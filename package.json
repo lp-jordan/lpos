@@ -1,0 +1,35 @@
+{
+  "name": "lpos-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "next build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "lint": "next lint",
+    "migrate:legacy-media": "tsx scripts/migrate-legacy-media.ts",
+    "prepare:runtime": "node scripts/prepare-lpos-runtime.mjs"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.10.0",
+    "@types/busboy": "^1.5.4",
+    "busboy": "^1.6.0",
+    "ffmpeg-static": "^5.3.0",
+    "html-to-docx": "^1.8.0",
+    "mammoth": "^1.12.0",
+    "next": "15.2.0",
+    "pdf-parse": "^2.4.5",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.9",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/react": "19.0.10",
+    "@types/react-dom": "19.0.4",
+    "typescript": "5.7.3"
+  }
+}

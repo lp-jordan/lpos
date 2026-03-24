@@ -1,0 +1,21 @@
+# Node / build
+node_modules/
+.next/
+out/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# LPOS runtime payloads
+runtime/whisper-runtime/**
+runtime/whisper-models/**
+runtime/atem-bridge/*.exe
+
+# Keep lightweight runtime scaffolding
+!runtime/README.md
+!runtime/whisper-runtime/.gitkeep
+!runtime/whisper-models/.gitkeep
+!runtime/atem-bridge/atem-bridge.js
