@@ -17,6 +17,7 @@ export interface SlateProject {
   projectId: string;
   name: string;
   clientName: string;
+  phase?: string;
 }
 
 export interface AtemToast {
@@ -314,10 +315,11 @@ export function useSlate(): SlateState & SlateActions {
   }, [attemptPlayback, ensureAudioElement, pushMuteState]);
 
   useEffect(() => {
-    const map = (project: { projectId: string; name: string; clientName: string }): SlateProject => ({
+    const map = (project: { projectId: string; name: string; clientName: string; phase?: string }): SlateProject => ({
       projectId: project.projectId,
       name: project.name,
       clientName: project.clientName,
+      phase: project.phase,
     });
 
     fetch('/api/projects')
@@ -429,7 +431,18 @@ export function useSlate(): SlateState & SlateActions {
     logs,
     projects,
 
-    loadProject: (id) => emit('loadProject', id),
+    loadProject: (id) => {
+      emit('loadProject', id);
+      // Auto-advance pre_production → production when a project is opened in Slate.
+      const project = projects.find((p) => p.projectId === id);
+      if (project?.phase === 'pre_production') {
+        void fetch(`/api/projects/${id}/phase`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phase: 'production', subPhase: 'recording' }),
+        });
+      }
+    },
     addNote: (code, note) => emit('addNote', { code, note }),
     editNote: (index, code, note) => emit('editNote', { index, code, note }),
     deleteNote: (index) => emit('deleteNote', index),

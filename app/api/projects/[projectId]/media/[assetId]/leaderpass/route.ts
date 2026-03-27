@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getCloudflareStreamConfigDiagnostic } from '@/lib/services/cloudflare-stream';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { canPrepareLeaderPassPublish, triggerLeaderPassPublish } from '@/lib/services/leaderpass-publish';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
@@ -14,6 +15,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 
 export async function POST(_req: NextRequest, { params }: Ctx) {
   const { projectId, assetId } = await params;
+  const actor = resolveRequestActor(_req);
   const asset = getAsset(projectId, assetId);
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   if (!asset.filePath) {
@@ -39,7 +41,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
     leaderpass: { status: 'preparing', lastError: null },
     cloudflare: { status: 'uploading', progress: 0, lastError: null },
   });
-  triggerLeaderPassPublish(projectId, assetId);
+  triggerLeaderPassPublish(projectId, assetId, { actor });
 
   return NextResponse.json({ ok: true, status: 'preparing' });
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { getCanonicalAssetDb } from '@/lib/store/canonical-asset-db';
 import type {
   CanonicalAsset,
@@ -37,8 +38,11 @@ export interface CanonicalRegisterInput {
   filePath: string | null;
   fileSize: number | null;
   mimeType?: string | null;
+  duration?: number | null;
   storageType: StorageType;
   existingAssetId?: string;
+  /** Pre-computed SHA256 hash (avoids a second full-file read during registration). */
+  preComputedHash?: string | null;
 }
 
 export interface CanonicalAssetPatch {
@@ -47,6 +51,7 @@ export interface CanonicalAssetPatch {
   tags?: string[];
   filePath?: string | null;
   fileSize?: number | null;
+  duration?: number | null;
   transcription?: Partial<TranscriptionInfo>;
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;
@@ -156,6 +161,19 @@ function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | n
   return bundle.transcriptions.find((transcription) => transcription.asset_version_id === assetVersionId) ?? null;
 }
 
+/** Async (non-blocking) SHA256 hash using streams. Use this in request handlers. */
+export async function computeFileHashAsync(filePath: string | null): Promise<string | null> {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const hash = createHash('sha256');
+    await pipeline(fs.createReadStream(filePath), hash);
+    return `sha256:${hash.digest('hex')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Synchronous hash — only use during migration or startup, never in a request handler. */
 function computeFileHashSync(filePath: string | null): string | null {
   if (!filePath || !fs.existsSync(filePath)) return null;
 
@@ -260,6 +278,7 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
     fileSize: mediaFile?.file_size_bytes ?? null,
     mimeType: mediaFile?.mime_type ?? null,
     storageType: getStorageType(mediaFile?.storage_class ?? 'nas'),
+    duration: mediaFile?.duration_seconds ?? null,
     registeredAt: bundle.asset.created_at,
     updatedAt: bundle.asset.updated_at,
     transcription: {
@@ -338,11 +357,11 @@ function insertMediaFile(mediaFile: CanonicalMediaFile): void {
   db.prepare(`
     INSERT INTO media_files (
       media_file_id, asset_version_id, role, source_path, managed_path, storage_class, original_filename,
-      managed_filename, mime_type, file_size_bytes, content_hash, source_modified_at, copied_to_managed_at,
+      managed_filename, mime_type, file_size_bytes, content_hash, duration_seconds, source_modified_at, copied_to_managed_at,
       is_source_available, is_managed_available, displacement_status, created_at, updated_at
     ) VALUES (
       @media_file_id, @asset_version_id, @role, @source_path, @managed_path, @storage_class, @original_filename,
-      @managed_filename, @mime_type, @file_size_bytes, @content_hash, @source_modified_at, @copied_to_managed_at,
+      @managed_filename, @mime_type, @file_size_bytes, @content_hash, @duration_seconds, @source_modified_at, @copied_to_managed_at,
       @is_source_available, @is_managed_available, @displacement_status, @created_at, @updated_at
     )
   `).run(mediaFile as unknown as SqlParams);
@@ -432,6 +451,7 @@ function importLegacyAsset(projectId: string, legacyAsset: MediaAsset): void {
     mime_type: legacyAsset.mimeType,
     file_size_bytes: legacyAsset.fileSize,
     content_hash: computeFileHashSync(legacyAsset.filePath),
+    duration_seconds: legacyAsset.duration ?? null,
     source_modified_at: sourceModifiedAt(legacyAsset.filePath),
     copied_to_managed_at: legacyAsset.filePath ? createdAt : null,
     is_source_available: legacyAsset.filePath && fs.existsSync(legacyAsset.filePath) ? 1 : 0,
@@ -576,7 +596,7 @@ function upsertAssetFields(assetId: string, patch: CanonicalAssetPatch): void {
 }
 
 function upsertMediaFileFields(assetId: string, patch: CanonicalAssetPatch): void {
-  if (patch.filePath === undefined && patch.fileSize === undefined) return;
+  if (patch.filePath === undefined && patch.fileSize === undefined && patch.duration === undefined) return;
 
   const version = getLatestVersionForAsset(assetId);
   if (!version) return;
@@ -591,6 +611,7 @@ function upsertMediaFileFields(assetId: string, patch: CanonicalAssetPatch): voi
     SET source_path = ?,
         managed_path = ?,
         file_size_bytes = ?,
+        duration_seconds = ?,
         managed_filename = ?,
         source_modified_at = ?,
         is_source_available = ?,
@@ -601,6 +622,7 @@ function upsertMediaFileFields(assetId: string, patch: CanonicalAssetPatch): voi
     nextFilePath,
     nextFilePath,
     patch.fileSize ?? mediaFile.file_size_bytes,
+    patch.duration !== undefined ? patch.duration : mediaFile.duration_seconds,
     nextFilePath ? path.basename(nextFilePath) : mediaFile.managed_filename,
     sourceModifiedAt(nextFilePath),
     sourceAvailable,
@@ -773,7 +795,9 @@ export function registerCanonicalMediaAsset(input: CanonicalRegisterInput): Medi
 
   const db = getCanonicalAssetDb();
   const timestamp = nowIso();
-  const fileHash = computeFileHashSync(input.filePath);
+  // Use pre-computed hash if provided (avoids blocking the event loop with sync I/O).
+  // Fall back to sync only during legacy migration paths where async isn't available.
+  const fileHash = input.preComputedHash !== undefined ? input.preComputedHash : computeFileHashSync(input.filePath);
   const sourceAvailable = input.filePath && fs.existsSync(input.filePath) ? 1 : 0;
 
   if (input.existingAssetId) {
@@ -814,6 +838,7 @@ export function registerCanonicalMediaAsset(input: CanonicalRegisterInput): Medi
       mime_type: input.mimeType ?? null,
       file_size_bytes: input.fileSize,
       content_hash: fileHash,
+      duration_seconds: input.duration ?? null,
       source_modified_at: sourceModifiedAt(input.filePath),
       copied_to_managed_at: input.filePath ? timestamp : null,
       is_source_available: sourceAvailable,
@@ -876,6 +901,7 @@ export function registerCanonicalMediaAsset(input: CanonicalRegisterInput): Medi
     mime_type: input.mimeType ?? null,
     file_size_bytes: input.fileSize,
     content_hash: fileHash,
+    duration_seconds: input.duration ?? null,
     source_modified_at: sourceModifiedAt(input.filePath),
     copied_to_managed_at: input.filePath ? timestamp : null,
     is_source_available: sourceAvailable,
@@ -978,6 +1004,7 @@ export function findCanonicalVersionCandidate(
   projectId: string,
   filename: string,
   filePath: string | null,
+  preComputedHash?: string | null,
 ): CanonicalVersionCandidate | null {
   const incomingKey = normalizeAssetKey(filename);
   if (!incomingKey) return null;
@@ -992,7 +1019,8 @@ export function findCanonicalVersionCandidate(
 
   const currentVersion = getLatestNonDuplicateVersionForAsset(matchingAsset.assetId);
   const currentMedia = currentVersion ? getPrimaryMediaFileForVersion(currentVersion.asset_version_id) : null;
-  const incomingHash = computeFileHashSync(filePath);
+  // Use pre-computed hash if provided; otherwise skip duplicate check (hash will be stored async).
+  const incomingHash = preComputedHash !== undefined ? preComputedHash : null;
   const duplicate = Boolean(incomingHash && currentMedia?.content_hash && incomingHash === currentMedia.content_hash);
 
   return {

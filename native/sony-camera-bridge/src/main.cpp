@@ -322,6 +322,16 @@ std::optional<CrInt32u> parseIpAddress(const std::string& host) {
   return address;
 }
 
+std::string formatIpAddress(CrInt32u address) {
+  std::ostringstream host;
+  host
+    << (address & 0xFFu) << '.'
+    << ((address >> 8u) & 0xFFu) << '.'
+    << ((address >> 16u) & 0xFFu) << '.'
+    << ((address >> 24u) & 0xFFu);
+  return host.str();
+}
+
 template <typename T>
 std::vector<T> readPropertyValues(const unsigned char* data, std::size_t count) {
   std::vector<T> values(count);
@@ -777,13 +787,17 @@ std::vector<DiscoveredCamera> discoverCameras() {
     if (cameraInfo == nullptr) continue;
 
     DiscoveredCamera camera{};
-    camera.name = "";
+    camera.name = sdkText(cameraInfo->GetName(), cameraInfo->GetNameSize());
     camera.model = normalizeModel(sdkText(cameraInfo->GetModel(), cameraInfo->GetModelSize()));
-    camera.host = sdkText(cameraInfo->GetIPAddressChar(), cameraInfo->GetIPAddressCharSize());
-    camera.connectionType = "";
-    camera.macAddress = "";
+    camera.connectionType = sdkText(cameraInfo->GetConnectionTypeName());
     camera.sshSupported = cameraInfo->GetSSHsupport() == SDK::CrSSHsupport_ON;
-    camera.id = camera.host;
+    if (camera.connectionType == "IP") {
+      camera.host = formatIpAddress(cameraInfo->GetIPAddress());
+      camera.macAddress = sdkText(cameraInfo->GetMACAddressChar(), cameraInfo->GetMACAddressCharSize());
+      camera.id = camera.macAddress.empty() ? camera.host : camera.macAddress;
+    } else {
+      camera.id = "non-ip-camera";
+    }
 
     if (!camera.host.empty()) {
       cameras.push_back(std::move(camera));
@@ -1107,4 +1121,33 @@ int main(int argc, char* argv[]) {
 
     std::thread([client]() {
       std::string rawRequest;
-      if (!readHttpRequest(client, rawRequ
+      if (!readHttpRequest(client, rawRequest)) {
+        closesocket(client);
+        return;
+      }
+
+      const HttpRequest request = parseRequest(rawRequest);
+      if (request.path == "/camera/liveview") {
+        const auto [host, model] = readIdentity(request);
+        if (host.empty()) {
+          const std::string response = badRequest("Camera host is required.");
+          sendAll(client, response.c_str(), static_cast<int>(response.size()));
+        } else {
+          const auto [username, password] = readCredentials(request);
+          const auto fingerprint = readFingerprint(request);
+          streamLiveView(client, CameraIdentity{host, model, username, password, fingerprint});
+        }
+        closesocket(client);
+        return;
+      }
+
+      const std::string response = handleJsonRequest(request);
+      sendAll(client, response.c_str(), static_cast<int>(response.size()));
+      closesocket(client);
+    }).detach();
+  }
+
+  closesocket(server);
+  WSACleanup();
+  return 0;
+}

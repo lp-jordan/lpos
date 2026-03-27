@@ -12,8 +12,10 @@
  */
 
 import fs                                          from 'node:fs';
+import type { ActivityActor }                     from '@/lib/models/activity';
 import { getAsset, patchAsset }                   from '@/lib/store/media-registry';
 import { getProjectStore, getUploadQueueService } from '@/lib/services/container';
+import { recordActivity, serviceActor }           from '@/lib/services/activity-monitor-service';
 import { isConnected }                            from '@/lib/services/frameio-tokens';
 import { getOrCreateProjectFolder, uploadAsset }  from '@/lib/services/frameio';
 import {
@@ -26,12 +28,17 @@ function getQueue() {
   try { return getUploadQueueService(); } catch { return null; }
 }
 
-export function triggerFrameIOUpload(projectId: string, assetId: string): void {
-  // Fire-and-forget — returns immediately, runs in background
-  setImmediate(() => { void runUpload(projectId, assetId); });
+interface FrameIOUploadContext {
+  actor?: ActivityActor;
+  clientId?: string | null;
 }
 
-async function runUpload(projectId: string, assetId: string): Promise<void> {
+export function triggerFrameIOUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): void {
+  // Fire-and-forget — returns immediately, runs in background
+  setImmediate(() => { void runUpload(projectId, assetId, context); });
+}
+
+async function runUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): Promise<void> {
   // Guard: Frame.io must be connected
   if (!isConnected()) return;
 
@@ -44,6 +51,25 @@ async function runUpload(projectId: string, assetId: string): Promise<void> {
   const queue    = getQueue();
   const filename = asset.name || asset.originalFilename;
   const jobId    = queue?.add(projectId, assetId, filename) ?? null;
+  const actor = context?.actor ?? serviceActor('Frame.io Upload', 'frameio-upload');
+  const clientId = context?.clientId ?? getProjectStore().getById(projectId)?.clientName ?? null;
+
+  recordActivity({
+    ...actor,
+    occurred_at: new Date().toISOString(),
+    event_type: 'frameio.upload.queued',
+    lifecycle_phase: 'queued',
+    source_kind: 'background_service',
+    visibility: 'user_timeline',
+    title: `Frame.io upload queued: ${filename}`,
+    summary: `${filename} was queued for Frame.io upload`,
+    client_id: clientId,
+    project_id: projectId,
+    asset_id: assetId,
+    job_id: jobId,
+    source_service: 'frameio-upload',
+    details_json: { provider: 'frameio', filename },
+  });
 
   patchAsset(projectId, assetId, { frameio: { status: 'uploading', lastError: null } });
 
@@ -56,7 +82,8 @@ async function runUpload(projectId: string, assetId: string): Promise<void> {
     const folderId    = await getOrCreateProjectFolder(projectName);
 
     // ── Compression (transparent, only for files ≥ 1.9 GB) ───────────────
-    const fileSize    = asset.fileSize ?? fs.statSync(asset.filePath).size;
+    const fileSize    = asset.fileSize || fs.statSync(asset.filePath).size;
+    if (!fileSize) throw new Error(`Cannot upload "${filename}" to Frame.io — file size is 0 or unknown`);
     let   uploadPath  = asset.filePath;
     let   uploadSize  = fileSize;
     let   uploadName  = filename;
@@ -86,6 +113,22 @@ async function runUpload(projectId: string, assetId: string): Promise<void> {
     if (jobId && queue?.isCancelled(jobId)) throw new Error('Cancelled');
 
     queue?.setProgress(jobId!, 5);
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: 'frameio.upload.started',
+      lifecycle_phase: 'running',
+      source_kind: 'background_service',
+      visibility: 'user_timeline',
+      title: `Frame.io upload started: ${filename}`,
+      summary: `${filename} started uploading to Frame.io`,
+      client_id: clientId,
+      project_id: projectId,
+      asset_id: assetId,
+      job_id: jobId,
+      source_service: 'frameio-upload',
+      details_json: { provider: 'frameio', filename },
+    });
 
     const result = await uploadAsset(
       folderId,
@@ -110,6 +153,27 @@ async function runUpload(projectId: string, assetId: string): Promise<void> {
     });
 
     if (jobId) queue?.complete(jobId);
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: 'frameio.upload.completed',
+      lifecycle_phase: 'completed',
+      source_kind: 'background_service',
+      visibility: 'user_timeline',
+      title: `Frame.io upload completed: ${filename}`,
+      summary: `${filename} finished uploading to Frame.io`,
+      client_id: clientId,
+      project_id: projectId,
+      asset_id: assetId,
+      job_id: jobId,
+      source_service: 'frameio-upload',
+      details_json: {
+        provider: 'frameio',
+        frameioAssetId: result.frameioAssetId,
+        reviewLink: result.reviewLink,
+        playerUrl: result.playerUrl,
+      },
+    });
     console.log(`[frameio] uploaded "${filename}" → ${result.reviewLink ?? result.frameioAssetId}`);
 
   } catch (err) {
@@ -117,11 +181,43 @@ async function runUpload(projectId: string, assetId: string): Promise<void> {
     if (message === 'Cancelled') {
       // Job already marked cancelled by the service — just reset the asset status
       patchAsset(projectId, assetId, { frameio: { status: 'none', lastError: null } });
+      recordActivity({
+        ...actor,
+        occurred_at: new Date().toISOString(),
+        event_type: 'frameio.upload.cancelled',
+        lifecycle_phase: 'cancelled',
+        source_kind: 'background_service',
+        visibility: 'operator_only',
+        title: `Frame.io upload cancelled: ${filename}`,
+        summary: `${filename} upload to Frame.io was cancelled`,
+        client_id: clientId,
+        project_id: projectId,
+        asset_id: assetId,
+        job_id: jobId,
+        source_service: 'frameio-upload',
+        details_json: { provider: 'frameio' },
+      });
       console.log(`[frameio] upload cancelled for "${filename}"`);
     } else {
       console.error('[frameio] upload failed:', message);
       patchAsset(projectId, assetId, { frameio: { status: 'none', lastError: message } });
       if (jobId) queue?.fail(jobId, message);
+      recordActivity({
+        ...actor,
+        occurred_at: new Date().toISOString(),
+        event_type: 'frameio.upload.failed',
+        lifecycle_phase: 'failed',
+        source_kind: 'background_service',
+        visibility: 'user_timeline',
+        title: `Frame.io upload failed: ${filename}`,
+        summary: `${filename} failed to upload to Frame.io`,
+        client_id: clientId,
+        project_id: projectId,
+        asset_id: assetId,
+        job_id: jobId,
+        source_service: 'frameio-upload',
+        details_json: { provider: 'frameio', error: message },
+      });
     }
 
   } finally {

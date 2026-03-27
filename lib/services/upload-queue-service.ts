@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as SocketIOServer } from 'socket.io';
 
-export type UploadJobStatus = 'queued' | 'compressing' | 'uploading' | 'done' | 'failed' | 'cancelled';
+const UPLOAD_TIMEOUT_MS = 3 * 60_000; // 3 minutes without progress → auto-fail
+const TIMEOUT_SWEEP_MS  = 30_000;     // check every 30s
+const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled']);
+
+export type UploadJobStatus = 'queued' | 'compressing' | 'uploading' | 'processing' | 'done' | 'failed' | 'cancelled';
 export type UploadJobProvider = 'frameio' | 'leaderpass';
 
 export interface UploadJob {
@@ -13,15 +17,23 @@ export interface UploadJob {
   status: UploadJobStatus;
   progress: number;
   error?: string;
+  detail?: string;
   queuedAt: string;
+  updatedAt: string;
   completedAt?: string;
 }
 
 export class UploadQueueService {
   private jobs = new Map<string, UploadJob>();
   private cancelledIds = new Set<string>();
+  private changeListeners: Array<(jobs: UploadJob[]) => void> = [];
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private io: SocketIOServer) {}
+
+  onQueueChange(cb: (jobs: UploadJob[]) => void): void {
+    this.changeListeners.push(cb);
+  }
 
   start(): void {
     const attach = (namespace: string) => {
@@ -33,10 +45,16 @@ export class UploadQueueService {
 
     attach('/upload-queue');
     attach('/frameio-uploads');
+    this.sweepTimer = setInterval(() => this.timeoutSweep(), TIMEOUT_SWEEP_MS);
+  }
+
+  stop(): void {
+    if (this.sweepTimer) { clearInterval(this.sweepTimer); this.sweepTimer = null; }
   }
 
   add(projectId: string, assetId: string, filename: string, provider: UploadJobProvider = 'frameio'): string {
     const jobId = randomUUID();
+    const queuedAt = new Date().toISOString();
     this.jobs.set(jobId, {
       jobId,
       assetId,
@@ -45,31 +63,36 @@ export class UploadQueueService {
       provider,
       status: 'queued',
       progress: 0,
-      queuedAt: new Date().toISOString(),
+      queuedAt,
+      updatedAt: queuedAt,
     });
     this.broadcast();
     return jobId;
   }
 
-  setCompressing(jobId: string, progress: number): void {
-    this.patch(jobId, { status: 'compressing', progress });
+  setCompressing(jobId: string, progress: number, detail?: string): void {
+    this.patch(jobId, { status: 'compressing', progress, detail, error: undefined });
   }
 
-  setProgress(jobId: string, progress: number): void {
-    this.patch(jobId, { status: 'uploading', progress });
+  setProgress(jobId: string, progress: number, detail?: string): void {
+    this.patch(jobId, { status: 'uploading', progress, detail, error: undefined });
+  }
+
+  setProcessing(jobId: string, detail: string): void {
+    this.patch(jobId, { status: 'processing', progress: 100, detail, error: undefined });
   }
 
   complete(jobId: string): void {
-    this.patch(jobId, { status: 'done', progress: 100, completedAt: new Date().toISOString() });
+    this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, completedAt: new Date().toISOString() });
   }
 
   fail(jobId: string, error: string): void {
-    this.patch(jobId, { status: 'failed', error, completedAt: new Date().toISOString() });
+    this.patch(jobId, { status: 'failed', error, detail: undefined, completedAt: new Date().toISOString() });
   }
 
   cancel(jobId: string): void {
     this.cancelledIds.add(jobId);
-    this.patch(jobId, { status: 'cancelled', completedAt: new Date().toISOString() });
+    this.patch(jobId, { status: 'cancelled', detail: undefined, error: undefined, completedAt: new Date().toISOString() });
   }
 
   isCancelled(jobId: string): boolean {
@@ -77,13 +100,13 @@ export class UploadQueueService {
   }
 
   getQueue(): UploadJob[] {
-    return Array.from(this.jobs.values());
+    return Array.from(this.jobs.values()).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
   }
 
   private patch(jobId: string, update: Partial<UploadJob>): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
-    Object.assign(job, update);
+    Object.assign(job, update, { updatedAt: new Date().toISOString() });
     this.broadcast();
   }
 
@@ -91,5 +114,17 @@ export class UploadQueueService {
     const queue = this.getQueue();
     this.io.of('/upload-queue').emit('queue', queue);
     this.io.of('/frameio-uploads').emit('queue', queue);
+    this.changeListeners.forEach((cb) => cb(queue));
+  }
+
+  private timeoutSweep(): void {
+    const now = Date.now();
+    for (const job of this.jobs.values()) {
+      if (TERMINAL_STATUSES.has(job.status)) continue;
+      if (now - Date.parse(job.updatedAt) > UPLOAD_TIMEOUT_MS) {
+        console.warn(`[upload-queue] auto-failing stale job ${job.jobId} (${job.filename})`);
+        this.fail(job.jobId, 'Timed out: no progress received');
+      }
+    }
   }
 }

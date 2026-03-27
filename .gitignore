@@ -13,6 +13,25 @@ dist/
 runtime/whisper-runtime/**
 runtime/whisper-models/**
 runtime/atem-bridge/*.exe
+runtime/*.log
+runtime/*-out.log
+runtime/*-err.log
+
+# External vendor SDKs and binaries
+vendor/
+
+# Local app state and generated data
+data/
+
+# Native build output
+native/sony-camera-bridge/build/
+
+# Local certificates
+localhost+*.pem
+localhost+*-key.pem
+
+# TypeScript build info
+*.tsbuildinfo
 
 # Keep lightweight runtime scaffolding
 !runtime/README.md

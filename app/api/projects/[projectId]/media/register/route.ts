@@ -4,7 +4,11 @@ import path from 'node:path';
 import { getProjectStore } from '@/lib/services/container';
 import { registerAsset } from '@/lib/store/media-registry';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
+import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
+import { probeDuration } from '@/lib/services/media-probe';
+import { patchAsset } from '@/lib/store/media-registry';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -72,7 +76,35 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       existingAssetId: body.replaceAssetId,
     });
 
-    triggerFrameIOUpload(projectId, asset.assetId);
+    const actor = resolveRequestActor(req);
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: 'asset.registered',
+      lifecycle_phase: 'created',
+      source_kind: 'api',
+      visibility: 'user_timeline',
+      title: `Asset registered: ${asset.name || asset.originalFilename}`,
+      summary: `${asset.name || asset.originalFilename} was registered to ${project.name}`,
+      client_id: project.clientName || null,
+      project_id: projectId,
+      asset_id: asset.assetId,
+      details_json: {
+        filePath: asset.filePath,
+        storageType: asset.storageType,
+        originalFilename: asset.originalFilename,
+      },
+      search_text: `${asset.name || asset.originalFilename} ${project.name} ${project.clientName}`.trim(),
+    });
+
+    triggerFrameIOUpload(projectId, asset.assetId, { actor, clientId: project.clientName || null });
+
+    // Probe duration in background
+    if (normalised && fs.existsSync(normalised)) {
+      probeDuration(normalised).then((dur) => {
+        if (dur != null) patchAsset(projectId, asset.assetId, { duration: dur });
+      }).catch(() => {});
+    }
 
     return NextResponse.json({ asset }, { status: 201 });
   } catch (err) {

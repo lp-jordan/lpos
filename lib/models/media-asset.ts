@@ -175,6 +175,7 @@ export interface MediaAsset {
   fileSize: number | null;
   mimeType: string | null;
   storageType: StorageType;
+  duration: number | null;
   registeredAt: string;
   updatedAt: string;
   transcription: TranscriptionInfo;

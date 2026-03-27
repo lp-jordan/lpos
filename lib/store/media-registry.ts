@@ -36,8 +36,11 @@ export interface RegisterInput {
   filePath: string | null;
   fileSize: number | null;
   mimeType?: string | null;
+  duration?: number | null;
   storageType: 'uploaded' | 'registered';
   existingAssetId?: string;
+  /** Pre-computed SHA256 hash — avoids a second full-file read during registration. */
+  preComputedHash?: string | null;
 }
 
 export function registerAsset(input: RegisterInput): MediaAsset {
@@ -58,6 +61,7 @@ export interface AssetPatch {
   tags?: string[];
   filePath?: string | null;
   fileSize?: number | null;
+  duration?: number | null;
   transcription?: Partial<TranscriptionInfo>;
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;

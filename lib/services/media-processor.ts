@@ -104,17 +104,41 @@ export class MediaProcessor extends EventEmitter {
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
+  /** Translate common ffmpeg stderr messages into plain-English errors. */
+  private static describeffmpegError(stderr: string, code: number | null): string {
+    if (stderr.includes('moov atom not found')) {
+      return 'The video file is incomplete or corrupted — the MP4 metadata block (moov atom) is missing. This usually means the upload was interrupted. Try re-uploading the original file.';
+    }
+    if (stderr.includes('Invalid data found when processing input')) {
+      return 'The file could not be read — it may be corrupted or in an unsupported format.';
+    }
+    if (stderr.includes('No such file or directory')) {
+      return 'The file could not be found at the recorded path. It may have been moved or deleted.';
+    }
+    if (stderr.includes('Permission denied')) {
+      return 'Permission denied reading the file. Check that the LPOS service account has access to the media directory.';
+    }
+    if (stderr.includes('Invalid option') || stderr.includes('Unrecognized option')) {
+      return 'An internal ffmpeg option was not recognised. Please report this to your LPOS administrator.';
+    }
+    return `Audio extraction failed (code ${code}).`;
+  }
+
   private extractAudio(inputPath: string, outputPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!ffmpegPath) { reject(new Error('ffmpeg-static binary not found')); return; }
 
       const proc = spawn(ffmpegPath, [
+        '-nostdin',
         '-i', inputPath,
         '-ar', '16000',
         '-ac', '1',
         '-c:a', 'pcm_s16le',
         '-y', outputPath,
-      ]);
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let stderrBuf = '';
+      proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString(); });
 
       let pct = 5;
       const timer = setInterval(() => {
@@ -124,7 +148,11 @@ export class MediaProcessor extends EventEmitter {
 
       proc.on('close', (code) => {
         clearInterval(timer);
-        code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`));
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(MediaProcessor.describeffmpegError(stderrBuf, code)));
+        }
       });
       proc.on('error', (err) => { clearInterval(timer); reject(err); });
     });

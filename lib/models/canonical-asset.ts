@@ -79,6 +79,7 @@ export interface CanonicalMediaFile {
   mime_type: string | null;
   file_size_bytes: number | null;
   content_hash: string | null;
+  duration_seconds: number | null;
   source_modified_at: string | null;
   copied_to_managed_at: string | null;
   is_source_available: number;

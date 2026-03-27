@@ -1,23 +1,134 @@
 'use client';
 
-import { CSSProperties, Fragment, useEffect, useState } from 'react';
+import { CSSProperties, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-
+import type {
+  TranscriptChatThread,
+  TranscriptChatThreadSummary,
+  TranscriptSearchMessage,
+  TranscriptSearchResponse,
+  TranscriptSearchSource,
+} from '@/lib/transcripts/types';
 type FileType = 'txt' | 'json' | 'srt' | 'vtt';
+type PanelMode = 'viewer' | 'search';
+type SearchView = 'browser' | 'thread';
+
+interface SearchScopeEntry {
+  jobId: string;
+  filename: string;
+}
 
 interface Props {
   projectId: string;
+  projectName: string;
+  mode: PanelMode;
   jobId: string | null;
   filename: string;
   onClose: () => void;
   standalone?: boolean;
+  searchScope: SearchScopeEntry[];
+  searchScopeMode: 'selected' | 'all';
+  searchSessionKey: number;
+  canUseSelectedScope?: boolean;
+  onUseSelectedScope?: () => void;
+  onNewChat?: () => void;
+  onApplyThreadScope?: (scope: { mode: 'selected' | 'all'; jobIds: string[] }) => void;
+  onOpenTranscript?: (jobId: string, filename: string) => void;
+  onStartSearchFromTranscript?: () => void;
 }
 
 function formatTranscriptLabel(filename: string): string {
   return filename.replace(/\.[^.]+$/, '');
 }
 
-export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, standalone = false }: Readonly<Props>) {
+function makeMessageId(prefix: string): string {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function groupSourcesByAsset(sources: TranscriptSearchSource[]): Array<{
+  jobId: string;
+  filename: string;
+  isDirectQuote: boolean;
+  excerpts: TranscriptSearchSource[];
+}> {
+  const groups = new Map<string, {
+    jobId: string;
+    filename: string;
+    isDirectQuote: boolean;
+    excerpts: TranscriptSearchSource[];
+  }>();
+
+  for (const source of sources) {
+    const existing = groups.get(source.jobId);
+    if (existing) {
+      existing.isDirectQuote = existing.isDirectQuote || Boolean(source.isDirectQuote);
+      existing.excerpts.push(source);
+      continue;
+    }
+
+    groups.set(source.jobId, {
+      jobId: source.jobId,
+      filename: source.filename,
+      isDirectQuote: Boolean(source.isDirectQuote),
+      excerpts: [source],
+    });
+  }
+
+  return [...groups.values()];
+}
+
+function buildScopeLabel(searchScopeMode: 'selected' | 'all', entries: SearchScopeEntry[]): string {
+  if (searchScopeMode === 'all') return 'all transcripts';
+  if (entries.length === 1) return formatTranscriptLabel(entries[0]!.filename);
+  return `${entries.length} selected transcripts`;
+}
+
+function renderMessageContent(content: string) {
+  const lines = content.split('\n').map((line) => line.trimEnd());
+  const paragraphs: string[] = [];
+  const bullets: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('- ')) bullets.push(trimmed.slice(2).trim());
+    else paragraphs.push(trimmed);
+  }
+
+  return (
+    <div className="txv-message-copy">
+      {paragraphs.map((paragraph, index) => (
+        <p key={`p-${index}`} className="txv-message-paragraph">{paragraph}</p>
+      ))}
+      {bullets.length > 0 && (
+        <ul className="txv-message-bullets">
+          {bullets.map((bullet, index) => (
+            <li key={`b-${index}`}>{bullet}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function TranscriptViewerPanel({
+  projectId,
+  projectName,
+  mode,
+  jobId,
+  filename,
+  onClose,
+  standalone = false,
+  searchScope,
+  searchScopeMode,
+  searchSessionKey,
+  canUseSelectedScope = false,
+  onUseSelectedScope,
+  onNewChat,
+  onApplyThreadScope,
+  onOpenTranscript,
+  onStartSearchFromTranscript,
+}: Readonly<Props>) {
   const [mounted, setMounted] = useState(false);
   const [availableFiles, setAvailableFiles] = useState<Record<FileType, boolean>>({
     txt: false,
@@ -29,6 +140,20 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wordCount, setWordCount] = useState(0);
+  const [messages, setMessages] = useState<TranscriptSearchMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [threadSummary, setThreadSummary] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [expandedSources, setExpandedSources] = useState<Record<string, boolean>>({});
+  const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
+  const [threadList, setThreadList] = useState<TranscriptChatThreadSummary[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [searchView, setSearchView] = useState<SearchView>('browser');
+  const chatBodyRef = useRef<HTMLDivElement | null>(null);
+  const shouldScrollToBottomRef = useRef(true);
+
+  const isOpen = mode === 'search' || jobId !== null;
+  const scopeLabel = useMemo(() => buildScopeLabel(searchScopeMode, searchScope), [searchScopeMode, searchScope]);
 
   useEffect(() => {
     setMounted(true);
@@ -36,16 +161,53 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
   }, []);
 
   useEffect(() => {
-    if (!jobId) {
+    setMessages([]);
+    setInput('');
+    setThreadSummary('');
+    setIsSubmitting(false);
+    setError(null);
+    setExpandedSources({});
+    setIsPinnedToBottom(true);
+    setActiveThreadId(null);
+    setSearchView('browser');
+    shouldScrollToBottomRef.current = true;
+  }, [searchSessionKey]);
+
+  useEffect(() => {
+    if (mode !== 'search' || searchView !== 'thread') return;
+    if (!shouldScrollToBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const node = chatBodyRef.current;
+      if (!node) return;
+      node.scrollTop = node.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, mode, searchView]);
+
+  useEffect(() => {
+    if (mode !== 'search') return;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/transcripts/chat-threads`);
+        if (!res.ok) return;
+        const data = await res.json() as { threads: TranscriptChatThreadSummary[] };
+        setThreadList(data.threads);
+      } catch {
+        // Ignore thread list failures.
+      }
+    })();
+  }, [mode, projectId, searchSessionKey]);
+
+  useEffect(() => {
+    if (mode !== 'viewer' || !jobId) {
       setAvailableFiles({ txt: false, json: false, srt: false, vtt: false });
       setContent('');
-      setError(null);
       setWordCount(0);
+      if (mode === 'viewer') setError(null);
       return;
     }
 
     setError(null);
-
     void (async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}/transcripts`);
@@ -53,16 +215,16 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
         const data = await res.json() as {
           transcripts: Array<{ jobId: string; files: Record<FileType, boolean> }>;
         };
-        const entry = data.transcripts.find((t) => t.jobId === jobId);
+        const entry = data.transcripts.find((item) => item.jobId === jobId);
         if (entry) setAvailableFiles(entry.files);
       } catch {
-        // ignore
+        // Ignore best-effort file metadata loading.
       }
     })();
-  }, [jobId, projectId]);
+  }, [jobId, mode, projectId]);
 
   useEffect(() => {
-    if (!jobId) return;
+    if (mode !== 'viewer' || !jobId) return;
 
     setLoading(true);
     setError(null);
@@ -88,14 +250,7 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
         setLoading(false);
       }
     })();
-  }, [jobId, projectId]);
-
-  const isOpen = jobId !== null;
-  const panelClass = [
-    'txv-panel',
-    standalone ? 'txv-panel--standalone' : '',
-    isOpen ? 'txv-panel--open' : '',
-  ].filter(Boolean).join(' ');
+  }, [jobId, mode, projectId]);
 
   const standalonePanelStyle: CSSProperties | undefined = standalone ? {
     position: 'fixed',
@@ -119,49 +274,459 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
     return `/api/projects/${projectId}/transcripts?download=${jobId}&type=${type}`;
   }
 
+  function appendMessage(message: TranscriptSearchMessage) {
+    setMessages((current) => [...current, message]);
+  }
+
+  function updatePendingMessage(id: string, patch: Partial<TranscriptSearchMessage>) {
+    setMessages((current) => current.map((message) => (
+      message.id === id ? { ...message, ...patch, pending: false } : message
+    )));
+  }
+
+  function resetToBrowser() {
+    setSearchView('browser');
+    setMessages([]);
+    setInput('');
+    setThreadSummary('');
+    setExpandedSources({});
+    setActiveThreadId(null);
+    onNewChat?.();
+  }
+
+  async function submitSearch(question: string) {
+    const trimmed = question.trim();
+    if (!trimmed || isSubmitting) return;
+    if (!searchScope.length) {
+      appendMessage({
+        id: makeMessageId('error'),
+        role: 'error',
+        content: 'No transcripts are available to search yet.',
+      });
+      setSearchView('thread');
+      return;
+    }
+
+    const conversation = messages
+      .filter((message) => message.role === 'user' || message.role === 'assistant')
+      .map((message) => ({ role: message.role, content: message.content }));
+    const pendingId = makeMessageId('assistant');
+
+    shouldScrollToBottomRef.current = true;
+    setSearchView('thread');
+    appendMessage({ id: makeMessageId('user'), role: 'user', content: trimmed });
+    appendMessage({ id: pendingId, role: 'assistant', content: 'Cami is thinking...', pending: true });
+    setInput('');
+    setIsSubmitting(true);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/transcripts/search`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          query: trimmed,
+          jobIds: searchScope.map((entry) => entry.jobId),
+          mode: searchScopeMode,
+          conversation: [...conversation, { role: 'user', content: trimmed }],
+          threadSummary,
+        }),
+      });
+
+      const payload = await res.json().catch(() => ({})) as TranscriptSearchResponse & { error?: string };
+      if (!res.ok) {
+        throw new Error(payload.error || 'Transcript search failed.');
+      }
+
+      if (payload.clarifyQuestion) {
+        updatePendingMessage(pendingId, {
+          content: payload.clarifyQuestion,
+          sources: [],
+        });
+        return;
+      }
+
+      const nextMessages: TranscriptSearchMessage[] = [
+        ...messages,
+        { id: makeMessageId('user-persisted'), role: 'user', content: trimmed },
+        {
+          id: pendingId,
+          role: 'assistant',
+          content: payload.answer,
+          sources: payload.sources,
+          usage: payload.usage,
+          searchMode: payload.searchMode,
+        },
+      ];
+
+      setThreadSummary(payload.threadSummary ?? '');
+      updatePendingMessage(pendingId, {
+        content: payload.answer,
+        sources: payload.sources,
+        usage: payload.usage,
+        searchMode: payload.searchMode,
+      });
+
+      if (payload.searchMode === 'local') return;
+
+      const persistedThread = await persistThread({
+        threadId: activeThreadId,
+        messages: nextMessages,
+        threadSummary: payload.threadSummary ?? '',
+      });
+
+      if (persistedThread) {
+        setActiveThreadId(persistedThread.threadId);
+        setThreadList((current) => {
+          const nextSummary: TranscriptChatThreadSummary = {
+            threadId: persistedThread.threadId,
+            title: persistedThread.title,
+            createdAt: persistedThread.createdAt,
+            updatedAt: persistedThread.updatedAt,
+            scope: persistedThread.scope,
+            messageCount: persistedThread.messages.length,
+          };
+          return [nextSummary, ...current.filter((thread) => thread.threadId !== persistedThread.threadId)]
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        });
+      }
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : 'Transcript search failed.';
+      updatePendingMessage(pendingId, {
+        role: 'error',
+        content: message,
+        sources: [],
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function persistThread(input: {
+    threadId: string | null;
+    messages: TranscriptSearchMessage[];
+    threadSummary: string;
+  }): Promise<TranscriptChatThread | null> {
+    try {
+      const threadId = input.threadId ?? activeThreadId;
+      const endpoint = threadId
+        ? `/api/projects/${projectId}/transcripts/chat-threads/${threadId}`
+        : `/api/projects/${projectId}/transcripts/chat-threads`;
+
+      if (!threadId) {
+        const created = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            scope: {
+              mode: searchScopeMode,
+              jobIds: searchScope.map((entry) => entry.jobId),
+            },
+          }),
+        });
+        if (!created.ok) return null;
+
+        const createdPayload = await created.json() as { thread: TranscriptChatThread };
+        const saved = await fetch(`/api/projects/${projectId}/transcripts/chat-threads/${createdPayload.thread.threadId}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            scope: createdPayload.thread.scope,
+            threadSummary: input.threadSummary,
+            messages: input.messages,
+          }),
+        });
+        if (!saved.ok) return createdPayload.thread;
+        return (await saved.json() as { thread: TranscriptChatThread }).thread;
+      }
+
+      const saved = await fetch(endpoint, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: {
+            mode: searchScopeMode,
+            jobIds: searchScope.map((entry) => entry.jobId),
+          },
+          threadSummary: input.threadSummary,
+          messages: input.messages,
+        }),
+      });
+      if (!saved.ok) return null;
+      return (await saved.json() as { thread: TranscriptChatThread }).thread;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadThread(threadId: string) {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/transcripts/chat-threads/${threadId}`);
+      if (!res.ok) return;
+      const data = await res.json() as { thread: TranscriptChatThread };
+      setActiveThreadId(data.thread.threadId);
+      setMessages(data.thread.messages);
+      setThreadSummary(data.thread.threadSummary);
+      setExpandedSources({});
+      setIsPinnedToBottom(true);
+      setSearchView('thread');
+      shouldScrollToBottomRef.current = true;
+      onApplyThreadScope?.(data.thread.scope);
+    } catch {
+      // Ignore failed thread loads.
+    }
+  }
+
+  async function deleteThread(threadId: string) {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/transcripts/chat-threads/${threadId}`, { method: 'DELETE' });
+      if (!res.ok) return;
+      setThreadList((current) => current.filter((thread) => thread.threadId !== threadId));
+      if (activeThreadId === threadId) {
+        resetToBrowser();
+      }
+    } catch {
+      // Ignore delete failures.
+    }
+  }
+
+  const panelClass = [
+    'txv-panel',
+    standalone ? 'txv-panel--standalone' : '',
+    isOpen ? 'txv-panel--open' : '',
+    mode === 'search' ? 'txv-panel--search' : '',
+  ].filter(Boolean).join(' ');
+
   const panel = (
     <Fragment>
       {standalone && isOpen && <div className="txv-backdrop" onClick={onClose} aria-hidden="true" />}
       <div className={panelClass} aria-hidden={!isOpen} style={standalonePanelStyle}>
         <div className="txv-header">
-          <button type="button" className="txv-back-btn" onClick={onClose} aria-label="Close transcript viewer">
+          <button
+            type="button"
+            className="txv-back-btn"
+            onClick={() => {
+              if (mode === 'search' && searchView === 'thread') {
+                setSearchView('browser');
+              } else {
+                onClose();
+              }
+            }}
+            aria-label={mode === 'search' && searchView === 'thread' ? 'Back to thread browser' : 'Close transcript panel'}
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="15 18 9 12 15 6"/>
+              <polyline points="15 18 9 12 15 6" />
             </svg>
-            Back to transcripts
+            {mode === 'search' && searchView === 'thread' ? 'Back to search' : 'Back to transcripts'}
           </button>
-          <div className="txv-header-info">
-            <span className="txv-filename" title={formatTranscriptLabel(filename)}>{formatTranscriptLabel(filename)}</span>
-            {wordCount > 0 && <span className="txv-wordcount">{wordCount.toLocaleString()} words</span>}
-          </div>
+
+          {mode === 'viewer' ? (
+            <>
+              <div className="txv-header-info">
+                <span className="txv-filename" title={formatTranscriptLabel(filename)}>{formatTranscriptLabel(filename)}</span>
+                {wordCount > 0 && <span className="txv-wordcount">{wordCount.toLocaleString()} words</span>}
+              </div>
+              <div className="txv-toolbar">
+                <span className="txv-toolbar-note">Read transcript and exports</span>
+                {onStartSearchFromTranscript && (
+                  <button type="button" className="txv-action-btn" onClick={onStartSearchFromTranscript}>
+                    Ask About Transcript
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="txv-header-info txv-header-info--stack">
+                <span className="txv-panel-title">Content Search</span>
+              </div>
+              <div className="txv-toolbar txv-toolbar--search">
+                <div className="txv-toolbar-actions">
+                  {searchView === 'thread' && canUseSelectedScope && onUseSelectedScope && (
+                    <button type="button" className="txv-action-btn" onClick={onUseSelectedScope}>
+                      Use Selected Transcripts
+                    </button>
+                  )}
+                </div>
+                <span className="txv-using-label" title={`Using: ${scopeLabel}`}>
+                  Using: {scopeLabel}
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="txv-tabs">
-          {(['txt', 'json', 'srt', 'vtt'] as FileType[]).map((type) => (
-            availableFiles[type] ? (
-              <a
-                key={type}
-                href={getDownloadUrl(type)}
-                download
-                className={`txv-tab${type === 'txt' ? ' txv-tab--active' : ''}`}
-                title={`Download .${type}`}
+        {mode === 'viewer' ? (
+          <>
+            <div className="txv-tabs">
+              {(['txt', 'json', 'srt', 'vtt'] as FileType[]).map((type) => (
+                availableFiles[type] ? (
+                  <a
+                    key={type}
+                    href={getDownloadUrl(type)}
+                    download
+                    className={`txv-tab${type === 'txt' ? ' txv-tab--active' : ''}`}
+                    title={`Download .${type}`}
+                  >
+                    {type.toUpperCase()}
+                  </a>
+                ) : null
+              ))}
+            </div>
+
+            <div className="txv-body">
+              {loading && <p className="txv-loading">Loading...</p>}
+              {error && <p className="txv-error">{error}</p>}
+              {!loading && !error && content && <pre className="txv-text">{content}</pre>}
+              {!loading && !error && !content && isOpen && <p className="txv-loading">No TXT transcript available.</p>}
+            </div>
+          </>
+        ) : searchView === 'browser' ? (
+          <>
+            <div className="txv-browser-body">
+              {threadList.length > 0 ? (
+                <div className="txv-thread-browser">
+                  <div className="txv-thread-list">
+                    {threadList.map((thread) => (
+                      <div
+                        key={thread.threadId}
+                        className={`txv-thread-chip${activeThreadId === thread.threadId ? ' txv-thread-chip--active' : ''}`}
+                      >
+                        <button type="button" className="txv-thread-chip-btn" onClick={() => void loadThread(thread.threadId)}>
+                          <span className="txv-thread-chip-title">{thread.title}</span>
+                          <span className="txv-thread-chip-meta">{thread.messageCount} msgs</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="txv-thread-chip-delete"
+                          onClick={() => void deleteThread(thread.threadId)}
+                          aria-label={`Delete ${thread.title}`}
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="txv-browser-empty">
+                  <div className="txv-empty-prompt-wrap">
+                    <div className="txv-empty-prompt">
+                      Ask me a question about {projectName}.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <form
+              className="txv-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitSearch(input);
+              }}
+            >
+              <input
+                type="text"
+                className="txv-composer-input"
+                placeholder="Ask or search across transcripts..."
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                disabled={isSubmitting}
+              />
+              <button type="submit" className="txv-composer-send" disabled={isSubmitting || !input.trim()}>
+                Send
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <div
+              ref={chatBodyRef}
+              className="txv-chat-body"
+              onScroll={(event) => {
+                const node = event.currentTarget;
+                const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+                const nextPinnedState = distanceFromBottom < 40;
+                setIsPinnedToBottom(nextPinnedState);
+                shouldScrollToBottomRef.current = nextPinnedState;
+              }}
+            >
+              {messages.map((message) => (
+                <div key={message.id} className={`txv-message txv-message--${message.role}`}>
+                  <div className="txv-message-bubble">
+                    <span className="txv-message-role">
+                      {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Cami' : 'Notice'}
+                    </span>
+                    {renderMessageContent(message.content)}
+                  </div>
+
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="txv-source-list">
+                      {groupSourcesByAsset(message.sources).map((sourceGroup) => (
+                        <SourceCard
+                          key={`${message.id}-${sourceGroup.jobId}`}
+                          sourceGroup={sourceGroup}
+                          expanded={Boolean(expandedSources[`${message.id}-${sourceGroup.jobId}`])}
+                          onToggle={() => setExpandedSources((current) => ({
+                            ...current,
+                            [`${message.id}-${sourceGroup.jobId}`]: !current[`${message.id}-${sourceGroup.jobId}`],
+                          }))}
+                          onOpenTranscript={onOpenTranscript}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {message.usage && (
+                    <p className="txv-usage-note">
+                      {message.searchMode === 'local'
+                        ? `${message.usage.selectedChunkCount} match${message.usage.selectedChunkCount === 1 ? '' : 'es'} found`
+                        : `Used ${message.usage.selectedChunkCount} excerpt${message.usage.selectedChunkCount === 1 ? '' : 's'} from ${message.usage.selectedTranscriptCount} transcript${message.usage.selectedTranscriptCount === 1 ? '' : 's'}.`
+                      }
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!isPinnedToBottom && (
+              <button
+                type="button"
+                className="txv-jump-bottom"
+                onClick={() => {
+                  const node = chatBodyRef.current;
+                  if (!node) return;
+                  node.scrollTop = node.scrollHeight;
+                  setIsPinnedToBottom(true);
+                  shouldScrollToBottomRef.current = true;
+                }}
+                aria-label="Jump to latest message"
               >
-                {type.toUpperCase()}
-              </a>
-            ) : null
-          ))}
-        </div>
+                &darr;
+              </button>
+            )}
 
-        <div className="txv-body">
-          {loading && <p className="txv-loading">Loading...</p>}
-          {error && <p className="txv-error">{error}</p>}
-          {!loading && !error && content && (
-            <pre className="txv-text">{content}</pre>
-          )}
-          {!loading && !error && !content && isOpen && (
-            <p className="txv-loading">No TXT transcript available.</p>
-          )}
-        </div>
+            <form
+              className="txv-composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitSearch(input);
+              }}
+            >
+              <input
+                type="text"
+                className="txv-composer-input"
+                placeholder="Ask or search across transcripts..."
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                disabled={isSubmitting}
+              />
+              <button type="submit" className="txv-composer-send" disabled={isSubmitting || !input.trim()}>
+                Send
+              </button>
+            </form>
+          </>
+        )}
       </div>
     </Fragment>
   );
@@ -172,4 +737,67 @@ export function TranscriptViewerPanel({ projectId, jobId, filename, onClose, sta
   }
 
   return panel;
+}
+
+function SourceCard({
+  sourceGroup,
+  expanded,
+  onToggle,
+  onOpenTranscript,
+}: Readonly<{
+  sourceGroup: {
+    jobId: string;
+    filename: string;
+    isDirectQuote: boolean;
+    excerpts: TranscriptSearchSource[];
+  };
+  expanded: boolean;
+  onToggle: () => void;
+  onOpenTranscript?: (jobId: string, filename: string) => void;
+}>) {
+  return (
+    <div className={`txv-source-card${expanded ? ' txv-source-card--expanded' : ''}`}>
+      <div className="txv-source-header">
+        <button type="button" className="txv-source-summary" onClick={onToggle}>
+          <div className="txv-source-title-wrap">
+            {sourceGroup.isDirectQuote && <span className="txv-source-flag">Quoted from transcript</span>}
+            <span className="txv-source-title" title={formatTranscriptLabel(sourceGroup.filename)}>
+              {formatTranscriptLabel(sourceGroup.filename)}
+            </span>
+            <span className="txv-source-count">
+              {sourceGroup.excerpts.length} section{sourceGroup.excerpts.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <span className={`txv-source-caret${expanded ? ' txv-source-caret--open' : ''}`} aria-hidden="true">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+        </button>
+        <div className="txv-source-actions">
+          <button type="button" className="txv-source-highlight" onClick={onToggle}>
+            Highlight asset
+          </button>
+        </div>
+        {onOpenTranscript && (
+          <button
+            type="button"
+            className="txv-source-link"
+            onClick={() => onOpenTranscript(sourceGroup.jobId, sourceGroup.filename)}
+          >
+            Open transcript
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="txv-source-detail-list">
+          {sourceGroup.excerpts.map((source, index) => (
+            <p key={`${sourceGroup.jobId}-${index}`} className="txv-source-excerpt">
+              {source.excerpt}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { readStorageConfig } from '@/lib/store/storage-config-store';
 
 export interface DetectedVolume {
@@ -35,64 +34,57 @@ function normalizeRootPath(rootPath: string): string {
   return path.normalize(rootPath);
 }
 
-function detectWindowsVolumes(): DetectedVolume[] {
-  const script = [
-    '$drives = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3 } | ForEach-Object {',
-    '  [PSCustomObject]@{',
-    '    rootPath = if ($_.DeviceID.EndsWith(\"\\\\\")) { $_.DeviceID } else { \"$($_.DeviceID)\\\\\" }',
-    '    label = if ($_.VolumeName) { $_.VolumeName } else { $_.DeviceID }',
-    '    totalBytes = if ($_.Size) { [int64]$_.Size } else { $null }',
-    '    freeBytes = if ($_.FreeSpace) { [int64]$_.FreeSpace } else { $null }',
-    '  }',
-    '}',
-    '$drives | ConvertTo-Json -Compress',
-  ].join(' ');
-
-  const result = spawnSync(
-    'C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    ['-NoProfile', '-Command', script],
-    { encoding: 'utf8', timeout: 5000 },
-  );
-
-  if (result.status !== 0 || !result.stdout.trim()) return [];
-
+function getPathCapacity(rootPath: string): { totalBytes: number | null; freeBytes: number | null } {
   try {
-    const parsed = JSON.parse(result.stdout) as Array<{
-      rootPath: string;
-      label: string;
-      totalBytes: number | null;
-      freeBytes: number | null;
-    }> | {
-      rootPath: string;
-      label: string;
-      totalBytes: number | null;
-      freeBytes: number | null;
+    if (typeof fs.statfsSync !== 'function') return { totalBytes: null, freeBytes: null };
+    const stat = fs.statfsSync(rootPath);
+    const blockSize = typeof stat.bsize === 'number' ? stat.bsize : 0;
+    const totalBlocks = typeof stat.blocks === 'number' ? stat.blocks : 0;
+    const freeBlocks = typeof stat.bavail === 'number'
+      ? stat.bavail
+      : (typeof stat.bfree === 'number' ? stat.bfree : 0);
+    if (blockSize <= 0 || totalBlocks <= 0) return { totalBytes: null, freeBytes: null };
+    return {
+      totalBytes: blockSize * totalBlocks,
+      freeBytes: blockSize * freeBlocks,
     };
-    const rows = Array.isArray(parsed) ? parsed : [parsed];
-    return rows.map((row) => {
-      const rootPath = normalizeRootPath(row.rootPath);
-      let writable = false;
-      let available = false;
+  } catch {
+    return { totalBytes: null, freeBytes: null };
+  }
+}
+
+function detectWindowsVolumes(): DetectedVolume[] {
+  const volumes: DetectedVolume[] = [];
+  for (let code = 67; code <= 90; code += 1) {
+    const letter = String.fromCharCode(code);
+    const rootPath = `${letter}:\\`;
+
+    let available = false;
+    let writable = false;
+    try {
+      available = fs.existsSync(rootPath);
+      if (!available) continue;
       try {
-        available = fs.existsSync(rootPath);
-        if (available) fs.accessSync(rootPath, fs.constants.W_OK);
-        writable = available;
+        fs.accessSync(rootPath, fs.constants.W_OK);
+        writable = true;
       } catch {
         writable = false;
       }
+    } catch {
+      continue;
+    }
 
-      return {
-        rootPath,
-        label: row.label || rootPath,
-        totalBytes: typeof row.totalBytes === 'number' ? row.totalBytes : null,
-        freeBytes: typeof row.freeBytes === 'number' ? row.freeBytes : null,
-        available,
-        writable,
-      };
+    const capacity = getPathCapacity(rootPath);
+    volumes.push({
+      rootPath,
+      label: `${letter}:`,
+      totalBytes: capacity.totalBytes,
+      freeBytes: capacity.freeBytes,
+      available,
+      writable,
     });
-  } catch {
-    return [];
   }
+  return volumes;
 }
 
 function detectFallbackVolumes(): DetectedVolume[] {
@@ -143,7 +135,23 @@ function buildReason(
   return null;
 }
 
+// ── Decision cache ───────────────────────────────────────────────────────────
+// detectHostVolumes() probes all 24 Windows drive letters synchronously on
+// every call. Drive letters don't change mid-session on their own — a user
+// adding a new volume still has to enable it in Storage Settings, which goes
+// through the PUT /api/storage/config route and calls invalidateStorageCache().
+// So we cache for the lifetime of the process and only invalidate explicitly.
+
+let _cachedDecision: StorageAllocationDecision | null = null;
+
+/** Invalidate the cached storage decision — call after config changes or on error. */
+export function invalidateStorageCache(): void {
+  _cachedDecision = null;
+}
+
 export function getStorageAllocationDecision(): StorageAllocationDecision {
+  if (_cachedDecision) return _cachedDecision;
+
   const config = readStorageConfig();
   const detected = detectHostVolumes();
   const preferenceMap = new Map(config.volumes.map((volume) => [normalizeRootPath(volume.rootPath), volume]));
@@ -177,16 +185,23 @@ export function getStorageAllocationDecision(): StorageAllocationDecision {
   });
 
   const eligible = states.filter((volume) => volume.eligible);
-  return {
+  const decision: StorageAllocationDecision = {
     active: eligible[0] ?? null,
     next: eligible[1] ?? null,
     volumes: states,
   };
+
+  // Only cache when an active volume exists — if nothing is eligible we want
+  // to re-probe on the next request so the user's fix is picked up immediately.
+  if (decision.active) _cachedDecision = decision;
+
+  return decision;
 }
 
 export function resolveProjectMediaStorageDir(projectId: string): string {
   const decision = getStorageAllocationDecision();
   if (!decision.active) {
+    invalidateStorageCache();
     throw new Error('No eligible LPOS storage drive is available. Add or enable a writable volume in Storage Settings.');
   }
 

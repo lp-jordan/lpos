@@ -312,9 +312,11 @@ function ShareCard({
   }
 
   const existingFileIds = new Set((share.files ?? []).map((f) => f.id));
-  const fileCountLabel  = share.files === null
+  // Prefer the live count from expanded files; fall back to the eager count from the list response.
+  const count = share.files !== null ? share.files.length : share.fileCount;
+  const fileCountLabel = count === null
     ? (share.filesLoading ? 'Loading…' : '—')
-    : `${share.files.length} file${share.files.length !== 1 ? 's' : ''}`;
+    : `${count} file${count !== 1 ? 's' : ''}`;
 
   return (
     <>

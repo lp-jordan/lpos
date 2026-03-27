@@ -123,8 +123,13 @@ export function formatDateStamp(date = new Date()): string {
   return `${month}-${day}-${year}`;
 }
 
-export function generateRecordingBaseName(projectName: string, date = new Date()): string {
-  return `${sanitizeProjectName(projectName)}_${formatDateStamp(date)}`;
+export function generateRecordingBaseName(projectName: string, date = new Date(), clientName?: string): string {
+  const project = sanitizeProjectName(projectName);
+  const datestamp = formatDateStamp(date);
+  if (clientName?.trim()) {
+    return `${sanitizeProjectName(clientName)}_${project}_${datestamp}`;
+  }
+  return `${project}_${datestamp}`;
 }
 
 export function createNote(code: string, note: string, date = new Date()): SlateNote {

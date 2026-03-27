@@ -20,16 +20,31 @@ const WHISPER_EXECUTABLE_NAMES = process.platform === 'win32'
   ? ['whisper-cli.exe', 'whisper.exe', 'main.exe']
   : ['whisper-cli', 'whisper', 'main'];
 
+function existingPathOrNull(targetPath: string | null | undefined): string | null {
+  const candidate = targetPath?.trim();
+  if (!candidate) return null;
+  return pathExists(candidate) ? candidate : null;
+}
+
 export function getRuntimeRoot(): string {
   return process.env.LPOS_RUNTIME_DIR?.trim() || path.join(process.cwd(), 'runtime');
 }
 
 export function getWhisperRuntimeDir(): string {
-  return process.env.LPOS_WHISPER_RUNTIME_DIR?.trim() || path.join(getRuntimeRoot(), 'whisper-runtime');
+  const explicit = existingPathOrNull(process.env.LPOS_WHISPER_RUNTIME_DIR);
+  if (explicit) return explicit;
+
+  return path.join(getRuntimeRoot(), 'whisper-runtime');
 }
 
 export function getWhisperModelDir(): string {
-  return process.env.LPOS_WHISPER_MODEL_DIR?.trim() || path.join(getRuntimeRoot(), 'whisper-models');
+  const explicit = existingPathOrNull(process.env.LPOS_WHISPER_MODEL_DIR);
+  if (explicit) return explicit;
+
+  const defaultDir = path.join(getRuntimeRoot(), 'whisper-models');
+  if (pathExists(defaultDir)) return defaultDir;
+
+  return process.env.LPOS_WHISPER_MODEL_DIR?.trim() || defaultDir;
 }
 
 export function getAtemBridgeDir(): string {
@@ -53,7 +68,7 @@ function pathExists(targetPath: string): boolean {
 }
 
 export function resolveWhisperBinaryPath(): string | null {
-  const explicit = process.env.LPOS_WHISPER_BINARY?.trim();
+  const explicit = existingPathOrNull(process.env.LPOS_WHISPER_BINARY);
   if (explicit) return explicit;
 
   const runtimeDir = getWhisperRuntimeDir();

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useProjects } from '@/hooks/useProjects';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
+import { GlobalSharesManager } from '@/components/media/GlobalSharesManager';
 import type { Project } from '@/lib/models/project';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { FRAMEIO_STATUS_LABEL, LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
@@ -256,7 +257,7 @@ function ProjectAccordion({
     : [...assets]
   ).sort((a, b) => {
     const cmp = assetSort === 'name'
-      ? a.name.localeCompare(b.name)
+      ? a.name.localeCompare(b.name, undefined, { numeric: true })
       : new Date(a.registeredAt).getTime() - new Date(b.registeredAt).getTime();
     return assetSortDir === 'asc' ? cmp : -cmp;
   });
@@ -375,6 +376,7 @@ function ProjectAccordion({
 export default function MediaPage() {
   const { projects, loading } = useProjects();
 
+  const [tab,          setTab]          = useState<'projects' | 'shares'>('projects');
   const [search,       setSearch]       = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [sortBy,       setSortBy]       = useState<'name' | 'client' | 'updated'>('updated');
@@ -403,7 +405,7 @@ export default function MediaPage() {
   // Unique sorted client names for the filter dropdown
   const clientNames = Array.from(
     new Set(projects.map((p: Project) => p.clientName ?? '').filter(Boolean))
-  ).sort() as string[];
+  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) as string[];
 
   // Filter by client only — search works at the asset level inside each accordion
   const filteredProjects = projects
@@ -413,8 +415,8 @@ export default function MediaPage() {
     })
     .sort((a: Project, b: Project) => {
       let cmp = 0;
-      if (sortBy === 'name')    cmp = a.name.localeCompare(b.name);
-      if (sortBy === 'client')  cmp = (a.clientName ?? '').localeCompare(b.clientName ?? '');
+      if (sortBy === 'name')    cmp = a.name.localeCompare(b.name, undefined, { numeric: true });
+      if (sortBy === 'client')  cmp = (a.clientName ?? '').localeCompare(b.clientName ?? '', undefined, { numeric: true });
       if (sortBy === 'updated') cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
       return sortDir === 'asc' ? cmp : -cmp;
     });
@@ -424,6 +426,27 @@ export default function MediaPage() {
 
   return (
     <div className="page-stack">
+      {/* Tab bar */}
+      <div className="gm-tabs">
+        <button
+          type="button"
+          className={`gm-tab${tab === 'projects' ? ' gm-tab--active' : ''}`}
+          onClick={() => setTab('projects')}
+        >
+          Projects
+        </button>
+        <button
+          type="button"
+          className={`gm-tab${tab === 'shares' ? ' gm-tab--active' : ''}`}
+          onClick={() => setTab('shares')}
+        >
+          Share Links
+        </button>
+      </div>
+
+      {tab === 'shares' && <GlobalSharesManager />}
+
+      {tab === 'projects' && <>
       {/* Toolbar */}
       <div className="gm-toolbar">
         <div className="gm-toolbar-search">
@@ -523,7 +546,9 @@ export default function MediaPage() {
         </div>
       )}
 
-      {/* Detail panel — shared across all projects */}
+      </>}
+
+      {/* Detail panel — rendered outside tabs so it can overlay either view */}
       <MediaDetailPanel
         asset={panelAsset}
         projectId={panelProjectId}

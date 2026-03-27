@@ -111,8 +111,7 @@ async function main() {
     if (mkcertFiles) {
       console.log(`  🔒 cert: ${path.basename(mkcertFiles.cert)}`);
     } else {
-      console.log('  ⚠  No mkcert certs found — running HTTP. Frame.io OAuth requires HTTPS.');
-      console.log('     Run: mkcert localhost 127.0.0.1 172.20.10.137  then restart.');
+      console.log('  ↳ Running HTTP — HTTPS handled by Tailscale.');
     }
     console.log(`  ↳ ${services}`);
     console.log('');

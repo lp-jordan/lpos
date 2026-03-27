@@ -21,6 +21,8 @@ target_include_directories(${BRIDGE_TARGET} PRIVATE
 target_compile_definitions(${BRIDGE_TARGET} PRIVATE
   WIN32_LEAN_AND_MEAN
   NOMINMAX
+  UNICODE
+  _UNICODE
 )
 
 find_library(SONY_CR_CORE_LIBRARY Cr_Core HINTS "${SONY_CRSDK_DIR}")

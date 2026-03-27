@@ -8,10 +8,17 @@ import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
 import { SharesPanel } from '@/components/projects/SharesPanel';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
+import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
+import { useIngestQueue } from '@/hooks/useIngestQueue';
 import type { MediaAsset } from '@/lib/models/media-asset';
-import { FRAMEIO_STATUS_LABEL, LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
+import { LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Mirrors the server-side normalizeAssetKey: strip extension, uppercase, alphanumeric only. */
+function normalizeKey(s: string): string {
+  return s.replace(/\.[^/.]+$/, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
 
 function formatBytes(b: number | null): string {
   if (b === null) return '—';
@@ -24,6 +31,47 @@ function formatBytes(b: number | null): string {
 function formatDate(iso: string): string {
   try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
   catch { return iso; }
+}
+
+type SortField = 'name' | 'date' | 'size' | 'duration';
+type SortDir = 'asc' | 'desc';
+
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: 'name',     label: 'Name' },
+  { value: 'date',     label: 'Date' },
+  { value: 'size',     label: 'Size' },
+  { value: 'duration', label: 'Duration' },
+];
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null || seconds <= 0) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function sortAssets(assets: MediaAsset[], field: SortField, dir: SortDir): MediaAsset[] {
+  const sorted = [...assets].sort((a, b) => {
+    let cmp = 0;
+    switch (field) {
+      case 'name':
+        cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+        break;
+      case 'date':
+        cmp = a.registeredAt.localeCompare(b.registeredAt);
+        break;
+      case 'size':
+        cmp = (a.fileSize ?? 0) - (b.fileSize ?? 0);
+        break;
+      case 'duration':
+        cmp = (a.duration ?? 0) - (b.duration ?? 0);
+        break;
+    }
+    return dir === 'asc' ? cmp : -cmp;
+  });
+  return sorted;
 }
 
 // ── Status badges ─────────────────────────────────────────────────────────────
@@ -40,19 +88,21 @@ function TranscriptionBadge({ status }: { status: MediaAsset['transcription']['s
   return <span className={`ma-badge ${cls}`}>{label}</span>;
 }
 
-function FrameIOBadge({ status, version }: { status: MediaAsset['frameio']['status']; version: number }) {
-  const cls: Record<typeof status, string> = {
-    none:          'ma-badge--neutral',
-    uploading:     'ma-badge--active',
-    in_review:     'ma-badge--review',
-    approved:      'ma-badge--success',
-    rejected:      'ma-badge--error',
-    needs_changes: 'ma-badge--pending',
-  };
+const VERSION_COLORS = [
+  { bg: 'rgba(100,149,237,0.15)', color: '#6495ed' }, // v1 — cornflower blue
+  { bg: 'rgba(155,122,204,0.15)', color: '#9b7acc' }, // v2 — soft purple
+  { bg: 'rgba(74,184,193,0.15)',  color: '#4ab8c1' }, // v3 — teal
+  { bg: 'rgba(219,175,95,0.16)',  color: '#dbaf5f' }, // v4 — gold (accent)
+];
+
+function VersionBadge({ version }: { version: number }) {
+  const slot = VERSION_COLORS[(version - 1) % VERSION_COLORS.length];
   return (
-    <span className={`ma-badge ${cls[status]}`}>
-      {FRAMEIO_STATUS_LABEL[status]}
-      {status !== 'none' && status !== 'uploading' && ` v${version}`}
+    <span
+      className="ma-badge ma-badge--version"
+      style={{ background: slot.bg, color: slot.color }}
+    >
+      v{version}
     </span>
   );
 }
@@ -154,11 +204,12 @@ function AssetRow({
       </div>
       <div className="ma-row-meta">
         <span className="ma-filesize">{formatBytes(asset.fileSize)}</span>
+        <span className="ma-duration">{formatDuration(asset.duration)}</span>
         <span className="ma-date">{formatDate(asset.registeredAt)}</span>
       </div>
       <div className="ma-row-badges">
         <TranscriptionBadge status={asset.transcription.status} />
-        <FrameIOBadge status={asset.frameio.status} version={asset.frameio.version} />
+        <VersionBadge version={asset.frameio.version} />
         <LeaderPassBadge status={asset.leaderpass.status} />
       </div>
       <button
@@ -218,10 +269,10 @@ function AssetCard({
       <div className="ma-card-body">
         <div className="ma-card-name">{asset.name}</div>
         {asset.description && <div className="ma-card-desc">{asset.description}</div>}
-        <div className="ma-card-meta">{formatBytes(asset.fileSize)} · {formatDate(asset.registeredAt)}</div>
+        <div className="ma-card-meta">{formatBytes(asset.fileSize)} · {formatDuration(asset.duration)} · {formatDate(asset.registeredAt)}</div>
         <div className="ma-card-badges">
           <TranscriptionBadge status={asset.transcription.status} />
-          <FrameIOBadge status={asset.frameio.status} version={asset.frameio.version} />
+          <VersionBadge version={asset.frameio.version} />
           <LeaderPassBadge status={asset.leaderpass.status} />
         </div>
       </div>
@@ -256,13 +307,14 @@ export function MediaTab({
   const [loading,         setLoading]         = useState(true);
   const [viewMode,        setViewMode]        = useState<'list' | 'card'>('list');
   const [search,          setSearch]          = useState('');
+  const [sortField,       setSortField]       = useState<SortField>('date');
+  const [sortDir,         setSortDir]         = useState<SortDir>('desc');
   const [selectedAsset,   setSelectedAsset]   = useState<MediaAsset | null>(null);
   const [isDragOver,      setIsDragOver]      = useState(false);
-  const [uploading,       setUploading]       = useState(false);
-  const [uploadProgress,  setUploadProgress]  = useState(0);
-  const [uploadLabel,     setUploadLabel]     = useState('');
   const [uploadError,     setUploadError]     = useState<string | null>(null);
   const [confirmDelete,   setConfirmDelete]   = useState<{ asset: MediaAsset; deleteFile: boolean } | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState<{ deleteFile: boolean } | null>(null);
+  const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [showSharesPanel, setShowSharesPanel] = useState(false);
@@ -272,18 +324,25 @@ export function MediaTab({
   const [shareCopied,     setShareCopied]     = useState(false);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
-  const [versionConfirm,  setVersionConfirm]  = useState<{ asset: MediaAsset; currentVersionNumber: number } | null>(null);
+  const { requestVersionConfirmation, startBatch, endBatch } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commentCountsRef = useRef<Map<string, number>>(new Map());
   const hasCommentBaselineRef = useRef(false);
   const consumedDeepLinkRef = useRef<string | null>(null);
-  const versionConfirmResolverRef = useRef<((accepted: boolean) => void) | null>(null);
-  const { openMenu } = useContextMenu();
+const { openMenu } = useContextMenu();
   const { toast } = useToast();
+  const { jobs: ingestJobs, cancel: cancelIngestJob } = useIngestQueue();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+
+  // ── Remote ingest state (survives tab navigation) ──────────────────────────
+
+  // Active ingest jobs for this project — used to float uploading assets to the top of the list
+  const activeIngestJobs = ingestJobs.filter(
+    (j) => j.projectId === projectId && (j.status === 'queued' || j.status === 'ingesting'),
+  );
 
   // ── Frame.io connection status ─────────────────────────────────────────────
 
@@ -380,18 +439,33 @@ export function MediaTab({
     );
   }
 
-  function requestVersionConfirmation(asset: MediaAsset, currentVersionNumber: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      versionConfirmResolverRef.current = resolve;
-      setVersionConfirm({ asset, currentVersionNumber });
-    });
+  function findLocalVersionCandidate(filename: string): MediaAsset | undefined {
+    const key = normalizeKey(filename);
+    if (!key) return undefined;
+    return [...assets].reverse().find(
+      (a) => normalizeKey(a.name) === key || normalizeKey(a.originalFilename) === key,
+    );
+  }
+
+  async function reserveIngestJobs(filenames: string[]): Promise<{ filename: string; jobId: string }[]> {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/ingest-queue/reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filenames }),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as { jobs?: { filename: string; jobId: string }[] };
+      return data.jobs ?? [];
+    } catch {
+      return [];
+    }
   }
 
   function uploadFile(
     file: File,
-    current: number,
-    total: number,
     replaceAssetId?: string,
+    reservedJobId?: string,
   ): Promise<{
     ok: boolean;
     code?: string;
@@ -404,16 +478,6 @@ export function MediaTab({
       if (replaceAssetId) form.append('replaceAssetId', replaceAssetId);
       form.append('file', file);
       const xhr = new XMLHttpRequest();
-      xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable) {
-          setUploadProgress(Math.round((ev.loaded / ev.total) * 100));
-          setUploadLabel(
-            total > 1
-              ? `Ingesting ${current} of ${total} — ${Math.round((ev.loaded / ev.total) * 100)}%`
-              : `Ingesting — ${Math.round((ev.loaded / ev.total) * 100)}%`,
-          );
-        }
-      };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) { resolve({ ok: true }); return; }
         try {
@@ -436,38 +500,90 @@ export function MediaTab({
       };
       xhr.onerror = () => { resolve({ ok: false, error: `Network error uploading "${file.name}"` }); };
       xhr.open('POST', `/api/projects/${projectId}/media`);
+      xhr.setRequestHeader('x-upload-filename', encodeURIComponent(file.name));
+      if (reservedJobId) xhr.setRequestHeader('x-ingest-job-id', reservedJobId);
       xhr.send(form);
     });
   }
 
   async function uploadFiles(files: File[]) {
     if (!files.length) return;
-    setUploading(true);
     setUploadError(null);
-    for (let i = 0; i < files.length; i++) {
-      setUploadProgress(0);
-      setUploadLabel(files.length > 1 ? `Ingesting ${i + 1} of ${files.length} — 0%` : 'Ingesting — 0%');
-      const firstAttempt = await uploadFile(files[i], i + 1, files.length);
-      if (firstAttempt.ok) continue;
+    startBatch();
 
-      if (firstAttempt.code === 'version_confirmation_required' && firstAttempt.existingAsset) {
-        const confirmed = await requestVersionConfirmation(
-          firstAttempt.existingAsset,
-          firstAttempt.currentVersionNumber ?? firstAttempt.existingAsset.frameio.version ?? 1,
-        );
-        if (confirmed) {
-          const retry = await uploadFile(files[i], i + 1, files.length, firstAttempt.existingAsset.assetId);
-          if (!retry.ok) setUploadError(retry.error ?? `Upload failed for "${files[i].name}"`);
+    // Warn the user if they try to leave while uploads are in progress.
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    try {
+      // Pre-check: detect version candidates by name before any upload starts.
+      // Shows the confirmation modal immediately at drag-and-drop time rather than
+      // waiting for each file to finish uploading and hash before asking.
+      // Map of fileIndex → replaceAssetId (confirmed) or null (declined).
+      const replaceMap = new Map<number, string | null>();
+      for (let i = 0; i < files.length; i++) {
+        const candidate = findLocalVersionCandidate(files[i].name);
+        if (candidate) {
+          const confirmed = await requestVersionConfirmation(
+            candidate,
+            candidate.frameio?.version ?? 1,
+          );
+          replaceMap.set(i, confirmed ? candidate.assetId : null);
         }
-        continue;
       }
 
-      setUploadError(firstAttempt.error ?? `Upload failed for "${files[i].name}"`);
+      // Pre-reserve ingest queue entries for all files so every file appears as
+      // "queued" in the IngestTray immediately — before any upload has started.
+      const reserved = await reserveIngestJobs(files.map((f) => f.name));
+
+      for (let i = 0; i < files.length; i++) {
+        const reservedJobId = reserved[i]?.jobId;
+        // Skip files whose reserved queue slot was cancelled while waiting.
+        if (reservedJobId && ingestJobs.some((j) => j.jobId === reservedJobId && j.status === 'cancelled')) {
+          continue;
+        }
+
+        // If pre-checked, upload directly with or without replaceAssetId
+        if (replaceMap.has(i)) {
+          const replaceId = replaceMap.get(i);
+          if (replaceId === null) {
+            // User declined the version bump — cancel the reserved slot and skip
+            if (reservedJobId) cancelIngestJob(reservedJobId);
+            continue;
+          }
+          const result = await uploadFile(files[i], replaceId, reservedJobId);
+          if (!result.ok) setUploadError(result.error ?? `Upload failed for "${files[i].name}"`);
+          continue;
+        }
+
+        const firstAttempt = await uploadFile(files[i], undefined, reservedJobId);
+        if (firstAttempt.ok) continue;
+
+        // Fallback: server detected a version conflict that the pre-check missed
+        // (e.g., a concurrent upload registered an asset between pre-check and upload).
+        if (firstAttempt.code === 'version_confirmation_required' && firstAttempt.existingAsset) {
+          const confirmed = await requestVersionConfirmation(
+            firstAttempt.existingAsset,
+            firstAttempt.currentVersionNumber ?? firstAttempt.existingAsset.frameio.version ?? 1,
+          );
+          if (confirmed) {
+            // Retry without reservedJobId — the first attempt already consumed or failed it
+            const retry = await uploadFile(files[i], firstAttempt.existingAsset.assetId);
+            if (!retry.ok) setUploadError(retry.error ?? `Upload failed for "${files[i].name}"`);
+          }
+          continue;
+        }
+
+        setUploadError(firstAttempt.error ?? `Upload failed for "${files[i].name}"`);
+      }
+      void fetchAssets();
+    } finally {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      endBatch();
     }
-    setUploading(false);
-    setUploadProgress(0);
-    setUploadLabel('');
-    void fetchAssets();
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -497,10 +613,8 @@ export function MediaTab({
   }
 
   async function registerPaths(paths: string[]) {
-    setUploading(true);
     setUploadError(null);
     for (let i = 0; i < paths.length; i++) {
-      setUploadLabel(`Registering ${i + 1} of ${paths.length}: ${paths[i].split(/[/\\]/).pop()}`);
       try {
         const registerPath = async (replaceAssetId?: string) => fetch(`/api/projects/${projectId}/media/register`, {
           method: 'POST',
@@ -536,8 +650,6 @@ export function MediaTab({
         setUploadError(`Network error registering "${paths[i]}"`);
       }
     }
-    setUploading(false);
-    setUploadLabel('');
     void fetchAssets();
   }
 
@@ -654,14 +766,54 @@ export function MediaTab({
     a.originalFilename.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // Active ingest jobs keyed by filename for fast lookup
+  const activeIngestByFilename = new Map(activeIngestJobs.map((j) => [j.filename, j]));
+
+  // Sort: assets with active ingest jobs float to the top (most progress first),
+  // remaining assets keep the user's chosen order.
+  const _baseSorted = sortAssets(filtered, sortField, sortDir);
+  const sorted = activeIngestByFilename.size === 0 ? _baseSorted : (() => {
+    const active: MediaAsset[] = [];
+    const rest: MediaAsset[] = [];
+    for (const a of _baseSorted) {
+      if (activeIngestByFilename.has(a.name) || activeIngestByFilename.has(a.originalFilename)) {
+        active.push(a);
+      } else {
+        rest.push(a);
+      }
+    }
+    active.sort((a, b) => {
+      const pa = (activeIngestByFilename.get(a.name) ?? activeIngestByFilename.get(a.originalFilename))?.progress ?? 0;
+      const pb = (activeIngestByFilename.get(b.name) ?? activeIngestByFilename.get(b.originalFilename))?.progress ?? 0;
+      return pb - pa;
+    });
+    return [...active, ...rest];
+  })();
+
   // ── Selection helpers (depend on filtered) ────────────────────────────────
 
-  const allFilteredIds = filtered.map((a) => a.assetId);
+  const allFilteredIds = sorted.map((a) => a.assetId);
   const allSelected    = allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedIds.has(id));
   const someSelected   = !allSelected && allFilteredIds.some((id) => selectedIds.has(id));
 
   function toggleSelectAll() {
     setSelectedIds(allSelected ? new Set() : new Set(allFilteredIds));
+  }
+
+  async function handleBulkDelete(deleteFile: boolean) {
+    if (!selectedIds.size) return;
+    setBulkDeleteWorking(true);
+    const ids = [...selectedIds];
+    await Promise.all(
+      ids.map((id) =>
+        fetch(`/api/projects/${projectId}/media/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' }),
+      ),
+    );
+    if (selectedAsset && ids.includes(selectedAsset.assetId)) setSelectedAsset(null);
+    setSelectedIds(new Set());
+    setConfirmBulkDelete(null);
+    setBulkDeleteWorking(false);
+    await fetchAssets();
   }
 
   async function handleBulkShare() {
@@ -742,8 +894,8 @@ export function MediaTab({
 
         {/* Drop zone */}
         <div
-          className={`proj-upload-zone${isDragOver ? ' proj-upload-zone--active' : ''}${uploading ? ' proj-upload-zone--busy' : ''}`}
-          onClick={() => !uploading && fileInputRef.current?.click()}
+          className={`proj-upload-zone${isDragOver ? ' proj-upload-zone--active' : ''}`}
+          onClick={() => fileInputRef.current?.click()}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
@@ -752,14 +904,7 @@ export function MediaTab({
           aria-label="Upload media — click or drag files here"
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}
         >
-          {uploading ? (
-            <>
-              <div className="proj-upload-bar-wrap">
-                <div className="proj-upload-bar-fill" style={{ width: `${uploadProgress}%` }} />
-              </div>
-              <span className="proj-upload-zone-label">{uploadLabel}</span>
-            </>
-          ) : isDragOver ? (
+          {isDragOver ? (
             <span className="proj-upload-zone-label proj-upload-zone-label--drop">Drop to upload</span>
           ) : (
             <>
@@ -811,6 +956,28 @@ export function MediaTab({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            <div className="ma-sort-controls">
+              {SORT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`ma-sort-btn${sortField === opt.value ? ' ma-sort-btn--active' : ''}`}
+                  onClick={() => {
+                    if (sortField === opt.value) {
+                      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+                    } else {
+                      setSortField(opt.value);
+                      setSortDir(opt.value === 'name' ? 'asc' : 'desc');
+                    }
+                  }}
+                >
+                  {opt.label}
+                  {sortField === opt.value && (
+                    <span className="ma-sort-arrow">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </button>
+              ))}
+            </div>
             <div className="ma-toolbar-right">
               <button
                 type="button"
@@ -878,6 +1045,28 @@ export function MediaTab({
             {shareError && <span className="ma-selection-error">{shareError}</span>}
             <button
               type="button"
+              className="ma-selection-action ma-selection-action--danger"
+              onClick={() => setConfirmBulkDelete({ deleteFile: false })}
+              disabled={bulkDeleteWorking}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+              Remove Selected
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action ma-selection-action--danger"
+              onClick={() => setConfirmBulkDelete({ deleteFile: true })}
+              disabled={bulkDeleteWorking}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+              Delete Files
+            </button>
+            <button
+              type="button"
               className="ma-selection-clear"
               onClick={() => setSelectedIds(new Set())}
               aria-label="Clear selection"
@@ -890,7 +1079,7 @@ export function MediaTab({
         {/* Content */}
         {loading ? (
           <p className="m-empty">Loading…</p>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <p className="m-empty">
             {assets.length === 0
               ? 'No media yet — drag a file from your NAS or click the upload zone above.'
@@ -898,7 +1087,7 @@ export function MediaTab({
           </p>
         ) : viewMode === 'list' ? (
           <div className="ma-list">
-            {filtered.map((a) => (
+            {sorted.map((a) => (
               <AssetRow
                 key={a.assetId}
                 asset={a}
@@ -912,7 +1101,7 @@ export function MediaTab({
           </div>
         ) : (
           <div className="ma-grid">
-            {filtered.map((a) => (
+            {sorted.map((a) => (
               <AssetCard
                 key={a.assetId}
                 asset={a}
@@ -987,6 +1176,24 @@ export function MediaTab({
         </div>
       )}
 
+      {/* Bulk delete confirm */}
+      {confirmBulkDelete && (
+        <ConfirmModal
+          title={confirmBulkDelete.deleteFile ? 'Delete Files' : 'Remove Selected'}
+          body={(() => {
+            const n = selectedIds.size;
+            const count = `${n} item${n === 1 ? '' : 's'}`;
+            return confirmBulkDelete.deleteFile
+              ? `Permanently delete ${count} from disk, remove from this project, and delete from Frame.io where applicable? This cannot be undone.`
+              : `Remove ${count} from this project? Files on disk and Frame.io are not affected.`;
+          })()}
+          confirmLabel={bulkDeleteWorking ? (confirmBulkDelete.deleteFile ? 'Deleting…' : 'Removing…') : (confirmBulkDelete.deleteFile ? 'Delete Files' : 'Remove')}
+          danger
+          onConfirm={() => void handleBulkDelete(confirmBulkDelete.deleteFile)}
+          onClose={() => setConfirmBulkDelete(null)}
+        />
+      )}
+
       {/* Delete confirm */}
       {confirmDelete && (
         <ConfirmModal
@@ -1014,23 +1221,6 @@ export function MediaTab({
         />
       )}
 
-      {versionConfirm && (
-        <ConfirmModal
-          title="Create New Version"
-          body={`"${versionConfirm.asset.name}" already exists in this project as version ${versionConfirm.currentVersionNumber}. Register this file as the next version and replace downstream pipeline mappings for future Frame.io and LeaderPass delivery?`}
-          confirmLabel="Create Version"
-          onConfirm={() => {
-            versionConfirmResolverRef.current?.(true);
-            versionConfirmResolverRef.current = null;
-            setVersionConfirm(null);
-          }}
-          onClose={() => {
-            versionConfirmResolverRef.current?.(false);
-            versionConfirmResolverRef.current = null;
-            setVersionConfirm(null);
-          }}
-        />
-      )}
     </>
   );
 }

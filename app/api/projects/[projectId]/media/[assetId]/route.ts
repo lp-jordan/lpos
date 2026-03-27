@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { getAsset, patchAsset, removeAsset } from '@/lib/store/media-registry';
 import type { AssetPatch } from '@/lib/store/media-registry';
 import { getAllShareAssets, removeShareAsset } from '@/lib/store/share-assets-store';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
+import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { deleteFrameioFile } from '@/lib/services/frameio';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
@@ -25,6 +27,27 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     const updated = patchAsset(projectId, assetId, body);
     if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    const actor = resolveRequestActor(req);
+    const eventType = body.transcription || body.frameio || body.cloudflare || body.leaderpass
+      ? 'asset.status.changed'
+      : 'asset.metadata.updated';
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: eventType,
+      lifecycle_phase: 'updated',
+      source_kind: 'api',
+      visibility: 'user_timeline',
+      title: `Asset updated: ${updated.name || updated.originalFilename}`,
+      summary: `${updated.name || updated.originalFilename} was updated`,
+      project_id: projectId,
+      asset_id: assetId,
+      client_id: null,
+      details_json: {
+        patch: body,
+      },
+      search_text: `${updated.name || updated.originalFilename} ${updated.originalFilename}`.trim(),
+    });
     return NextResponse.json({ asset: updated });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
@@ -62,6 +85,23 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     // ── Local registry + optional disk file ───────────────────────────────
     const removed = removeAsset(projectId, assetId);
     if (!removed) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    recordActivity({
+      ...resolveRequestActor(req),
+      occurred_at: new Date().toISOString(),
+      event_type: 'asset.deleted',
+      lifecycle_phase: 'superseded',
+      source_kind: 'api',
+      visibility: 'operator_only',
+      title: `Asset deleted: ${removed.name || removed.originalFilename}`,
+      summary: `${removed.name || removed.originalFilename} was removed from the project`,
+      project_id: projectId,
+      asset_id: assetId,
+      details_json: {
+        deleteFile,
+        filePath: removed.filePath,
+      },
+      search_text: `${removed.name || removed.originalFilename} ${removed.originalFilename}`.trim(),
+    });
 
     if (deleteFile && removed.storageType === 'uploaded' && removed.filePath) {
       try { if (fs.existsSync(removed.filePath)) fs.unlinkSync(removed.filePath); } catch { /* ignore */ }

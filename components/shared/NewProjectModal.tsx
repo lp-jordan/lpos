@@ -63,7 +63,9 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName }: Reado
               placeholder="LeaderPass"
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
-              autoFocus
+              readOnly={!!defaultClientName}
+              disabled={!!defaultClientName}
+              autoFocus={!defaultClientName}
               autoComplete="off"
             />
           </div>
@@ -77,6 +79,7 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName }: Reado
               placeholder="Annual Summit Highlights"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              autoFocus={!!defaultClientName}
               autoComplete="off"
             />
           </div>

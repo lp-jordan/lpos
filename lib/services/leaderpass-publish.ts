@@ -1,6 +1,8 @@
+import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getUploadQueueService } from '@/lib/services/container';
 import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
+import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
 import {
   createCloudflareTusUpload,
   getCloudflareStreamConfigDiagnostic,
@@ -24,9 +26,13 @@ export function canPrepareLeaderPassPublish(): boolean {
   return isCloudflareStreamConfigured();
 }
 
-export function triggerLeaderPassPublish(projectId: string, assetId: string): void {
+interface LeaderPassPublishContext {
+  actor?: ActivityActor;
+}
+
+export function triggerLeaderPassPublish(projectId: string, assetId: string, context?: LeaderPassPublishContext): void {
   setImmediate(() => {
-    void runLeaderPassPublish(projectId, assetId).catch((error) => {
+    void runLeaderPassPublish(projectId, assetId, context).catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[leaderpass] unhandled publish failure for asset ${assetId}: ${message}`);
       patchAsset(projectId, assetId, {
@@ -50,7 +56,7 @@ export function triggerLeaderPassBatchPublish(projectId: string, assetIds: strin
   }
 }
 
-async function runLeaderPassPublish(projectId: string, assetId: string): Promise<void> {
+async function runLeaderPassPublish(projectId: string, assetId: string, context?: LeaderPassPublishContext): Promise<void> {
   const asset = getAsset(projectId, assetId);
   if (!asset || !asset.filePath) {
     console.warn(`[leaderpass] skipped publish for asset ${assetId}: asset or file path missing`);
@@ -83,6 +89,23 @@ async function runLeaderPassPublish(projectId: string, assetId: string): Promise
   const queue = getQueue();
   const filename = asset.name || asset.originalFilename;
   const jobId = queue?.add(projectId, assetId, filename, 'leaderpass' satisfies PublishQueueProvider) ?? null;
+  const actor = context?.actor ?? serviceActor('LeaderPass Publish', 'leaderpass-publish');
+
+  recordActivity({
+    ...actor,
+    occurred_at: new Date().toISOString(),
+    event_type: 'leaderpass.publish.queued',
+    lifecycle_phase: 'queued',
+    source_kind: 'background_service',
+    visibility: 'user_timeline',
+    title: `LeaderPass publish queued: ${filename}`,
+    summary: `${filename} was queued for LeaderPass preparation`,
+    project_id: projectId,
+    asset_id: assetId,
+    job_id: jobId,
+    source_service: 'leaderpass-publish',
+    details_json: { filename },
+  });
 
   patchAsset(projectId, assetId, {
     cloudflare: {
@@ -96,6 +119,21 @@ async function runLeaderPassPublish(projectId: string, assetId: string): Promise
       lastError: null,
       publishedAt: null,
     },
+  });
+  recordActivity({
+    ...actor,
+    occurred_at: new Date().toISOString(),
+    event_type: 'leaderpass.publish.started',
+    lifecycle_phase: 'running',
+    source_kind: 'background_service',
+    visibility: 'user_timeline',
+    title: `LeaderPass publish started: ${filename}`,
+    summary: `${filename} started Cloudflare and LeaderPass preparation`,
+    project_id: projectId,
+    asset_id: assetId,
+    job_id: jobId,
+    source_service: 'leaderpass-publish',
+    details_json: { filename },
   });
 
   try {
@@ -136,7 +174,7 @@ async function runLeaderPassPublish(projectId: string, assetId: string): Promise
         uploadedAt: new Date().toISOString(),
       },
     });
-    queue?.setProgress(jobId!, 100);
+    queue?.setProcessing(jobId!, 'Waiting for Cloudflare Stream processing');
 
     const ready = await waitForCloudflareVideoReady(prepared.uid, {
       isCancelled: jobId ? () => queue?.isCancelled(jobId) ?? false : undefined,
@@ -183,6 +221,25 @@ async function runLeaderPassPublish(projectId: string, assetId: string): Promise
   });
 
     queue?.complete(jobId!);
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: 'leaderpass.publish.completed',
+      lifecycle_phase: 'completed',
+      source_kind: 'background_service',
+      visibility: 'user_timeline',
+      title: `LeaderPass publish prepared: ${filename}`,
+      summary: `${filename} is ready for LeaderPass handoff`,
+      project_id: projectId,
+      asset_id: assetId,
+      job_id: jobId,
+      source_service: 'leaderpass-publish',
+      details_json: {
+        filename,
+        playbackUrl: ready.previewUrl,
+        cloudflareUid: ready.uid,
+      },
+    });
     console.log(`[leaderpass] asset ${assetId} prepared for LeaderPass handoff`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -205,5 +262,22 @@ async function runLeaderPassPublish(projectId: string, assetId: string): Promise
       if (cancelled) queue?.cancel(jobId);
       else queue?.fail(jobId, message);
     }
+    recordActivity({
+      ...actor,
+      occurred_at: new Date().toISOString(),
+      event_type: cancelled ? 'leaderpass.publish.cancelled' : 'leaderpass.publish.failed',
+      lifecycle_phase: cancelled ? 'cancelled' : 'failed',
+      source_kind: 'background_service',
+      visibility: cancelled ? 'operator_only' : 'user_timeline',
+      title: `${cancelled ? 'LeaderPass publish cancelled' : 'LeaderPass publish failed'}: ${filename}`,
+      summary: cancelled
+        ? `${filename} LeaderPass preparation was cancelled`
+        : `${filename} failed during LeaderPass preparation`,
+      project_id: projectId,
+      asset_id: assetId,
+      job_id: jobId,
+      source_service: 'leaderpass-publish',
+      details_json: { filename, error: cancelled ? null : message },
+    });
   }
 }

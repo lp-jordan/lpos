@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Project } from '@/lib/models/project';
 import { Asset } from '@/lib/models/asset';
@@ -45,7 +45,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
   const [selectedTranscriptJobId, setSelectedTranscriptJobId] = useState<string | null>(null);
   const deepLinkedAssetId = searchParams.get('assetId');
 
-  const workbooks = assets.filter((a) => a.type === 'workbook');
+  const workbooks = assets.filter((asset) => asset.type === 'workbook');
 
   function sendToPassPrep(jobId: string) {
     setPassPrepTranscripts((prev) => prev.includes(jobId) ? prev : [...prev, jobId]);
@@ -80,21 +80,19 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
       </div>
 
       <div className="proj-tabs">
-        {tabs.map((t) => (
+        {tabs.map((item) => (
           <button
-            key={t.id}
+            key={item.id}
             type="button"
-            className={`proj-tab${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
+            className={`proj-tab${tab === item.id ? ' active' : ''}`}
+            onClick={() => setTab(item.id)}
           >
-            {t.label}
+            {item.label}
           </button>
         ))}
       </div>
 
-      {tab === 'scripts' && (
-        <ScriptsTab projectId={project.projectId} />
-      )}
+      {tab === 'scripts' && <ScriptsTab projectId={project.projectId} />}
 
       {tab === 'media' && (
         <MediaTab
@@ -108,6 +106,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
       {tab === 'transcripts' && (
         <TranscriptsTab
           projectId={project.projectId}
+          projectName={project.name}
           passPrepIds={passPrepTranscripts}
           onSendToPassPrep={sendToPassPrep}
           selectedJobId={selectedTranscriptJobId}
@@ -135,12 +134,14 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
 
 function TranscriptsTab({
   projectId,
+  projectName,
   passPrepIds,
   onSendToPassPrep,
   selectedJobId,
   onClearSelectedJobId,
 }: {
   projectId: string;
+  projectName: string;
   passPrepIds: string[];
   onSendToPassPrep: (jobId: string) => void;
   selectedJobId?: string | null;
@@ -148,9 +149,12 @@ function TranscriptsTab({
 }) {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [panelMode, setPanelMode] = useState<'viewer' | 'search' | null>(null);
   const [viewerJobId, setViewerJobId] = useState<string | null>(null);
   const [viewerFilename, setViewerFilename] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [searchScopeJobIds, setSearchScopeJobIds] = useState<string[] | null>(null);
+  const [searchSessionKey, setSearchSessionKey] = useState(0);
 
   const fetchTranscripts = useCallback(async () => {
     try {
@@ -159,7 +163,7 @@ function TranscriptsTab({
       const data = await res.json() as { transcripts: TranscriptEntry[] };
       setTranscripts(data.transcripts);
     } catch {
-      // ignore
+      // Ignore list refresh errors.
     } finally {
       setLoading(false);
     }
@@ -177,14 +181,31 @@ function TranscriptsTab({
     return `/api/projects/${projectId}/transcripts?download=${jobId}&type=${type}`;
   }
 
-  function openViewer(t: TranscriptEntry) {
-    setViewerJobId(t.jobId);
-    setViewerFilename(formatTranscriptLabel(t.filename));
+  function openViewer(entry: TranscriptEntry) {
+    setViewerJobId(entry.jobId);
+    setViewerFilename(formatTranscriptLabel(entry.filename));
+    setPanelMode('viewer');
   }
 
-  function closeViewer() {
+  function closePanel() {
     setViewerJobId(null);
     setViewerFilename('');
+    setPanelMode(null);
+  }
+
+  function openSearch(optionalEntry?: TranscriptEntry) {
+    const nextScope = optionalEntry
+      ? [optionalEntry.jobId]
+      : (selected.size > 0 ? [...selected] : null);
+    setSearchScopeJobIds(nextScope);
+    setPanelMode('search');
+    setSearchSessionKey((value) => value + 1);
+  }
+
+  function applySelectedScopeToSearch() {
+    setSearchScopeJobIds(selected.size > 0 ? [...selected] : null);
+    setPanelMode('search');
+    setSearchSessionKey((value) => value + 1);
   }
 
   function toggleSelect(jobId: string) {
@@ -200,136 +221,161 @@ function TranscriptsTab({
     setSelected((prev) => (
       prev.size === transcripts.length
         ? new Set()
-        : new Set(transcripts.map((t) => t.jobId))
+        : new Set(transcripts.map((entry) => entry.jobId))
     ));
   }
 
   useEffect(() => {
     if (!selectedJobId || loading) return;
-    const entry = transcripts.find((t) => t.jobId === selectedJobId);
+    const entry = transcripts.find((transcript) => transcript.jobId === selectedJobId);
     if (entry) {
       openViewer(entry);
       onClearSelectedJobId?.();
     }
   }, [selectedJobId, transcripts, loading, onClearSelectedJobId]);
 
-  if (loading) return <p className="m-empty">Loading…</p>;
+  const activeSearchScope = useMemo(() => {
+    if (!searchScopeJobIds || searchScopeJobIds.length === 0) return transcripts;
+    const scopeSet = new Set(searchScopeJobIds);
+    return transcripts.filter((entry) => scopeSet.has(entry.jobId));
+  }, [searchScopeJobIds, transcripts]);
+
+  const nextSelectedScope = selected.size > 0 ? [...selected].sort() : null;
+  const appliedScope = searchScopeJobIds ? [...searchScopeJobIds].sort() : null;
+  const canUseSelectedScope = JSON.stringify(nextSelectedScope) !== JSON.stringify(appliedScope);
+
+  if (loading) return <p className="m-empty">Loading...</p>;
 
   return (
     <div className="proj-tab-content page-stack" style={{ position: 'relative' }}>
-      {transcripts.length > 1 && (
+      {transcripts.length > 0 && (
         <div className="proj-transcript-toolbar">
-          <label className="proj-transcript-select-all">
-            <input
-              type="checkbox"
-              checked={selected.size > 0 && selected.size === transcripts.length}
-              onChange={toggleSelectAll}
-            />
-            <span>Select all</span>
-          </label>
-          {selected.size >= 2 && (
-            <div className="proj-bulk-bar proj-transcript-bulk-bar">
-              <span className="proj-bulk-count">{selected.size} selected</span>
-              <div className="proj-bulk-actions">
-                <button
-                  type="button"
-                  className="proj-bulk-btn"
-                  disabled
-                  title="Batch Pass Prep is not wired yet."
-                >
-                  Pass Prep
+          <div className="proj-transcript-toolbar-actions">
+            {transcripts.length > 1 ? (
+              <label className="proj-transcript-select-all">
+                <input
+                  type="checkbox"
+                  checked={selected.size > 0 && selected.size === transcripts.length}
+                  onChange={toggleSelectAll}
+                />
+                <span>Select all</span>
+              </label>
+            ) : (
+              <span />
+            )}
+
+            <button type="button" className="proj-file-action proj-file-action--primary" onClick={() => openSearch()}>
+              Content Search
+            </button>
+          </div>
+
+          {transcripts.length > 1 && selected.size >= 2 && (
+            <>
+              <div className="proj-bulk-bar proj-transcript-bulk-bar">
+                <span className="proj-bulk-count">{selected.size} selected</span>
+                <div className="proj-bulk-actions">
+                  <button
+                    type="button"
+                    className="proj-bulk-btn"
+                    disabled
+                    title="Batch Pass Prep is not wired yet."
+                  >
+                    Pass Prep
+                  </button>
+                </div>
+                <button type="button" className="proj-bulk-clear" onClick={() => setSelected(new Set())}>
+                  Clear selection
                 </button>
               </div>
-              <button type="button" className="proj-bulk-clear" onClick={() => setSelected(new Set())}>
-                Clear selection
-              </button>
-            </div>
+            </>
           )}
         </div>
       )}
 
       {transcripts.length > 0 ? (
         <div className="proj-file-list">
-          {transcripts.map((t) => (
+          {transcripts.map((entry) => (
             <div
-              key={t.jobId}
-              className={`proj-file-row proj-file-row--transcript${viewerJobId === t.jobId ? ' proj-file-row--active' : ''}${selected.has(t.jobId) ? ' proj-row--selected' : ''}`}
+              key={entry.jobId}
+              className={`proj-file-row proj-file-row--transcript${viewerJobId === entry.jobId && panelMode === 'viewer' ? ' proj-file-row--active' : ''}${selected.has(entry.jobId) ? ' proj-row--selected' : ''}`}
             >
               <button
                 type="button"
                 className="proj-transcript-check"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleSelect(t.jobId);
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleSelect(entry.jobId);
                 }}
-                aria-label={selected.has(t.jobId) ? `Deselect ${formatTranscriptLabel(t.filename)}` : `Select ${formatTranscriptLabel(t.filename)}`}
+                aria-label={selected.has(entry.jobId) ? `Deselect ${formatTranscriptLabel(entry.filename)}` : `Select ${formatTranscriptLabel(entry.filename)}`}
               >
-                <Checkbox checked={selected.has(t.jobId)} />
+                <Checkbox checked={selected.has(entry.jobId)} />
               </button>
+
               <button
                 type="button"
                 className="proj-file-row-btn"
-                onClick={() => openViewer(t)}
-                aria-label={`View TXT transcript for ${formatTranscriptLabel(t.filename)}`}
+                onClick={() => openViewer(entry)}
+                aria-label={`View TXT transcript for ${formatTranscriptLabel(entry.filename)}`}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10 9 9 9 8 9"/>
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
                 </svg>
                 <div className="proj-file-info">
-                  <span className="proj-file-name">{formatTranscriptLabel(t.filename)}</span>
-                  <span className="proj-file-date">{formatDate(t.completedAt)}</span>
+                  <span className="proj-file-name">{formatTranscriptLabel(entry.filename)}</span>
+                  <span className="proj-file-date">{formatDate(entry.completedAt)}</span>
                 </div>
               </button>
 
               <div className="proj-file-actions">
                 <a
-                  href={getTranscriptFileUrl(t.jobId, 'txt')}
+                  href={getTranscriptFileUrl(entry.jobId, 'txt')}
                   className="proj-file-action"
                   download
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
                 >
                   TXT
                 </a>
-                {t.files.json && (
+                {entry.files.json && (
                   <a
-                    href={getTranscriptFileUrl(t.jobId, 'json')}
+                    href={getTranscriptFileUrl(entry.jobId, 'json')}
                     className="proj-file-action"
                     download
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
                   >
                     JSON
                   </a>
                 )}
-                {t.files.srt && (
+                {entry.files.srt && (
                   <a
-                    href={getTranscriptFileUrl(t.jobId, 'srt')}
+                    href={getTranscriptFileUrl(entry.jobId, 'srt')}
                     className="proj-file-action"
                     download
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
                   >
                     SRT
                   </a>
                 )}
-                {t.files.vtt && (
+                {entry.files.vtt && (
                   <a
-                    href={getTranscriptFileUrl(t.jobId, 'vtt')}
+                    href={getTranscriptFileUrl(entry.jobId, 'vtt')}
                     className="proj-file-action"
                     download
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
                   >
                     VTT
                   </a>
                 )}
                 <button
                   type="button"
-                  className={`proj-file-action proj-file-action--primary${passPrepIds.includes(t.jobId) ? ' sent' : ''}`}
-                  onClick={() => onSendToPassPrep(t.jobId)}
-                  disabled={passPrepIds.includes(t.jobId)}
+                  className={`proj-file-action proj-file-action--primary${passPrepIds.includes(entry.jobId) ? ' sent' : ''}`}
+                  onClick={() => onSendToPassPrep(entry.jobId)}
+                  disabled={passPrepIds.includes(entry.jobId)}
                 >
-                  {passPrepIds.includes(t.jobId) ? '✓ In Pass Prep' : '→ Pass Prep'}
+                  {passPrepIds.includes(entry.jobId) ? '✓ In Pass Prep' : '→ Pass Prep'}
                 </button>
               </div>
             </div>
@@ -341,10 +387,35 @@ function TranscriptsTab({
 
       <TranscriptViewerPanel
         projectId={projectId}
-        jobId={viewerJobId}
+        projectName={projectName}
+        mode={panelMode === 'search' ? 'search' : 'viewer'}
+        jobId={panelMode === 'viewer' ? viewerJobId : null}
         filename={viewerFilename}
-        onClose={closeViewer}
+        onClose={closePanel}
         standalone
+        searchScope={activeSearchScope.map((entry) => ({ jobId: entry.jobId, filename: entry.filename }))}
+        searchScopeMode={searchScopeJobIds && searchScopeJobIds.length > 0 ? 'selected' : 'all'}
+        searchSessionKey={searchSessionKey}
+        canUseSelectedScope={canUseSelectedScope}
+        onUseSelectedScope={applySelectedScopeToSearch}
+        onNewChat={() => setSearchSessionKey((value) => value + 1)}
+        onApplyThreadScope={(scope) => {
+          setSearchScopeJobIds(scope.mode === 'all' || scope.jobIds.length === 0 ? null : scope.jobIds);
+          setPanelMode('search');
+        }}
+        onOpenTranscript={(jobId, transcriptFilename) => {
+          const entry = transcripts.find((item) => item.jobId === jobId);
+          if (entry) openViewer(entry);
+          else {
+            setViewerJobId(jobId);
+            setViewerFilename(formatTranscriptLabel(transcriptFilename));
+            setPanelMode('viewer');
+          }
+        }}
+        onStartSearchFromTranscript={() => {
+          const current = transcripts.find((item) => item.jobId === viewerJobId);
+          if (current) openSearch(current);
+        }}
       />
     </div>
   );

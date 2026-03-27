@@ -18,6 +18,7 @@ const DATA_DIR   = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data')
 const TOKEN_FILE = path.join(DATA_DIR, 'frameio-tokens.json');
 
 const IMS_TOKEN_URL = 'https://ims-na1.adobelogin.com/ims/token/v3';
+const DEFAULT_REDIRECT_URI = 'https://localhost:3000/api/auth/frameio/callback';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -47,8 +48,8 @@ function write(tokens: StoredTokens): void {
 // ── Refresh ───────────────────────────────────────────────────────────────────
 
 async function refresh(refreshToken: string): Promise<StoredTokens> {
-  const clientId     = process.env.FRAMEIO_CLIENT_ID;
-  const clientSecret = process.env.FRAMEIO_CLIENT_SECRET;
+  const clientId     = process.env.FRAMEIO_CLIENT_ID?.trim();
+  const clientSecret = process.env.FRAMEIO_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) {
     throw new Error('FRAMEIO_CLIENT_ID / FRAMEIO_CLIENT_SECRET not set in .env.local');
   }
@@ -57,17 +58,34 @@ async function refresh(refreshToken: string): Promise<StoredTokens> {
 
   const res = await fetch(IMS_TOKEN_URL, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
     body: new URLSearchParams({
       grant_type:    'refresh_token',
       refresh_token: refreshToken,
-      client_id:     clientId,
-      client_secret: clientSecret,
     }),
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    try {
+      const parsed = JSON.parse(body) as {
+        error?: string;
+        jump?: string;
+      };
+      if (parsed.error === 'ride_AdobeID_acct_actreq') {
+        throw new Error(
+          'Adobe requires the connected account to complete an account action before refresh can succeed. ' +
+          `Reconnect Frame.io and finish the Adobe prompt: ${parsed.jump ?? process.env.FRAMEIO_REDIRECT_URI?.trim() ?? DEFAULT_REDIRECT_URI}`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Adobe requires the connected account')) {
+        throw error;
+      }
+    }
     throw new Error(`Adobe IMS token refresh failed (${res.status}): ${body}`);
   }
 

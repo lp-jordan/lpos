@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ projectId: string }> }) {
   try {
@@ -16,7 +17,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ pr
   try {
     const { projectId } = await params;
     const body = await req.json() as { name?: string; clientName?: string; archived?: boolean };
-    const project = getProjectStore().update(projectId, body);
+    const project = getProjectStore().update(projectId, body, {
+      actor: resolveRequestActor(req),
+      source_kind: 'api',
+    });
     if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ project });
   } catch (err) {
@@ -27,7 +31,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ pr
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ projectId: string }> }) {
   try {
     const { projectId } = await params;
-    const ok = getProjectStore().delete(projectId);
+    const ok = getProjectStore().delete(projectId, {
+      actor: resolveRequestActor(_req),
+      source_kind: 'api',
+    });
     if (!ok) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json({ ok: true });
   } catch (err) {

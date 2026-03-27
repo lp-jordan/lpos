@@ -11,9 +11,9 @@ declare global {
 }
 
 function initSchema(db: DatabaseSync): void {
+  db.exec(`PRAGMA foreign_keys = ON`);
+  db.exec(`PRAGMA journal_mode = WAL`);
   db.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
 
     CREATE TABLE IF NOT EXISTS assets (
       asset_id TEXT PRIMARY KEY,
@@ -84,6 +84,7 @@ function initSchema(db: DatabaseSync): void {
       mime_type TEXT,
       file_size_bytes INTEGER,
       content_hash TEXT,
+      duration_seconds REAL,
       source_modified_at TEXT,
       copied_to_managed_at TEXT,
       is_source_available INTEGER NOT NULL DEFAULT 0,
@@ -162,12 +163,21 @@ function initSchema(db: DatabaseSync): void {
   `);
 }
 
+function migrateSchema(db: DatabaseSync): void {
+  // Add duration_seconds to media_files if missing (for existing DBs)
+  const cols = db.prepare("PRAGMA table_info('media_files')").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'duration_seconds')) {
+    db.exec('ALTER TABLE media_files ADD COLUMN duration_seconds REAL');
+  }
+}
+
 export function getCanonicalAssetDb(): DatabaseSync {
   if (globalThis.__lpos_canonical_asset_db) return globalThis.__lpos_canonical_asset_db;
 
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const db = new DatabaseSync(DB_PATH);
   initSchema(db);
+  migrateSchema(db);
   globalThis.__lpos_canonical_asset_db = db;
   return db;
 }

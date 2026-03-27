@@ -94,7 +94,7 @@ export default function SlatePage() {
     (acc[p.clientName] ??= []).push(p);
     return acc;
   }, {});
-  const sortedClients = Object.keys(clientGroups).sort();
+  const sortedClients = Object.keys(clientGroups).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
   // ── Note actions ──
   function submitNote() {

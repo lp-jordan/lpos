@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
@@ -27,6 +28,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 
 export async function POST(_req: NextRequest, { params }: Ctx) {
   const { projectId, assetId } = await params;
+  const actor = resolveRequestActor(_req);
 
   const asset = getAsset(projectId, assetId);
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
@@ -41,7 +43,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
 
   // Reset error state and trigger upload via shared service
   patchAsset(projectId, assetId, { frameio: { status: 'none', lastError: null } });
-  triggerFrameIOUpload(projectId, assetId);
+  triggerFrameIOUpload(projectId, assetId, { actor });
 
   return NextResponse.json({ ok: true, status: 'uploading' });
 }

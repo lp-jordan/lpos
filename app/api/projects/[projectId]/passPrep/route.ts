@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { buildFallbackCoursePlan, generateCoursePlan } from '@/lib/passprep/generate-plan';
 import { inferAiProvider, type CourseState, type NormalizedProject, type Settings } from '@/lib/passprep/core';
 import { generateLegacyWorkbookSections } from '@/lib/passprep/workbook';
+import { readTranscriptMeta, readTranscriptText } from '@/lib/transcripts/store';
 
 type Params = { params: Promise<{ projectId: string }> };
 
@@ -32,24 +31,6 @@ type WorkbookSection = {
   title: string;
   content: string;
 };
-
-async function readTranscriptText(projectId: string, jobId: string): Promise<string> {
-  const targetPath = path.join(process.cwd(), 'data', 'projects', projectId, 'transcripts', `${jobId}.txt`);
-  try {
-    return await fs.readFile(targetPath, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
-async function readTranscriptMeta(projectId: string, jobId: string): Promise<{ filename?: string } | null> {
-  const targetPath = path.join(process.cwd(), 'data', 'projects', projectId, 'transcripts', `${jobId}.meta.json`);
-  try {
-    return JSON.parse(await fs.readFile(targetPath, 'utf-8')) as { filename?: string };
-  } catch {
-    return null;
-  }
-}
 
 function toSettings(input: { audience?: string; tone?: string; additionalGuidance?: string }): Settings {
   return {
@@ -136,8 +117,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     const videoEntries = await Promise.all(
       body.jobIds.map(async (jobId) => {
         const [transcript, meta] = await Promise.all([
-          readTranscriptText(projectId, jobId),
-          readTranscriptMeta(projectId, jobId),
+          Promise.resolve(readTranscriptText(projectId, jobId)),
+          Promise.resolve(readTranscriptMeta(projectId, jobId)),
         ]);
         return {
           jobId,
@@ -179,8 +160,8 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const videoEntries = await Promise.all(
       body.jobIds.map(async (jobId) => {
         const [transcript, meta] = await Promise.all([
-          readTranscriptText(projectId, jobId),
-          readTranscriptMeta(projectId, jobId),
+          Promise.resolve(readTranscriptText(projectId, jobId)),
+          Promise.resolve(readTranscriptMeta(projectId, jobId)),
         ]);
         return {
           jobId,

@@ -3,13 +3,18 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useProjects } from '@/hooks/useProjects';
+import { useClientOwners } from '@/hooks/useClientOwners';
+import { useClientStats } from '@/hooks/useClientStats';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 import { RenameModal } from '@/components/shared/RenameModal';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { ContextMenu } from '@/components/shared/ContextMenu';
 import type { MenuEntry } from '@/components/shared/ContextMenu';
 import { useContextMenu } from '@/hooks/useContextMenu';
+import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
+import { OwnerPicker } from '@/components/projects/OwnerPicker';
 import type { Project } from '@/lib/models/project';
+import type { UserSummary } from '@/lib/models/user';
 
 type ViewMode = 'card' | 'list';
 
@@ -46,6 +51,7 @@ function IconPencil()  { return <svg width="13" height="13" viewBox="0 0 24 24" 
 function IconArchive() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>; }
 function IconTrash()   { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>; }
 function IconUnarchive() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><polyline points="10 12 12 10 14 12"/><line x1="12" y1="10" x2="12" y2="16"/></svg>; }
+function IconUser()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
 
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 
@@ -104,6 +110,8 @@ async function apiDelete(projectId: string) {
 export default function ProjectsPage() {
   const router = useRouter();
   const { projects } = useProjects();
+  const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners();
+  const clientStats = useClientStats();
 
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
@@ -117,6 +125,7 @@ export default function ProjectsPage() {
   // Modals
   const [showNewModal, setShowNewModal] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; currentName: string; isClient?: boolean } | null>(null);
+  const [ownerPicker, setOwnerPicker] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
   const [confirmArchive, setConfirmArchive] = useState<{ ids: string[]; label: string; unarchive?: boolean } | null>(null);
 
@@ -131,7 +140,7 @@ export default function ProjectsPage() {
 
   const visibleProjects = showArchived ? archivedProjects : activeProjects;
 
-  const clients = Array.from(new Set(activeProjects.map((p) => p.clientName))).sort();
+  const clients = Array.from(new Set(activeProjects.map((p) => p.clientName))).sort((a, b) => (a ?? '').localeCompare(b ?? '', undefined, { numeric: true }));
 
   const clientProjects = activeClient
     ? visibleProjects.filter((p) => p.clientName === activeClient)
@@ -206,9 +215,12 @@ export default function ProjectsPage() {
   async function saveRename(value: string) {
     if (!renaming) return;
     if (renaming.isClient) {
-      // Rename client: patch all projects with that clientName
+      // Rename client: patch all projects with that clientName + re-key ownership
       const toRename = projects.filter((p) => p.clientName === renaming.currentName);
-      await Promise.all(toRename.map((p) => apiPatch(p.projectId, { clientName: value })));
+      await Promise.all([
+        ...toRename.map((p) => apiPatch(p.projectId, { clientName: value })),
+        renameClient(renaming.currentName, value),
+      ]);
       if (activeClient === renaming.currentName) setActiveClient(value);
     } else {
       await apiPatch(renaming.id, { name: value });
@@ -258,33 +270,34 @@ export default function ProjectsPage() {
 
   const buildClientMenu = useCallback((clientName: string): MenuEntry[] => {
     const clientProjs = projects.filter((p) => p.clientName === clientName);
+    const ownerId = owners[clientName];
+
+    const ownerEntries: MenuEntry[] = ownerId
+      ? [
+          { type: 'item', label: 'Reassign Owner', icon: <IconUser />, onClick: () => setOwnerPicker(clientName) },
+          { type: 'item', label: 'Remove Owner',   icon: <IconUser />, onClick: () => void removeOwner(clientName) },
+          { type: 'separator' },
+        ]
+      : [
+          { type: 'item', label: 'Assign Owner', icon: <IconUser />, onClick: () => setOwnerPicker(clientName) },
+          { type: 'separator' },
+        ];
+
     return [
-      {
-        type: 'item',
-        label: 'Open',
-        icon: <IconOpen />,
-        onClick: () => { setActiveClient(clientName); setSearch(''); },
-      },
-      {
-        type: 'item',
-        label: 'Rename Client',
-        icon: <IconPencil />,
-        onClick: () => setRenaming({ id: '', currentName: clientName, isClient: true }),
-      },
+      { type: 'item', label: 'Open',          icon: <IconOpen />,   onClick: () => { setActiveClient(clientName); setSearch(''); } },
+      { type: 'item', label: 'Rename Client', icon: <IconPencil />, onClick: () => setRenaming({ id: '', currentName: clientName, isClient: true }) },
       { type: 'separator' },
+      ...ownerEntries,
       {
         type: 'item',
         label: `Delete All ${clientProjs.length} Project${clientProjs.length !== 1 ? 's' : ''}`,
         icon: <IconTrash />,
         danger: true,
         disabled: clientProjs.length === 0,
-        onClick: () => setConfirmDelete({
-          ids: clientProjs.map((p) => p.projectId),
-          label: `all projects in "${clientName}"`,
-        }),
+        onClick: () => setConfirmDelete({ ids: clientProjs.map((p) => p.projectId), label: `all projects in "${clientName}"` }),
       },
     ];
-  }, [projects]);
+  }, [projects, owners, removeOwner]);
 
   // ── Client drill-in view ────────────────────────────────────────────────────
 
@@ -487,11 +500,16 @@ export default function ProjectsPage() {
         <div className="proj-client-grid">
           {filteredClients.map((client) => {
             const count = activeProjects.filter((p) => p.clientName === client).length;
+            const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
+            const stats = clientStats[client];
             return (
               <ClientCard
                 key={client}
                 clientName={client}
                 count={count}
+                mediaCount={stats?.mediaCount ?? 0}
+                scriptCount={stats?.scriptCount ?? 0}
+                owner={owner}
                 onClick={() => { setActiveClient(client); setSearch(''); }}
                 onContextMenu={(e) => { clientMenu.open(e, client); }}
               />
@@ -505,11 +523,13 @@ export default function ProjectsPage() {
         <div className="proj-list">
           {filteredClients.map((client) => {
             const count = activeProjects.filter((p) => p.clientName === client).length;
+            const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
             return (
               <ClientRow
                 key={client}
                 clientName={client}
                 count={count}
+                owner={owner}
                 onClick={() => { setActiveClient(client); setSearch(''); }}
                 onContextMenu={(e) => { clientMenu.open(e, client); }}
               />
@@ -538,6 +558,15 @@ export default function ProjectsPage() {
         <NewProjectModal
           onClose={() => setShowNewModal(false)}
           onCreated={() => setShowNewModal(false)}
+        />
+      )}
+      {ownerPicker && (
+        <OwnerPicker
+          clientName={ownerPicker}
+          currentOwnerId={owners[ownerPicker]}
+          users={users}
+          onAssign={(userId) => assignOwner(ownerPicker, userId)}
+          onClose={() => setOwnerPicker(null)}
         />
       )}
       <Modals
@@ -709,8 +738,8 @@ function ProjectRow({ project: p, selected, selectionActive, onClick, onToggle, 
 
 // ── Client card ───────────────────────────────────────────────────────────────
 
-function ClientCard({ clientName, count, onClick, onContextMenu }: {
-  clientName: string; count: number;
+function ClientCard({ clientName, count, mediaCount, scriptCount, owner, onClick, onContextMenu }: {
+  clientName: string; count: number; mediaCount: number; scriptCount: number; owner?: UserSummary;
   onClick: () => void; onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -720,20 +749,30 @@ function ClientCard({ clientName, count, onClick, onContextMenu }: {
       onClick={onClick}
       onContextMenu={onContextMenu}
     >
-      <span className="proj-client-card-initial">{clientName.charAt(0).toUpperCase()}</span>
-      <span className="proj-client-card-name">{clientName}</span>
-      <span className="proj-client-card-count">{count} project{count !== 1 ? 's' : ''}</span>
-      <svg className="proj-client-card-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="9 18 15 12 9 6"/>
-      </svg>
+      <div className="proj-client-card-body">
+        <span className="proj-client-card-initial">{clientName.charAt(0).toUpperCase()}</span>
+        <div className="proj-client-card-info">
+          <span className="proj-client-card-name">{clientName}</span>
+          <div className="proj-client-card-stats">
+            <span className="proj-client-card-stat">{count} project{count !== 1 ? 's' : ''}</span>
+            <span className="proj-client-card-stat">{mediaCount > 0 ? `${mediaCount} media` : 'No media'}</span>
+            <span className="proj-client-card-stat">{scriptCount > 0 ? `${scriptCount} script${scriptCount !== 1 ? 's' : ''}` : 'No scripts'}</span>
+          </div>
+        </div>
+      </div>
+      <span className="proj-client-card-owner">
+        {owner
+          ? <><OwnerAvatar user={owner} size={18} /><span className="proj-client-card-owner-name">{owner.name}</span></>
+          : <span className="proj-client-card-owner-unassigned">Unassigned</span>}
+      </span>
     </button>
   );
 }
 
 // ── Client row ────────────────────────────────────────────────────────────────
 
-function ClientRow({ clientName, count, onClick, onContextMenu }: {
-  clientName: string; count: number;
+function ClientRow({ clientName, count, owner, onClick, onContextMenu }: {
+  clientName: string; count: number; owner?: UserSummary;
   onClick: () => void; onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -746,6 +785,7 @@ function ClientRow({ clientName, count, onClick, onContextMenu }: {
       <span className="proj-client-row-initial">{clientName.charAt(0).toUpperCase()}</span>
       <span className="proj-client-row-name">{clientName}</span>
       <span className="proj-client-row-count">{count} project{count !== 1 ? 's' : ''}</span>
+      {owner && <OwnerAvatar user={owner} size={20} />}
       <svg className="proj-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="9 18 15 12 9 6"/>
       </svg>

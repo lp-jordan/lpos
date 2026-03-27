@@ -28,6 +28,7 @@
  */
 
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { getValidAccessToken } from './frameio-tokens';
 
 const BASE_V4 = 'https://api.frame.io/v4';
@@ -110,17 +111,12 @@ async function resolveAccountId(): Promise<string> {
   const claims  = decodeJwtPayload(token);
   const clientId = process.env.FRAMEIO_CLIENT_ID?.trim() ?? '';
 
-  console.log('[frameio-v4] JWT claims keys:', Object.keys(claims).join(', '));
-
   // 1 ── Look for account_id directly in JWT claims
   const claimId =
     claims['frameio_account_id'] ??
     claims['account_id'] ??
     claims['https://frameio.com/account_id'];
-  if (typeof claimId === 'string' && claimId) {
-    console.log('[frameio-v4] account_id from JWT claim:', claimId);
-    return claimId;
-  }
+  if (typeof claimId === 'string' && claimId) return claimId;
 
   // 2 ── Try v2 /me (may work with OAuth token on legacy-enabled accounts)
   try {
@@ -133,13 +129,10 @@ async function resolveAccountId(): Promise<string> {
     });
     if (res.ok) {
       const me = await res.json() as Record<string, unknown>;
-      console.log('[frameio-v4] v2/me keys:', Object.keys(me).join(', '));
       if (typeof me.account_id === 'string' && me.account_id) return me.account_id;
-    } else {
-      console.log('[frameio-v4] v2/me status:', res.status);
     }
-  } catch (e) {
-    console.log('[frameio-v4] v2/me error:', e);
+  } catch {
+    // v2 not available — continue
   }
 
   // 3 ── Try v4 /me
@@ -153,17 +146,12 @@ async function resolveAccountId(): Promise<string> {
     });
     if (res.ok) {
       const body = await res.json() as Record<string, unknown>;
-      console.log('[frameio-v4] v4/me keys:', Object.keys(body).join(', '));
       const data = (body.data ?? body) as Record<string, unknown>;
-      console.log('[frameio-v4] v4/me data keys:', Object.keys(data).join(', '));
       const id = data.account_id ?? data.frameio_account_id;
       if (typeof id === 'string' && id) return id;
-    } else {
-      const txt = await res.text().catch(() => '');
-      console.log('[frameio-v4] v4/me status:', res.status, txt.slice(0, 200));
     }
-  } catch (e) {
-    console.log('[frameio-v4] v4/me error:', e);
+  } catch {
+    // v4/me not available — continue
   }
 
   // 4 ── Try v4 /accounts (no account_id needed in path)
@@ -177,15 +165,11 @@ async function resolveAccountId(): Promise<string> {
     });
     if (res.ok) {
       const body = await res.json() as Record<string, unknown>;
-      console.log('[frameio-v4] /v4/accounts keys:', Object.keys(body).join(', '));
       const items = (Array.isArray(body) ? body : (body.data ?? [])) as { id?: string }[];
       if (items.length > 0 && items[0].id) return items[0].id;
-    } else {
-      const txt = await res.text().catch(() => '');
-      console.log('[frameio-v4] /v4/accounts status:', res.status, txt.slice(0, 200));
     }
-  } catch (e) {
-    console.log('[frameio-v4] /v4/accounts error:', e);
+  } catch {
+    // /v4/accounts not available — continue
   }
 
   // Nothing worked — throw with useful diagnostic
@@ -204,7 +188,6 @@ async function discover(): Promise<DiscoveryResult> {
 
   // Step 1: Resolve account_id via multiple strategies
   const accountId = await resolveAccountId();
-  console.log(`[frameio-v4] account_id: ${accountId}`);
 
   // Step 2: List workspaces
   const wsRes    = await fioFetch(`${BASE_V4}/accounts/${accountId}/workspaces`);
@@ -216,8 +199,6 @@ async function discover(): Promise<DiscoveryResult> {
   if (workspaces.length === 0) {
     throw new Error(`No workspaces found in Frame.io account ${accountId}`);
   }
-
-  console.log(`[frameio-v4] workspaces: ${workspaces.map((w) => `"${w.name}"`).join(', ')}`);
 
   // Step 3: Search each workspace's projects for the matching name
   let match: V4Project | null = null;
@@ -254,7 +235,6 @@ async function discover(): Promise<DiscoveryResult> {
     );
   }
 
-  console.log(`[frameio-v4] project "${match.name}" → root_folder_id: ${rootFolderId}`);
 
   _cached = { accountId, projectId: match.id, rootFolderId };
   return _cached;
@@ -381,39 +361,53 @@ export async function uploadAsset(
 
   console.log(`[frameio-v4] file ${fileId} created, ${uploadUrls.length} upload part(s)`);
 
-  // ── Step 2: Upload binary to S3 (read one chunk at a time — no full-file buffer) ──
-  const fd     = fs.openSync(filePath, 'r');
-  let   offset = 0;
+  // ── Step 2: Upload binary to S3 (stream each part — avoids INT32_MAX fs.readSync limit) ──
+  // fs.readSync's `length` parameter is capped at INT32_MAX (2 147 483 647), so any file
+  // or Frame.io chunk larger than 2 GiB would throw ERR_OUT_OF_RANGE if read into a buffer.
+  // Using fs.createReadStream with { start, end } streams each part directly without buffering.
+  //
+  // Parts are uploaded in parallel batches (CHUNK_CONCURRENCY at a time) to make full use
+  // of available upload bandwidth instead of serialising each PUT.
+  const CHUNK_CONCURRENCY = 4;
 
-  try {
-    for (let i = 0; i < uploadUrls.length; i++) {
-      const { url, size } = uploadUrls[i];
-      const chunk = Buffer.allocUnsafe(size);
-      const bytesRead = fs.readSync(fd, chunk, 0, size, offset);
-      const slice = bytesRead < size ? chunk.subarray(0, bytesRead) : chunk;
-      offset += bytesRead;
+  // Precompute byte offsets for each part so concurrent uploads can seek independently
+  let offsetAccum = 0;
+  const parts = uploadUrls.map(({ url, size }) => {
+    const start = offsetAccum;
+    offsetAccum += size;
+    return { url, size, start };
+  });
 
-      console.log(`[frameio-v4] uploading part ${i + 1}/${uploadUrls.length} (${slice.length} bytes)…`);
+  for (let i = 0; i < parts.length; i += CHUNK_CONCURRENCY) {
+    if (cancelCheck?.()) throw new Error('Cancelled');
+
+    const batch = parts.slice(i, i + CHUNK_CONCURRENCY);
+    console.log(
+      `[frameio-v4] uploading parts ${i + 1}–${Math.min(i + CHUNK_CONCURRENCY, parts.length)}` +
+      `/${parts.length}…`,
+    );
+
+    await Promise.all(batch.map(async ({ url, size, start }, batchIdx) => {
+      const partNum = i + batchIdx + 1;
+      const readStream = fs.createReadStream(filePath, { start, end: start + size - 1 });
+      const webStream = Readable.toWeb(readStream) as ReadableStream<Uint8Array>;
 
       const putRes = await fetch(url, {
         method:  'PUT',
-        body:    slice,
+        // @ts-expect-error — Node.js built-in fetch requires duplex for streaming request bodies
+        duplex:  'half',
+        body:    webStream,
         headers: {
           'Content-Type':   mimeType,
-          'Content-Length': String(slice.length),
+          'Content-Length': String(size),
           'x-amz-acl':      'private',
         },
       });
 
       if (!putRes.ok) {
-        throw new Error(`S3 PUT part ${i + 1}/${uploadUrls.length} failed: ${putRes.status}`);
+        throw new Error(`S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}`);
       }
-
-      // Check for cancellation after each part so we stop promptly
-      if (cancelCheck?.()) throw new Error('Cancelled');
-    }
-  } finally {
-    fs.closeSync(fd);
+    }));
   }
 
   console.log(`[frameio-v4] upload complete for "${name}"`);
@@ -450,7 +444,8 @@ export interface FrameIOShare {
   id:        string;
   name:      string;
   shareUrl:  string;
-  createdAt: string;   // ISO string
+  createdAt: string;    // ISO string
+  fileCount: number | null;  // from local store; null = not tracked by LPOS
 }
 
 export interface FrameIOShareFile {
@@ -500,13 +495,13 @@ export async function createShareLink(fileIds: string[], shareName: string): Pro
   }
 
   const shareUrl = share.short_url ?? share.url ?? share.link ?? `https://app.frame.io/r/${share.id}`;
-  console.log(`[frameio-v4] created share "${shareName}" with ${fileIds.length} file(s): ${shareUrl}`);
 
   return {
     id:        share.id,
     name:      share.name ?? shareName,
     shareUrl,
     createdAt: share.inserted_at ?? new Date().toISOString(),
+    fileCount: fileIds.length,
   };
 }
 
@@ -526,6 +521,7 @@ export async function listShares(): Promise<FrameIOShare[]> {
     name:      s.name ?? `Share ${s.id.slice(0, 6)}`,
     shareUrl:  s.short_url ?? s.url ?? s.link ?? `https://app.frame.io/r/${s.id}`,
     createdAt: s.inserted_at ?? '',
+    fileCount: null,  // enriched by route handlers that have local store access
   }));
 }
 

@@ -8,10 +8,6 @@ const mainNav = [
   { href: '/media', label: 'Media' },
 ];
 
-const toolNav = [
-  { href: '/slate', label: 'Studio' },
-];
-
 export function NavBar() {
   const pathname = usePathname();
 
@@ -38,15 +34,9 @@ export function NavBar() {
           </Link>
         ))}
         <span className="navbar-divider" />
-        {toolNav.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`navbar-link${isActive(item.href) ? ' active' : ''}`}
-          >
-            {item.label}
-          </Link>
-        ))}
+        <Link href="/slate" className={`navbar-link${isActive('/slate') ? ' active' : ''}`}>
+          Studio
+        </Link>
       </div>
     </nav>
   );

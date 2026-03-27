@@ -23,9 +23,19 @@ import { PassPrepService } from './passprep-service';
 import { UploadQueueService } from './upload-queue-service';
 import { IngestQueueService } from './ingest-queue-service';
 import { CameraControlService } from './camera-control-service';
+import {
+  ActivityMonitorService,
+  getActivityMonitorService,
+  setActivityMonitorService,
+} from './activity-monitor-service';
 import { ProjectStore } from '@/lib/store/project-store';
+import { ClientOwnerStore } from '@/lib/store/client-owner-store';
+import { TaskStore } from '@/lib/store/task-store';
+import { ProjectNoteStore } from '@/lib/store/project-note-store';
+import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
 import { getRuntimeDependencyReport } from './runtime-dependencies';
+import { PipelineTrackerService } from './pipeline-tracker-service';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -40,6 +50,16 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_cameraControlService: CameraControlService | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_activityMonitorService: ActivityMonitorService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_pipelineTracker: PipelineTrackerService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_clientOwnerStore: ClientOwnerStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_taskStore: TaskStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_projectNoteStore: ProjectNoteStore | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_io: SocketIOServer | undefined;
 }
 
@@ -51,6 +71,11 @@ let passPrepService: PassPrepService | null = null;
 let uploadQueueService: UploadQueueService | null = null;
 let ingestQueueService: IngestQueueService | null = null;
 let cameraControlService: CameraControlService | null = null;
+let activityMonitorService: ActivityMonitorService | null = null;
+let pipelineTracker: PipelineTrackerService | null = null;
+let clientOwnerStore: ClientOwnerStore | null = null;
+let taskStore: TaskStore | null = null;
+let projectNoteStore: ProjectNoteStore | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -100,23 +125,35 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   globalThis.__lpos_ingestQueueService = ingestQueueService;
   ingestQueueService.start();
 
+  pipelineTracker = new PipelineTrackerService(io, globalThis.__lpos_projectStore);
+  pipelineTracker.subscribe(ingestQueueService, uploadQueueService, transcripterService);
+  pipelineTracker.start();
+  globalThis.__lpos_pipelineTracker = pipelineTracker;
+
   cameraControlService = new CameraControlService(io, registry);
   globalThis.__lpos_cameraControlService = cameraControlService;
+  activityMonitorService = new ActivityMonitorService(io, registry, globalThis.__lpos_projectStore);
+  globalThis.__lpos_activityMonitorService = activityMonitorService;
+  setActivityMonitorService(activityMonitorService);
 
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
     passPrepService.start(),
     cameraControlService.start(),
+    activityMonitorService.start(),
   ]);
 }
 
 export async function stopServices(): Promise<void> {
+  pipelineTracker?.stop();
+  uploadQueueService?.stop();
   await Promise.all([
     slateService?.stop(),
     transcripterService?.stop(),
     passPrepService?.stop(),
     cameraControlService?.stop(),
+    activityMonitorService?.stop(),
   ]);
 }
 
@@ -172,4 +209,46 @@ export function getCameraControlService(): CameraControlService {
   cameraControlService = new CameraControlService(globalThis.__lpos_io);
   globalThis.__lpos_cameraControlService = cameraControlService;
   return cameraControlService;
+}
+
+export function getActivityService(): ActivityMonitorService {
+  if (globalThis.__lpos_activityMonitorService) return globalThis.__lpos_activityMonitorService;
+  if (activityMonitorService) return activityMonitorService;
+  const existing = getActivityMonitorService();
+  if (existing) return existing;
+
+  activityMonitorService = new ActivityMonitorService(globalThis.__lpos_io, null, getProjectStore());
+  globalThis.__lpos_activityMonitorService = activityMonitorService;
+  setActivityMonitorService(activityMonitorService);
+  return activityMonitorService;
+}
+
+export function getPipelineTrackerService(): PipelineTrackerService {
+  if (globalThis.__lpos_pipelineTracker) return globalThis.__lpos_pipelineTracker;
+  if (pipelineTracker) return pipelineTracker;
+  throw new Error('PipelineTrackerService not initialized — server.ts must be running');
+}
+
+export function getClientOwnerStore(): ClientOwnerStore {
+  if (globalThis.__lpos_clientOwnerStore) return globalThis.__lpos_clientOwnerStore;
+  if (clientOwnerStore) return clientOwnerStore;
+  clientOwnerStore = new ClientOwnerStore();
+  globalThis.__lpos_clientOwnerStore = clientOwnerStore;
+  return clientOwnerStore;
+}
+
+export function getTaskStore(): TaskStore {
+  if (globalThis.__lpos_taskStore) return globalThis.__lpos_taskStore;
+  if (taskStore) return taskStore;
+  taskStore = new TaskStore();
+  globalThis.__lpos_taskStore = taskStore;
+  return taskStore;
+}
+
+export function getProjectNoteStore(): ProjectNoteStore {
+  if (globalThis.__lpos_projectNoteStore) return globalThis.__lpos_projectNoteStore;
+  if (projectNoteStore) return projectNoteStore;
+  projectNoteStore = new ProjectNoteStore();
+  globalThis.__lpos_projectNoteStore = projectNoteStore;
+  return projectNoteStore;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type ConfigVolume = {
   rootPath: string;
@@ -67,16 +67,36 @@ export function StorageSettingsClient() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [bootstrapped, setBootstrapped] = useState(false);
-  const [unlocked, setUnlocked] = useState(false);
-  const [pin, setPin] = useState('');
-  const [pinConfirm, setPinConfirm] = useState('');
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [thresholdPercent, setThresholdPercent] = useState(90);
   const [reserveGb, setReserveGb] = useState(25);
   const [managedRootName] = useState('LPOS');
   const [volumes, setVolumes] = useState<EditableVolume[]>([]);
   const [activeDrive, setActiveDrive] = useState<AllocationVolume | null>(null);
   const [nextDrive, setNextDrive] = useState<AllocationVolume | null>(null);
+  const [hasLoadedConfig, setHasLoadedConfig] = useState(false);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedSignatureRef = useRef<string>('');
+
+  function buildSignature(input: {
+    thresholdPercent: number;
+    reserveGb: number;
+    managedRootName: string;
+    volumes: EditableVolume[];
+  }): string {
+    return JSON.stringify({
+      thresholdPercent: input.thresholdPercent,
+      reserveGb: input.reserveGb,
+      managedRootName: input.managedRootName,
+      volumes: [...input.volumes]
+        .sort((a, b) => a.priority - b.priority)
+        .map((volume) => ({
+          rootPath: volume.rootPath,
+          enabled: volume.enabled,
+          priority: volume.priority,
+        })),
+    });
+  }
 
   async function loadConfig() {
     setLoading(true);
@@ -86,8 +106,6 @@ export function StorageSettingsClient() {
       const data = await res.json() as ConfigResponse;
       if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Failed to load storage settings.');
 
-      setBootstrapped(Boolean(data.bootstrapped));
-      setUnlocked(Boolean(data.unlocked));
       if (data.config && data.allocation) {
         setThresholdPercent(data.config.thresholdPercent);
         setReserveGb(Math.round(data.config.reserveBytes / 1024 / 1024 / 1024));
@@ -103,15 +121,29 @@ export function StorageSettingsClient() {
         setVolumes(merged);
         setActiveDrive(data.allocation.active);
         setNextDrive(data.allocation.next ?? null);
+        lastSavedSignatureRef.current = buildSignature({
+          thresholdPercent: data.config.thresholdPercent,
+          reserveGb: Math.round(data.config.reserveBytes / 1024 / 1024 / 1024),
+          managedRootName: data.config.managedRootName,
+          volumes: merged,
+        });
       } else {
-        setVolumes((data.allocation?.volumes ?? []).map((volume, index) => ({
+        const merged = (data.allocation?.volumes ?? []).map((volume, index) => ({
           ...volume,
           enabled: false,
           priority: index,
-        })));
+        }));
+        setVolumes(merged);
         setActiveDrive(data.allocation?.active ?? null);
         setNextDrive(data.allocation?.next ?? null);
+        lastSavedSignatureRef.current = buildSignature({
+          thresholdPercent,
+          reserveGb,
+          managedRootName,
+          volumes: merged,
+        });
       }
+      setHasLoadedConfig(true);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -121,6 +153,12 @@ export function StorageSettingsClient() {
 
   useEffect(() => {
     void loadConfig();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
   }, []);
 
   const enabledCount = useMemo(() => volumes.filter((volume) => volume.enabled).length, [volumes]);
@@ -143,37 +181,10 @@ export function StorageSettingsClient() {
     });
   }
 
-  async function unlock(mode: 'bootstrap' | 'unlock') {
-    setError(null);
-    if (mode === 'bootstrap' && pin !== pinConfirm) {
-      setError('PIN confirmation does not match.');
-      return;
-    }
-
-    const res = await fetch('/api/storage/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin, mode }),
-    });
-    const data = await res.json().catch(() => ({})) as { error?: string };
-    if (!res.ok) {
-      setError(data.error ?? 'Unable to unlock storage settings.');
-      return;
-    }
-
-    setPin('');
-    setPinConfirm('');
-    await loadConfig();
-  }
-
-  async function lock() {
-    await fetch('/api/storage/auth', { method: 'DELETE' });
-    await loadConfig();
-  }
-
   async function save() {
     setSaving(true);
     setError(null);
+    setSaveMessage('Saving…');
     try {
       const res = await fetch('/api/storage/config', {
         method: 'PUT',
@@ -194,12 +205,33 @@ export function StorageSettingsClient() {
       const data = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Unable to save storage settings.');
       await loadConfig();
+      setSaveMessage('Saved');
     } catch (err) {
       setError((err as Error).message);
+      setSaveMessage(null);
     } finally {
       setSaving(false);
     }
   }
+
+  useEffect(() => {
+    if (!hasLoadedConfig || loading) return;
+    const currentSignature = buildSignature({
+      thresholdPercent,
+      reserveGb,
+      managedRootName,
+      volumes,
+    });
+    if (currentSignature === lastSavedSignatureRef.current) {
+      setSaveMessage('Saved');
+      return;
+    }
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setSaveMessage('Unsaved changes');
+    saveTimeoutRef.current = setTimeout(() => {
+      void save();
+    }, 700);
+  }, [thresholdPercent, reserveGb, volumes]);
 
   if (loading) {
     return (
@@ -223,158 +255,125 @@ export function StorageSettingsClient() {
             when the current one crosses the configured capacity threshold.
           </p>
         </div>
-        {bootstrapped && unlocked && (
-          <button type="button" className="storage-settings-secondary" onClick={() => void lock()}>
-            Lock Settings
-          </button>
-        )}
+        <div className="storage-settings-status" aria-live="polite">
+          {saving ? 'Saving…' : (saveMessage ?? 'Autosave on')}
+        </div>
       </div>
 
       {error && <div className="storage-settings-error">{error}</div>}
 
-      {!bootstrapped && (
-        <div className="storage-settings-card storage-settings-auth">
-          <h2 className="storage-settings-section-title">Create admin PIN</h2>
-          <p className="storage-settings-muted">Set the local PIN that protects storage settings on this host.</p>
-          <label className="storage-settings-field">
-            <span>New PIN</span>
-            <input value={pin} onChange={(event) => setPin(event.target.value)} inputMode="numeric" type="password" />
-          </label>
-          <label className="storage-settings-field">
-            <span>Confirm PIN</span>
-            <input value={pinConfirm} onChange={(event) => setPinConfirm(event.target.value)} inputMode="numeric" type="password" />
-          </label>
-          <button type="button" className="storage-settings-primary" onClick={() => void unlock('bootstrap')}>
-            Save PIN and Continue
-          </button>
+      <div className="storage-settings-grid">
+        <div className="storage-settings-card">
+          <h2 className="storage-settings-section-title">Allocation</h2>
+          <div className="storage-settings-summary">
+            <div>
+              <span className="storage-settings-label">Active Drive</span>
+              <strong>{activeDrive ? `${activeDrive.label} (${activeDrive.rootPath})` : 'None available'}</strong>
+            </div>
+            <div>
+              <span className="storage-settings-label">Next Drive</span>
+              <strong>{nextDrive ? `${nextDrive.label} (${nextDrive.rootPath})` : 'No standby drive'}</strong>
+            </div>
+            <div>
+              <span className="storage-settings-label">Threshold</span>
+              <strong>{thresholdPercent}% used</strong>
+            </div>
+            <div>
+              <span className="storage-settings-label">Reserve</span>
+              <strong>{reserveGb} GB free</strong>
+            </div>
+          </div>
         </div>
-      )}
 
-      {bootstrapped && !unlocked && (
-        <div className="storage-settings-card storage-settings-auth">
-          <h2 className="storage-settings-section-title">Unlock storage settings</h2>
-          <p className="storage-settings-muted">Enter the local admin PIN to manage drive allocation.</p>
+        <div className="storage-settings-card">
+          <h2 className="storage-settings-section-title">Thresholds</h2>
           <label className="storage-settings-field">
-            <span>Admin PIN</span>
-            <input value={pin} onChange={(event) => setPin(event.target.value)} inputMode="numeric" type="password" />
+            <span>Switch when drive usage reaches</span>
+            <input
+              type="number"
+              min={50}
+              max={98}
+              value={thresholdPercent}
+              onChange={(event) => setThresholdPercent(Number(event.target.value))}
+            />
           </label>
-          <button type="button" className="storage-settings-primary" onClick={() => void unlock('unlock')}>
-            Unlock
-          </button>
+          <label className="storage-settings-field">
+            <span>Minimum free space to keep in reserve (GB)</span>
+            <input
+              type="number"
+              min={0}
+              max={5000}
+              value={reserveGb}
+              onChange={(event) => setReserveGb(Number(event.target.value))}
+            />
+          </label>
         </div>
-      )}
+      </div>
 
-      {unlocked && (
-        <>
-          <div className="storage-settings-grid">
-            <div className="storage-settings-card">
-              <h2 className="storage-settings-section-title">Allocation</h2>
-              <div className="storage-settings-summary">
-                <div>
-                  <span className="storage-settings-label">Active Drive</span>
-                  <strong>{activeDrive ? `${activeDrive.label} (${activeDrive.rootPath})` : 'None available'}</strong>
-                </div>
-                <div>
-                  <span className="storage-settings-label">Next Drive</span>
-                  <strong>{nextDrive ? `${nextDrive.label} (${nextDrive.rootPath})` : 'No standby drive'}</strong>
-                </div>
-                <div>
-                  <span className="storage-settings-label">Threshold</span>
-                  <strong>{thresholdPercent}% used</strong>
-                </div>
-                <div>
-                  <span className="storage-settings-label">Reserve</span>
-                  <strong>{reserveGb} GB free</strong>
-                </div>
-              </div>
-            </div>
-
-            <div className="storage-settings-card">
-              <h2 className="storage-settings-section-title">Thresholds</h2>
-              <label className="storage-settings-field">
-                <span>Switch when drive usage reaches</span>
-                <input
-                  type="number"
-                  min={50}
-                  max={98}
-                  value={thresholdPercent}
-                  onChange={(event) => setThresholdPercent(Number(event.target.value))}
-                />
-              </label>
-              <label className="storage-settings-field">
-                <span>Minimum free space to keep in reserve (GB)</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={5000}
-                  value={reserveGb}
-                  onChange={(event) => setReserveGb(Number(event.target.value))}
-                />
-              </label>
-            </div>
+      <div className="storage-settings-card">
+        <div className="storage-settings-card-head">
+          <div>
+            <h2 className="storage-settings-section-title">Detected volumes</h2>
+            <p className="storage-settings-muted">
+              LPOS manages its own structure inside each enabled drive at <code>\{managedRootName}</code>.
+            </p>
           </div>
+          <div className="storage-settings-enabled-count">{enabledCount} enabled</div>
+        </div>
 
-          <div className="storage-settings-card">
-            <div className="storage-settings-card-head">
-              <div>
-                <h2 className="storage-settings-section-title">Detected volumes</h2>
-                <p className="storage-settings-muted">
-                  LPOS manages its own structure inside each enabled drive at <code>\{managedRootName}</code>.
-                </p>
-              </div>
-              <div className="storage-settings-enabled-count">{enabledCount} enabled</div>
-            </div>
-
-            <div className="storage-volume-list">
-              {[...volumes].sort((a, b) => a.priority - b.priority).map((volume, index) => (
-                <article key={volume.rootPath} className="storage-volume-card">
-                  <div className="storage-volume-main">
-                    <div>
-                      <div className="storage-volume-title-row">
-                        <h3 className="storage-volume-title">{volume.label}</h3>
-                        <span className={`storage-volume-chip${volume.eligible ? ' ok' : ''}`}>
-                          {volume.eligible ? 'Ready' : volume.reason ?? 'Unavailable'}
-                        </span>
-                      </div>
-                      <p className="storage-volume-path">{volume.rootPath}</p>
-                      <p className="storage-volume-meta">
-                        {bytesToHuman(volume.freeBytes)} free of {bytesToHuman(volume.totalBytes)}
-                        {typeof volume.usedPercent === 'number' ? ` • ${volume.usedPercent.toFixed(1)}% used` : ''}
-                      </p>
-                    </div>
-                    <label className="storage-volume-toggle">
-                      <input
-                        type="checkbox"
-                        checked={volume.enabled}
-                        onChange={(event) => updateVolume(volume.rootPath, { enabled: event.target.checked })}
-                      />
-                      <span>Enabled</span>
-                    </label>
+        <div className="storage-volume-list">
+          {[...volumes].sort((a, b) => a.priority - b.priority).map((volume, index) => (
+            <article key={volume.rootPath} className="storage-volume-card">
+              <div className="storage-volume-main">
+                <div>
+                  <div className="storage-volume-title-row">
+                    <h3 className="storage-volume-title">{volume.label}</h3>
+                    <span className={`storage-volume-chip${volume.eligible ? ' ok' : ''}`}>
+                      {volume.eligible ? 'Ready' : volume.reason ?? 'Unavailable'}
+                    </span>
                   </div>
-                  <div className="storage-volume-actions">
-                    <span className="storage-volume-order">Priority #{index + 1}</span>
-                    <button type="button" className="storage-settings-secondary" onClick={() => moveVolume(volume.rootPath, -1)}>
-                      Move Up
-                    </button>
-                    <button type="button" className="storage-settings-secondary" onClick={() => moveVolume(volume.rootPath, 1)}>
-                      Move Down
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </div>
+                  <p className="storage-volume-path">{volume.rootPath}</p>
+                  <p className="storage-volume-meta">
+                    {bytesToHuman(volume.freeBytes)} free of {bytesToHuman(volume.totalBytes)}
+                    {typeof volume.usedPercent === 'number' ? ` • ${volume.usedPercent.toFixed(1)}% used` : ''}
+                  </p>
+                </div>
+                <label className="storage-volume-toggle">
+                  <input
+                    type="checkbox"
+                    checked={volume.enabled}
+                    onChange={(event) => updateVolume(volume.rootPath, { enabled: event.target.checked })}
+                  />
+                  <span>Enabled</span>
+                </label>
+              </div>
+              <div className="storage-volume-actions">
+                <span className="storage-volume-order">Priority #{index + 1}</span>
+                <button
+                  type="button"
+                  className="storage-settings-secondary"
+                  onClick={() => moveVolume(volume.rootPath, -1)}
+                >
+                  Move Up
+                </button>
+                <button
+                  type="button"
+                  className="storage-settings-secondary"
+                  onClick={() => moveVolume(volume.rootPath, 1)}
+                >
+                  Move Down
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
 
-          <div className="storage-settings-actions">
-            <button type="button" className="storage-settings-secondary" onClick={() => void loadConfig()}>
-              Refresh Volumes
-            </button>
-            <button type="button" className="storage-settings-primary" disabled={saving} onClick={() => void save()}>
-              {saving ? 'Saving…' : 'Save Storage Settings'}
-            </button>
-          </div>
-        </>
-      )}
+      <div className="storage-settings-actions">
+        <button type="button" className="storage-settings-secondary" onClick={() => void loadConfig()}>
+          Refresh Volumes
+        </button>
+      </div>
     </section>
   );
 }

@@ -431,7 +431,7 @@ export class SlateService {
     this.notes = readNotes(projectId);
     this.currentProjectId = projectId;
     const project = this.projectStore.getById(projectId);
-    if (project) this.atemFilenameBase = generateRecordingBaseName(project.name);
+    if (project) this.atemFilenameBase = generateRecordingBaseName(project.name, new Date(), project.clientName);
     this.config.lastProjectId = projectId;
     saveConfig(this.config);
     this.emitAtemState();

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
+import { resolveRequestActor } from '@/lib/services/activity-actor';
 
 export async function GET() {
   try {
@@ -17,7 +18,10 @@ export async function POST(req: NextRequest) {
 
     if (!name?.trim()) return NextResponse.json({ error: 'name is required' }, { status: 400 });
 
-    const project = getProjectStore().create({ name, clientName: clientName ?? '' });
+    const project = getProjectStore().create(
+      { name, clientName: clientName ?? '' },
+      { actor: resolveRequestActor(req), source_kind: 'api' },
+    );
     return NextResponse.json({ project }, { status: 201 });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

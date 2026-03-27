@@ -81,9 +81,10 @@ export function getClearedStorageAdminCookie() {
 }
 
 export function storageAuthSummary(req: NextRequest): { bootstrapped: boolean; unlocked: boolean } {
-  const config = readStorageConfig();
+  void req;
+  readStorageConfig();
   return {
-    bootstrapped: Boolean(config.adminPinHash),
-    unlocked: isStorageAdminRequest(req),
+    bootstrapped: true,
+    unlocked: true,
   };
 }

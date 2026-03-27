@@ -19,8 +19,10 @@ export async function GET() {
   const clientId    = process.env.FRAMEIO_CLIENT_ID?.trim();
   const redirectUri = process.env.FRAMEIO_REDIRECT_URI?.trim()
     ?? 'https://localhost:3000/api/auth/frameio/callback';
-  const scopes = process.env.FRAMEIO_SCOPES?.trim()
-    ?? 'openid AdobeID offline_access';
+  const scopes = (process.env.FRAMEIO_SCOPES?.trim() ?? 'openid AdobeID offline_access')
+    .split(/[,\s]+/)
+    .filter(Boolean)
+    .join(' ');
 
   if (!clientId) {
     return NextResponse.json(

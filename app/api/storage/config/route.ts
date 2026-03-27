@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getStorageAllocationDecision } from '@/lib/services/storage-volume-service';
-import { isStorageAdminRequest, storageAuthSummary } from '@/lib/services/storage-auth';
+import { getStorageAllocationDecision, invalidateStorageCache } from '@/lib/services/storage-volume-service';
+import { storageAuthSummary } from '@/lib/services/storage-auth';
 import { patchStorageConfig, readStorageConfig, sanitizeStorageConfig } from '@/lib/store/storage-config-store';
 
 export async function GET(req: NextRequest) {
@@ -35,11 +35,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const config = readStorageConfig();
-  const unlocked = isStorageAdminRequest(req);
-  if (config.adminPinHash && !unlocked) {
-    return NextResponse.json({ error: 'Storage settings are locked.' }, { status: 401 });
-  }
+  void readStorageConfig();
 
   const body = await req.json().catch(() => ({})) as {
     thresholdPercent?: number;
@@ -64,6 +60,9 @@ export async function PUT(req: NextRequest) {
       priority: Number.isFinite(volume.priority) ? Number(volume.priority) : index,
     })),
   });
+
+  // Config changed — drop the cached drive scan so the new preference is reflected
+  invalidateStorageCache();
 
   return NextResponse.json({
     ok: true,

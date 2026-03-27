@@ -41,7 +41,7 @@ export type CompressProgressCallback = (percent: number) => void;
 function probeDurationSeconds(filePath: string): Promise<number> {
   return new Promise((resolve) => {
     if (!ffmpegPath) { resolve(0); return; }
-    const proc = spawn(ffmpegPath, ['-i', filePath]);
+    const proc = spawn(ffmpegPath, ['-nostdin', '-i', filePath], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     proc.on('close', () => {
@@ -104,7 +104,7 @@ export async function compressForFrameIO(
       outputPath,
     ];
 
-    const proc = spawn(ffmpegPath!, args);
+    const proc = spawn(ffmpegPath!, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     if (jobId) activeProcs.set(jobId, proc);
 
     // Parse -progress pipe:1 output (stdout) for out_time_ms

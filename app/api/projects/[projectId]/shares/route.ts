@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readRegistry } from '@/lib/store/media-registry';
 import { listShares, createShareLink } from '@/lib/services/frameio';
-import { setShareAssets } from '@/lib/store/share-assets-store';
+import { getAllShareAssets, setShareAssets } from '@/lib/store/share-assets-store';
 
 type Params = { params: Promise<{ projectId: string }> };
 
@@ -16,11 +16,19 @@ export async function GET(_req: NextRequest, { params }: Params) {
   try {
     const { projectId } = await params;
 
-    const allShares = await listShares();
+    const [allShares, localShares] = await Promise.all([
+      listShares(),
+      Promise.resolve(getAllShareAssets(projectId)),
+    ]);
 
-    // Filter out per-asset auto-review links created during upload.
-    // Those are named "Review — {filename}" and are shown in the asset detail panel instead.
-    const shares = allShares.filter((s) => !s.name.startsWith('Review — '));
+    // Filter out per-asset auto-review links shown in the asset detail panel instead.
+    // Enrich with fileCount from local store when available (null = not yet tracked by LPOS).
+    const shares = allShares
+      .filter((s) => !s.name.startsWith('Review — '))
+      .map((s) => ({
+        ...s,
+        fileCount: s.id in localShares ? localShares[s.id].length : null,
+      }));
 
     // Build a lookup: frameio file ID → LPOS asset name
     const assets  = readRegistry(projectId);
