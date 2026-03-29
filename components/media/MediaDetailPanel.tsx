@@ -22,6 +22,7 @@ import {
   LEADERPASS_STATUS_LABEL,
 } from '@/lib/models/media-asset';
 import type { FrameIOComment } from '@/lib/services/frameio';
+import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
 
 interface Props {
   asset:              MediaAsset | null;
@@ -82,7 +83,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setName(asset.name);
     setDescription(asset.description);
     setMetaDirty(false);
-    setGeneratedShareUrl(null);
+    setExistingShareLinks([]);
     setShareError(null);
     setShowLeaderPassErrorDetails(false);
   }, [asset]);
@@ -106,9 +107,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [fioUploading, setFioUploading]       = useState(false);
   const [fioError, setFioError]               = useState<string | null>(null);
   const [copied, setCopied]                   = useState(false);
-  const [shareGenerating, setShareGenerating] = useState(false);
-  const [shareError, setShareError]           = useState<string | null>(null);
-  const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
+  const [shareGenerating, setShareGenerating]   = useState(false);
+  const [shareError, setShareError]             = useState<string | null>(null);
+  const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
 
   // Poll while uploading
   const pollFio = useCallback(async () => {
@@ -225,6 +226,19 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setTimeout(() => setCopied(false), 2000);
   }
 
+  const fetchShareLinks = useCallback(async (assetId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/${assetId}/shares`);
+      if (!res.ok) return;
+      const data = await res.json() as { shares: AssetShareLink[] };
+      setExistingShareLinks(data.shares);
+    } catch { /* ignore */ }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (asset?.assetId) void fetchShareLinks(asset.assetId);
+  }, [asset?.assetId, fetchShareLinks]);
+
   async function handleGenerateShareLink() {
     if (!asset) return;
     setShareGenerating(true);
@@ -235,9 +249,17 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ assetIds: [asset.assetId], name: `Review — ${asset.name}` }),
       });
-      const data = await res.json() as { shareUrl?: string; error?: string };
+      const data = await res.json() as { shareUrl?: string; shareId?: string; error?: string };
       if (!res.ok) { setShareError(data.error ?? 'Failed to generate share link'); return; }
-      if (data.shareUrl) setGeneratedShareUrl(data.shareUrl);
+      if (data.shareUrl && data.shareId) {
+        const link: AssetShareLink = {
+          shareId:   data.shareId,
+          shareUrl:  data.shareUrl,
+          name:      `Review — ${asset.name}`,
+          createdAt: new Date().toISOString(),
+        };
+        setExistingShareLinks((prev) => [...prev.filter((l) => l.shareId !== data.shareId), link]);
+      }
     } catch {
       setShareError('Network error — could not generate share link');
     } finally {
@@ -531,8 +553,23 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   </div>
                 )}
 
+                {/* Persisted share links for this asset */}
+                {existingShareLinks.length > 0 && !isUploading && existingShareLinks.map((link) => (
+                  <div key={link.shareId} className="mad-copy-row mad-copy-row--generated">
+                    <span className="mad-copy-label">Share link</span>
+                    <span className="mad-copy-url">{link.shareUrl}</span>
+                    <button
+                      type="button"
+                      className="mad-copy-btn mad-copy-btn--primary"
+                      onClick={() => handleCopyLink(link.shareUrl)}
+                    >
+                      {copied ? '✓ Copied' : 'Copy'}
+                    </button>
+                  </div>
+                ))}
+
                 {/* Generate a new share link on demand */}
-                {asset.frameio.assetId && !isUploading && !generatedShareUrl && (
+                {asset.frameio.assetId && !isUploading && (
                   <button
                     type="button"
                     className="mad-action-btn"
@@ -543,23 +580,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                       <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                     </svg>
-                    {shareGenerating ? 'Generating…' : 'Generate share link'}
+                    {shareGenerating ? 'Generating…' : existingShareLinks.length > 0 ? 'Generate new share link' : 'Generate share link'}
                   </button>
-                )}
-
-                {/* Generated share link result */}
-                {generatedShareUrl && !isUploading && (
-                  <div className="mad-copy-row mad-copy-row--generated">
-                    <span className="mad-copy-label">New share link</span>
-                    <span className="mad-copy-url">{generatedShareUrl}</span>
-                    <button
-                      type="button"
-                      className="mad-copy-btn mad-copy-btn--primary"
-                      onClick={() => handleCopyLink(generatedShareUrl)}
-                    >
-                      {copied ? '✓ Copied' : 'Copy'}
-                    </button>
-                  </div>
                 )}
 
                 {shareError && <p className="mad-error">{shareError}</p>}

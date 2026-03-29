@@ -6,6 +6,7 @@ import { NavBar } from '@/components/shell/NavBar';
 import { Breadcrumb } from '@/components/shell/Breadcrumb';
 import { PipelineTray } from '@/components/shell/PipelineTray';
 import { UserMenu } from '@/components/shell/UserMenu';
+import { WishListButton } from '@/components/shell/WishListButton';
 import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { VersionConfirmProvider } from '@/contexts/VersionConfirmContext';
@@ -52,6 +53,7 @@ export function AppShell({
             <div className="app-home">
               {children}
               {currentUser && <UserMenu user={currentUser} />}
+              {currentUser && <WishListButton currentUser={currentUser} home />}
               <StorageGear home />
               {!isStudio && <TrayGroup />}
             </div>
@@ -72,6 +74,7 @@ export function AppShell({
             <main className="app-content">
               {children}
             </main>
+            {currentUser && !isSignIn && <WishListButton currentUser={currentUser} />}
             <StorageGear />
             {!isStudio && <TrayGroup />}
           </div>

@@ -3,9 +3,11 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useProjects } from '@/hooks/useProjects';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useClientOwners } from '@/hooks/useClientOwners';
 import { useClientStats } from '@/hooks/useClientStats';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
+import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 import { RenameModal } from '@/components/shared/RenameModal';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { ContextMenu } from '@/components/shared/ContextMenu';
@@ -52,6 +54,7 @@ function IconArchive() { return <svg width="13" height="13" viewBox="0 0 24 24" 
 function IconTrash()   { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>; }
 function IconUnarchive() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><polyline points="10 12 12 10 14 12"/><line x1="12" y1="10" x2="12" y2="16"/></svg>; }
 function IconUser()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
+function IconTask()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><polyline points="9 11 11 13 15 9"/><line x1="3" y1="19" x2="21" y2="19"/><line x1="3" y1="15" x2="21" y2="15"/></svg>; }
 
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 
@@ -111,6 +114,7 @@ export default function ProjectsPage() {
   const router = useRouter();
   const { projects } = useProjects();
   const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners();
+  const currentUser = useCurrentUser();
   const clientStats = useClientStats();
 
   const [search, setSearch] = useState('');
@@ -128,6 +132,7 @@ export default function ProjectsPage() {
   const [ownerPicker, setOwnerPicker] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
   const [confirmArchive, setConfirmArchive] = useState<{ ids: string[]; label: string; unarchive?: boolean } | null>(null);
+  const [taskProject, setTaskProject] = useState<Project | null>(null);
 
   // Context menus
   const projectMenu = useContextMenu<Project>();
@@ -241,6 +246,12 @@ export default function ProjectsPage() {
       label: 'Rename',
       icon: <IconPencil />,
       onClick: () => setRenaming({ id: project.projectId, currentName: project.name }),
+    },
+    {
+      type: 'item',
+      label: 'Add Task',
+      icon: <IconTask />,
+      onClick: () => setTaskProject(project),
     },
     { type: 'separator' },
     project.archived
@@ -449,6 +460,16 @@ export default function ProjectsPage() {
             onCreated={() => setShowNewModal(false)}
           />
         )}
+        {taskProject && (
+          <NewTaskModal
+            projects={activeProjects}
+            users={users}
+            currentUserId={currentUser?.id ?? ''}
+            defaultProjectId={taskProject.projectId}
+            onCreated={() => setTaskProject(null)}
+            onClose={() => setTaskProject(null)}
+          />
+        )}
         <Modals
           renaming={renaming}
           confirmDelete={confirmDelete}
@@ -558,6 +579,16 @@ export default function ProjectsPage() {
         <NewProjectModal
           onClose={() => setShowNewModal(false)}
           onCreated={() => setShowNewModal(false)}
+        />
+      )}
+      {taskProject && (
+        <NewTaskModal
+          projects={activeProjects}
+          users={users}
+          currentUserId=""
+          defaultProjectId={taskProject.projectId}
+          onCreated={() => setTaskProject(null)}
+          onClose={() => setTaskProject(null)}
         />
       )}
       {ownerPicker && (

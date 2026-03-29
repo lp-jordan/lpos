@@ -60,6 +60,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_projectNoteStore: ProjectNoteStore | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_wishStore: WishStore | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_io: SocketIOServer | undefined;
 }
 
@@ -76,6 +78,7 @@ let pipelineTracker: PipelineTrackerService | null = null;
 let clientOwnerStore: ClientOwnerStore | null = null;
 let taskStore: TaskStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
+let wishStore: WishStore | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -132,7 +135,7 @@ export async function initServices(io: SocketIOServer): Promise<void> {
 
   cameraControlService = new CameraControlService(io, registry);
   globalThis.__lpos_cameraControlService = cameraControlService;
-  activityMonitorService = new ActivityMonitorService(io, registry, globalThis.__lpos_projectStore);
+  activityMonitorService = new ActivityMonitorService(io, registry);
   globalThis.__lpos_activityMonitorService = activityMonitorService;
   setActivityMonitorService(activityMonitorService);
 
@@ -217,7 +220,7 @@ export function getActivityService(): ActivityMonitorService {
   const existing = getActivityMonitorService();
   if (existing) return existing;
 
-  activityMonitorService = new ActivityMonitorService(globalThis.__lpos_io, null, getProjectStore());
+  activityMonitorService = new ActivityMonitorService(globalThis.__lpos_io, null);
   globalThis.__lpos_activityMonitorService = activityMonitorService;
   setActivityMonitorService(activityMonitorService);
   return activityMonitorService;
@@ -251,4 +254,12 @@ export function getProjectNoteStore(): ProjectNoteStore {
   projectNoteStore = new ProjectNoteStore();
   globalThis.__lpos_projectNoteStore = projectNoteStore;
   return projectNoteStore;
+}
+
+export function getWishStore(): WishStore {
+  if (globalThis.__lpos_wishStore) return globalThis.__lpos_wishStore;
+  if (wishStore) return wishStore;
+  wishStore = new WishStore();
+  globalThis.__lpos_wishStore = wishStore;
+  return wishStore;
 }

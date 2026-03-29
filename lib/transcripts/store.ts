@@ -71,6 +71,21 @@ export function readTranscriptText(projectId: string, jobId: string): string {
   }
 }
 
+function buildTimecodedText(projectId: string, jobId: string): string {
+  const { jsonPath } = getTranscriptPaths(projectId, jobId);
+  try {
+    const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as {
+      transcription?: Array<{ timestamps: { from: string }; text: string }>;
+    };
+    if (!Array.isArray(raw.transcription)) return '';
+    return raw.transcription
+      .map((seg) => `[${seg.timestamps.from.substring(0, 8)}] ${seg.text.trim()}`)
+      .join('\n');
+  } catch {
+    return '';
+  }
+}
+
 export function listProjectTranscripts(projectId: string): TranscriptEntry[] {
   const transcriptsDir = getTranscriptsDir(projectId);
   const subtitlesDir = getSubtitlesDir(projectId);
@@ -110,7 +125,16 @@ export function listProjectTranscripts(projectId: string): TranscriptEntry[] {
   return transcripts;
 }
 
-export function readTranscriptDownload(projectId: string, jobId: string, type: 'txt' | 'json' | 'srt' | 'vtt'): Buffer | null {
+export function readTranscriptDownload(
+  projectId: string,
+  jobId: string,
+  type: 'txt' | 'json' | 'srt' | 'vtt' | 'timecoded-txt',
+): Buffer | null {
+  if (type === 'timecoded-txt') {
+    const content = buildTimecodedText(projectId, jobId);
+    return content ? Buffer.from(content, 'utf8') : null;
+  }
+
   const paths = getTranscriptPaths(projectId, jobId);
   const filePath = (
     type === 'txt' ? paths.txtPath

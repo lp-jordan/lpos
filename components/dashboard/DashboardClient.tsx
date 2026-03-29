@@ -3,8 +3,11 @@
 import { useCallback, useState } from 'react';
 import type { Project } from '@/lib/models/project';
 import { SUBPHASE_ORDER, SUBPHASE_PHASE_MAP } from '@/lib/models/project';
-import type { Task } from '@/lib/models/task';
+import type { Task, TaskStatus, TaskPriority } from '@/lib/models/task';
 import type { ProjectNote } from '@/lib/models/project-note';
+import type { UserSummary } from '@/lib/models/user';
+import { NewTaskModal } from './NewTaskModal';
+import { TaskDetailModal } from './TaskDetailModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,28 +49,72 @@ function isCrossPhase(current: string): boolean {
   return SUBPHASE_PHASE_MAP[current as never] !== next.phase;
 }
 
+/** Highlight @word tokens in notes text. */
+function renderNotes(text: string) {
+  const parts = text.split(/(@\w+)/g);
+  return parts.map((part, i) =>
+    part.startsWith('@')
+      ? <span key={i} className="task-mention">{part}</span>
+      : part,
+  );
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  not_started: 'Not Started',
+  in_progress: 'In Progress',
+  blocked: 'Blocked',
+  waiting_on_client: 'Waiting',
+  done: 'Done',
+};
+
+const STATUS_ORDER: TaskStatus[] = ['not_started', 'in_progress', 'blocked', 'waiting_on_client', 'done'];
+
+const PRIORITY_LABEL: Record<TaskPriority, string> = {
+  urgent: 'Urgent',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
+};
+
 // ── Activity ──────────────────────────────────────────────────────────────────
 
 interface ActivityEvent {
   event_id: string;
   occurred_at: string;
+  event_type: string;
   title: string;
   summary: string | null;
   project_id: string | null;
+  actor_display: string | null;
+  actor_type: string | null;
 }
 
-function ActivityFeed({ events }: { events: ActivityEvent[] }) {
+function ActivityFeed({ events, projectMap }: { events: ActivityEvent[]; projectMap: Map<string, string> }) {
   if (events.length === 0) {
     return <p className="dashboard-empty">No recent activity for your projects.</p>;
   }
   return (
     <ul className="dashboard-activity-list">
-      {events.map((e) => (
-        <li key={e.event_id} className="dashboard-activity-item">
-          <span className="dashboard-activity-title">{e.title}</span>
-          <span className="dashboard-activity-time">{relativeTime(e.occurred_at)}</span>
-        </li>
-      ))}
+      {events.map((e) => {
+        const projectName = e.project_id ? (projectMap.get(e.project_id) ?? null) : null;
+        const showActor = e.actor_display && e.actor_type !== 'system';
+        return (
+          <li key={e.event_id} className="dashboard-activity-item">
+            <span className="dashboard-activity-title">{e.title}</span>
+            <span className="dashboard-activity-meta">
+              {projectName && (
+                <span className="dashboard-activity-project">{projectName}</span>
+              )}
+              {showActor && (
+                <span className="dashboard-activity-actor">{e.actor_display}</span>
+              )}
+              <span className="dashboard-activity-time">{relativeTime(e.occurred_at)}</span>
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -169,16 +216,59 @@ function ProjectStatusSection({ initialProjects }: { initialProjects: Project[] 
 
 // ── To-Dos ────────────────────────────────────────────────────────────────────
 
-function TodoSection({ initialTasks, userId }: { initialTasks: Task[]; userId: string }) {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [newDesc, setNewDesc] = useState('');
-  const [adding, setAdding] = useState(false);
+function StatusPill({ task, onChange }: { task: Task; onChange: (status: TaskStatus) => void }) {
+  const [open, setOpen] = useState(false);
 
-  const toggle = useCallback(async (task: Task) => {
+  return (
+    <div className="task-status-wrapper" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className={`task-status-pill task-status-pill--${task.status}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {STATUS_LABEL[task.status]}
+      </button>
+      {open && (
+        <div className="task-status-dropdown" onMouseLeave={() => setOpen(false)}>
+          {STATUS_ORDER.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`task-status-option${s === task.status ? ' task-status-option--active' : ''}`}
+              onClick={() => { onChange(s); setOpen(false); }}
+            >
+              {STATUS_LABEL[s]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TodoSection({
+  initialTasks,
+  userId,
+  allProjects,
+  users,
+}: {
+  initialTasks: Task[];
+  userId: string;
+  allProjects: Project[];
+  users: UserSummary[];
+}) {
+  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [collapsedDone, setCollapsedDone] = useState<Record<string, boolean>>({});
+
+  const projectMap = new Map(allProjects.map((p) => [p.projectId, p]));
+
+  const setStatus = useCallback(async (task: Task, status: TaskStatus) => {
     const res = await fetch(`/api/tasks/${task.taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ completed: !task.completed }),
+      body: JSON.stringify({ status }),
     });
     if (res.ok) {
       const data = await res.json() as { task: Task };
@@ -186,73 +276,128 @@ function TodoSection({ initialTasks, userId }: { initialTasks: Task[]; userId: s
     }
   }, []);
 
-  const submit = useCallback(async () => {
-    if (!newDesc.trim()) return;
-    const res = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: newDesc.trim() }),
-    });
-    if (res.ok) {
-      const data = await res.json() as { task: Task };
-      setTasks((prev) => [data.task, ...prev]);
-      setNewDesc('');
-      setAdding(false);
-    }
-  }, [newDesc]);
+  const activeTasks = tasks.filter((t) => t.status !== 'done');
+  const doneTasks = tasks.filter((t) => t.status === 'done');
 
-  const active = tasks.filter((t) => !t.completed);
-  const done = tasks.filter((t) => t.completed);
+  // Group active tasks by projectId
+  const groups = new Map<string, Task[]>();
+  for (const t of activeTasks) {
+    if (!groups.has(t.projectId)) groups.set(t.projectId, []);
+    groups.get(t.projectId)!.push(t);
+  }
+  // Done tasks also grouped
+  const doneGroups = new Map<string, Task[]>();
+  for (const t of doneTasks) {
+    if (!doneGroups.has(t.projectId)) doneGroups.set(t.projectId, []);
+    doneGroups.get(t.projectId)!.push(t);
+  }
+
+  const allGroupIds = [...new Set([...groups.keys(), ...doneGroups.keys()])];
+
+  function projectLabel(projectId: string): string {
+    const p = projectMap.get(projectId);
+    if (!p) return projectId === 'unassigned' ? 'Unassigned' : projectId;
+    return `${p.clientName} — ${p.name}`;
+  }
+
+  if (tasks.length === 0 && !showModal) {
+    return (
+      <div>
+        <p className="dashboard-empty">No tasks yet.</p>
+        <button type="button" className="dashboard-add-btn" onClick={() => setShowModal(true)}>+ New Task</button>
+        {showModal && (
+          <NewTaskModal
+            projects={allProjects}
+            users={users}
+            currentUserId={userId}
+            onCreated={(t) => setTasks((prev) => [t, ...prev])}
+            onClose={() => setShowModal(false)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard-todos">
-      {active.length === 0 && !adding && (
-        <p className="dashboard-empty">No open to-dos.</p>
+      {allGroupIds.map((pid) => {
+        const activeGroup = groups.get(pid) ?? [];
+        const doneGroup = doneGroups.get(pid) ?? [];
+        const doneCollapsed = collapsedDone[pid] !== false; // collapsed by default
+
+        return (
+          <div key={pid} className="task-group">
+            <div className="task-group-header">{projectLabel(pid)}</div>
+
+            {activeGroup.map((t) => (
+              <TaskRow key={t.taskId} task={t} onStatusChange={(s) => void setStatus(t, s)} onClick={() => setSelectedTask(t)} />
+            ))}
+
+            {doneGroup.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className="task-done-toggle"
+                  onClick={() => setCollapsedDone((prev) => ({ ...prev, [pid]: !doneCollapsed }))}
+                >
+                  {doneCollapsed ? '▸' : '▾'} {doneGroup.length} completed
+                </button>
+                {!doneCollapsed && doneGroup.map((t) => (
+                  <TaskRow key={t.taskId} task={t} onStatusChange={(s) => void setStatus(t, s)} onClick={() => setSelectedTask(t)} />
+                ))}
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      <button type="button" className="dashboard-add-btn" onClick={() => setShowModal(true)}>
+        + New Task
+      </button>
+
+      {showModal && (
+        <NewTaskModal
+          projects={allProjects}
+          users={users}
+          currentUserId={userId}
+          onCreated={(t) => setTasks((prev) => [t, ...prev])}
+          onClose={() => setShowModal(false)}
+        />
       )}
-      {active.map((t) => (
-        <label key={t.taskId} className="dashboard-todo-row">
-          <input
-            type="checkbox"
-            className="dashboard-todo-check"
-            checked={false}
-            onChange={() => void toggle(t)}
-          />
-          <span className="dashboard-todo-desc">{t.description}</span>
-          {t.clientName && <span className="dashboard-todo-client">{t.clientName}</span>}
-        </label>
-      ))}
-      {done.slice(0, 3).map((t) => (
-        <label key={t.taskId} className="dashboard-todo-row dashboard-todo-row--done">
-          <input
-            type="checkbox"
-            className="dashboard-todo-check"
-            checked
-            onChange={() => void toggle(t)}
-          />
-          <span className="dashboard-todo-desc">{t.description}</span>
-        </label>
-      ))}
-      {adding ? (
-        <div className="dashboard-todo-add-row">
-          <input
-            autoFocus
-            type="text"
-            className="dashboard-todo-input"
-            placeholder="Task description…"
-            value={newDesc}
-            onChange={(e) => setNewDesc(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submit();
-              if (e.key === 'Escape') { setAdding(false); setNewDesc(''); }
-            }}
-          />
-          <button type="button" className="dashboard-todo-save" onClick={() => void submit()}>Add</button>
-          <button type="button" className="dashboard-todo-cancel" onClick={() => { setAdding(false); setNewDesc(''); }}>✕</button>
-        </div>
-      ) : (
-        <button type="button" className="dashboard-add-btn" onClick={() => setAdding(true)}>
-          + Add task
-        </button>
+
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          projects={allProjects}
+          users={users}
+          onUpdated={(updated) => setTasks((prev) => prev.map((t) => t.taskId === updated.taskId ? updated : t))}
+          onClose={() => setSelectedTask(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TaskRow({ task, onStatusChange, onClick }: { task: Task; onStatusChange: (s: TaskStatus) => void; onClick: () => void }) {
+  return (
+    <div
+      className={`task-row${task.status === 'done' ? ' task-row--done' : ''}`}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
+    >
+      <StatusPill task={task} onChange={onStatusChange} />
+      <div className="task-body">
+        <span className="task-desc">{task.description}</span>
+        {task.notes && (
+          <span className="task-notes">{renderNotes(task.notes)}</span>
+        )}
+      </div>
+      {task.priority !== 'medium' && (
+        <span className={`task-priority-badge task-priority-badge--${task.priority}`}>
+          {PRIORITY_LABEL[task.priority]}
+        </span>
       )}
     </div>
   );
@@ -314,16 +459,20 @@ export interface DashboardClientProps {
   firstName: string;
   userId: string;
   projects: Project[];
+  allProjects: Project[];
+  users: UserSummary[];
   activity: ActivityEvent[];
   tasks: Task[];
   notes: ProjectNote[];
-  userMap: Record<string, string>;  // userId → display name
+  userMap: Record<string, string>;
 }
 
 export function DashboardClient({
   firstName,
   userId,
   projects,
+  allProjects,
+  users,
   activity,
   tasks,
   notes,
@@ -344,12 +493,20 @@ export function DashboardClient({
 
         <section className="dashboard-section">
           <h2 className="dashboard-section-heading">Recent Activity</h2>
-          <ActivityFeed events={activity} />
+          <ActivityFeed
+            events={activity}
+            projectMap={new Map(allProjects.map((p) => [p.projectId, p.name]))}
+          />
         </section>
 
         <section className="dashboard-section">
           <h2 className="dashboard-section-heading">To-Dos</h2>
-          <TodoSection initialTasks={tasks} userId={userId} />
+          <TodoSection
+            initialTasks={tasks}
+            userId={userId}
+            allProjects={allProjects}
+            users={users}
+          />
         </section>
 
         <section className="dashboard-section">

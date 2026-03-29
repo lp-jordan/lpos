@@ -9,28 +9,12 @@ import type {
   ActivityVisibility,
   NotificationSeverity,
 } from '@/lib/models/activity';
-import type { ProjectStore } from '@/lib/store/project-store';
-import { readRegistry } from '@/lib/store/media-registry';
 import { getActivityDb } from '@/lib/store/activity-db';
 import type { ServiceRegistry } from './registry';
-import type { FrameIOComment } from './frameio';
-import { getComments } from './frameio';
-
-interface FrameIoTrackedAsset {
-  client_id: string | null;
-  project_id: string;
-  project_name: string;
-  asset_id: string;
-  asset_name: string;
-  frameio_file_id: string;
-}
 
 interface ActivityMonitorOptions {
-  pollIntervalMs?: number;
   summaryIntervalMs?: number;
   now?: () => Date;
-  getComments?: (fileId: string) => Promise<FrameIOComment[]>;
-  listTrackedFrameIoAssets?: () => FrameIoTrackedAsset[];
 }
 
 declare global {
@@ -42,40 +26,23 @@ const DEFAULT_VISIBILITY: ActivityVisibility[] = ['user_timeline', 'operator_onl
 
 export class ActivityMonitorService {
   private readonly db: DatabaseSync;
-  private readonly pollIntervalMs: number;
   private readonly summaryIntervalMs: number;
   private readonly now: () => Date;
-  private readonly getCommentsImpl: (fileId: string) => Promise<FrameIOComment[]>;
-  private readonly listTrackedFrameIoAssetsImpl: () => FrameIoTrackedAsset[];
-  private pollTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private io: SocketIOServer | undefined,
     private registry: ServiceRegistry | null,
-    private projectStore: ProjectStore,
     options: ActivityMonitorOptions = {},
   ) {
     this.db = getActivityDb();
-    this.pollIntervalMs = options.pollIntervalMs ?? 5 * 60 * 1000;
     this.summaryIntervalMs = options.summaryIntervalMs ?? 60 * 60 * 1000;
     this.now = options.now ?? (() => new Date());
-    this.getCommentsImpl = options.getComments ?? getComments;
-    this.listTrackedFrameIoAssetsImpl = options.listTrackedFrameIoAssets ?? (() => this.listTrackedFrameIoAssets());
   }
 
   async start(): Promise<void> {
     this.registry?.register('activity-monitor', 'Activity Monitor');
     this.registry?.update('activity-monitor', 'running');
-
-    if (!this.pollTimer) {
-      this.pollTimer = setInterval(() => {
-        void this.pollFrameIoCommentsOnce().catch((error) => {
-          console.warn('[activity-monitor] frame.io comment poll failed:', error);
-        });
-      }, this.pollIntervalMs);
-      this.pollTimer.unref?.();
-    }
 
     if (!this.summaryTimer) {
       this.summaryTimer = setInterval(() => {
@@ -90,9 +57,7 @@ export class ActivityMonitorService {
   }
 
   async stop(): Promise<void> {
-    if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.summaryTimer) clearInterval(this.summaryTimer);
-    this.pollTimer = null;
     this.summaryTimer = null;
     this.registry?.update('activity-monitor', 'stopped');
   }
@@ -152,74 +117,6 @@ export class ActivityMonitorService {
           ORDER BY created_at DESC
         `);
     return (projectId ? stmt.all(projectId) : stmt.all()) as Array<Record<string, unknown>>;
-  }
-
-  async pollFrameIoCommentsOnce(): Promise<void> {
-    const trackedAssets = this.listTrackedFrameIoAssetsImpl();
-
-    for (const tracked of trackedAssets) {
-      const comments = await this.getCommentsImpl(tracked.frameio_file_id);
-      for (const comment of comments) {
-        this.recordExternalActivity({
-          occurred_at: comment.createdAt,
-          event_type: 'frameio.comment.created',
-          lifecycle_phase: 'commented',
-          source_kind: 'external_poll',
-          visibility: 'user_timeline',
-          actor_type: 'external_user',
-          actor_display: comment.authorName,
-          client_id: tracked.client_id,
-          project_id: tracked.project_id,
-          asset_id: tracked.asset_id,
-          source_service: 'frameio',
-          source_id: tracked.frameio_file_id,
-          title: `New comment on ${tracked.asset_name} in Frame.io`,
-          summary: `${comment.authorName} commented on ${tracked.asset_name}`,
-          details_json: {
-            frameioFileId: tracked.frameio_file_id,
-            commentId: comment.id,
-            authorName: comment.authorName,
-            createdAt: comment.createdAt,
-            text: comment.text,
-            timestampSeconds: comment.timestamp,
-            completed: comment.completed,
-            assetName: tracked.asset_name,
-            projectName: tracked.project_name,
-          },
-          dedupe_key: `frameio-comment:${tracked.frameio_file_id}:${comment.id}`,
-        });
-
-        for (const reply of comment.replies) {
-          this.recordExternalActivity({
-            occurred_at: reply.createdAt,
-            event_type: 'frameio.comment.reply.created',
-            lifecycle_phase: 'commented',
-            source_kind: 'external_poll',
-            visibility: 'operator_only',
-            actor_type: 'external_user',
-            actor_display: reply.authorName,
-            client_id: tracked.client_id,
-            project_id: tracked.project_id,
-            asset_id: tracked.asset_id,
-            source_service: 'frameio',
-            source_id: tracked.frameio_file_id,
-            title: `New reply on ${tracked.asset_name} in Frame.io`,
-            summary: `${reply.authorName} replied on ${tracked.asset_name}`,
-            details_json: {
-              frameioFileId: tracked.frameio_file_id,
-              commentId: comment.id,
-              replyId: reply.id,
-              authorName: reply.authorName,
-              createdAt: reply.createdAt,
-              text: reply.text,
-              assetName: tracked.asset_name,
-              projectName: tracked.project_name,
-            },
-            dedupe_key: `frameio-reply:${tracked.frameio_file_id}:${comment.id}:${reply.id}`,
-          });
-        }
-      }
-    }
   }
 
   async generateSummaries(): Promise<void> {
@@ -567,21 +464,6 @@ export class ActivityMonitorService {
       event.recorded_at,
       event.recorded_at,
     );
-  }
-
-  private listTrackedFrameIoAssets(): FrameIoTrackedAsset[] {
-    return this.projectStore
-      .getAll()
-      .flatMap((project) => readRegistry(project.projectId)
-        .filter((asset) => Boolean(asset.frameio.assetId))
-        .map((asset) => ({
-          client_id: project.clientName?.trim() || null,
-          project_id: project.projectId,
-          project_name: project.name,
-          asset_id: asset.assetId,
-          asset_name: asset.name || asset.originalFilename,
-          frameio_file_id: asset.frameio.assetId!,
-        })));
   }
 
   private mapEventRow(row: Record<string, unknown>): ActivityEventRecord {

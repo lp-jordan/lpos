@@ -19,12 +19,8 @@ function cleanupDb() {
   setActivityMonitorService(undefined);
 }
 
-function createService(options?: ConstructorParameters<typeof ActivityMonitorService>[3]) {
-  const fakeProjectStore = {
-    getAll: () => [],
-  } as unknown as ConstructorParameters<typeof ActivityMonitorService>[2];
-
-  return new ActivityMonitorService(undefined, null, fakeProjectStore, options);
+function createService(options?: ConstructorParameters<typeof ActivityMonitorService>[2]) {
+  return new ActivityMonitorService(undefined, null, options);
 }
 
 test.beforeEach(() => {
@@ -120,49 +116,6 @@ test('external dedupe keys prevent duplicate comment events and notification spa
   `).get() as { event_count: number; notification_count: number };
 
   assert.equal(counts.event_count, 1);
-  assert.equal(counts.notification_count, 1);
-});
-
-test('pollFrameIoCommentsOnce records new comments and replies once', async () => {
-  const service = createService({
-    listTrackedFrameIoAssets: () => [{
-      client_id: 'Acme',
-      project_id: 'project-1',
-      project_name: 'Spring Campaign',
-      asset_id: 'asset-1',
-      asset_name: 'Promo Cut',
-      frameio_file_id: 'file-1',
-    }],
-    getComments: async () => [{
-      id: 'comment-1',
-      text: 'Please tighten the opening.',
-      timestamp: 12,
-      authorName: 'Alex',
-      authorAvatar: null,
-      createdAt: '2026-03-25T12:00:00.000Z',
-      completed: false,
-      replies: [{
-        id: 'reply-1',
-        text: 'Will do.',
-        authorName: 'Jordan',
-        authorAvatar: null,
-        createdAt: '2026-03-25T12:05:00.000Z',
-      }],
-    }],
-  });
-
-  await service.pollFrameIoCommentsOnce();
-  await service.pollFrameIoCommentsOnce();
-
-  const counts = getActivityDb().prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM activity_events WHERE event_type = 'frameio.comment.created') AS comment_count,
-      (SELECT COUNT(*) FROM activity_events WHERE event_type = 'frameio.comment.reply.created') AS reply_count,
-      (SELECT COUNT(*) FROM notification_candidates WHERE notification_type = 'frameio_comment') AS notification_count
-  `).get() as { comment_count: number; reply_count: number; notification_count: number };
-
-  assert.equal(counts.comment_count, 1);
-  assert.equal(counts.reply_count, 1);
   assert.equal(counts.notification_count, 1);
 });
 

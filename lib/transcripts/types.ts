@@ -11,6 +11,7 @@ export interface TranscriptSearchSource {
   filename: string;
   excerpt: string;
   isDirectQuote?: boolean;
+  matchText?: string;
 }
 
 export interface TranscriptSearchScope {

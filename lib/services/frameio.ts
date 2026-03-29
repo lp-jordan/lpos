@@ -68,6 +68,7 @@ async function fioFetch(url: string, init?: RequestInit): Promise<Response> {
 
 interface DiscoveryResult {
   accountId:    string;
+  workspaceId:  string;   // for webhooks
   projectId:    string;   // for shares
   rootFolderId: string;   // for uploads
 }
@@ -202,6 +203,7 @@ async function discover(): Promise<DiscoveryResult> {
 
   // Step 3: Search each workspace's projects for the matching name
   let match: V4Project | null = null;
+  let workspaceWithProject = '';
   const allProjects: V4Project[] = [];
 
   for (const ws of workspaces) {
@@ -214,7 +216,7 @@ async function discover(): Promise<DiscoveryResult> {
     allProjects.push(...projects);
 
     const found = projects.find((p) => p.name === projectName);
-    if (found) { match = found; break; }
+    if (found) { match = found; workspaceWithProject = ws.id; break; }
   }
 
   if (!match) {
@@ -235,8 +237,7 @@ async function discover(): Promise<DiscoveryResult> {
     );
   }
 
-
-  _cached = { accountId, projectId: match.id, rootFolderId };
+  _cached = { accountId, workspaceId: workspaceWithProject, projectId: match.id, rootFolderId };
   return _cached;
 }
 
@@ -701,6 +702,66 @@ export async function postComment(
     completed:    c.completed ?? false,
     replies:      [],
   };
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+
+export interface FrameIOWebhook {
+  id:      string;
+  name:    string;
+  url:     string;
+  active:  boolean;
+  events:  string[];
+  secret?: string;   // only returned on create
+}
+
+/**
+ * Register a new webhook in the workspace that contains the configured project.
+ * POST /v4/accounts/{id}/workspaces/{ws}/webhooks
+ */
+export async function registerWebhook(
+  name:   string,
+  url:    string,
+  events: string[],
+): Promise<FrameIOWebhook> {
+  const { accountId, workspaceId } = await discover();
+  const res  = await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/workspaces/${workspaceId}/webhooks`,
+    {
+      method: 'POST',
+      body:   JSON.stringify({ data: { name, url, events } }),
+    },
+  );
+  const body = await res.json() as {
+    data?: { id: string; name: string; url: string; active: boolean; events: string[]; secret?: string };
+  };
+  const d = body.data;
+  if (!d?.id) throw new Error(`Frame.io registerWebhook returned no id. Got: ${JSON.stringify(body)}`);
+  return { id: d.id, name: d.name, url: d.url, active: d.active, events: d.events, secret: d.secret };
+}
+
+/**
+ * List webhooks registered in the workspace that contains the configured project.
+ * GET /v4/accounts/{id}/workspaces/{ws}/webhooks
+ */
+export async function listWebhooks(): Promise<FrameIOWebhook[]> {
+  const { accountId, workspaceId } = await discover();
+  const res  = await fioFetch(`${BASE_V4}/accounts/${accountId}/workspaces/${workspaceId}/webhooks`);
+  const body = await res.json() as {
+    data?: { id: string; name: string; url: string; active: boolean; events: string[] }[];
+  };
+  return (body.data ?? []).map((d) => ({
+    id: d.id, name: d.name, url: d.url, active: d.active, events: d.events,
+  }));
+}
+
+/**
+ * Delete a webhook by ID.
+ * DELETE /v4/accounts/{id}/webhooks/{webhook_id}
+ */
+export async function deleteWebhook(webhookId: string): Promise<void> {
+  const { accountId } = await discover();
+  await fioFetch(`${BASE_V4}/accounts/${accountId}/webhooks/${webhookId}`, { method: 'DELETE' });
 }
 
 // ── Media stream URLs ─────────────────────────────────────────────────────────

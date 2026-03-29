@@ -14,6 +14,7 @@ interface ActivityRow {
   project_id: string | null;
   client_id: string | null;
   actor_display: string | null;
+  actor_type: string | null;
 }
 
 export async function GET() {
@@ -46,7 +47,7 @@ export async function GET() {
   const placeholders = projectIds.map(() => '?').join(', ');
   const rows = db.prepare(
     `SELECT event_id, occurred_at, event_type, lifecycle_phase, title, summary,
-            project_id, client_id, actor_display
+            project_id, client_id, actor_display, actor_type
      FROM activity_events
      WHERE project_id IN (${placeholders})
        AND visibility = 'user_timeline'

@@ -1,6 +1,6 @@
 'use client';
 
-import { CSSProperties, Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import React, { CSSProperties, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   TranscriptChatThread,
@@ -11,6 +11,7 @@ import type {
 } from '@/lib/transcripts/types';
 type FileType = 'txt' | 'json' | 'srt' | 'vtt';
 type PanelMode = 'viewer' | 'search';
+type ViewMode = 'plain' | 'timecoded';
 type SearchView = 'browser' | 'thread';
 
 interface SearchScopeEntry {
@@ -136,6 +137,7 @@ export function TranscriptViewerPanel({
     srt: false,
     vtt: false,
   });
+  const [viewMode, setViewMode] = useState<ViewMode>('plain');
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -224,16 +226,21 @@ export function TranscriptViewerPanel({
   }, [jobId, mode, projectId]);
 
   useEffect(() => {
+    setViewMode('plain');
+  }, [jobId]);
+
+  useEffect(() => {
     if (mode !== 'viewer' || !jobId) return;
 
     setLoading(true);
     setError(null);
 
+    const fetchType = viewMode === 'timecoded' ? 'timecoded-txt' : 'txt';
     void (async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/transcripts?download=${jobId}&type=txt`);
+        const res = await fetch(`/api/projects/${projectId}/transcripts?download=${jobId}&type=${fetchType}`);
         if (!res.ok) {
-          setError('Could not load TXT transcript.');
+          setError(viewMode === 'timecoded' ? 'Could not load timecoded transcript.' : 'Could not load TXT transcript.');
           setContent('');
           setWordCount(0);
           return;
@@ -250,7 +257,7 @@ export function TranscriptViewerPanel({
         setLoading(false);
       }
     })();
-  }, [jobId, mode, projectId]);
+  }, [jobId, mode, projectId, viewMode]);
 
   const standalonePanelStyle: CSSProperties | undefined = standalone ? {
     position: 'fixed',
@@ -365,8 +372,6 @@ export function TranscriptViewerPanel({
         usage: payload.usage,
         searchMode: payload.searchMode,
       });
-
-      if (payload.searchMode === 'local') return;
 
       const persistedThread = await persistThread({
         threadId: activeThreadId,
@@ -526,7 +531,26 @@ export function TranscriptViewerPanel({
                 {wordCount > 0 && <span className="txv-wordcount">{wordCount.toLocaleString()} words</span>}
               </div>
               <div className="txv-toolbar">
-                <span className="txv-toolbar-note">Read transcript and exports</span>
+                {availableFiles.json ? (
+                  <div className="txv-view-toggle">
+                    <button
+                      type="button"
+                      className={`txv-view-btn${viewMode === 'plain' ? ' txv-view-btn--active' : ''}`}
+                      onClick={() => setViewMode('plain')}
+                    >
+                      Plain
+                    </button>
+                    <button
+                      type="button"
+                      className={`txv-view-btn${viewMode === 'timecoded' ? ' txv-view-btn--active' : ''}`}
+                      onClick={() => setViewMode('timecoded')}
+                    >
+                      Timecoded
+                    </button>
+                  </div>
+                ) : (
+                  <span className="txv-toolbar-note">Read transcript and exports</span>
+                )}
                 {onStartSearchFromTranscript && (
                   <button type="button" className="txv-action-btn" onClick={onStartSearchFromTranscript}>
                     Ask About Transcript
@@ -564,13 +588,23 @@ export function TranscriptViewerPanel({
                     key={type}
                     href={getDownloadUrl(type)}
                     download
-                    className={`txv-tab${type === 'txt' ? ' txv-tab--active' : ''}`}
+                    className={`txv-tab${type === 'txt' && viewMode === 'plain' ? ' txv-tab--active' : ''}`}
                     title={`Download .${type}`}
                   >
                     {type.toUpperCase()}
                   </a>
                 ) : null
               ))}
+              {availableFiles.json && (
+                <a
+                  href={`/api/projects/${projectId}/transcripts?download=${jobId}&type=timecoded-txt`}
+                  download
+                  className={`txv-tab${viewMode === 'timecoded' ? ' txv-tab--active' : ''}`}
+                  title="Download timecoded TXT"
+                >
+                  TIMECODED
+                </a>
+              )}
             </div>
 
             <div className="txv-body">
@@ -662,6 +696,7 @@ export function TranscriptViewerPanel({
 
                   {message.sources && message.sources.length > 0 && (
                     <div className="txv-source-list">
+                      <span className="txv-sources-label">Sources</span>
                       {groupSourcesByAsset(message.sources).map((sourceGroup) => (
                         <SourceCard
                           key={`${message.id}-${sourceGroup.jobId}`}
@@ -739,6 +774,40 @@ export function TranscriptViewerPanel({
   return panel;
 }
 
+function renderExcerptContent(excerpt: string, matchText: string | undefined): React.ReactNode {
+  // AI mode — truncate to a few lines
+  if (!matchText) {
+    const clean = excerpt.replace(/^\.*\s*/, '').trim();
+    const truncated = clean.length > 220 ? `${clean.slice(0, 220).trimEnd()}…` : clean;
+    return truncated;
+  }
+
+  // Local find mode — trim to ~12 words each side and highlight the match
+  const WINDOW = 80;
+  const lower = excerpt.toLowerCase();
+  const matchLower = matchText.toLowerCase();
+  const idx = lower.indexOf(matchLower);
+
+  if (idx === -1) {
+    // Match not found in excerpt (token fallback case) — show first 180 chars
+    return excerpt.replace(/^\.*\s*/, '').trim().slice(0, 180);
+  }
+
+  const start = Math.max(0, idx - WINDOW);
+  const end = Math.min(excerpt.length, idx + matchText.length + WINDOW);
+  const before = (start > 0 ? '…' : '') + excerpt.slice(start, idx);
+  const match = excerpt.slice(idx, idx + matchText.length);
+  const after = excerpt.slice(idx + matchText.length, end) + (end < excerpt.length ? '…' : '');
+
+  return (
+    <>
+      {before}
+      <mark className="txv-match-highlight">{match}</mark>
+      {after}
+    </>
+  );
+}
+
 function SourceCard({
   sourceGroup,
   expanded,
@@ -755,45 +824,39 @@ function SourceCard({
   onToggle: () => void;
   onOpenTranscript?: (jobId: string, filename: string) => void;
 }>) {
+  const sectionCount = sourceGroup.excerpts.length;
+
   return (
     <div className={`txv-source-card${expanded ? ' txv-source-card--expanded' : ''}`}>
-      <div className="txv-source-header">
-        <button type="button" className="txv-source-summary" onClick={onToggle}>
-          <div className="txv-source-title-wrap">
-            {sourceGroup.isDirectQuote && <span className="txv-source-flag">Quoted from transcript</span>}
-            <span className="txv-source-title" title={formatTranscriptLabel(sourceGroup.filename)}>
-              {formatTranscriptLabel(sourceGroup.filename)}
-            </span>
-            <span className="txv-source-count">
-              {sourceGroup.excerpts.length} section{sourceGroup.excerpts.length === 1 ? '' : 's'}
-            </span>
-          </div>
+      <div className="txv-source-row">
+        <button type="button" className="txv-source-toggle" onClick={onToggle} aria-expanded={expanded}>
+          <span className="txv-source-name" title={formatTranscriptLabel(sourceGroup.filename)}>
+            {formatTranscriptLabel(sourceGroup.filename)}
+          </span>
+          <span className="txv-source-count">
+            {sectionCount} section{sectionCount === 1 ? '' : 's'}
+          </span>
           <span className={`txv-source-caret${expanded ? ' txv-source-caret--open' : ''}`} aria-hidden="true">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </span>
         </button>
-        <div className="txv-source-actions">
-          <button type="button" className="txv-source-highlight" onClick={onToggle}>
-            Highlight asset
-          </button>
-        </div>
         {onOpenTranscript && (
           <button
             type="button"
-            className="txv-source-link"
+            className="txv-source-go-btn"
             onClick={() => onOpenTranscript(sourceGroup.jobId, sourceGroup.filename)}
           >
-            Open transcript
+            Go to video
           </button>
         )}
       </div>
       {expanded && (
-        <div className="txv-source-detail-list">
+        <div className="txv-source-excerpts">
           {sourceGroup.excerpts.map((source, index) => (
             <p key={`${sourceGroup.jobId}-${index}`} className="txv-source-excerpt">
-              {source.excerpt}
+              {renderExcerptContent(source.excerpt, source.matchText)}
             </p>
           ))}
         </div>

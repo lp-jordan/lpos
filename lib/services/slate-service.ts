@@ -693,10 +693,10 @@ async function discoverPlaybackSessions(host: string, port: number): Promise<Pla
     await client.connectAnonymous();
 
     const rootEntries = await client.list();
-    const atemFolder = rootEntries.find((entry) => entry.isDirectory && entry.name.toLowerCase() === 'atem');
-    if (!atemFolder) return [];
+    const rootFolder = rootEntries.find((entry) => entry.isDirectory && !entry.name.startsWith('.'));
+    if (!rootFolder) return [];
 
-    const sessionEntries = await client.list(atemFolder.path);
+    const sessionEntries = await client.list(rootFolder.path);
     const sessions: PlaybackSessionEntry[] = [];
 
     for (const sessionEntry of sessionEntries) {

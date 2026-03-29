@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readRegistry } from '@/lib/store/media-registry';
 import { createShareLink } from '@/lib/services/frameio';
+import { setShareAssets } from '@/lib/store/share-assets-store';
+import { addAssetShareLink } from '@/lib/store/asset-share-links-store';
 
 /**
  * POST /api/projects/[projectId]/media/share
@@ -56,7 +58,20 @@ export async function POST(
 
     const share = await createShareLink(fileIds, shareName);
 
-    return NextResponse.json({ shareUrl: share.shareUrl, fileCount: fileIds.length, skipped: missing.length });
+    // Track the share so it persists and can be retrieved per-asset later
+    setShareAssets(projectId, share.id, fileIds);
+
+    const now = new Date().toISOString();
+    for (const assetId of assetIds) {
+      addAssetShareLink(projectId, assetId, {
+        shareId:   share.id,
+        shareUrl:  share.shareUrl,
+        name:      shareName,
+        createdAt: now,
+      });
+    }
+
+    return NextResponse.json({ shareUrl: share.shareUrl, shareId: share.id, fileCount: fileIds.length, skipped: missing.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[share] error:', message);

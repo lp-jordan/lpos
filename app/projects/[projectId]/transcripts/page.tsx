@@ -1,6 +1,8 @@
 import { notFound } from 'next/navigation';
 import { ProjectHeader } from '@/components/projects/ProjectHeader';
 import { getProjectAssets, getProjectById, getProjectJobs } from '@/lib/selectors/projects';
+import { listProjectTranscripts } from '@/lib/transcripts/store';
+import { TranscriptPageActions } from '@/components/transcripts/TranscriptPageActions';
 
 const formatMap = {
   transcript: 'JSON transcript',
@@ -34,6 +36,8 @@ export default async function ProjectTranscriptsPage({ params }: Readonly<{ para
   );
 
   const hasCompletedTranscript = transcriptJobs.some((job) => job.type === 'transcribe_media' && job.status === 'completed');
+  const storedTranscripts = listProjectTranscripts(projectId);
+  const hasStoredTranscripts = storedTranscripts.length > 0;
   const queueCards = transcriptJobs.length > 0 ? transcriptJobs : [{
     jobId: 'mock-transcription', projectId, type: 'transcribe_media',
     status: 'queued', assignedTo: 'LPOS Host', progress: 0
@@ -101,6 +105,7 @@ export default async function ProjectTranscriptsPage({ params }: Readonly<{ para
           </section>
 
           <section className="panel transcript-panel">
+            <TranscriptPageActions projectId={projectId} hasTranscripts={hasStoredTranscripts} />
             <div className="transcript-output-list">
               {transcriptAssets.length > 0 ? (
                 transcriptAssets.map((asset) => (

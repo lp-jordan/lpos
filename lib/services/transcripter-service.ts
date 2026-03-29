@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import type { Server as SocketIOServer } from 'socket.io';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
@@ -192,10 +193,13 @@ export class TranscripterService {
           filename:    next.filename,
           completedAt: new Date().toISOString(),
         };
-        (await import('node:fs')).writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
       } catch (e) {
         console.warn('[transcripter] could not write transcript meta:', e);
       }
+
+      // Remove any older transcript files for the same asset now that this job succeeded.
+      this.pruneOldTranscripts(next.projectId, next.assetId, next.jobId);
 
       this.fireCompletion(next.jobId);
       recordActivity({
@@ -285,6 +289,36 @@ export class TranscripterService {
         source_service: 'transcripter',
         details_json: { filename: job.filename },
       });
+    }
+  }
+
+  private pruneOldTranscripts(projectId: string, assetId: string, keepJobId: string): void {
+    const transcriptsDir = path.join(DATA_DIR, 'projects', projectId, 'transcripts');
+    const subtitlesDir   = path.join(DATA_DIR, 'projects', projectId, 'subtitles');
+
+    try {
+      const metaFiles = fs.readdirSync(transcriptsDir).filter((f) => f.endsWith('.meta.json'));
+      for (const metaFile of metaFiles) {
+        const oldJobId = metaFile.replace('.meta.json', '');
+        if (oldJobId === keepJobId) continue;
+
+        try {
+          const meta = JSON.parse(fs.readFileSync(path.join(transcriptsDir, metaFile), 'utf8')) as { assetId?: string };
+          if (meta.assetId !== assetId) continue;
+        } catch {
+          continue;
+        }
+
+        for (const name of [`${oldJobId}.txt`, `${oldJobId}.json`, `${oldJobId}.meta.json`]) {
+          try { fs.unlinkSync(path.join(transcriptsDir, name)); } catch { /* already gone */ }
+        }
+        for (const name of [`${oldJobId}.srt`, `${oldJobId}.vtt`]) {
+          try { fs.unlinkSync(path.join(subtitlesDir, name)); } catch { /* already gone */ }
+        }
+        console.log(`[transcripter] pruned old transcript ${oldJobId} for asset ${assetId}`);
+      }
+    } catch {
+      // transcripts dir may not exist yet — ignore
     }
   }
 

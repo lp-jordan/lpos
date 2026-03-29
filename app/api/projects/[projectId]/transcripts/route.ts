@@ -12,7 +12,7 @@ export async function GET(
   const download = searchParams.get('download');
   const type = searchParams.get('type');
 
-  if (download && (type === 'txt' || type === 'json' || type === 'srt' || type === 'vtt')) {
+  if (download && (type === 'txt' || type === 'json' || type === 'srt' || type === 'vtt' || type === 'timecoded-txt')) {
     const content = readTranscriptDownload(projectId, download, type);
     if (!content) return NextResponse.json({ error: 'File not found' }, { status: 404 });
 
@@ -21,6 +21,7 @@ export async function GET(
       json: 'application/json',
       srt: 'text/plain',
       vtt: 'text/vtt',
+      'timecoded-txt': 'text/plain',
     };
 
     return new NextResponse(content, {

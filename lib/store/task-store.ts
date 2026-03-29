@@ -1,13 +1,40 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Task } from '@/lib/models/task';
+import type { Task, TaskPriority, TaskStatus } from '@/lib/models/task';
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 
 interface TasksFile {
   tasks: Task[];
+}
+
+/** Shape of a task as it may exist on disk before the schema upgrade. */
+interface LegacyTask extends Omit<Task, 'projectId' | 'priority' | 'status' | 'notes'> {
+  projectId?: string | null;
+  priority?: TaskPriority;
+  status?: string; // broader string to handle old 'todo' value
+  notes?: string | null;
+  completed?: boolean;
+}
+
+function migrate(raw: LegacyTask): Task {
+  const rawStatus = raw.status === 'todo' ? 'not_started' : raw.status;
+  const status: TaskStatus = (rawStatus as TaskStatus) ?? (raw.completed ? 'done' : 'not_started');
+  return {
+    taskId: raw.taskId,
+    description: raw.description,
+    projectId: raw.projectId ?? 'unassigned',
+    clientName: raw.clientName ?? null,
+    priority: raw.priority ?? 'medium',
+    status,
+    notes: raw.notes ?? null,
+    createdBy: raw.createdBy,
+    assignedTo: raw.assignedTo,
+    createdAt: raw.createdAt,
+    completedAt: status === 'done' ? (raw.completedAt ?? raw.createdAt) : undefined,
+  };
 }
 
 export class TaskStore {
@@ -22,8 +49,8 @@ export class TaskStore {
   private load() {
     try {
       if (fs.existsSync(TASKS_FILE)) {
-        const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as TasksFile;
-        this.tasks = data.tasks ?? [];
+        const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as { tasks: LegacyTask[] };
+        this.tasks = (data.tasks ?? []).map(migrate);
       }
     } catch {
       this.tasks = [];
@@ -56,19 +83,23 @@ export class TaskStore {
 
   create(input: {
     description: string;
-    projectId?: string | null;
+    projectId: string;
     clientName?: string | null;
+    priority?: TaskPriority;
+    notes?: string | null;
     createdBy: string;
     assignedTo?: string[];
   }): Task {
     const task: Task = {
       taskId: randomUUID(),
       description: input.description.trim(),
-      projectId: input.projectId ?? null,
+      projectId: input.projectId,
       clientName: input.clientName ?? null,
+      priority: input.priority ?? 'medium',
+      status: 'not_started',
+      notes: input.notes ?? null,
       createdBy: input.createdBy,
       assignedTo: input.assignedTo?.length ? input.assignedTo : [input.createdBy],
-      completed: false,
       createdAt: new Date().toISOString(),
     };
     this.tasks.push(task);
@@ -76,17 +107,21 @@ export class TaskStore {
     return task;
   }
 
-  update(taskId: string, patch: Partial<Pick<Task, 'completed' | 'description' | 'assignedTo'>>): Task | null {
+  update(
+    taskId: string,
+    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'notes'>>,
+  ): Task | null {
     const idx = this.tasks.findIndex((t) => t.taskId === taskId);
     if (idx === -1) return null;
     const prev = this.tasks[idx];
+    const nextStatus = patch.status ?? prev.status;
     this.tasks[idx] = {
       ...prev,
       ...patch,
       completedAt:
-        patch.completed === true && !prev.completed
+        nextStatus === 'done' && prev.status !== 'done'
           ? new Date().toISOString()
-          : patch.completed === false
+          : nextStatus !== 'done'
             ? undefined
             : prev.completedAt,
     };

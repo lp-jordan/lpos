@@ -236,14 +236,18 @@ export async function POST(
             }
 
             let jobId = '';
-            try {
-              const job = getTranscripterService().enqueue(projectId, stableDest, asset.assetId, asset.originalFilename);
-              jobId = job.jobId;
-              patchAsset(projectId, asset.assetId, {
-                transcription: { status: 'queued', jobId, completedAt: null },
-              });
-            } catch (err) {
-              console.error('[upload] failed to enqueue transcription:', err);
+            // Skip auto-transcription for new versions — the existing transcript
+            // remains current until the operator manually retranscribes.
+            if (!replaceAssetId) {
+              try {
+                const job = getTranscripterService().enqueue(projectId, stableDest, asset.assetId, asset.originalFilename);
+                jobId = job.jobId;
+                patchAsset(projectId, asset.assetId, {
+                  transcription: { status: 'queued', jobId, completedAt: null },
+                });
+              } catch (err) {
+                console.error('[upload] failed to enqueue transcription:', err);
+              }
             }
 
             triggerFrameIOUpload(projectId, asset.assetId, {

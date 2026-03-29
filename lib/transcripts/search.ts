@@ -115,12 +115,17 @@ async function classifyQuery(
     'You are a search intent classifier for a video course transcript search tool.',
     'Classify the query using conversation history for context.',
     '',
-    '"find" — The user wants to locate specific words, names, or exact phrases. Extract only the meaningful search terms.',
+    '"find" — The user wants to locate specific words, names, or exact phrases in the transcript text.',
+    '  Extract ONLY the content being searched for — the word, phrase, or name that should appear verbatim in the transcript.',
+    '  Do NOT include speaker names, subject names, or question words as terms.',
+    '  Example: "where does Boo say cryptiter" → terms: ["cryptiter"]',
+    '  Example: "find mentions of machine learning" → terms: ["machine learning"]',
+    '  Example: "what does the instructor say about REST APIs" → mode: ask (needs context, not a verbatim find)',
     '"ask" — The user wants analysis, synthesis, summary, or any contextual understanding. Default to this when in doubt.',
     '"clarify" — Use sparingly. Only when the intent is genuinely unresolvable from the query and conversation history.',
     '',
     'Return strict JSON only. No markdown. No explanation.',
-    '{"mode":"find","terms":["term1","term2"]}',
+    '{"mode":"find","terms":["term1"]}',
     '{"mode":"ask"}',
     '{"mode":"clarify","question":"One short specific question"}',
   ].join('\n');
@@ -166,11 +171,16 @@ async function classifyQuery(
 
     const candidate = extractJsonObjectCandidate(text) ?? text;
     const parsed = JSON.parse(candidate) as unknown;
-    if (isClassifyResult(parsed)) return parsed;
+    if (isClassifyResult(parsed)) {
+      console.log('[transcript search] classifier raw:', text);
+      console.log('[transcript search] classifier result:', JSON.stringify(parsed));
+      return parsed;
+    }
   } catch {
     // Fall through to default.
   }
 
+  console.log('[transcript search] classifier fallback → ask');
   return { mode: 'ask' };
 }
 
@@ -473,35 +483,61 @@ function phraseSearch(record: TranscriptRecord, phrase: string): LocalMatch[] {
 function tokenFallbackSearch(record: TranscriptRecord, tokens: string[]): LocalMatch[] {
   if (!tokens.length) return [];
   const haystack = record.text.toLowerCase();
-  const hitPositions: number[] = [];
 
-  for (const token of tokens) {
+  // Single token — simple position search.
+  if (tokens.length === 1) {
+    const token = tokens[0]!;
+    const matches: LocalMatch[] = [];
     let pos = haystack.indexOf(token);
-    while (pos !== -1) {
-      hitPositions.push(pos);
+    while (pos !== -1 && matches.length < LOCAL_MAX_MATCHES_PER_TRANSCRIPT) {
+      matches.push({
+        jobId: record.jobId,
+        filename: record.filename,
+        excerpt: extractContext(record.text, pos, token.length),
+        matchIndex: pos,
+      });
       pos = haystack.indexOf(token, pos + 1);
     }
+    return matches;
   }
 
-  if (!hitPositions.length) return [];
-  hitPositions.sort((a, b) => a - b);
+  // Multiple tokens — find the rarest token to use as anchor, then require ALL
+  // tokens to appear within a proximity window around each anchor hit.
+  // This prevents a common word (e.g. a speaker's name) from flooding results
+  // when the rarer search target doesn't appear in the transcript at all.
+  const PROXIMITY = 500;
 
-  // Deduplicate hits within 150 chars of each other — keep the cluster anchor.
-  const anchors: number[] = [];
-  let lastAnchor = -200;
-  for (const hit of hitPositions) {
-    if (hit - lastAnchor > 150) {
-      anchors.push(hit);
-      lastAnchor = hit;
+  let anchorToken = tokens[0]!;
+  let anchorCount = Infinity;
+  for (const token of tokens) {
+    let count = 0;
+    let p = haystack.indexOf(token);
+    while (p !== -1) { count++; p = haystack.indexOf(token, p + 1); }
+    if (count > 0 && count < anchorCount) { anchorCount = count; anchorToken = token; }
+  }
+
+  if (anchorCount === Infinity) return []; // Not even the rarest token was found.
+
+  const matches: LocalMatch[] = [];
+  let pos = haystack.indexOf(anchorToken);
+  while (pos !== -1 && matches.length < LOCAL_MAX_MATCHES_PER_TRANSCRIPT) {
+    const winStart = Math.max(0, pos - PROXIMITY);
+    const winEnd = Math.min(haystack.length, pos + anchorToken.length + PROXIMITY);
+    const window = haystack.slice(winStart, winEnd);
+
+    if (tokens.every((token) => window.includes(token))) {
+      matches.push({
+        jobId: record.jobId,
+        filename: record.filename,
+        excerpt: extractContext(record.text, pos, anchorToken.length),
+        matchIndex: pos,
+      });
     }
+
+    pos = haystack.indexOf(anchorToken, pos + 1);
   }
 
-  return anchors.slice(0, LOCAL_MAX_MATCHES_PER_TRANSCRIPT).map((pos) => ({
-    jobId: record.jobId,
-    filename: record.filename,
-    excerpt: extractContext(record.text, pos, 1),
-    matchIndex: pos,
-  }));
+  return matches;
 }
 
 function buildLocalSearchAnswer(matches: LocalMatch[]): string {
@@ -523,12 +559,16 @@ function localTextSearch(records: TranscriptRecord[], query: string): Transcript
   // Strip wrapping quotes if the user typed a quoted phrase.
   const phrase = /^["'](.+)["']$/.exec(query.trim())?.[1] ?? query;
   const tokens = tokenize(query);
+  console.log('[transcript search] local find — phrase:', JSON.stringify(phrase), 'tokens:', JSON.stringify(tokens));
 
   const allMatches: LocalMatch[] = [];
   for (const record of records) {
     if (allMatches.length >= LOCAL_MAX_MATCHES_TOTAL) break;
     const hits = phraseSearch(record, phrase);
     const recordMatches = hits.length > 0 ? hits : tokenFallbackSearch(record, tokens);
+    if (recordMatches.length > 0) {
+      console.log(`[transcript search] matched "${record.filename}": ${hits.length} phrase hits, ${recordMatches.length - hits.length} token-fallback hits`);
+    }
     allMatches.push(...recordMatches);
   }
 
@@ -550,6 +590,7 @@ function localTextSearch(records: TranscriptRecord[], query: string): Transcript
       filename: match.filename,
       excerpt: match.excerpt,
       isDirectQuote: true,
+      matchText: phrase,
     })),
     scope: {
       jobIds: records.map((record) => record.jobId),
@@ -605,6 +646,8 @@ export async function searchTranscriptContent(input: {
   const conversation = (input.conversation ?? []).filter((message) => normalizeText(message.content));
 
   const classification = await classifyQuery(query, conversation);
+
+  console.log('[transcript search] query:', JSON.stringify(query), '→ mode:', classification.mode, classification.mode === 'find' ? `terms: ${JSON.stringify(classification.terms)}` : '');
 
   if (classification.mode === 'clarify') {
     return {
