@@ -10,6 +10,8 @@ interface Props {
 export function TranscriptPageActions({ projectId, hasTranscripts }: Readonly<Props>) {
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<number | null>(null);
 
   async function clearDuplicates() {
     setClearing(true);
@@ -22,6 +24,21 @@ export function TranscriptPageActions({ projectId, hasTranscripts }: Readonly<Pr
       setClearResult(0);
     } finally {
       setClearing(false);
+    }
+  }
+
+  async function deleteAll() {
+    if (!confirm('Delete all transcripts for this project? This cannot be undone.')) return;
+    setDeleting(true);
+    setDeleteResult(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/transcripts/delete-all`, { method: 'POST' });
+      const data = await res.json() as { deleted?: number };
+      setDeleteResult(data.deleted ?? 0);
+    } catch {
+      setDeleteResult(0);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -43,6 +60,14 @@ export function TranscriptPageActions({ projectId, hasTranscripts }: Readonly<Pr
         disabled={clearing || !hasTranscripts}
       >
         {clearing ? 'Clearing…' : clearResult !== null ? `Cleared ${clearResult}` : 'Clear duplicates'}
+      </button>
+      <button
+        type="button"
+        className="btn-secondary btn--destructive"
+        onClick={() => void deleteAll()}
+        disabled={deleting || !hasTranscripts}
+      >
+        {deleting ? 'Deleting…' : deleteResult !== null ? `Deleted ${deleteResult}` : 'Delete all'}
       </button>
     </div>
   );

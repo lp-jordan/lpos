@@ -83,10 +83,15 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setName(asset.name);
     setDescription(asset.description);
     setMetaDirty(false);
-    setExistingShareLinks([]);
     setShareError(null);
     setShowLeaderPassErrorDetails(false);
+    setShowCompose(false);
   }, [asset]);
+
+  // Reset per-asset state only when the selected asset changes (not on re-renders of the same asset)
+  useEffect(() => {
+    setExistingShareLinks([]);
+  }, [asset?.assetId]);
 
   async function handleSaveMeta() {
     if (!asset || !metaDirty) return;
@@ -273,6 +278,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [commentText,     setCommentText]     = useState('');
   const [commentPosting,  setCommentPosting]  = useState(false);
   const [commentError,    setCommentError]    = useState<string | null>(null);
+  const [showCompose,     setShowCompose]     = useState(false);
   const commentEndRef = useRef<HTMLDivElement>(null);
 
   const fetchComments = useCallback(async () => {
@@ -322,6 +328,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
       if (data.comment) {
         setComments((prev) => [...prev, data.comment!]);
         setCommentText('');
+        setShowCompose(false);
         setTimeout(() => commentEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       }
     } catch {
@@ -367,20 +374,22 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </span>
                   </div>
                 )}
-                <div className="mad-info-grid">
-                  <span className="mad-info-label">Cloudflare</span>
-                  <span className="mad-info-value">{CLOUDFLARE_STREAM_STATUS_LABEL[asset.cloudflare.status]}</span>
-                  <span className="mad-info-label">Stream UID</span>
-                  <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
-                  <span className="mad-info-label">Playback</span>
-                  <span className="mad-info-value">
-                    {asset.leaderpass.playbackUrl ? (
-                      <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
-                        Open Cloudflare preview ↗
-                      </a>
-                    ) : '—'}
-                  </span>
-                </div>
+                {asset.cloudflare.status !== 'none' && (
+                  <div className="mad-info-grid">
+                    <span className="mad-info-label">Cloudflare</span>
+                    <span className="mad-info-value">{CLOUDFLARE_STREAM_STATUS_LABEL[asset.cloudflare.status]}</span>
+                    <span className="mad-info-label">Stream UID</span>
+                    <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
+                    <span className="mad-info-label">Playback</span>
+                    <span className="mad-info-value">
+                      {asset.leaderpass.playbackUrl ? (
+                        <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
+                          Open Cloudflare preview ↗
+                        </a>
+                      ) : '—'}
+                    </span>
+                  </div>
+                )}
                 {asset.leaderpass.status === 'awaiting_platform' && (
                   <p className="mad-hint">
                     Cloudflare delivery is ready. LPOS has stored the prepared payload and is waiting for the LeaderPass platform API handoff.
@@ -488,23 +497,37 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   <span className={`mad-fio-badge mad-fio-badge--${fioStatus}`}>
                     {FRAMEIO_STATUS_LABEL[fioStatus]}
                   </span>
+                  {(asset.frameio.playerUrl || asset.frameio.reviewLink) && !isUploading && (
+                    <a
+                      href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mad-icon-btn"
+                      title="Open in Frame.io"
+                      aria-label="Open in Frame.io"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                        <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                      </svg>
+                    </a>
+                  )}
+                  {asset.frameio.assetId && !isUploading && (
+                    <button
+                      type="button"
+                      className="mad-icon-btn"
+                      onClick={() => void handleGenerateShareLink()}
+                      disabled={shareGenerating}
+                      title={shareGenerating ? 'Generating…' : 'Generate share link'}
+                      aria-label="Generate share link"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                      </svg>
+                    </button>
+                  )}
                 </div>
-
-                  {/* Frame.io view link */}
-                {(asset.frameio.playerUrl || asset.frameio.reviewLink) && !isUploading && (
-                  <a
-                    href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mad-fio-review-link-btn"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                      <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                    </svg>
-                    Open in Frame.io
-                  </a>
-                )}
 
                 {/* Upload button */}
                 {fioStatus === 'none' && !isUploading && (
@@ -538,21 +561,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   <p className="mad-error">Last attempt failed: {asset.frameio.lastError}</p>
                 )}
 
-                {/* Review link — stored on asset (created during upload) */}
-                {asset.frameio.reviewLink && !isUploading && (
-                  <div className="mad-copy-row">
-                    <span className="mad-copy-label">Review link</span>
-                    <span className="mad-copy-url">{asset.frameio.reviewLink}</span>
-                    <button
-                      type="button"
-                      className="mad-copy-btn"
-                      onClick={() => handleCopyLink(asset.frameio.reviewLink!)}
-                    >
-                      {copied ? '✓' : 'Copy'}
-                    </button>
-                  </div>
-                )}
-
                 {/* Persisted share links for this asset */}
                 {existingShareLinks.length > 0 && !isUploading && existingShareLinks.map((link) => (
                   <div key={link.shareId} className="mad-copy-row mad-copy-row--generated">
@@ -567,22 +575,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </button>
                   </div>
                 ))}
-
-                {/* Generate a new share link on demand */}
-                {asset.frameio.assetId && !isUploading && (
-                  <button
-                    type="button"
-                    className="mad-action-btn"
-                    onClick={() => void handleGenerateShareLink()}
-                    disabled={shareGenerating}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                    </svg>
-                    {shareGenerating ? 'Generating…' : existingShareLinks.length > 0 ? 'Generate new share link' : 'Generate share link'}
-                  </button>
-                )}
 
                 {shareError && <p className="mad-error">{shareError}</p>}
               </div>
@@ -648,31 +640,51 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   )}
 
-                  <div className="mad-comment-compose">
-                    <textarea
-                      className="mad-comment-input"
-                      rows={2}
-                      placeholder="Leave a comment…"
-                      value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          void handlePostComment();
-                        }
-                      }}
-                      disabled={commentPosting}
-                    />
-                    {commentError && <p className="mad-error">{commentError}</p>}
+                  {showCompose ? (
+                    <div className="mad-comment-compose">
+                      <textarea
+                        className="mad-comment-input"
+                        rows={2}
+                        placeholder="Leave a comment…"
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            e.preventDefault();
+                            void handlePostComment();
+                          }
+                        }}
+                        disabled={commentPosting}
+                        autoFocus
+                      />
+                      {commentError && <p className="mad-error">{commentError}</p>}
+                      <div className="mad-compose-footer">
+                        <button
+                          type="button"
+                          className="mad-comment-trigger"
+                          onClick={() => { setShowCompose(false); setCommentText(''); setCommentError(null); }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => void handlePostComment()}
+                          disabled={commentPosting || !commentText.trim()}
+                        >
+                          {commentPosting ? 'Posting…' : 'Post  ⌘↵'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      className="mad-action-btn mad-action-btn--primary"
-                      onClick={() => void handlePostComment()}
-                      disabled={commentPosting || !commentText.trim()}
+                      className="mad-comment-trigger"
+                      onClick={() => setShowCompose(true)}
                     >
-                      {commentPosting ? 'Posting…' : 'Post  ⌘↵'}
+                      + Add comment
                     </button>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -700,16 +712,14 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     className="mad-action-btn mad-action-btn--cloud"
                     onClick={() => void handlePushToLeaderPass()}
                     disabled={!asset.filePath || lpPublishing}
-                  title="Cloudflare Stream push — coming soon"
-                >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
-                    <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
-                  </svg>
-                    {lpPublishing ? 'Queueingâ€¦' : 'Push to LeaderPass'}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+                      <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
+                    </svg>
+                    {lpPublishing ? 'Queuing…' : 'Push to LeaderPass'}
                   </button>
                 )}
-                <p className="mad-hint">Wiring coming soon — credentials set in .env.local.</p>
               </div>
 
               {/* ── Transcription section ── */}

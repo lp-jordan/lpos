@@ -25,6 +25,8 @@
  *   FRAMEIO_CLIENT_ID      — Adobe Developer Console client ID
  *   FRAMEIO_CLIENT_SECRET  — Adobe Developer Console client secret
  *   FRAMEIO_PROJECT_NAME   — Exact name of your Frame.io project
+ *   FRAMEIO_ACCOUNT_ID     — Frame.io account UUID (optional but recommended;
+ *                            skips all auto-discovery probes if set)
  */
 
 import fs from 'node:fs';
@@ -108,8 +110,12 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
 }
 
 async function resolveAccountId(): Promise<string> {
-  const token   = await getValidAccessToken();
-  const claims  = decodeJwtPayload(token);
+  // 0 ── Explicit env var — skips all probing (recommended for production)
+  const envId = process.env.FRAMEIO_ACCOUNT_ID?.trim();
+  if (envId) return envId;
+
+  const token    = await getValidAccessToken();
+  const claims   = decodeJwtPayload(token);
   const clientId = process.env.FRAMEIO_CLIENT_ID?.trim() ?? '';
 
   // 1 ── Look for account_id directly in JWT claims
@@ -117,7 +123,10 @@ async function resolveAccountId(): Promise<string> {
     claims['frameio_account_id'] ??
     claims['account_id'] ??
     claims['https://frameio.com/account_id'];
-  if (typeof claimId === 'string' && claimId) return claimId;
+  if (typeof claimId === 'string' && claimId) {
+    console.log('[frameio] account_id resolved from JWT claim:', claimId);
+    return claimId;
+  }
 
   // 2 ── Try v2 /me (may work with OAuth token on legacy-enabled accounts)
   try {
@@ -128,49 +137,65 @@ async function resolveAccountId(): Promise<string> {
         'x-frameio-legacy-token-auth': 'true',
       },
     });
+    console.log('[frameio] v2/me probe status:', res.status);
     if (res.ok) {
       const me = await res.json() as Record<string, unknown>;
+      console.log('[frameio] v2/me keys:', Object.keys(me).join(', '));
       if (typeof me.account_id === 'string' && me.account_id) return me.account_id;
+    } else {
+      const text = await res.text().catch(() => '');
+      console.log('[frameio] v2/me error body:', text.slice(0, 200));
     }
-  } catch {
-    // v2 not available — continue
+  } catch (e) {
+    console.log('[frameio] v2/me probe threw:', e);
   }
 
   // 3 ── Try v4 /me
   try {
-    const res  = await fetch(`${BASE_V4}/me`, {
+    const res = await fetch(`${BASE_V4}/me`, {
       headers: {
-        Authorization:  `Bearer ${token}`,
-        'x-api-key':    clientId,
-        Accept:         'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-api-key':   clientId,
+        Accept:        'application/json',
       },
     });
+    console.log('[frameio] v4/me probe status:', res.status);
     if (res.ok) {
       const body = await res.json() as Record<string, unknown>;
       const data = (body.data ?? body) as Record<string, unknown>;
+      console.log('[frameio] v4/me keys:', Object.keys(data).join(', '));
       const id = data.account_id ?? data.frameio_account_id;
       if (typeof id === 'string' && id) return id;
+    } else {
+      const text = await res.text().catch(() => '');
+      console.log('[frameio] v4/me error body:', text.slice(0, 200));
     }
-  } catch {
-    // v4/me not available — continue
+  } catch (e) {
+    console.log('[frameio] v4/me probe threw:', e);
   }
 
   // 4 ── Try v4 /accounts (no account_id needed in path)
   try {
-    const res  = await fetch(`${BASE_V4}/accounts`, {
+    const res = await fetch(`${BASE_V4}/accounts`, {
       headers: {
-        Authorization:  `Bearer ${token}`,
-        'x-api-key':    clientId,
-        Accept:         'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-api-key':   clientId,
+        Accept:        'application/json',
       },
     });
+    console.log('[frameio] v4/accounts probe status:', res.status);
     if (res.ok) {
       const body = await res.json() as Record<string, unknown>;
+      console.log('[frameio] v4/accounts body keys:', Object.keys(body).join(', '));
       const items = (Array.isArray(body) ? body : (body.data ?? [])) as { id?: string }[];
+      console.log('[frameio] v4/accounts item count:', items.length, '| first id:', items[0]?.id);
       if (items.length > 0 && items[0].id) return items[0].id;
+    } else {
+      const text = await res.text().catch(() => '');
+      console.log('[frameio] v4/accounts error body:', text.slice(0, 200));
     }
-  } catch {
-    // /v4/accounts not available — continue
+  } catch (e) {
+    console.log('[frameio] v4/accounts probe threw:', e);
   }
 
   // Nothing worked — throw with useful diagnostic
@@ -442,11 +467,14 @@ export async function uploadAsset(
 // ── Share link types ──────────────────────────────────────────────────────────
 
 export interface FrameIOShare {
-  id:        string;
-  name:      string;
-  shareUrl:  string;
-  createdAt: string;    // ISO string
-  fileCount: number | null;  // from local store; null = not tracked by LPOS
+  id:                  string;
+  name:                string;
+  shareUrl:            string;
+  createdAt:           string;    // ISO string
+  fileCount:           number | null;  // from local store; null = not tracked by LPOS
+  downloading_enabled: boolean | null;
+  commenting_enabled:    boolean | null;
+  access:              'public' | 'private' | null;
 }
 
 export interface FrameIOShareFile {
@@ -463,7 +491,11 @@ export interface FrameIOShareFile {
  * POST /v4/accounts/{id}/projects/{projectId}/shares
  * POST /v4/accounts/{id}/shares/{shareId}/files  (attach file IDs)
  */
-export async function createShareLink(fileIds: string[], shareName: string): Promise<FrameIOShare> {
+export async function createShareLink(
+  fileIds:   string[],
+  shareName: string,
+  settings?: Pick<ShareSettings, 'downloading_enabled'>,
+): Promise<FrameIOShare> {
   const { accountId, projectId } = await discover();
 
   // Create the share — V4 spec requires type="asset" and access field.
@@ -474,18 +506,22 @@ export async function createShareLink(fileIds: string[], shareName: string): Pro
       method: 'POST',
       body: JSON.stringify({
         data: {
-          type:                 'asset',
-          access:               'public',
-          name:                 shareName,
-          asset_ids:            fileIds,
-          downloading_enabled:  true,
+          type:                'asset',
+          access:              'public',
+          name:                shareName,
+          asset_ids:           fileIds,
+          downloading_enabled: settings?.downloading_enabled ?? true,
         },
       }),
     },
   );
 
   const shareBody = await shareRes.json() as {
-    data?: { id: string; name?: string; short_url?: string; url?: string; link?: string; inserted_at?: string };
+    data?: {
+      id: string; name?: string; short_url?: string; url?: string; link?: string;
+      inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
+      access?: 'public' | 'private';
+    };
   };
   const share = shareBody.data;
 
@@ -498,11 +534,14 @@ export async function createShareLink(fileIds: string[], shareName: string): Pro
   const shareUrl = share.short_url ?? share.url ?? share.link ?? `https://app.frame.io/r/${share.id}`;
 
   return {
-    id:        share.id,
-    name:      share.name ?? shareName,
+    id:                  share.id,
+    name:                share.name ?? shareName,
     shareUrl,
-    createdAt: share.inserted_at ?? new Date().toISOString(),
-    fileCount: fileIds.length,
+    createdAt:           share.inserted_at ?? new Date().toISOString(),
+    fileCount:           fileIds.length,
+    downloading_enabled: share.downloading_enabled ?? true,
+    commenting_enabled:    share.commenting_enabled ?? null,
+    access:              share.access ?? 'public',
   };
 }
 
@@ -514,15 +553,22 @@ export async function listShares(): Promise<FrameIOShare[]> {
   const { accountId, projectId } = await discover();
   const res  = await fioFetch(`${BASE_V4}/accounts/${accountId}/projects/${projectId}/shares`);
   const body = await res.json() as {
-    data?: { id: string; name?: string; short_url?: string; url?: string; link?: string; inserted_at?: string }[];
+    data?: {
+      id: string; name?: string; short_url?: string; url?: string; link?: string;
+      inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
+      access?: 'public' | 'private';
+    }[];
   };
 
   return (body.data ?? []).map((s) => ({
-    id:        s.id,
-    name:      s.name ?? `Share ${s.id.slice(0, 6)}`,
-    shareUrl:  s.short_url ?? s.url ?? s.link ?? `https://app.frame.io/r/${s.id}`,
-    createdAt: s.inserted_at ?? '',
-    fileCount: null,  // enriched by route handlers that have local store access
+    id:                  s.id,
+    name:                s.name ?? `Share ${s.id.slice(0, 6)}`,
+    shareUrl:            s.short_url ?? s.url ?? s.link ?? `https://app.frame.io/r/${s.id}`,
+    createdAt:           s.inserted_at ?? '',
+    fileCount:           null,  // enriched by route handlers that have local store access
+    downloading_enabled: s.downloading_enabled ?? null,
+    commenting_enabled:    s.commenting_enabled ?? null,
+    access:              s.access ?? null,
   }));
 }
 
@@ -565,16 +611,32 @@ export async function removeFileFromShare(shareId: string, fileId: string): Prom
   );
 }
 
+export interface ShareSettings {
+  name?:               string;
+  downloading_enabled?: boolean;
+}
+
 /**
- * Rename an existing share.
+ * Update one or more settings on an existing share.
  * PATCH /v4/accounts/{id}/shares/{shareId}
  */
-export async function renameShare(shareId: string, name: string): Promise<void> {
+export async function updateShareSettings(shareId: string, settings: ShareSettings): Promise<void> {
   const { accountId } = await discover();
-  await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}`, {
+  console.log('[frameio] PATCH share', shareId, 'with', JSON.stringify(settings));
+  const res = await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}`, {
     method: 'PATCH',
-    body:   JSON.stringify({ data: { name } }),
+    body:   JSON.stringify({ data: settings }),
   });
+  const body = await res.json().catch(() => null);
+  console.log('[frameio] PATCH share response:', JSON.stringify(body));
+}
+
+/**
+ * Rename an existing share.
+ * @deprecated Use updateShareSettings({ name }) instead.
+ */
+export async function renameShare(shareId: string, name: string): Promise<void> {
+  await updateShareSettings(shareId, { name });
 }
 
 /**

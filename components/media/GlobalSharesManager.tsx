@@ -29,7 +29,6 @@ function ShareRow({ share, projectId }: { share: GlobalShareProject['shares'][nu
     if (!confirm(`Delete "${share.name}"? The link will stop working.`)) return;
     setDeleting(true);
     try {
-      // Unassigned shares have no LPOS project — delete directly via a dedicated route
       const url = projectId === '__unassigned__'
         ? `/api/shares/${share.id}`
         : `/api/projects/${projectId}/shares/${share.id}`;
@@ -140,10 +139,17 @@ function ProjectGroup({ group }: { group: GlobalShareProject }) {
 
 // ── GlobalSharesManager ───────────────────────────────────────────────────────
 
-export function GlobalSharesManager() {
-  const [groups,  setGroups]  = useState<GlobalShareProject[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState<string | null>(null);
+export interface ProjectFilterOption {
+  projectId:   string;
+  projectName: string;
+  clientName:  string;
+}
+
+export function GlobalSharesManager({ projects }: { projects?: ProjectFilterOption[] }) {
+  const [groups,         setGroups]         = useState<GlobalShareProject[]>([]);
+  const [loading,        setLoading]        = useState(false);
+  const [error,          setError]          = useState<string | null>(null);
+  const [projectFilter,  setProjectFilter]  = useState<string>('');
 
   const fetchShares = useCallback(async () => {
     setLoading(true);
@@ -162,14 +168,42 @@ export function GlobalSharesManager() {
 
   useEffect(() => { void fetchShares(); }, [fetchShares]);
 
-  const totalShares = groups.reduce((n, g) => n + g.shares.length, 0);
+  const filteredGroups = projectFilter
+    ? groups.filter((g) => g.projectId === projectFilter)
+    : groups;
+
+  const totalShares = filteredGroups.reduce((n, g) => n + g.shares.length, 0);
+
+  // Build sorted project options from fetched groups (or from the prop if provided)
+  const projectOptions: ProjectFilterOption[] = projects
+    ? projects
+    : groups
+        .filter((g) => g.projectId !== '__unassigned__')
+        .map((g) => ({ projectId: g.projectId, projectName: g.projectName, clientName: g.clientName }));
 
   return (
     <div className="gsm-root">
       <div className="gsm-toolbar">
         <span className="gsm-title">
-          {loading ? 'Loading…' : `${totalShares} share link${totalShares !== 1 ? 's' : ''} across ${groups.length} project${groups.length !== 1 ? 's' : ''}`}
+          {loading ? 'Loading…' : `${totalShares} share link${totalShares !== 1 ? 's' : ''} across ${filteredGroups.length} project${filteredGroups.length !== 1 ? 's' : ''}`}
         </span>
+
+        {projectOptions.length > 0 && (
+          <select
+            className="gsm-project-filter"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+            aria-label="Filter by project"
+          >
+            <option value="">All projects</option>
+            {projectOptions.map((p) => (
+              <option key={p.projectId} value={p.projectId}>
+                {p.clientName ? `${p.clientName} — ${p.projectName}` : p.projectName}
+              </option>
+            ))}
+          </select>
+        )}
+
         <button
           type="button"
           className="sh-icon-btn"
@@ -187,11 +221,13 @@ export function GlobalSharesManager() {
 
       {error && <p className="sh-error">{error}</p>}
 
-      {!loading && !error && groups.length === 0 && (
-        <p className="m-empty">No share links found. Create them from a project's Shares panel.</p>
+      {!loading && !error && filteredGroups.length === 0 && (
+        <p className="m-empty">
+          {projectFilter ? 'No share links for this project.' : 'No share links found. Create them from a project\'s Shares panel.'}
+        </p>
       )}
 
-      {groups.map((g) => (
+      {filteredGroups.map((g) => (
         <ProjectGroup key={g.projectId} group={g} />
       ))}
     </div>

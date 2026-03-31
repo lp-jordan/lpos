@@ -23,6 +23,7 @@ import { PassPrepService } from './passprep-service';
 import { UploadQueueService } from './upload-queue-service';
 import { IngestQueueService } from './ingest-queue-service';
 import { CameraControlService } from './camera-control-service';
+import { AmaranService } from './amaran-service';
 import {
   ActivityMonitorService,
   getActivityMonitorService,
@@ -36,6 +37,7 @@ import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
 import { getRuntimeDependencyReport } from './runtime-dependencies';
 import { PipelineTrackerService } from './pipeline-tracker-service';
+import { PresentationService } from './presentation-service';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -63,6 +65,10 @@ declare global {
   var __lpos_wishStore: WishStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_io: SocketIOServer | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_amaranService: AmaranService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_presentationService: PresentationService | undefined;
 }
 
 // ── Module-local singletons (fast path when module is shared) ─────────────
@@ -73,12 +79,14 @@ let passPrepService: PassPrepService | null = null;
 let uploadQueueService: UploadQueueService | null = null;
 let ingestQueueService: IngestQueueService | null = null;
 let cameraControlService: CameraControlService | null = null;
+let amaranService: AmaranService | null = null;
 let activityMonitorService: ActivityMonitorService | null = null;
 let pipelineTracker: PipelineTrackerService | null = null;
 let clientOwnerStore: ClientOwnerStore | null = null;
 let taskStore: TaskStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
+let presentationService: PresentationService | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -135,15 +143,21 @@ export async function initServices(io: SocketIOServer): Promise<void> {
 
   cameraControlService = new CameraControlService(io, registry);
   globalThis.__lpos_cameraControlService = cameraControlService;
+  amaranService = new AmaranService(io);
+  globalThis.__lpos_amaranService = amaranService;
   activityMonitorService = new ActivityMonitorService(io, registry);
   globalThis.__lpos_activityMonitorService = activityMonitorService;
   setActivityMonitorService(activityMonitorService);
+
+  presentationService = new PresentationService(io);
+  globalThis.__lpos_presentationService = presentationService;
 
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
     passPrepService.start(),
     cameraControlService.start(),
+    amaranService.start(),
     activityMonitorService.start(),
   ]);
 }
@@ -156,6 +170,7 @@ export async function stopServices(): Promise<void> {
     transcripterService?.stop(),
     passPrepService?.stop(),
     cameraControlService?.stop(),
+    amaranService?.stop(),
     activityMonitorService?.stop(),
   ]);
 }
@@ -214,6 +229,15 @@ export function getCameraControlService(): CameraControlService {
   return cameraControlService;
 }
 
+export function getAmaranService(): AmaranService {
+  if (globalThis.__lpos_amaranService) return globalThis.__lpos_amaranService;
+  if (amaranService) return amaranService;
+  // Lazy init without socket — allows API routes to work before server.ts has run
+  amaranService = new AmaranService();
+  globalThis.__lpos_amaranService = amaranService;
+  return amaranService;
+}
+
 export function getActivityService(): ActivityMonitorService {
   if (globalThis.__lpos_activityMonitorService) return globalThis.__lpos_activityMonitorService;
   if (activityMonitorService) return activityMonitorService;
@@ -262,4 +286,10 @@ export function getWishStore(): WishStore {
   wishStore = new WishStore();
   globalThis.__lpos_wishStore = wishStore;
   return wishStore;
+}
+
+export function getPresentationService(): PresentationService {
+  if (globalThis.__lpos_presentationService) return globalThis.__lpos_presentationService;
+  if (presentationService) return presentationService;
+  throw new Error('PresentationService not initialized — server.ts must be running');
 }

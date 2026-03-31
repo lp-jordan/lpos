@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveLibreOfficeBinary } from './presentation-service';
 
 export interface RuntimeDependencyReport {
   id: string;
@@ -97,6 +98,7 @@ export function getRuntimeDependencyReport(): RuntimeReport {
   const atemBridgeDir = getAtemBridgeDir();
   const atemCommand = resolveAtemBridgeCommand();
   const storageRoot = getStorageRoot();
+  const libreofficeBinary = resolveLibreOfficeBinary();
 
   const whisperBinaryPaths = uniquePaths([
     process.env.LPOS_WHISPER_BINARY?.trim(),
@@ -154,6 +156,17 @@ export function getRuntimeDependencyReport(): RuntimeReport {
           ? `Using ${storageRoot}`
           : `Storage root does not exist yet: ${storageRoot}`,
         paths: uniquePaths([storageRoot]),
+      },
+      {
+        id: 'libreoffice',
+        label: 'LibreOffice',
+        configured: Boolean(libreofficeBinary),
+        available: Boolean(libreofficeBinary && (process.platform !== 'win32' || pathExists(libreofficeBinary))),
+        required: false,
+        details: libreofficeBinary
+          ? `Using ${libreofficeBinary}`
+          : 'LibreOffice not found. Install LibreOffice to enable PPTX → slide conversion for the Presentation tab.',
+        paths: libreofficeBinary ? uniquePaths([libreofficeBinary]) : [],
       },
       {
         id: 'frameio',

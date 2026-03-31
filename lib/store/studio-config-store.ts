@@ -26,6 +26,11 @@ export interface SonySdkBridgeConfig {
   args: string[];
 }
 
+export interface AmaranConfig {
+  port: number;        // Amaran Desktop WebSocket port (default 33782)
+  autoConnect: boolean;
+}
+
 export interface CameraConfig {
   provider: CameraProviderKind;
   model: SonyCameraModel;
@@ -41,10 +46,12 @@ export interface CameraConfig {
 
 export interface StudioConfig {
   camera: CameraConfig;
+  amaran: AmaranConfig;
 }
 
 export interface StudioConfigPatch {
   camera?: Partial<CameraConfig>;
+  amaran?: Partial<AmaranConfig>;
 }
 
 const DEFAULTS: StudioConfig = {
@@ -64,6 +71,10 @@ const DEFAULTS: StudioConfig = {
       startupTimeoutMs: 60_000,
       args: [],
     },
+  },
+  amaran: {
+    port: 33782,
+    autoConnect: true,
   },
 };
 
@@ -100,6 +111,10 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
 function normalizeStudioConfig(raw?: Partial<StudioConfig>): StudioConfig {
   return {
     camera: normalizeCameraConfig(raw?.camera),
+    amaran: {
+      port: typeof raw?.amaran?.port === 'number' && raw.amaran.port > 0 ? raw.amaran.port : DEFAULTS.amaran.port,
+      autoConnect: raw?.amaran?.autoConnect ?? DEFAULTS.amaran.autoConnect,
+    },
   };
 }
 
@@ -129,6 +144,10 @@ export function patchStudioConfig(patch: StudioConfigPatch): StudioConfig {
         ...current.camera.sdkBridge,
         ...(patch.camera?.sdkBridge ?? {}),
       },
+    },
+    amaran: {
+      ...current.amaran,
+      ...(patch.amaran ?? {}),
     },
   });
   writeStudioConfig(next);

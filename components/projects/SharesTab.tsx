@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { FrameIOShare } from '@/lib/services/frameio';
 import type { MediaAsset } from '@/lib/models/media-asset';
 
@@ -39,10 +39,11 @@ function NewShareModal({
   onClose:   () => void;
   onCreated: (share: FrameIOShare) => void;
 }) {
-  const [name,       setName]       = useState('');
-  const [selected,   setSelected]   = useState<Set<string>>(new Set());
-  const [creating,   setCreating]   = useState(false);
-  const [error,      setError]      = useState<string | null>(null);
+  const [name,             setName]             = useState('');
+  const [selected,         setSelected]         = useState<Set<string>>(new Set());
+  const [creating,         setCreating]         = useState(false);
+  const [error,            setError]            = useState<string | null>(null);
+  const [dlEnabled, setDlEnabled] = useState(true);
 
   const uploadedAssets = assets.filter((a) => a.frameio.assetId);
 
@@ -61,7 +62,11 @@ function NewShareModal({
       const res  = await fetch(`/api/projects/${projectId}/shares`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ assetIds: [...selected], name: name.trim() || undefined }),
+        body:    JSON.stringify({
+          assetIds:            [...selected],
+          name:                name.trim() || undefined,
+          downloading_enabled: dlEnabled,
+        }),
       });
       const data = await res.json() as { share?: FrameIOShare; error?: string };
       if (!res.ok) { setError(data.error ?? 'Failed to create share'); return; }
@@ -118,6 +123,16 @@ function NewShareModal({
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="sh-modal-field">
+            <label className="sh-modal-label">Settings</label>
+            <div className="sh-modal-toggles">
+              <label className="sh-setting-toggle" title="Allow viewers to download files">
+                <input type="checkbox" className="sh-toggle-input" checked={dlEnabled} onChange={(e) => setDlEnabled(e.target.checked)} />
+                <span className="sh-toggle" /><span className="sh-setting-label">Downloads</span>
+              </label>
+            </div>
           </div>
 
           {error && <p className="sh-error">{error}</p>}
@@ -256,10 +271,56 @@ function ShareCard({
   onDeleted:       (shareId: string) => void;
   onFilesChanged:  (shareId: string) => void;
 }) {
-  const [copied,       setCopied]       = useState(false);
-  const [deleting,     setDeleting]     = useState(false);
-  const [removingId,   setRemovingId]   = useState<string | null>(null);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [copied,          setCopied]          = useState(false);
+  const [deleting,        setDeleting]        = useState(false);
+  const [removingId,      setRemovingId]      = useState<string | null>(null);
+  const [showAddModal,    setShowAddModal]    = useState(false);
+  const [editingName,     setEditingName]     = useState(false);
+  const [nameDraft,       setNameDraft]       = useState(share.name);
+  const [renaming,        setRenaming]        = useState(false);
+  const [downloadEnabled, setDownloadEnabled] = useState<boolean | null>(share.downloading_enabled);
+  const [togglingField,   setTogglingField]   = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  function startEditing() {
+    setNameDraft(share.name);
+    setEditingName(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
+  }
+
+  function cancelEditing() {
+    setEditingName(false);
+    setNameDraft(share.name);
+  }
+
+  async function commitRename() {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === share.name) { cancelEditing(); return; }
+    setRenaming(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/shares/${share.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ name: trimmed }),
+      });
+      if (res.ok) share.name = trimmed;
+    } catch { /* ignore */ } finally {
+      setRenaming(false);
+      setEditingName(false);
+    }
+  }
+
+  async function handleToggle(value: boolean) {
+    setTogglingField('downloading_enabled');
+    try {
+      const res = await fetch(`/api/projects/${projectId}/shares/${share.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ downloading_enabled: value }),
+      });
+      if (res.ok) setDownloadEnabled(value);
+    } catch { /* network error — toggle reverts */ } finally { setTogglingField(null); }
+  }
 
   function handleCopy() {
     navigator.clipboard.writeText(share.shareUrl).catch(() => {});
@@ -311,7 +372,33 @@ function ShareCard({
           </button>
 
           <div className="sh-card-info">
-            <span className="sh-card-name">{share.name}</span>
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                className="sh-card-name-input"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                  if (e.key === 'Escape') { e.preventDefault(); cancelEditing(); }
+                }}
+                onBlur={() => void commitRename()}
+                disabled={renaming}
+              />
+            ) : (
+              <button
+                type="button"
+                className="sh-card-name sh-card-name--editable"
+                onClick={startEditing}
+                title="Click to rename"
+              >
+                {share.name}
+                <svg className="sh-card-edit-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+            )}
             <span className="sh-card-meta">
               {share.createdAt ? formatDate(share.createdAt) : ''}
               {share.files !== null && ` · ${share.files.length} file${share.files.length !== 1 ? 's' : ''}`}
@@ -365,6 +452,23 @@ function ShareCard({
         <div className="sh-card-url-row">
           <span className="sh-card-url">{share.shareUrl}</span>
         </div>
+
+        {/* Settings toggles — visible when expanded */}
+        {share.expanded && (
+          <div className="sh-card-settings">
+            <label className="sh-setting-toggle" title="Allow viewers to download files">
+              <input
+                type="checkbox"
+                className="sh-toggle-input"
+                checked={downloadEnabled ?? true}
+                disabled={togglingField === 'downloading_enabled'}
+                onChange={(e) => void handleToggle(e.target.checked)}
+              />
+              <span className="sh-toggle" />
+              <span className="sh-setting-label">Downloads</span>
+            </label>
+          </div>
+        )}
 
         {/* Expanded: file list */}
         {share.expanded && (

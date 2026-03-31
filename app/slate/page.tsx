@@ -3,8 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSlate } from '@/hooks/useSlate';
 import { AtemPanel } from '@/components/slate/AtemPanel';
+import { LightingPanel } from '@/components/slate/LightingPanel';
 import { PlaybackPanel } from '@/components/slate/PlaybackPanel';
 import { CameraPanel } from '@/components/slate/CameraPanel';
+import { PresentationPanel } from '@/components/studio/PresentationPanel';
 import { SlateModal, ModalType } from '@/components/slate/SlateModal';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 
@@ -58,7 +60,7 @@ export default function SlatePage() {
   const [modal, setModal] = useState<{ type: ModalType; message?: string }>({ type: null });
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectClient, setNewProjectClient] = useState<string | undefined>();
-  const [studioTab, setStudioTab] = useState<'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback'>('notes');
+  const [studioTab, setStudioTab] = useState<'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation'>('notes');
 
   const projectRef = useRef<HTMLDivElement>(null);
   const noteInputRef = useRef<HTMLTextAreaElement>(null);
@@ -273,6 +275,12 @@ export default function SlatePage() {
                 <rect x="3" y="5" width="2" height="14" rx="1"/>
               </svg>
             )},
+            { id: 'presentation', label: 'Presentation', icon: (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+            )},
           ] as { id: string; label: string; icon: React.ReactNode; soon?: boolean }[]).map((tab) => (
             <button
               key={tab.id}
@@ -409,18 +417,7 @@ export default function SlatePage() {
             <PlaybackPanel connection={slate.playbackConnection} />
           )}
 
-          {studioTab === 'lighting' && (
-            <div className="sl-coming-soon">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity=".4">
-                <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-              </svg>
-              <span className="sl-coming-soon-title">Lighting Controls</span>
-              <span className="sl-coming-soon-sub">amaran Desktop integration coming next</span>
-            </div>
-          )}
+          {studioTab === 'lighting' && <LightingPanel />}
 
           {/* ── Camera / Audio soon ── */}
           {studioTab === 'audio' && (
@@ -499,6 +496,8 @@ export default function SlatePage() {
           )}
 
           {studioTab === 'camera' && <CameraPanel />}
+
+          {studioTab === 'presentation' && <PresentationPanel />}
 
         </section>
       </div>

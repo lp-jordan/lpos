@@ -41,6 +41,7 @@ export function UserMenu({ user }: { user: UserSummary }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Open user menu for ${user.name}`}
+        data-guest-ok
       >
         {user.avatarUrl
           ? <img src={user.avatarUrl} alt="" className="user-menu-avatar-image" />
@@ -57,7 +58,7 @@ export function UserMenu({ user }: { user: UserSummary }) {
             My Dashboard
           </Link>
           <form action="/api/auth/logout" method="post">
-            <button type="submit" className="user-menu-link user-menu-link--button" role="menuitem">
+            <button type="submit" className="user-menu-link user-menu-link--button" role="menuitem" data-guest-ok>
               Sign out
             </button>
           </form>

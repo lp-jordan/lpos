@@ -45,12 +45,14 @@ export function AppShell({
   const isStudio = pathname.startsWith('/slate');
   const isSignIn = pathname === '/signin';
 
+  const isGuest = currentUser?.isGuest ?? false;
+
   if (isHome) {
     return (
       <ToastProvider>
         <ContextMenuProvider>
           <VersionConfirmProvider>
-            <div className="app-home">
+            <div className="app-home" data-guest={isGuest || undefined}>
               {children}
               {currentUser && <UserMenu user={currentUser} />}
               {currentUser && <WishListButton currentUser={currentUser} home />}
@@ -67,7 +69,7 @@ export function AppShell({
     <ToastProvider>
         <ContextMenuProvider>
           <VersionConfirmProvider>
-            <div className="app-inner">
+            <div className="app-inner" data-guest={isGuest || undefined}>
               {currentUser && !isSignIn && <UserMenu user={currentUser} />}
               <NavBar />
               <Breadcrumb />

@@ -39,10 +39,11 @@ function NewShareModal({
   onClose:   () => void;
   onCreated: (share: FrameIOShare) => void;
 }) {
-  const [name,     setName]     = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [creating, setCreating] = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [name,            setName]            = useState('');
+  const [selected,        setSelected]        = useState<Set<string>>(new Set());
+  const [creating,        setCreating]        = useState(false);
+  const [error,           setError]           = useState<string | null>(null);
+  const [dlEnabled, setDlEnabled] = useState(true);
 
   const uploadedAssets = assets.filter((a) => a.frameio.assetId);
 
@@ -61,7 +62,11 @@ function NewShareModal({
       const res  = await fetch(`/api/projects/${projectId}/shares`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ assetIds: [...selected], name: name.trim() || undefined }),
+        body:    JSON.stringify({
+          assetIds:            [...selected],
+          name:                name.trim() || undefined,
+          downloading_enabled: dlEnabled,
+        }),
       });
       const data = await res.json() as { share?: FrameIOShare; error?: string };
       if (!res.ok) { setError(data.error ?? 'Failed to create share'); return; }
@@ -116,6 +121,16 @@ function NewShareModal({
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="sh-modal-field">
+            <label className="sh-modal-label">Settings</label>
+            <div className="sh-modal-toggles">
+              <label className="sh-setting-toggle" title="Allow viewers to download files">
+                <input type="checkbox" className="sh-toggle-input" checked={dlEnabled} onChange={(e) => setDlEnabled(e.target.checked)} />
+                <span className="sh-toggle" /><span className="sh-setting-label">Downloads</span>
+              </label>
+            </div>
           </div>
 
           {error && <p className="sh-error">{error}</p>}
@@ -249,14 +264,29 @@ function ShareCard({
   onDeleted:      (id: string) => void;
   onFilesChanged: (id: string) => void;
 }) {
-  const [copied,       setCopied]       = useState(false);
-  const [deleting,     setDeleting]     = useState(false);
-  const [removingId,   setRemovingId]   = useState<string | null>(null);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [editingName,  setEditingName]  = useState(false);
-  const [nameDraft,    setNameDraft]    = useState(share.name);
-  const [renaming,     setRenaming]     = useState(false);
+  const [copied,            setCopied]            = useState(false);
+  const [deleting,          setDeleting]          = useState(false);
+  const [removingId,        setRemovingId]        = useState<string | null>(null);
+  const [showAddModal,      setShowAddModal]      = useState(false);
+  const [editingName,       setEditingName]       = useState(false);
+  const [nameDraft,         setNameDraft]         = useState(share.name);
+  const [renaming,          setRenaming]          = useState(false);
+  const [downloadEnabled, setDownloadEnabled] = useState<boolean | null>(share.downloading_enabled);
+  const [togglingField,   setTogglingField]   = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleToggle(value: boolean) {
+    setTogglingField('downloading_enabled');
+    try {
+      const res = await fetch(`/api/projects/${projectId}/shares/${share.id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ downloading_enabled: value }),
+      });
+      if (res.ok) setDownloadEnabled(value);
+    } catch { /* network error — toggle reverts */ }
+    finally { setTogglingField(null); }
+  }
 
   function handleCopy() {
     navigator.clipboard.writeText(share.shareUrl).catch(() => {});
@@ -418,6 +448,23 @@ function ShareCard({
         <div className="sh-card-url-row">
           <span className="sh-card-url">{share.shareUrl}</span>
         </div>
+
+        {/* Settings toggles — visible when expanded */}
+        {share.expanded && (
+          <div className="sh-card-settings">
+            <label className="sh-setting-toggle" title="Allow viewers to download files">
+              <input
+                type="checkbox"
+                className="sh-toggle-input"
+                checked={downloadEnabled ?? true}
+                disabled={togglingField === 'downloading_enabled'}
+                onChange={(e) => void handleToggle(e.target.checked)}
+              />
+              <span className="sh-toggle" />
+              <span className="sh-setting-label">Downloads</span>
+            </label>
+          </div>
+        )}
 
         {/* Expanded file list */}
         {share.expanded && (

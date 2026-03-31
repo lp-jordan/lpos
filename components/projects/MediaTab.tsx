@@ -324,6 +324,8 @@ export function MediaTab({
   const [shareCopied,     setShareCopied]     = useState(false);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
+  const [retranscribeWorking, setRetranscribeWorking] = useState(false);
+  const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
   const { requestVersionConfirmation, startBatch, endBatch } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -863,6 +865,25 @@ const { openMenu } = useContextMenu();
     }
   }
 
+  async function handleBulkRetranscribe() {
+    if (!selectedIds.size) return;
+    setRetranscribeWorking(true);
+    setRetranscribeError(null);
+    try {
+      await Promise.all(
+        [...selectedIds].map((id) =>
+          fetch(`/api/projects/${projectId}/media/${id}/retranscribe`, { method: 'POST' }),
+        ),
+      );
+      setSelectedIds(new Set());
+      void fetchAssets();
+    } catch {
+      setRetranscribeError('Network error — could not queue re-transcription');
+    } finally {
+      setRetranscribeWorking(false);
+    }
+  }
+
   function handleCopyShareUrl() {
     if (!shareResult) return;
     navigator.clipboard.writeText(shareResult.url).catch(() => {});
@@ -1041,8 +1062,20 @@ const { openMenu } = useContextMenu();
               </svg>
               {shareWorking ? 'Creating share…' : 'Create Share Link'}
             </button>
+            <button
+              type="button"
+              className="ma-selection-action"
+              onClick={() => void handleBulkRetranscribe()}
+              disabled={retranscribeWorking}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+              </svg>
+              {retranscribeWorking ? 'Queueing…' : 'Re-transcribe'}
+            </button>
             {publishError && <span className="ma-selection-error">{publishError}</span>}
             {shareError && <span className="ma-selection-error">{shareError}</span>}
+            {retranscribeError && <span className="ma-selection-error">{retranscribeError}</span>}
             <button
               type="button"
               className="ma-selection-action ma-selection-action--danger"

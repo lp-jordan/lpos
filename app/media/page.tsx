@@ -444,7 +444,15 @@ export default function MediaPage() {
         </button>
       </div>
 
-      {tab === 'shares' && <GlobalSharesManager />}
+      {tab === 'shares' && (
+        <GlobalSharesManager
+          projects={projects.map((p: Project) => ({
+            projectId:   p.projectId,
+            projectName: p.name,
+            clientName:  p.clientName ?? '',
+          }))}
+        />
+      )}
 
       {tab === 'projects' && <>
       {/* Toolbar */}

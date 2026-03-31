@@ -103,5 +103,6 @@ export function toUserSummary(user: User | null): UserSummary | null {
     email: user.email,
     name: user.name,
     avatarUrl: user.avatarUrl,
+    isGuest: user.id === GUEST_USER_ID,
   };
 }

@@ -155,6 +155,7 @@ function TranscriptsTab({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchScopeJobIds, setSearchScopeJobIds] = useState<string[] | null>(null);
   const [searchSessionKey, setSearchSessionKey] = useState(0);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchTranscripts = useCallback(async () => {
     try {
@@ -225,6 +226,23 @@ function TranscriptsTab({
     ));
   }
 
+  async function deleteSelected() {
+    const jobIds = [...selected];
+    if (!confirm(`Delete ${jobIds.length} transcript${jobIds.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await fetch(`/api/projects/${projectId}/transcripts`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobIds }),
+      });
+      setSelected(new Set());
+      void fetchTranscripts();
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   useEffect(() => {
     if (!selectedJobId || loading) return;
     const entry = transcripts.find((transcript) => transcript.jobId === selectedJobId);
@@ -281,6 +299,14 @@ function TranscriptsTab({
                     title="Batch Pass Prep is not wired yet."
                   >
                     Pass Prep
+                  </button>
+                  <button
+                    type="button"
+                    className="proj-bulk-btn proj-bulk-btn--danger"
+                    onClick={() => void deleteSelected()}
+                    disabled={deleting}
+                  >
+                    {deleting ? 'Deleting…' : 'Delete'}
                   </button>
                 </div>
                 <button type="button" className="proj-bulk-clear" onClick={() => setSelected(new Set())}>

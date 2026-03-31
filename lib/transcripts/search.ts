@@ -39,11 +39,16 @@ interface LocalMatch {
   matchIndex: number;
 }
 
+interface ClaudeSearchCitation {
+  id: string;
+  quotedText?: string;
+}
+
 interface ClaudeSearchPayload {
   answer?: string;
   summary?: string;
   bullets?: string[];
-  citationIds?: string[];
+  citations?: ClaudeSearchCitation[];
   threadSummary?: string;
 }
 
@@ -52,7 +57,15 @@ function isClaudeSearchPayload(value: unknown): value is ClaudeSearchPayload {
   const record = value as Record<string, unknown>;
   if (typeof record.answer !== 'string' && typeof record.summary !== 'string') return false;
   if (record.bullets !== undefined && !Array.isArray(record.bullets)) return false;
-  if (record.citationIds !== undefined && !Array.isArray(record.citationIds)) return false;
+  if (record.citations !== undefined) {
+    if (!Array.isArray(record.citations)) return false;
+    for (const c of record.citations as unknown[]) {
+      if (!c || typeof c !== 'object') return false;
+      const citation = c as Record<string, unknown>;
+      if (typeof citation.id !== 'string') return false;
+      if (citation.quotedText !== undefined && typeof citation.quotedText !== 'string') return false;
+    }
+  }
   if (record.threadSummary !== undefined && typeof record.threadSummary !== 'string') return false;
   return true;
 }
@@ -393,7 +406,8 @@ async function requestClaudeSearch(input: {
     'If the user asks for a list, places, instances, examples, or bullets, each bullet should capture one concrete item.',
     'Do not describe the format you are using. Just return the content in the requested structure.',
     'Return strict JSON with this shape:',
-    '{"summary":"...","bullets":["..."],"citationIds":["e1"],"threadSummary":"..."}',
+    '{"summary":"...","bullets":["..."],"citations":[{"id":"e1","quotedText":"short exact phrase from that excerpt"}],"threadSummary":"..."}',
+    'In citations, quotedText must be a short verbatim phrase (under 120 characters) copied exactly from the cited excerpt.',
     'Never cite an excerpt that was not provided.',
   ];
   if (input.verbatimIntent) {
@@ -677,14 +691,19 @@ export async function searchTranscriptContent(input: {
   });
 
   const evidenceMap = new Map<string, TranscriptChunk>(evidence.map((chunk, index) => [`e${index + 1}`, chunk]));
-  const sources = (modelResponse.citationIds ?? [])
-    .map((id) => evidenceMap.get(id))
-    .filter((value): value is TranscriptChunk => Boolean(value))
-    .map((chunk) => ({
-      jobId: chunk.jobId,
-      filename: chunk.filename,
-      excerpt: chunk.text,
-    }));
+  const sources = (modelResponse.citations ?? [])
+    .map((citation) => {
+      const chunk = evidenceMap.get(citation.id);
+      if (!chunk) return null;
+      const source: TranscriptSearchSource = {
+        jobId: chunk.jobId,
+        filename: chunk.filename,
+        excerpt: chunk.text,
+      };
+      if (citation.quotedText) source.matchText = citation.quotedText;
+      return source;
+    })
+    .filter((value): value is TranscriptSearchSource => Boolean(value));
 
   return {
     answer: formatAnswer(modelResponse.summary, modelResponse.bullets, modelResponse.answer)

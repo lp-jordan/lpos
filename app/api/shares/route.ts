@@ -57,7 +57,7 @@ export async function GET() {
       const localShares = getAllShareAssets(project.projectId);
       const enriched = shares.map((s) => ({
         ...s,
-        fileCount: s.id in localShares ? localShares[s.id].length : null,
+        fileCount: (localShares[s.id]?.length ?? 0) > 0 ? localShares[s.id].length : null,
       }));
       enriched.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 

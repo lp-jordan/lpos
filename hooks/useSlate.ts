@@ -11,7 +11,7 @@ import type {
   SlateNote,
 } from '@/lib/services/atem-utils';
 
-export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback';
+export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation';
 
 export interface SlateProject {
   projectId: string;

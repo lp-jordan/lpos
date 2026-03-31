@@ -43,6 +43,13 @@ function nextSubPhase(current: string): { phase: string; subPhase: string } | nu
   return { phase: SUBPHASE_PHASE_MAP[next], subPhase: next };
 }
 
+function prevSubPhase(current: string): { phase: string; subPhase: string } | null {
+  const idx = SUBPHASE_ORDER.indexOf(current as never);
+  if (idx <= 0) return null;
+  const prev = SUBPHASE_ORDER[idx - 1];
+  return { phase: SUBPHASE_PHASE_MAP[prev as keyof typeof SUBPHASE_PHASE_MAP], subPhase: prev };
+}
+
 function isCrossPhase(current: string): boolean {
   const next = nextSubPhase(current);
   if (!next) return false;
@@ -96,8 +103,9 @@ function ActivityFeed({ events, projectMap }: { events: ActivityEvent[]; project
     return <p className="dashboard-empty">No recent activity for your projects.</p>;
   }
   return (
-    <ul className="dashboard-activity-list">
-      {events.map((e) => {
+    <div className="dashboard-activity-scroll">
+      <ul className="dashboard-activity-list">
+        {events.map((e) => {
         const projectName = e.project_id ? (projectMap.get(e.project_id) ?? null) : null;
         const showActor = e.actor_display && e.actor_type !== 'system';
         return (
@@ -115,7 +123,8 @@ function ActivityFeed({ events, projectMap }: { events: ActivityEvent[]; project
           </li>
         );
       })}
-    </ul>
+      </ul>
+    </div>
   );
 }
 
@@ -147,6 +156,20 @@ function ProjectStatusSection({ initialProjects }: { initialProjects: Project[] 
     }
   }, [confirming]);
 
+  const retreat = useCallback(async (projectId: string, currentSubPhase: string) => {
+    const prev = prevSubPhase(currentSubPhase);
+    if (!prev) return;
+    const res = await fetch(`/api/projects/${projectId}/phase`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prev),
+    });
+    if (res.ok) {
+      const data = await res.json() as { project: Project };
+      setProjects((p) => p.map((proj) => proj.projectId === projectId ? data.project : proj));
+    }
+  }, []);
+
   const byPhase = (phase: string) => projects.filter((p) => p.phase === phase);
 
   if (projects.length === 0) {
@@ -171,6 +194,16 @@ function ProjectStatusSection({ initialProjects }: { initialProjects: Project[] 
                     <span className="dashboard-project-client">{p.clientName}</span>
                   </div>
                   <div className="dashboard-project-right">
+                    {prevSubPhase(p.subPhase) && (
+                      <button
+                        type="button"
+                        className="dashboard-advance-btn dashboard-advance-btn--back"
+                        title={`Move back to ${SUBPHASE_LABEL[prevSubPhase(p.subPhase)?.subPhase ?? ''] ?? 'previous stage'}`}
+                        onClick={() => void retreat(p.projectId, p.subPhase)}
+                      >
+                        ‹
+                      </button>
+                    )}
                     <span className={`dashboard-subphase-badge dashboard-subphase-badge--${p.phase}`}>
                       {SUBPHASE_LABEL[p.subPhase] ?? p.subPhase}
                     </span>

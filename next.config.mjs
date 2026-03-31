@@ -2,7 +2,7 @@
 const nextConfig = {
   // Prevent Next.js from bundling native binaries — lets them resolve via
   // their real node_modules path at runtime instead of a mangled vendor-chunk.
-  serverExternalPackages: ['ffmpeg-static', 'fluent-ffmpeg'],
+  serverExternalPackages: ['ffmpeg-static', 'fluent-ffmpeg', '@napi-rs/canvas', 'pdfjs-dist'],
 };
 
 export default nextConfig;

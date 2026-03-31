@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteShare, renameShare } from '@/lib/services/frameio';
+import { deleteShare, updateShareSettings } from '@/lib/services/frameio';
 import { readRegistry } from '@/lib/store/media-registry';
 import { getShareAssets, deleteShareRecord } from '@/lib/store/share-assets-store';
 
@@ -47,20 +47,35 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
 /**
  * PATCH /api/projects/[projectId]/shares/[shareId]
- * Body: { name: string }
+ * Body: { name?, downloading_enabled? }
  *
- * Renames the share on Frame.io.
+ * Updates one or more share settings on Frame.io.
  */
 export async function PATCH(req: NextRequest, { params }: Params) {
   try {
     const { shareId } = await params;
-    const body = await req.json() as { name?: string };
-    const name = body.name?.trim();
-    if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 });
-    await renameShare(shareId, name);
+    const body = await req.json() as {
+      name?:               string;
+      downloading_enabled?: boolean;
+    };
+
+    const settings: typeof body = {};
+    if (body.name !== undefined) {
+      const name = body.name.trim();
+      if (!name) return NextResponse.json({ error: 'name cannot be empty' }, { status: 400 });
+      settings.name = name;
+    }
+    if (body.downloading_enabled !== undefined) settings.downloading_enabled = body.downloading_enabled;
+
+    if (Object.keys(settings).length === 0) {
+      return NextResponse.json({ error: 'no valid fields provided' }, { status: 400 });
+    }
+
+    await updateShareSettings(shareId, settings);
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error('[shares PATCH] error:', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

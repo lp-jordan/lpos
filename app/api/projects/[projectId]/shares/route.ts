@@ -21,13 +21,15 @@ export async function GET(_req: NextRequest, { params }: Params) {
       Promise.resolve(getAllShareAssets(projectId)),
     ]);
 
-    // Filter out per-asset auto-review links shown in the asset detail panel instead.
-    // Enrich with fileCount from local store when available (null = not yet tracked by LPOS).
+    // Filter to shares belonging to this project (tracked in local store).
+    // Also filter out per-asset auto-review links shown in the asset detail panel instead.
+    // Enrich with fileCount from local store; treat empty arrays as untracked (null = "—").
     const shares = allShares
       .filter((s) => !s.name.startsWith('Review — '))
+      .filter((s) => s.id in localShares)
       .map((s) => ({
         ...s,
-        fileCount: s.id in localShares ? localShares[s.id].length : null,
+        fileCount: (localShares[s.id]?.length ?? 0) > 0 ? localShares[s.id].length : null,
       }));
 
     // Build a lookup: frameio file ID → LPOS asset name
@@ -56,7 +58,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
 export async function POST(req: NextRequest, { params }: Params) {
   try {
     const { projectId } = await params;
-    const body = await req.json() as { assetIds?: string[]; name?: string };
+    const body = await req.json() as {
+      assetIds?:            string[];
+      name?:                string;
+      downloading_enabled?: boolean;
+    };
 
     const { assetIds = [], name } = body;
     const assets = readRegistry(projectId);
@@ -70,7 +76,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     const shareName = name?.trim() ||
       `Share — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 
-    const share = await createShareLink(fileIds, shareName);
+    const share = await createShareLink(fileIds, shareName, {
+      downloading_enabled: body.downloading_enabled,
+    });
 
     // Record asset membership locally — V4 API has no list endpoint
     setShareAssets(projectId, share.id, fileIds);

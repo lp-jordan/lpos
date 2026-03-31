@@ -1,6 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
+import { GUEST_USER_ID } from '@/lib/models/user';
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function isPublicPath(pathname: string): boolean {
   if (pathname === '/signin') return true;
@@ -15,6 +18,16 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith('/api/')) {
+    // Block mutating requests from guest sessions (auth routes are exempt)
+    if (MUTATING_METHODS.has(req.method) && !pathname.startsWith('/api/auth/')) {
+      const session = await verifySessionToken(req.cookies.get(APP_SESSION_COOKIE)?.value);
+      if (session?.userId === GUEST_USER_ID) {
+        return NextResponse.json(
+          { error: 'Guest accounts are view-only.' },
+          { status: 403 },
+        );
+      }
+    }
     return NextResponse.next();
   }
 
