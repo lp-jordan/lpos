@@ -69,6 +69,8 @@ declare global {
   var __lpos_amaranService: AmaranService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_presentationService: PresentationService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_restartPending: boolean | undefined;
 }
 
 // ── Module-local singletons (fast path when module is shared) ─────────────

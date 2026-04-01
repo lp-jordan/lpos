@@ -6,7 +6,6 @@ import type {
   TranscriptChatThread,
   TranscriptChatThreadSummary,
   TranscriptSearchMessage,
-  TranscriptSearchResponse,
   TranscriptSearchSource,
 } from '@/lib/transcripts/types';
 type FileType = 'txt' | 'json' | 'srt' | 'vtt';
@@ -308,7 +307,7 @@ export function TranscriptViewerPanel({
       appendMessage({
         id: makeMessageId('error'),
         role: 'error',
-        content: 'No transcripts are available to search yet.',
+        content: 'No transcripts are available yet.',
       });
       setSearchView('thread');
       return;
@@ -316,7 +315,7 @@ export function TranscriptViewerPanel({
 
     const conversation = messages
       .filter((message) => message.role === 'user' || message.role === 'assistant')
-      .map((message) => ({ role: message.role, content: message.content }));
+      .map((message) => ({ role: message.role as 'user' | 'assistant', content: message.content }));
     const pendingId = makeMessageId('assistant');
 
     shouldScrollToBottomRef.current = true;
@@ -326,57 +325,75 @@ export function TranscriptViewerPanel({
     setInput('');
     setIsSubmitting(true);
 
+    let answer = '';
+    let sources: TranscriptSearchSource[] = [];
+    let newThreadSummary = '';
+
     try {
-      const res = await fetch(`/api/projects/${projectId}/transcripts/search`, {
+      const res = await fetch(`/api/projects/${projectId}/cami/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          query: trimmed,
-          jobIds: searchScope.map((entry) => entry.jobId),
-          mode: searchScopeMode,
+          message: trimmed,
           conversation: [...conversation, { role: 'user', content: trimmed }],
+          jobIds: searchScope.map((entry) => entry.jobId),
+          scopeMode: searchScopeMode,
           threadSummary,
         }),
       });
 
-      const payload = await res.json().catch(() => ({})) as TranscriptSearchResponse & { error?: string };
-      if (!res.ok) {
-        throw new Error(payload.error || 'Transcript search failed.');
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({ error: 'Cami chat failed.' })) as { error?: string };
+        throw new Error(err.error ?? 'Cami chat failed.');
       }
 
-      if (payload.clarifyQuestion) {
-        updatePendingMessage(pendingId, {
-          content: payload.clarifyQuestion,
-          sources: [],
-        });
-        return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (!data) continue;
+
+          let event: { type: string; text?: string; answer?: string; sources?: TranscriptSearchSource[]; threadSummary?: string };
+          try { event = JSON.parse(data) as typeof event; } catch { continue; }
+
+          if (event.type === 'status' && event.text) {
+            updatePendingMessage(pendingId, { content: event.text });
+          } else if (event.type === 'done') {
+            answer = event.answer ?? '';
+            sources = event.sources ?? [];
+            newThreadSummary = event.threadSummary ?? '';
+          } else if (event.type === 'error' && event.text) {
+            throw new Error(event.text);
+          }
+        }
       }
+
+      if (!answer) throw new Error('Cami did not return a response.');
 
       const nextMessages: TranscriptSearchMessage[] = [
         ...messages,
         { id: makeMessageId('user-persisted'), role: 'user', content: trimmed },
-        {
-          id: pendingId,
-          role: 'assistant',
-          content: payload.answer,
-          sources: payload.sources,
-          usage: payload.usage,
-          searchMode: payload.searchMode,
-        },
+        { id: pendingId, role: 'assistant', content: answer, sources },
       ];
 
-      setThreadSummary(payload.threadSummary ?? '');
-      updatePendingMessage(pendingId, {
-        content: payload.answer,
-        sources: payload.sources,
-        usage: payload.usage,
-        searchMode: payload.searchMode,
-      });
+      setThreadSummary(newThreadSummary);
+      updatePendingMessage(pendingId, { content: answer, sources });
 
       const persistedThread = await persistThread({
         threadId: activeThreadId,
         messages: nextMessages,
-        threadSummary: payload.threadSummary ?? '',
+        threadSummary: newThreadSummary,
       });
 
       if (persistedThread) {
@@ -395,12 +412,8 @@ export function TranscriptViewerPanel({
         });
       }
     } catch (submitError) {
-      const message = submitError instanceof Error ? submitError.message : 'Transcript search failed.';
-      updatePendingMessage(pendingId, {
-        role: 'error',
-        content: message,
-        sources: [],
-      });
+      const message = submitError instanceof Error ? submitError.message : 'Cami chat failed.';
+      updatePendingMessage(pendingId, { role: 'error', content: message, sources: [] });
     } finally {
       setIsSubmitting(false);
     }
@@ -561,7 +574,7 @@ export function TranscriptViewerPanel({
           ) : (
             <>
               <div className="txv-header-info txv-header-info--stack">
-                <span className="txv-panel-title">Content Search</span>
+                <span className="txv-panel-title">Cami</span>
               </div>
               <div className="txv-toolbar txv-toolbar--search">
                 <div className="txv-toolbar-actions">
@@ -662,7 +675,7 @@ export function TranscriptViewerPanel({
               <input
                 type="text"
                 className="txv-composer-input"
-                placeholder="Ask or search across transcripts..."
+                placeholder="Ask Cami anything about this project..."
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 disabled={isSubmitting}
@@ -751,7 +764,7 @@ export function TranscriptViewerPanel({
               <input
                 type="text"
                 className="txv-composer-input"
-                placeholder="Ask or search across transcripts..."
+                placeholder="Ask Cami anything about this project..."
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 disabled={isSubmitting}

@@ -15,6 +15,8 @@ interface VersionConfirmContextValue {
   startBatch: () => void;
   /** Call when a batch finishes to clean up. */
   endBatch: () => void;
+  /** Returns true if the user cancelled out of the version confirm modal during this batch. */
+  isBatchCancelled: () => boolean;
 }
 
 const VersionConfirmContext = createContext<VersionConfirmContextValue | null>(null);
@@ -24,21 +26,28 @@ export function VersionConfirmProvider({ children }: { children: React.ReactNode
   const [confirmAll, setConfirmAll] = useState(false);
   const pendingRef = useRef<PendingConfirmation | null>(null);
   const confirmAllRef = useRef(false);
+  const batchCancelledRef = useRef(false);
 
   const startBatch = useCallback(() => {
     confirmAllRef.current = false;
+    batchCancelledRef.current = false;
     setConfirmAll(false);
   }, []);
 
   const endBatch = useCallback(() => {
     confirmAllRef.current = false;
+    batchCancelledRef.current = false;
     setConfirmAll(false);
   }, []);
+
+  const isBatchCancelled = useCallback(() => batchCancelledRef.current, []);
 
   const requestVersionConfirmation = useCallback(
     (asset: MediaAsset, currentVersionNumber: number): Promise<boolean> => {
       // If the user already said "confirm all" for this batch, auto-approve.
       if (confirmAllRef.current) return Promise.resolve(true);
+      // If the user already cancelled this batch, auto-decline all remaining.
+      if (batchCancelledRef.current) return Promise.resolve(false);
 
       return new Promise((resolve) => {
         const entry: PendingConfirmation = { asset, currentVersionNumber, resolve };
@@ -60,6 +69,7 @@ export function VersionConfirmProvider({ children }: { children: React.ReactNode
   }
 
   function handleClose() {
+    batchCancelledRef.current = true;
     pendingRef.current?.resolve(false);
     pendingRef.current = null;
     setPending(null);
@@ -67,7 +77,7 @@ export function VersionConfirmProvider({ children }: { children: React.ReactNode
   }
 
   return (
-    <VersionConfirmContext.Provider value={{ requestVersionConfirmation, startBatch, endBatch }}>
+    <VersionConfirmContext.Provider value={{ requestVersionConfirmation, startBatch, endBatch, isBatchCancelled }}>
       {children}
       {pending && (
         <VersionConfirmModal

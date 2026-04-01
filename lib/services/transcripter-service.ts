@@ -225,6 +225,8 @@ export class TranscripterService {
     } catch (err) {
       if (processingTimeout) clearTimeout(processingTimeout);
       const msg = (err as Error).message;
+      // If cancelJob already marked this job as canceled, don't overwrite it with failed.
+      if (this.jobs.get(next.jobId)?.status === 'canceled') return;
       this.updateJob(next.jobId, { status: 'failed', error: msg });
       console.error(`[transcripter] ✗ failed "${next.filename}":`, msg);
       this.fireCompletion(next.jobId);
@@ -249,6 +251,37 @@ export class TranscripterService {
       const hasMore = Array.from(this.jobs.values()).some((j) => j.status === 'queued');
       if (hasMore) setImmediate(() => this.processNext());
     }
+  }
+
+  /**
+   * Cancel all active or queued transcription jobs for a given asset.
+   * Also deletes any partial output files the job may have written.
+   * Call this when an asset is deleted while transcription is in progress.
+   */
+  cancelByAsset(assetId: string): void {
+    for (const job of this.jobs.values()) {
+      if (
+        job.assetId === assetId &&
+        job.status !== 'done' &&
+        job.status !== 'failed' &&
+        job.status !== 'canceled'
+      ) {
+        this.cancelJob(job.jobId);
+        this.cleanupJobFiles(job.projectId, job.jobId);
+      }
+    }
+  }
+
+  private cleanupJobFiles(projectId: string, jobId: string): void {
+    const transcriptsDir = path.join(DATA_DIR, 'projects', projectId, 'transcripts');
+    const subtitlesDir   = path.join(DATA_DIR, 'projects', projectId, 'subtitles');
+    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.meta.json`]) {
+      try { fs.unlinkSync(path.join(transcriptsDir, name)); } catch { /* already gone */ }
+    }
+    for (const name of [`${jobId}.srt`, `${jobId}.vtt`]) {
+      try { fs.unlinkSync(path.join(subtitlesDir, name)); } catch { /* already gone */ }
+    }
+    console.log(`[transcripter] cleaned up partial files for cancelled job ${jobId}`);
   }
 
   private cancelJob(jobId: string): void {

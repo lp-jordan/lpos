@@ -15,7 +15,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
-import { readRegistry } from '@/lib/store/media-registry';
+import { readRegistry, getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getActivityMonitorService } from '@/lib/services/activity-monitor-service';
 
 // ── Signature verification ────────────────────────────────────────────────────
@@ -119,6 +119,14 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
   if (!tracked) {
     console.warn(`[webhooks/frameio] no LPOS asset found for Frame.io file ${fileId} — ignoring`);
     return;
+  }
+
+  // Increment comment count for both top-level comments and replies.
+  const currentAsset = getAsset(tracked.project_id, tracked.asset_id);
+  if (currentAsset) {
+    patchAsset(tracked.project_id, tracked.asset_id, {
+      frameio: { commentCount: (currentAsset.frameio.commentCount ?? 0) + 1 },
+    });
   }
 
   const svc = getActivityMonitorService();

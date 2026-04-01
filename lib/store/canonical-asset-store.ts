@@ -158,7 +158,13 @@ function pickLatestDistribution(
 
 function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | null): TranscriptionRow | null {
   if (!assetVersionId) return null;
-  return bundle.transcriptions.find((transcription) => transcription.asset_version_id === assetVersionId) ?? null;
+  // Prefer a transcription on the current version; fall back to the most recent
+  // across any version so that skipping transcription on v2 still surfaces the v1 result.
+  return (
+    bundle.transcriptions.find((t) => t.asset_version_id === assetVersionId) ??
+    bundle.transcriptions[0] ??
+    null
+  );
 }
 
 /** Async (non-blocking) SHA256 hash using streams. Use this in request handlers. */
@@ -262,6 +268,10 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
   const cloudflare = pickLatestDistribution(bundle, currentVersionId, 'cloudflare');
   const leaderpass = pickLatestDistribution(bundle, currentVersionId, 'leaderpass');
   const transcription = pickLatestTranscription(bundle, currentVersionId);
+  const transcriptionFromPriorVersion = transcription !== null && transcription.asset_version_id !== currentVersionId;
+  const transcriptionSourceVersion = transcriptionFromPriorVersion
+    ? bundle.versions.find((v) => v.asset_version_id === transcription!.asset_version_id) ?? null
+    : null;
   const frameioMeta = parseMetadataJson<FrameIOInfo>(frameio?.metadata_json);
   const cloudflareMeta = parseMetadataJson<CloudflareStreamInfo>(cloudflare?.metadata_json);
   const leaderpassMeta = parseMetadataJson<LeaderPassInfo>(leaderpass?.metadata_json);
@@ -287,11 +297,14 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
       status: (transcription?.status as TranscriptionInfo['status']) ?? transcriptionMeta.status ?? 'none',
       jobId: transcription?.job_id ?? transcriptionMeta.jobId ?? null,
       completedAt: transcription?.completed_at ?? transcriptionMeta.completedAt ?? null,
+      fromPriorVersion: transcriptionFromPriorVersion,
+      sourceVersionNumber: transcriptionSourceVersion?.version_number ?? null,
     },
     frameio: {
       ...defaultFrameIO(),
       ...frameioMeta,
       assetId: frameio?.provider_asset_id ?? frameioMeta.assetId ?? null,
+      stackId: frameioMeta.stackId ?? null,
       reviewLink: frameio?.review_url ?? frameioMeta.reviewLink ?? null,
       playerUrl: frameio?.playback_url ?? frameioMeta.playerUrl ?? null,
       status: (frameio?.provider_status as FrameIOInfo['status']) ?? frameioMeta.status ?? 'none',

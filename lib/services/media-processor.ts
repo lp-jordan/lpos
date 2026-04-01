@@ -11,7 +11,7 @@
  *   LPOS_WHISPER_MODEL       — model name without extension, default "base"
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -49,8 +49,12 @@ function resolveModelDir(): string {
 
 export class MediaProcessor extends EventEmitter {
   private aborted = false;
+  private currentProc: ChildProcess | null = null;
 
-  abort() { this.aborted = true; }
+  abort() {
+    this.aborted = true;
+    this.currentProc?.kill();
+  }
 
   async process(job: {
     jobId: string;
@@ -137,6 +141,8 @@ export class MediaProcessor extends EventEmitter {
         '-y', outputPath,
       ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
+      this.currentProc = proc;
+
       let stderrBuf = '';
       proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString(); });
 
@@ -147,14 +153,16 @@ export class MediaProcessor extends EventEmitter {
       }, 500);
 
       proc.on('close', (code) => {
+        this.currentProc = null;
         clearInterval(timer);
+        if (this.aborted) { reject(new Error('Job canceled')); return; }
         if (code === 0) {
           resolve();
         } else {
           reject(new Error(MediaProcessor.describeffmpegError(stderrBuf, code)));
         }
       });
-      proc.on('error', (err) => { clearInterval(timer); reject(err); });
+      proc.on('error', (err) => { this.currentProc = null; clearInterval(timer); reject(err); });
     });
   }
 
@@ -185,6 +193,8 @@ export class MediaProcessor extends EventEmitter {
         '-of', outputPrefix,
       ]);
 
+      this.currentProc = proc;
+
       let pct = 20;
       const timer = setInterval(() => {
         pct = Math.min(pct + 1, 88);
@@ -192,7 +202,9 @@ export class MediaProcessor extends EventEmitter {
       }, 2000);
 
       proc.on('close', (code) => {
+        this.currentProc = null;
         clearInterval(timer);
+        if (this.aborted) { reject(new Error('Job canceled')); return; }
         if (code === 0) {
           resolve({
             txtPath:  `${outputPrefix}.txt`,
@@ -204,7 +216,7 @@ export class MediaProcessor extends EventEmitter {
           reject(new Error(`whisper exited with code ${code}`));
         }
       });
-      proc.on('error', (err) => { clearInterval(timer); reject(err); });
+      proc.on('error', (err) => { this.currentProc = null; clearInterval(timer); reject(err); });
     });
   }
 }

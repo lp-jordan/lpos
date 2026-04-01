@@ -2,6 +2,89 @@
 
 ---
 
+## 2026-03-31 (large-file upload timeout fix)
+
+**Prompt:** Uploads getting stuck waiting. Follow-up: file is 9 GB — largest attempted so far.
+
+**Summary:** Root cause identified as Node.js 18+'s default `requestTimeout` of 300,000 ms (5 minutes). The custom HTTP/HTTPS server in `server.ts` inherits this default, which terminates the connection mid-stream for large uploads before the route handler finishes writing to disk. A 9 GB file at even modest speeds (30 MB/s) exceeds the 5-minute window. The ingest job is created as `queued` via pre-reservation but the connection drop prevents the `file` event from completing, leaving it permanently stuck. Fix: set `httpServer.requestTimeout = 0` (disabled) immediately after server creation. Application-level timeouts (the stale-sweep 10-minute failsafe) remain in place. Not related to any recent code changes — first time this file size was attempted.
+
+**Files changed:**
+- `server.ts` — `httpServer.requestTimeout = 0` after server creation
+
+**Decision rationale:** `requestTimeout = 0` is appropriate for a local/on-prem server with trusted clients. The stale-sweep handles genuinely abandoned jobs. A hard transport-layer cutoff at 5 minutes is the wrong place to enforce timeouts for media ingest.
+
+---
+
+## 2026-03-31 (project back button + client routing)
+
+**Prompt:** Add a back button near the project header to navigate from a project back to the projects list, matching the style of the existing back button on the projects page. Also fix routing so Client View → Projects View → Project is preserved end-to-end (currently the client context is lost when navigating back from a project).
+
+**Summary:**
+1. **Back button in project header** — Added a `proj-back-btn` chevron button to `ProjectDetail` to the left of the client name/project name block. Navigates to `/projects?client={clientName}` if client context is available, otherwise `/projects`.
+2. **Client context in URL** — `handleProjectClick` in `projects/page.tsx` now appends `?client={clientName}` to the project URL so the client is embedded in the navigation. On the projects page, a `useEffect` reads `?client=` from `useSearchParams` on mount and restores `activeClient`, so back-navigating from a project lands correctly in the client's project list rather than the top-level client selector.
+3. **CSS** — `project-header` set to `display: flex; align-items: flex-start; gap: 12px` to accommodate the button alongside the text block.
+
+**Files changed:**
+- `app/projects/page.tsx` — Added `useEffect`, `useSearchParams`; restore `activeClient` from URL on mount; include `?client=` when navigating to a project
+- `components/projects/ProjectDetail.tsx` — Added `useRouter`; read `client` from searchParams; added back button to project header; wrapped text content in a div
+- `app/globals.css` — `project-header` flex layout
+
+**Decision rationale:** Storing client in the URL query param is the least-invasive approach — no global state, no localStorage, works correctly with browser back/forward. The `useEffect` restore on the projects page handles the case where the user arrives at `/projects?client=X` from any navigation source.
+
+---
+
+## 2026-03-31 (transcript tab sort + filter)
+
+**Prompt:** Can we quickly add sort and filter on transcript tab in a project?
+
+**Summary:** Added a filename filter input and sort selector to the Transcripts tab toolbar. Filter narrows the visible list by filename substring (case-insensitive). Sort options: Newest first (default), Oldest first, Name A–Z, Name Z–A. "Select all" and bulk actions operate on the filtered/sorted list. Empty-filter state shows a contextual message.
+
+**Files changed:**
+- `components/projects/ProjectDetail.tsx` — `filterText`/`sortKey` state; `displayedTranscripts` memo; updated `toggleSelectAll`; filter input + sort select in toolbar; list renders `displayedTranscripts`
+- `app/globals.css` — `.proj-transcript-filter-row`, `.proj-transcript-filter-input`, `.proj-transcript-sort-select`
+
+**Decision rationale:** Pure client-side — no API changes needed since all transcripts are already fetched. Default sort is newest-first to match expected usage pattern.
+
+---
+
+## 2026-03-31 (follow-up — share migration + bug fix)
+
+**Prompt:** (1) Confirmed share links are asset-scoped and won't update when versions are added. Asked whether we can detect assets in existing shares, add the new stack entity to those shares, then remove the original file — so existing links automatically reflect new versions. (2) Screenshot showed 9 separate files in Frame.io (3 versions × 3 videos) instead of 3 version stacks — stack creation wasn't working.
+
+**Summary:**
+1. **Bug fix — `getAsset` called after `registerAsset`**: The prior Frame.io file ID was always null because `getAsset` was called after the new version was already registered as current. Moved the lookup to before `registerAsset` so the correct v1 Frame.io IDs are captured.
+2. **Share migration on stack creation**: After creating a version stack (v1→v2), `runUpload` now scans `getAllShareAssets` for any shares containing the old file ID, adds the new stack ID to each (`addFilesToShare`), removes the old file ID (`removeFileFromShare`), and updates the local store. All previously-sent share links automatically resolve to the stack (and therefore always serve the head version). Migration only runs on the `createVersionStack` path — for v3+ (`addFileToVersionStack` path), shares already reference the stack.
+
+**Files changed:**
+- `app/api/projects/[projectId]/media/route.ts` — moved `getAsset` call before `registerAsset`; removed duplicate post-registration lookup
+- `lib/services/frameio-upload.ts` — added `addFilesToShare`, `removeFileFromShare` imports from frameio; added `getAllShareAssets`, `addShareAssets`, `removeShareAsset` imports from share store; share migration loop inside `createVersionStack` branch
+
+**Decision rationale:** Share migration is non-fatal (wrapped in its own try/catch) so a Frame.io API hiccup doesn't block the upload. The migration only applies on first stacking — v3+ uploads already have shares pointing at the stack, which auto-serves the latest version.
+
+---
+
+**Prompt:** Two issues: (1) On v2+ uploads with skip transcription, the UI shows the asset as "Not Transcribed" even though a v1 transcript exists. Should instead show transcription status from v1 with a subtle indicator that it came from a prior version. (2) When uploading a v2, LPOS reflects the new upload but versioning does not happen in Frame.io — a brand-new Frame.io asset is created instead of versioning the existing one. Requested: make v2 overwrite the old one in Frame.io (version stack). Frame.io API reference provided at developer.adobe.com/frameio.
+
+**Summary:**
+Implemented both fixes.
+1. **Transcription version fallback + v1 badge**: `pickLatestTranscription` now falls back to the most recent transcription across any version when the current version has no transcription record. `bundleToProjection` sets `fromPriorVersion: true` and `sourceVersionNumber` when the transcription belongs to an older version. The UI shows a subtle `v{n}` pill badge alongside the transcription status badge when `fromPriorVersion` is true.
+2. **Frame.io version stacking**: Two new functions added to `frameio.ts` — `createVersionStack` (POST `.../version_stacks`) and `addFileToVersionStack` (PATCH `.../files/{id}/move`). The upload route captures the prior version's Frame.io file ID and stack ID before registering a new version and passes them as context to `triggerFrameIOUpload`. After the S3 upload completes, `runUpload` either creates a new stack (first replacement) or moves the file into the existing stack (subsequent replacements). The stack ID is stored in `frameio.stackId` and the stack's `view_url` replaces the review link so all existing shares resolve to the latest version.
+
+**Files changed:**
+- `lib/models/media-asset.ts` — Added `fromPriorVersion`, `sourceVersionNumber` to `TranscriptionInfo`; added `stackId` to `FrameIOInfo` and `defaultFrameIO()`
+- `lib/store/canonical-asset-store.ts` — `pickLatestTranscription` fallback; `bundleToProjection` sets `fromPriorVersion`, `sourceVersionNumber`, `stackId`
+- `lib/services/frameio.ts` — Added `createVersionStack()` and `addFileToVersionStack()`
+- `lib/services/frameio-upload.ts` — Extended `FrameIOUploadContext` with `priorFrameioFileId`/`priorFrameioStackId`; version stack logic post-upload
+- `app/api/projects/[projectId]/media/route.ts` — Imports `getAsset`; captures prior Frame.io IDs before new version registration; passes them to `triggerFrameIOUpload`
+- `components/media/MediaDetailPanel.tsx` — Wrapped status badge in `.mad-tx-status-group`; added `.mad-tx-version-pill` badge
+- `app/globals.css` — Added `.mad-tx-status-group` and `.mad-tx-version-pill` styles
+
+**Decision rationale:** Transcription fallback is the minimal-touch fix — no DB migration, no new columns, just a looser query in `pickLatestTranscription`. The `fromPriorVersion` flag is set at projection time (not stored) so it's always accurate. For Frame.io versioning, the Frame.io v4 API uses a two-step flow (upload file → create/extend version stack) rather than a single versioning endpoint; this is the canonical workflow per their developer docs. The `stackId` is persisted in `metadata_json` (already spread via `...patch.frameio`) so no schema migration is needed.
+
+**Alternatives considered:** For transcription, could have shown "Transcribed (prior version)" as a text label change rather than a pill badge — chose the pill to keep the existing status badge unchanged and legible. For Frame.io, could have tracked the stack type as a string enum on the model; opted for `stackId: string | null` (presence = stack exists) to keep it simple.
+
+---
+
 ## 2026-03-27
 
 **Prompt:** Multiple items — (1) "We do need a way to clear cancelled jobs from queue page" + button UI cleanup; (2) investigation of cancel-override bug ("when reached by the queue, the cancel is overridden and the ingestion starts, and then they get stuck at 95%"); (3) stale queued job sweep false positives ("Upload never started — browser may have left the page" firing on healthy queued jobs).

@@ -10,6 +10,7 @@ import { WishListButton } from '@/components/shell/WishListButton';
 import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { VersionConfirmProvider } from '@/contexts/VersionConfirmContext';
+import { RestartCountdownBanner } from '@/components/shell/RestartCountdownBanner';
 import type { UserSummary } from '@/lib/models/user';
 
 function TrayGroup() {
@@ -53,6 +54,7 @@ export function AppShell({
         <ContextMenuProvider>
           <VersionConfirmProvider>
             <div className="app-home" data-guest={isGuest || undefined}>
+              <RestartCountdownBanner />
               {children}
               {currentUser && <UserMenu user={currentUser} />}
               {currentUser && <WishListButton currentUser={currentUser} home />}
@@ -70,6 +72,7 @@ export function AppShell({
         <ContextMenuProvider>
           <VersionConfirmProvider>
             <div className="app-inner" data-guest={isGuest || undefined}>
+              <RestartCountdownBanner />
               {currentUser && !isSignIn && <UserMenu user={currentUser} />}
               <NavBar />
               <Breadcrumb />

@@ -462,6 +462,71 @@ export async function uploadAsset(
   return { frameioAssetId: fileId, playerUrl, reviewLink };
 }
 
+// ── Version stacks ────────────────────────────────────────────────────────────
+
+export interface FrameIOVersionStackResult {
+  stackId: string;
+  viewUrl: string | null;
+}
+
+/**
+ * Create a Frame.io version stack from two existing files.
+ * The first file is the older version; the second is the newer version.
+ *
+ * POST /v4/accounts/{id}/folders/{folderId}/version_stacks
+ * Body: { data: { file_ids: [oldFileId, newFileId] } }
+ */
+export async function createVersionStack(
+  folderId: string,
+  oldFileId: string,
+  newFileId: string,
+): Promise<FrameIOVersionStackResult> {
+  const { accountId } = await discover();
+  const res = await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/folders/${folderId}/version_stacks`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ data: { file_ids: [oldFileId, newFileId] } }),
+    },
+  );
+  const body = await res.json() as {
+    data?: { id: string; view_url?: string | null };
+    errors?: { message?: string }[];
+  };
+  if (!res.ok || !body.data?.id) {
+    const msg = body.errors?.[0]?.message ?? `HTTP ${res.status}`;
+    throw new Error(`Frame.io version stack creation failed: ${msg}`);
+  }
+  console.log(`[frameio-v4] version stack created: ${body.data.id}`);
+  return { stackId: body.data.id, viewUrl: body.data.view_url ?? null };
+}
+
+/**
+ * Add a file to an existing Frame.io version stack by moving it.
+ *
+ * PATCH /v4/accounts/{id}/files/{fileId}/move
+ * Body: { data: { parent_id: stackId } }
+ */
+export async function addFileToVersionStack(
+  fileId: string,
+  stackId: string,
+): Promise<void> {
+  const { accountId } = await discover();
+  const res = await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/files/${fileId}/move`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ data: { parent_id: stackId } }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json() as { errors?: { message?: string }[] };
+    const msg = body.errors?.[0]?.message ?? `HTTP ${res.status}`;
+    throw new Error(`Frame.io move to version stack failed: ${msg}`);
+  }
+  console.log(`[frameio-v4] file ${fileId} moved into version stack ${stackId}`);
+}
+
 // ── Share links ───────────────────────────────────────────────────────────────
 
 // ── Share link types ──────────────────────────────────────────────────────────
@@ -654,6 +719,7 @@ export interface FrameIOComment {
   id:          string;
   text:        string;
   timestamp:   number | null;   // seconds into the video, null = general comment
+  duration:    number | null;   // seconds; non-null = spanning/range comment
   authorName:  string;
   authorAvatar: string | null;
   createdAt:   string;
@@ -678,19 +744,22 @@ export async function getComments(fileId: string): Promise<FrameIOComment[]> {
   const res  = await fioFetch(`${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`);
   const body = await res.json() as {
     data?: {
-      id:         string;
-      text:       string;
-      timestamp?: number | null;
-      completed?: boolean;
-      inserted_at: string;
-      author?:    { name?: string; avatar_url?: string | null };
-      owner?:     { name?: string; avatar_url?: string | null };
+      id:          string;
+      text:        string;
+      timestamp?:  number | null;
+      duration?:   number | null;
+      completed?:  boolean;
+      inserted_at?: string | null;
+      created_at?:  string | null;
+      author?:     { name?: string; avatar_url?: string | null };
+      owner?:      { name?: string; avatar_url?: string | null };
       replies?:   {
-        id:          string;
-        text:        string;
-        inserted_at: string;
-        author?:     { name?: string; avatar_url?: string | null };
-        owner?:      { name?: string; avatar_url?: string | null };
+        id:           string;
+        text:         string;
+        inserted_at?: string | null;
+        created_at?:  string | null;
+        author?:      { name?: string; avatar_url?: string | null };
+        owner?:       { name?: string; avatar_url?: string | null };
       }[];
     }[];
   };
@@ -701,18 +770,19 @@ export async function getComments(fileId: string): Promise<FrameIOComment[]> {
       id:           c.id,
       text:         c.text,
       timestamp:    c.timestamp ?? null,
-      authorName:   author?.name ?? 'Unknown',
+      duration:     c.duration ?? null,
+      authorName:   author?.name ?? '',
       authorAvatar: author?.avatar_url ?? null,
-      createdAt:    c.inserted_at,
+      createdAt:    c.inserted_at ?? c.created_at ?? '',
       completed:    c.completed ?? false,
       replies:      (c.replies ?? []).map((r) => {
         const ra = r.author ?? r.owner;
         return {
           id:           r.id,
           text:         r.text,
-          authorName:   ra?.name ?? 'Unknown',
+          authorName:   ra?.name ?? '',
           authorAvatar: ra?.avatar_url ?? null,
-          createdAt:    r.inserted_at,
+          createdAt:    r.inserted_at ?? r.created_at ?? '',
         };
       }),
     };
@@ -723,16 +793,21 @@ export async function getComments(fileId: string): Promise<FrameIOComment[]> {
  * Post a new comment on a Frame.io file.
  * POST /v4/accounts/{id}/files/{file_id}/comments
  * timestamp: seconds into the video (optional)
+ * duration:  length of the range in seconds (optional, requires timestamp)
  */
 export async function postComment(
   fileId:    string,
   text:      string,
   timestamp: number | null = null,
+  duration:  number | null = null,
 ): Promise<FrameIOComment> {
   const { accountId } = await discover();
 
   const body: Record<string, unknown> = { text };
-  if (timestamp !== null) body.timestamp = timestamp;
+  if (timestamp !== null) {
+    body.timestamp = Math.floor(timestamp);
+    if (duration !== null && duration > 0) body.duration = Math.round(duration);
+  }
 
   const res    = await fioFetch(
     `${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`,
@@ -740,13 +815,15 @@ export async function postComment(
   );
   const result = await res.json() as {
     data?: {
-      id:          string;
-      text:        string;
-      timestamp?:  number | null;
-      completed?:  boolean;
-      inserted_at: string;
-      author?:     { name?: string; avatar_url?: string | null };
-      owner?:      { name?: string; avatar_url?: string | null };
+      id:           string;
+      text:         string;
+      timestamp?:   number | null;
+      duration?:    number | null;
+      completed?:   boolean;
+      inserted_at?: string | null;
+      created_at?:  string | null;
+      author?:      { name?: string; avatar_url?: string | null };
+      owner?:       { name?: string; avatar_url?: string | null };
     };
   };
 
@@ -758,12 +835,37 @@ export async function postComment(
     id:           c.id,
     text:         c.text,
     timestamp:    c.timestamp ?? null,
-    authorName:   author?.name ?? 'Unknown',
+    duration:     c.duration ?? null,
+    authorName:   author?.name ?? '',
     authorAvatar: author?.avatar_url ?? null,
-    createdAt:    c.inserted_at,
+    createdAt:    c.inserted_at ?? c.created_at ?? '',
     completed:    c.completed ?? false,
     replies:      [],
   };
+}
+
+/**
+ * Delete a comment on a Frame.io file.
+ * DELETE /v4/accounts/{id}/comments/{comment_id}
+ */
+export async function deleteComment(commentId: string): Promise<void> {
+  const { accountId } = await discover();
+  await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/comments/${commentId}`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
+ * Update the text of an existing comment.
+ * PATCH /v4/accounts/{id}/comments/{comment_id}
+ */
+export async function updateComment(commentId: string, text: string): Promise<void> {
+  const { accountId } = await discover();
+  await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/comments/${commentId}`,
+    { method: 'PATCH', body: JSON.stringify({ data: { text } }) },
+  );
 }
 
 // ── Webhooks ──────────────────────────────────────────────────────────────────

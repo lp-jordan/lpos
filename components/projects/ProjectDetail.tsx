@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Project } from '@/lib/models/project';
 import { Asset } from '@/lib/models/asset';
 import { io } from 'socket.io-client';
@@ -40,6 +40,7 @@ function Checkbox({ checked }: Readonly<{ checked: boolean }>) {
 
 export function ProjectDetail({ project, assets }: Readonly<Props>) {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [tab, setTab] = useState<Tab>('media');
   const [passPrepTranscripts, setPassPrepTranscripts] = useState<string[]>([]);
   const [selectedTranscriptJobId, setSelectedTranscriptJobId] = useState<string | null>(null);
@@ -69,13 +70,28 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
     if (deepLinkedAssetId) setTab('media');
   }, [deepLinkedAssetId]);
 
+  const clientParam = searchParams.get('client');
+  const backHref = clientParam ? `/projects?client=${encodeURIComponent(clientParam)}` : '/projects';
+
   return (
     <div className="page-stack">
       <div className="project-header">
-        <span className="project-header-client">{project.clientName}</span>
-        <h1 className="project-header-name">{project.name}</h1>
-        <div className="project-header-meta">
-          <span>{project.createdAt}</span>
+        <button
+          type="button"
+          className="proj-back-btn"
+          onClick={() => router.push(backHref)}
+          aria-label="Back to projects"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <div>
+          <span className="project-header-client">{project.clientName}</span>
+          <h1 className="project-header-name">{project.name}</h1>
+          <div className="project-header-meta">
+            <span>{project.createdAt}</span>
+          </div>
         </div>
       </div>
 
@@ -149,6 +165,8 @@ function TranscriptsTab({
 }) {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterText, setFilterText] = useState('');
+  const [sortKey, setSortKey] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'>('date-desc');
   const [panelMode, setPanelMode] = useState<'viewer' | 'search' | null>(null);
   const [viewerJobId, setViewerJobId] = useState<string | null>(null);
   const [viewerFilename, setViewerFilename] = useState('');
@@ -220,9 +238,9 @@ function TranscriptsTab({
 
   function toggleSelectAll() {
     setSelected((prev) => (
-      prev.size === transcripts.length
+      prev.size === displayedTranscripts.length && displayedTranscripts.every((e) => prev.has(e.jobId))
         ? new Set()
-        : new Set(transcripts.map((entry) => entry.jobId))
+        : new Set(displayedTranscripts.map((entry) => entry.jobId))
     ));
   }
 
@@ -258,6 +276,23 @@ function TranscriptsTab({
     return transcripts.filter((entry) => scopeSet.has(entry.jobId));
   }, [searchScopeJobIds, transcripts]);
 
+  const displayedTranscripts = useMemo(() => {
+    const needle = filterText.trim().toLowerCase();
+    const filtered = needle
+      ? transcripts.filter((entry) =>
+          formatTranscriptLabel(entry.filename).toLowerCase().includes(needle),
+        )
+      : transcripts;
+    return [...filtered].sort((a, b) => {
+      switch (sortKey) {
+        case 'date-asc':  return new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime();
+        case 'name-asc':  return formatTranscriptLabel(a.filename).localeCompare(formatTranscriptLabel(b.filename), undefined, { numeric: true, sensitivity: 'base' });
+        case 'name-desc': return formatTranscriptLabel(b.filename).localeCompare(formatTranscriptLabel(a.filename), undefined, { numeric: true, sensitivity: 'base' });
+        default:          return new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime();
+      }
+    });
+  }, [transcripts, filterText, sortKey]);
+
   const nextSelectedScope = selected.size > 0 ? [...selected].sort() : null;
   const appliedScope = searchScopeJobIds ? [...searchScopeJobIds].sort() : null;
   const canUseSelectedScope = JSON.stringify(nextSelectedScope) !== JSON.stringify(appliedScope);
@@ -273,7 +308,7 @@ function TranscriptsTab({
               <label className="proj-transcript-select-all">
                 <input
                   type="checkbox"
-                  checked={selected.size > 0 && selected.size === transcripts.length}
+                  checked={displayedTranscripts.length > 0 && displayedTranscripts.every((e) => selected.has(e.jobId))}
                   onChange={toggleSelectAll}
                 />
                 <span>Select all</span>
@@ -281,6 +316,27 @@ function TranscriptsTab({
             ) : (
               <span />
             )}
+
+            <div className="proj-transcript-filter-row">
+              <input
+                type="search"
+                className="proj-transcript-filter-input"
+                placeholder="Filter by name…"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+              />
+              <select
+                className="proj-transcript-sort-select"
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as typeof sortKey)}
+                aria-label="Sort transcripts"
+              >
+                <option value="date-desc">Newest first</option>
+                <option value="date-asc">Oldest first</option>
+                <option value="name-asc">Name A–Z</option>
+                <option value="name-desc">Name Z–A</option>
+              </select>
+            </div>
 
             <button type="button" className="proj-file-action proj-file-action--primary" onClick={() => openSearch()}>
               Content Search
@@ -320,7 +376,10 @@ function TranscriptsTab({
 
       {transcripts.length > 0 ? (
         <div className="proj-file-list">
-          {transcripts.map((entry) => (
+          {displayedTranscripts.length === 0 && (
+            <p className="m-empty">No transcripts match &ldquo;{filterText}&rdquo;.</p>
+          )}
+          {displayedTranscripts.map((entry) => (
             <div
               key={entry.jobId}
               className={`proj-file-row proj-file-row--transcript${viewerJobId === entry.jobId && panelMode === 'viewer' ? ' proj-file-row--active' : ''}${selected.has(entry.jobId) ? ' proj-row--selected' : ''}`}

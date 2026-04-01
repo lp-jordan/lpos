@@ -52,7 +52,14 @@ Ingest, Frame.io upload, and Cloudflare/LeaderPass publish pipelines are all ope
 | `components/shell/UploadTray.tsx` | Live upload status UI |
 
 ### Data flow
-Asset registered → `triggerFrameIOUpload` (fire-and-forget) → optional ffmpeg compress → Frame.io `local_upload` → S3 PUT (streamed per part) → asset patched with `frameioAssetId` + `reviewLink`.
+Asset registered → `triggerFrameIOUpload` (fire-and-forget) → optional ffmpeg compress → Frame.io `local_upload` → S3 PUT (streamed per part) → version stack create/extend (if replacing) → asset patched with `frameioAssetId` + `stackId` + `reviewLink`.
+
+### Version stacking
+When a v2+ asset is uploaded with `replaceAssetId`, the upload route reads the prior version's `frameio.assetId` and `frameio.stackId` and passes them to `triggerFrameIOUpload`. After the S3 upload completes:
+- **First replacement (v1→v2):** `createVersionStack(folderId, priorFileId, newFileId)` — POST `.../version_stacks` — creates a Frame.io version stack containing both files. The stack ID is stored in `frameio.stackId`; the stack's `view_url` becomes the review link.
+- **Subsequent replacements (v2→v3+):** `addFileToVersionStack(newFileId, stackId)` — PATCH `.../files/{id}/move` — moves the new file into the existing stack. Existing review links and share links automatically resolve to the latest version.
+
+All versioning failures are non-fatal (logged as warnings) to avoid blocking the upload if the stack API is unavailable.
 
 ---
 

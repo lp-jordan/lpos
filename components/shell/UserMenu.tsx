@@ -3,6 +3,9 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import type { UserSummary } from '@/lib/models/user';
+import { RestartButton } from './RestartButton';
+
+const ADMIN_EMAIL = 'jordan@leaderpass.com';
 
 function initialsFor(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean).slice(0, 2);
@@ -57,6 +60,7 @@ export function UserMenu({ user }: { user: UserSummary }) {
           <Link href="/dashboard" className="user-menu-link" role="menuitem" onClick={() => setOpen(false)}>
             My Dashboard
           </Link>
+          {user.email === ADMIN_EMAIL && <RestartButton />}
           <form action="/api/auth/logout" method="post">
             <button type="submit" className="user-menu-link user-menu-link--button" role="menuitem" data-guest-ok>
               Sign out

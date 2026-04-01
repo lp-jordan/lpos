@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useCallback, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useProjects } from '@/hooks/useProjects';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useClientOwners } from '@/hooks/useClientOwners';
@@ -112,6 +112,7 @@ async function apiDelete(projectId: string) {
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { projects } = useProjects();
   const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners();
   const currentUser = useCurrentUser();
@@ -120,6 +121,12 @@ export default function ProjectsPage() {
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [activeClient, setActiveClient] = useState<string | null>(null);
+
+  // Restore client context when navigating back from a project page.
+  useEffect(() => {
+    const client = searchParams.get('client');
+    if (client) setActiveClient(client);
+  }, [searchParams]);
   const [showArchived, setShowArchived] = useState(false);
 
   // Selection
@@ -199,7 +206,8 @@ export default function ProjectsPage() {
     } else if (selected.size > 0) {
       toggleSelect(project.projectId, e);
     } else {
-      router.push(`/projects/${project.projectId}`);
+      const clientParam = project.clientName ? `?client=${encodeURIComponent(project.clientName)}` : '';
+      router.push(`/projects/${project.projectId}${clientParam}`);
     }
   }
 

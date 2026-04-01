@@ -17,6 +17,8 @@ export const FRAMEIO_STATUS_LABEL: Record<FrameIOStatus, string> = {
 
 export interface FrameIOInfo {
   assetId: string | null;
+  /** Frame.io version stack ID, set after the first versioning operation. */
+  stackId: string | null;
   reviewLink: string | null;
   playerUrl: string | null;
   status: FrameIOStatus;
@@ -29,6 +31,7 @@ export interface FrameIOInfo {
 export function defaultFrameIO(): FrameIOInfo {
   return {
     assetId: null,
+    stackId: null,
     reviewLink: null,
     playerUrl: null,
     status: 'none',
@@ -156,10 +159,14 @@ export interface TranscriptionInfo {
   status: TranscriptionStatus;
   jobId: string | null;
   completedAt: string | null;
+  /** True when the transcription belongs to an older asset version (e.g. v1 transcript shown on v2). */
+  fromPriorVersion: boolean;
+  /** Version number the transcription was produced from, when fromPriorVersion is true. */
+  sourceVersionNumber: number | null;
 }
 
 export function defaultTranscription(): TranscriptionInfo {
-  return { status: 'none', jobId: null, completedAt: null };
+  return { status: 'none', jobId: null, completedAt: null, fromPriorVersion: false, sourceVersionNumber: null };
 }
 
 export type StorageType = 'uploaded' | 'registered';

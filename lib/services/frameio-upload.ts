@@ -17,7 +17,19 @@ import { getAsset, patchAsset }                   from '@/lib/store/media-regist
 import { getProjectStore, getUploadQueueService } from '@/lib/services/container';
 import { recordActivity, serviceActor }           from '@/lib/services/activity-monitor-service';
 import { isConnected }                            from '@/lib/services/frameio-tokens';
-import { getOrCreateProjectFolder, uploadAsset }  from '@/lib/services/frameio';
+import {
+  getOrCreateProjectFolder,
+  uploadAsset,
+  createVersionStack,
+  addFileToVersionStack,
+  addFilesToShare,
+  removeFileFromShare,
+}                                                  from '@/lib/services/frameio';
+import {
+  getAllShareAssets,
+  addShareAssets,
+  removeShareAsset,
+}                                                  from '@/lib/store/share-assets-store';
 import {
   compressForFrameIO,
   cancelCompress,
@@ -31,6 +43,10 @@ function getQueue() {
 interface FrameIOUploadContext {
   actor?: ActivityActor;
   clientId?: string | null;
+  /** Frame.io file ID of the prior version. When set, a version stack is created or extended. */
+  priorFrameioFileId?: string | null;
+  /** Existing Frame.io version stack ID. When set, the new file is moved into this stack. */
+  priorFrameioStackId?: string | null;
 }
 
 export function triggerFrameIOUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): void {
@@ -141,10 +157,63 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
 
     queue?.setProgress(jobId!, 95);
 
+    // ── Version stacking ──────────────────────────────────────────────────────
+    // If this upload replaces a prior version, group the files into a Frame.io
+    // version stack so existing review/share links continue pointing at the same
+    // asset and automatically show the newest version.
+    let stackId: string | null = context?.priorFrameioStackId ?? null;
+    let stackViewUrl: string | null = null;
+
+    if (context?.priorFrameioStackId) {
+      // Stack already exists — move the new file into it.
+      try {
+        await addFileToVersionStack(result.frameioAssetId, context.priorFrameioStackId);
+      } catch (err) {
+        console.warn('[frameio] could not add file to version stack (non-fatal):', (err as Error).message);
+        stackId = null;
+      }
+    } else if (context?.priorFrameioFileId) {
+      // First version replacement — create a new stack from the old file + this one.
+      try {
+        const stackResult = await createVersionStack(folderId, context.priorFrameioFileId, result.frameioAssetId);
+        stackId      = stackResult.stackId;
+        stackViewUrl = stackResult.viewUrl;
+
+        // Migrate existing shares: swap the old file ID for the stack so every
+        // share link that was sent out automatically shows the latest version.
+        try {
+          const allShareAssets  = getAllShareAssets(projectId);
+          const affectedShares  = Object.entries(allShareAssets)
+            .filter(([, fileIds]) => fileIds.includes(context.priorFrameioFileId!))
+            .map(([shareId]) => shareId);
+
+          for (const shareId of affectedShares) {
+            // Add the new file (not the stack) — Frame.io doesn't reliably accept
+            // version stack IDs as share assets, and adding the old file's ID after
+            // it has been moved into the stack causes Frame.io to remove the stack
+            // entry from the share entirely.
+            await addFilesToShare(shareId, [result.frameioAssetId]);
+            await removeFileFromShare(shareId, context.priorFrameioFileId!);
+            addShareAssets(projectId, shareId, [result.frameioAssetId]);
+            removeShareAsset(projectId, shareId, context.priorFrameioFileId!);
+          }
+
+          if (affectedShares.length > 0) {
+            console.log(`[frameio] migrated ${affectedShares.length} share(s) from file ${context.priorFrameioFileId} to stack ${stackId}`);
+          }
+        } catch (err) {
+          console.warn('[frameio] share migration failed (non-fatal):', (err as Error).message);
+        }
+      } catch (err) {
+        console.warn('[frameio] could not create version stack (non-fatal):', (err as Error).message);
+      }
+    }
+
     patchAsset(projectId, assetId, {
       frameio: {
         assetId:    result.frameioAssetId,
-        reviewLink: result.reviewLink,
+        stackId:    stackId,
+        reviewLink: stackViewUrl ?? result.reviewLink,
         playerUrl:  result.playerUrl,
         status:     'in_review',
         uploadedAt: new Date().toISOString(),

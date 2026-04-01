@@ -6,45 +6,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectStore, getTranscripterService, getIngestQueueService } from '@/lib/services/container';
 import {
-  readRegistry, registerAsset, migrateLooseFiles, patchAsset, writeRegistry,
+  readRegistry, registerAsset, migrateLooseFiles, patchAsset, getAsset,
 } from '@/lib/store/media-registry';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
-import { getComments } from '@/lib/services/frameio';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
-import type { MediaAsset } from '@/lib/models/media-asset';
 import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { probeDuration } from '@/lib/services/media-probe';
 
 function getIngestQueue() {
   try { return getIngestQueueService(); } catch { return null; }
-}
-
-async function refreshFrameIOCommentCounts(projectId: string, assets: MediaAsset[]): Promise<MediaAsset[]> {
-  const refreshed = await Promise.all(assets.map(async (asset) => {
-    if (!asset.frameio.assetId) return asset;
-
-    try {
-      const commentCount = (await getComments(asset.frameio.assetId)).length;
-      if (commentCount === asset.frameio.commentCount) return asset;
-
-      return {
-        ...asset,
-        frameio: {
-          ...asset.frameio,
-          commentCount,
-        },
-        updatedAt: new Date().toISOString(),
-      };
-    } catch {
-      return asset;
-    }
-  }));
-
-  const changed = refreshed.some((asset, index) => asset.frameio.commentCount !== assets[index]?.frameio.commentCount);
-  if (changed) writeRegistry(projectId, refreshed);
-  return refreshed;
 }
 
 export async function GET(
@@ -54,7 +26,7 @@ export async function GET(
   try {
     const { projectId } = await params;
     migrateLooseFiles(projectId);
-    const assets = await refreshFrameIOCommentCounts(projectId, readRegistry(projectId));
+    const assets = readRegistry(projectId);
     return NextResponse.json({ assets });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
@@ -189,6 +161,17 @@ export async function POST(
               return;
             }
 
+            // Capture the prior version's Frame.io IDs BEFORE registering the new
+            // version — once registerAsset runs, the new version becomes current and
+            // the prior version's distribution record is no longer returned by getAsset.
+            let priorFrameioFileId: string | null = null;
+            let priorFrameioStackId: string | null = null;
+            if (replaceAssetId) {
+              const priorAsset = getAsset(projectId, replaceAssetId);
+              priorFrameioFileId  = priorAsset?.frameio.assetId ?? null;
+              priorFrameioStackId = priorAsset?.frameio.stackId ?? null;
+            }
+
             const stat = fs.statSync(dest);
             const asset = registerAsset({
               projectId,
@@ -253,6 +236,8 @@ export async function POST(
             triggerFrameIOUpload(projectId, asset.assetId, {
               actor,
               clientId: project.clientName || null,
+              priorFrameioFileId,
+              priorFrameioStackId,
             });
             results.push({ assetId: asset.assetId, filename: info.filename, jobId });
             res();

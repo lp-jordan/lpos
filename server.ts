@@ -71,6 +71,13 @@ async function main() {
 
   const protocol = mkcertFiles ? 'https' : 'http';
 
+  // ── Upload timeout ─────────────────────────────────────────────────────────
+  // Node.js 18+ defaults requestTimeout to 300 s (5 min), which kills large
+  // file uploads mid-stream before the route handler can finish writing.
+  // Disable it on this local server — timeouts are handled at the application
+  // layer (ingest queue stale sweep) rather than the transport layer.
+  httpServer.requestTimeout = 0;
+
   // ── Socket.io ──────────────────────────────────────────────────────────────
 
   const io = new SocketIOServer(httpServer, {

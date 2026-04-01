@@ -326,7 +326,7 @@ export function MediaTab({
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
-  const { requestVersionConfirmation, startBatch, endBatch } = useVersionConfirm();
+  const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commentCountsRef = useRef<Map<string, number>>(new Map());
@@ -540,6 +540,15 @@ const { openMenu } = useContextMenu();
       // Pre-reserve ingest queue entries for all files so every file appears as
       // "queued" in the IngestTray immediately — before any upload has started.
       const reserved = await reserveIngestJobs(files.map((f) => f.name));
+
+      // If the user cancelled out of the version confirm modal, abort the whole
+      // batch — cancel every reserved slot and exit before any upload starts.
+      if (isBatchCancelled()) {
+        for (const r of reserved) {
+          if (r?.jobId) cancelIngestJob(r.jobId);
+        }
+        return;
+      }
 
       for (let i = 0; i < files.length; i++) {
         const reservedJobId = reserved[i]?.jobId;

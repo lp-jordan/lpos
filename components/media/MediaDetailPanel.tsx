@@ -22,7 +22,10 @@ import {
   LEADERPASS_STATUS_LABEL,
 } from '@/lib/models/media-asset';
 import type { FrameIOComment } from '@/lib/services/frameio';
+
+type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
+import { VideoTheaterMode } from './VideoTheaterMode';
 
 interface Props {
   asset:              MediaAsset | null;
@@ -52,6 +55,17 @@ function formatDate(iso: string | null): string {
   catch { return iso; }
 }
 
+function formatCommentDate(iso: string): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  } catch { return ''; }
+}
+
 function summarizeError(message: string): string {
   const lines = message
     .split(/\r?\n/)
@@ -70,6 +84,7 @@ function isAudioFile(filename: string): boolean {
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
   const [showLeaderPassErrorDetails, setShowLeaderPassErrorDetails] = useState(false);
+  const [theaterSrc,                 setTheaterSrc]                 = useState<string | null>(null);
 
   // ── Metadata edit ──────────────────────────────────────────────────────────
   const [name, setName]               = useState('');
@@ -85,7 +100,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setMetaDirty(false);
     setShareError(null);
     setShowLeaderPassErrorDetails(false);
-    setShowCompose(false);
   }, [asset]);
 
   // Reset per-asset state only when the selected asset changes (not on re-renders of the same asset)
@@ -115,6 +129,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [shareGenerating, setShareGenerating]   = useState(false);
   const [shareError, setShareError]             = useState<string | null>(null);
   const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
+  const [deletingShareId,   setDeletingShareId]   = useState<string | null>(null);
 
   // Poll while uploading
   const pollFio = useCallback(async () => {
@@ -272,21 +287,33 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
+  async function handleDeleteShareLink(shareId: string) {
+    if (!asset) return;
+    setDeletingShareId(shareId);
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/media/${asset.assetId}/shares?shareId=${encodeURIComponent(shareId)}`,
+        { method: 'DELETE' },
+      );
+      if (res.ok) setExistingShareLinks((prev) => prev.filter((l) => l.shareId !== shareId));
+    } catch { /* ignore */ } finally {
+      setDeletingShareId(null);
+    }
+  }
+
   // ── Comments ───────────────────────────────────────────────────────────────
-  const [comments,        setComments]        = useState<FrameIOComment[]>([]);
-  const [commentsLoading, setCommentsLoading] = useState(false);
-  const [commentText,     setCommentText]     = useState('');
-  const [commentPosting,  setCommentPosting]  = useState(false);
-  const [commentError,    setCommentError]    = useState<string | null>(null);
-  const [showCompose,     setShowCompose]     = useState(false);
-  const commentEndRef = useRef<HTMLDivElement>(null);
+  const [comments,          setComments]          = useState<CommentRow[]>([]);
+  const [commentsLoading,   setCommentsLoading]   = useState(false);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
+  const [editingCommentId,  setEditingCommentId]  = useState<string | null>(null);
+  const [editText,          setEditText]          = useState('');
 
   const fetchComments = useCallback(async () => {
     if (!asset?.frameio.assetId) return;
     setCommentsLoading(true);
     try {
       const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`);
-      const data = await res.json() as { comments?: FrameIOComment[]; error?: string };
+      const data = await res.json() as { comments?: CommentRow[]; error?: string };
       if (data.comments) setComments(data.comments);
     } catch { /* ignore */ } finally {
       setCommentsLoading(false);
@@ -310,31 +337,40 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     return () => clearInterval(id);
   }, [asset?.frameio.assetId, fetchComments]);
 
-  async function handlePostComment() {
-    if (!commentText.trim() || !asset) return;
-    setCommentPosting(true);
-    setCommentError(null);
+  async function handleUpdateComment(commentId: string) {
+    if (!asset || !editText.trim()) return;
     try {
       const res = await fetch(
         `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
         {
-          method:  'POST',
+          method:  'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ text: commentText.trim() }),
+          body:    JSON.stringify({ commentId, text: editText.trim() }),
         },
       );
-      const data = await res.json() as { comment?: FrameIOComment; error?: string };
-      if (!res.ok) { setCommentError(data.error ?? 'Failed to post comment'); return; }
-      if (data.comment) {
-        setComments((prev) => [...prev, data.comment!]);
-        setCommentText('');
-        setShowCompose(false);
-        setTimeout(() => commentEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      if (res.ok) {
+        setComments(prev => prev.map(c => c.id === commentId ? { ...c, text: editText.trim() } : c));
+        setEditingCommentId(null);
+        setEditText('');
       }
-    } catch {
-      setCommentError('Network error — could not post comment');
-    } finally {
-      setCommentPosting(false);
+    } catch { /* ignore */ }
+  }
+
+  async function handleDeleteComment(commentId: string) {
+    if (!asset) return;
+    setDeletingCommentId(commentId);
+    try {
+      await fetch(
+        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        {
+          method:  'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ commentId }),
+        },
+      );
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch { /* ignore */ } finally {
+      setDeletingCommentId(null);
     }
   }
 
@@ -351,6 +387,18 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
 
   return (
     <>
+      {theaterSrc && asset && (
+        <VideoTheaterMode
+          src={theaterSrc}
+          assetId={asset.assetId}
+          projectId={projectId}
+          frameioAssetId={asset.frameio.assetId}
+          comments={comments}
+          onClose={() => setTheaterSrc(null)}
+          onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
+        />
+      )}
+
       {open && <div className="mad-backdrop" onClick={onClose} aria-hidden="true" />}
 
       <aside className={`mad-panel${open ? ' mad-panel--open' : ''}`} role="dialog" aria-label="Media asset detail">
@@ -469,6 +517,17 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           </a>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        className="mad-video-theater-btn"
+                        onClick={() => setTheaterSrc(src)}
+                        aria-label="Open in theater mode"
+                        title="Theater mode"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+                        </svg>
+                      </button>
                     </div>
                   );
                 }
@@ -484,6 +543,17 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   ) : (
                     <div className="mad-video-wrap">
                       <video className="mad-video" src={src} controls preload="metadata" key={asset.assetId} />
+                      <button
+                        type="button"
+                        className="mad-video-theater-btn"
+                        onClick={() => setTheaterSrc(src)}
+                        aria-label="Open in theater mode"
+                        title="Theater mode"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+                        </svg>
+                      </button>
                     </div>
                   );
                 }
@@ -562,19 +632,37 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 )}
 
                 {/* Persisted share links for this asset */}
-                {existingShareLinks.length > 0 && !isUploading && existingShareLinks.map((link) => (
-                  <div key={link.shareId} className="mad-copy-row mad-copy-row--generated">
-                    <span className="mad-copy-label">Share link</span>
-                    <span className="mad-copy-url">{link.shareUrl}</span>
-                    <button
-                      type="button"
-                      className="mad-copy-btn mad-copy-btn--primary"
-                      onClick={() => handleCopyLink(link.shareUrl)}
-                    >
-                      {copied ? '✓ Copied' : 'Copy'}
-                    </button>
+                {existingShareLinks.length > 0 && !isUploading && (
+                  <div className={existingShareLinks.length >= 3 ? 'mad-share-links-scroll' : undefined}>
+                    {existingShareLinks.map((link) => (
+                      <div key={link.shareId} className="mad-copy-row mad-copy-row--generated">
+                        <span className="mad-copy-url">{link.shareUrl}</span>
+                        <button
+                          type="button"
+                          className="mad-copy-btn mad-copy-btn--primary"
+                          onClick={() => handleCopyLink(link.shareUrl)}
+                        >
+                          {copied ? '✓' : 'Copy'}
+                        </button>
+                        <button
+                          type="button"
+                          className="mad-copy-btn mad-copy-btn--danger"
+                          onClick={() => void handleDeleteShareLink(link.shareId)}
+                          disabled={deletingShareId === link.shareId}
+                          aria-label="Delete share link"
+                          title="Delete share link"
+                        >
+                          {deletingShareId === link.shareId ? '…' : (
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                              <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
 
                 {shareError && <p className="mad-error">{shareError}</p>}
               </div>
@@ -615,20 +703,78 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           <div className="mad-comment-header">
                             {c.authorAvatar
                               ? <img src={c.authorAvatar} alt="" className="mad-comment-avatar" />
-                              : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{c.authorName[0]}</div>
+                              : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{(c.authorName || '?')[0]}</div>
                             }
-                            <span className="mad-comment-author">{c.authorName}</span>
-                            {c.timestamp !== null && (
-                              <span className="mad-comment-time">{formatTimestamp(c.timestamp)}</span>
+                            <span className="mad-comment-author">
+                              {c.authorName || (c.fromFrame ? 'Frame.io Reviewer' : 'Unknown')}
+                            </span>
+                            {c.fromFrame && (
+                              <span className="mad-comment-source" title="Left via Frame.io">Frame.io</span>
                             )}
-                            <span className="mad-comment-date">{formatDate(c.createdAt)}</span>
+                            {c.timestamp !== null && (
+                              <span className="mad-comment-time">
+                                {formatTimestamp(c.timestamp)}
+                                {c.duration ? ` → ${formatTimestamp(c.timestamp + c.duration)}` : ''}
+                              </span>
+                            )}
+                            <span className="mad-comment-date">{formatCommentDate(c.createdAt)}</span>
+                            {c.canEdit && editingCommentId !== c.id && (
+                              <button
+                                type="button"
+                                className="mad-comment-action"
+                                onClick={() => { setEditingCommentId(c.id); setEditText(c.text); }}
+                                aria-label="Edit comment"
+                                title="Edit comment"
+                              >
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="mad-comment-action mad-comment-action--danger"
+                              onClick={() => void handleDeleteComment(c.id)}
+                              disabled={deletingCommentId === c.id}
+                              aria-label="Delete comment"
+                              title="Delete comment"
+                            >
+                              {deletingCommentId === c.id ? '…' : (
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                                  <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                                </svg>
+                              )}
+                            </button>
                           </div>
-                          <p className="mad-comment-text">{c.text}</p>
+                          {editingCommentId === c.id ? (
+                            <div className="mad-comment-edit">
+                              <textarea
+                                className="mad-comment-edit-input"
+                                value={editText}
+                                onChange={e => setEditText(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void handleUpdateComment(c.id); }
+                                  if (e.key === 'Escape') { setEditingCommentId(null); setEditText(''); }
+                                }}
+                                rows={2}
+                                autoFocus
+                              />
+                              <div className="mad-comment-edit-footer">
+                                <button type="button" className="mad-comment-trigger" onClick={() => { setEditingCommentId(null); setEditText(''); }}>Cancel</button>
+                                <button type="button" className="mad-action-btn mad-action-btn--primary" onClick={() => void handleUpdateComment(c.id)} disabled={!editText.trim()}>Save  ⌘↵</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="mad-comment-text">{c.text}</p>
+                          )}
                           {c.replies.length > 0 && (
                             <div className="mad-comment-replies">
                               {c.replies.map((r) => (
                                 <div key={r.id} className="mad-comment-reply">
                                   <span className="mad-comment-author">{r.authorName}</span>
+                                  <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
                                   <p className="mad-comment-text">{r.text}</p>
                                 </div>
                               ))}
@@ -636,54 +782,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           )}
                         </div>
                       ))}
-                      <div ref={commentEndRef} />
                     </div>
-                  )}
-
-                  {showCompose ? (
-                    <div className="mad-comment-compose">
-                      <textarea
-                        className="mad-comment-input"
-                        rows={2}
-                        placeholder="Leave a comment…"
-                        value={commentText}
-                        onChange={(e) => setCommentText(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                            e.preventDefault();
-                            void handlePostComment();
-                          }
-                        }}
-                        disabled={commentPosting}
-                        autoFocus
-                      />
-                      {commentError && <p className="mad-error">{commentError}</p>}
-                      <div className="mad-compose-footer">
-                        <button
-                          type="button"
-                          className="mad-comment-trigger"
-                          onClick={() => { setShowCompose(false); setCommentText(''); setCommentError(null); }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          className="mad-action-btn mad-action-btn--primary"
-                          onClick={() => void handlePostComment()}
-                          disabled={commentPosting || !commentText.trim()}
-                        >
-                          {commentPosting ? 'Posting…' : 'Post  ⌘↵'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="mad-comment-trigger"
-                      onClick={() => setShowCompose(true)}
-                    >
-                      + Add comment
-                    </button>
                   )}
                 </div>
               )}
@@ -726,15 +825,25 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
               <div className="mad-section">
                 <div className="mad-section-head">
                   <span className="mad-section-title">Transcription</span>
-                  <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
-                    {{
-                      none:       'Not Transcribed',
-                      queued:     'Queued',
-                      processing: 'Transcribing…',
-                      done:       'Done',
-                      failed:     'Failed',
-                    }[asset.transcription.status]}
-                  </span>
+                  <div className="mad-tx-status-group">
+                    <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
+                      {{
+                        none:       'Not Transcribed',
+                        queued:     'Queued',
+                        processing: 'Transcribing…',
+                        done:       'Done',
+                        failed:     'Failed',
+                      }[asset.transcription.status]}
+                    </span>
+                    {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
+                      <span
+                        className="mad-tx-version-pill"
+                        title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
+                      >
+                        v{asset.transcription.sourceVersionNumber ?? '?'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
                   <button
