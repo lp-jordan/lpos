@@ -3,12 +3,7 @@ import { ProjectHeader } from '@/components/projects/ProjectHeader';
 import { getProjectAssets, getProjectById, getProjectJobs } from '@/lib/selectors/projects';
 import { listProjectTranscripts } from '@/lib/transcripts/store';
 import { TranscriptPageActions } from '@/components/transcripts/TranscriptPageActions';
-
-const formatMap = {
-  transcript: 'JSON transcript',
-  subtitle: 'Subtitle export',
-  video: 'Source media'
-} as const;
+import { TranscriptOutputList } from '@/components/transcripts/TranscriptOutputList';
 
 const queueStatusTone: Record<string, 'active' | 'ready' | 'idle'> = {
   running: 'active',
@@ -106,39 +101,7 @@ export default async function ProjectTranscriptsPage({ params }: Readonly<{ para
 
           <section className="panel transcript-panel">
             <TranscriptPageActions projectId={projectId} hasTranscripts={hasStoredTranscripts} />
-            <div className="transcript-output-list">
-              {transcriptAssets.length > 0 ? (
-                transcriptAssets.map((asset) => (
-                  <article key={asset.assetId} className="transcript-output-card">
-                    <div className="row-head">
-                      <strong>{asset.name}</strong>
-                      <span className="tag">{formatMap[asset.type as keyof typeof formatMap] ?? asset.type}</span>
-                    </div>
-                    <div className="row-meta">
-                      <span>Source: {asset.source}</span>
-                      <span>Status: {asset.status}</span>
-                    </div>
-                  </article>
-                ))
-              ) : (
-                <>
-                  <article className="transcript-output-card">
-                    <div className="row-head">
-                      <strong>Main interview transcript.json</strong>
-                      <span className="tag">Transcript JSON</span>
-                    </div>
-                    <div className="row-meta"><span>Status: Waiting for first run</span></div>
-                  </article>
-                  <article className="transcript-output-card">
-                    <div className="row-head">
-                      <strong>Main interview subtitles.srt</strong>
-                      <span className="tag">Subtitle export</span>
-                    </div>
-                    <div className="row-meta"><span>Status: Waiting for first run</span></div>
-                  </article>
-                </>
-              )}
-            </div>
+            <TranscriptOutputList projectId={projectId} initialTranscripts={storedTranscripts} />
           </section>
         </div>
 

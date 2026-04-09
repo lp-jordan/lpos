@@ -12,12 +12,18 @@ import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
+import { UPLOAD_CHUNK_SIZE_BYTES } from '@/lib/upload-constants';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Mirrors the server-side normalizeAssetKey: strip extension, uppercase, alphanumeric only. */
 function normalizeKey(s: string): string {
   return s.replace(/\.[^/.]+$/, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/** Mirrors the server-side stripVersionSuffix. No underscore prefix since normalizeKey removes them. */
+function stripVersionSuffix(key: string): string {
+  return key.replace(/V\d+$/, '');
 }
 
 function formatBytes(b: number | null): string {
@@ -38,7 +44,7 @@ type SortDir = 'asc' | 'desc';
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'name',     label: 'Name' },
-  { value: 'date',     label: 'Date' },
+  { value: 'date',     label: 'Date uploaded' },
   { value: 'size',     label: 'Size' },
   { value: 'duration', label: 'Duration' },
 ];
@@ -60,7 +66,7 @@ function sortAssets(assets: MediaAsset[], field: SortField, dir: SortDir): Media
         cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
         break;
       case 'date':
-        cmp = a.registeredAt.localeCompare(b.registeredAt);
+        cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
         break;
       case 'size':
         cmp = (a.fileSize ?? 0) - (b.fileSize ?? 0);
@@ -166,25 +172,31 @@ function AssetRow({
   isSelected,
   onSelect,
   onClick,
+  onDoubleClick,
   onContextMenu,
 }: {
   asset:         MediaAsset;
   isOpen:        boolean;
   isSelected:    boolean;
-  onSelect:      (e: React.MouseEvent) => void;
-  onClick:       () => void;
+  onSelect:      () => void;
+  onClick:       (e: React.MouseEvent) => void;
+  onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
     <div
       className={`ma-row${isOpen ? ' ma-row--open' : ''}${isSelected ? ' ma-row--selected' : ''}`}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       role="row"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') onClick(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onDoubleClick(); }
+        if (e.key === ' ')     { e.preventDefault(); onSelect(); }
+      }}
     >
-      <div className="ma-row-check" onClick={(e) => { e.stopPropagation(); onSelect(e); }}>
+      <div className="ma-row-check" onClick={(e) => { e.stopPropagation(); onSelect(); }}>
         <input
           type="checkbox"
           className="ma-checkbox"
@@ -234,25 +246,31 @@ function AssetCard({
   isSelected,
   onSelect,
   onClick,
+  onDoubleClick,
   onContextMenu,
 }: {
   asset:         MediaAsset;
   isOpen:        boolean;
   isSelected:    boolean;
-  onSelect:      (e: React.MouseEvent) => void;
-  onClick:       () => void;
+  onSelect:      () => void;
+  onClick:       (e: React.MouseEvent) => void;
+  onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
     <div
       className={`ma-card${isOpen ? ' ma-card--open' : ''}${isSelected ? ' ma-card--selected' : ''}`}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') onClick(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onDoubleClick(); }
+        if (e.key === ' ')     { e.preventDefault(); onSelect(); }
+      }}
     >
-      <div className="ma-card-check" onClick={(e) => { e.stopPropagation(); onSelect(e); }}>
+      <div className="ma-card-check" onClick={(e) => { e.stopPropagation(); onSelect(); }}>
         <input
           type="checkbox"
           className="ma-checkbox"
@@ -332,6 +350,8 @@ export function MediaTab({
   const commentCountsRef = useRef<Map<string, number>>(new Map());
   const hasCommentBaselineRef = useRef(false);
   const consumedDeepLinkRef = useRef<string | null>(null);
+  const lastSelectedIdx = useRef<number>(-1);
+  const contentRef = useRef<HTMLDivElement>(null);
 const { openMenu } = useContextMenu();
   const { toast } = useToast();
   const { jobs: ingestJobs, cancel: cancelIngestJob } = useIngestQueue();
@@ -431,6 +451,17 @@ const { openMenu } = useContextMenu();
     return () => { socket.disconnect(); };
   }, [fetchAssets]);
 
+  // Deselect when clicking outside the content area
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (contentRef.current && !contentRef.current.contains(e.target as Node)) {
+        setSelectedIds(new Set());
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, []);
+
   // ── Upload ────────────────────────────────────────────────────────────────
 
   const ACCEPTED_EXTS = ['.mp4', '.mov', '.avi', '.mkv', '.mxf', '.webm', '.m4v', '.mts', '.mp3', '.wav', '.aac', '.flac'];
@@ -444,17 +475,25 @@ const { openMenu } = useContextMenu();
   function findLocalVersionCandidate(filename: string): MediaAsset | undefined {
     const key = normalizeKey(filename);
     if (!key) return undefined;
-    return [...assets].reverse().find(
+    const exact = [...assets].reverse().find(
       (a) => normalizeKey(a.name) === key || normalizeKey(a.originalFilename) === key,
     );
+    if (exact) return exact;
+    const base = stripVersionSuffix(key);
+    if (base && base !== key) {
+      return [...assets].reverse().find(
+        (a) => stripVersionSuffix(normalizeKey(a.name)) === base || stripVersionSuffix(normalizeKey(a.originalFilename)) === base,
+      );
+    }
+    return undefined;
   }
 
-  async function reserveIngestJobs(filenames: string[]): Promise<{ filename: string; jobId: string }[]> {
+  async function reserveIngestJobs(files: Pick<File, 'name' | 'size'>[]): Promise<{ filename: string; jobId: string }[]> {
     try {
       const res = await fetch(`/api/projects/${projectId}/ingest-queue/reserve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filenames }),
+        body: JSON.stringify({ files: files.map((f) => ({ filename: f.name, size: f.size })) }),
       });
       if (!res.ok) return [];
       const data = await res.json() as { jobs?: { filename: string; jobId: string }[] };
@@ -464,7 +503,131 @@ const { openMenu } = useContextMenu();
     }
   }
 
-  function uploadFile(
+  // ── Chunked upload helpers ───────────────────────────────────────────────────
+
+  async function initiateChunkedUpload(
+    file: File,
+    jobId: string,
+    replaceAssetId?: string,
+  ): Promise<{ uploadId: string; bytesReceived: number } | null> {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, fileSize: file.size, jobId, replaceAssetId }),
+      });
+      if (!res.ok) {
+        const d = await res.json() as { error?: string };
+        setUploadError(d.error ?? `Failed to start upload for "${file.name}"`);
+        return null;
+      }
+      return await res.json() as { uploadId: string; bytesReceived: number };
+    } catch {
+      setUploadError(`Network error starting upload for "${file.name}"`);
+      return null;
+    }
+  }
+
+  async function uploadChunks(
+    file: File,
+    uploadId: string,
+    startOffset: number,
+  ): Promise<{ ok: boolean; error?: string }> {
+    let offset = startOffset;
+    while (offset < file.size) {
+      const chunk = file.slice(offset, offset + UPLOAD_CHUNK_SIZE_BYTES);
+      let chunkOk = false;
+      let lastError = '';
+
+      // Retry up to 3× per chunk with exponential backoff.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+        try {
+          const res = await fetch(`/api/projects/${projectId}/media/upload/${uploadId}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'Upload-Offset': String(offset),
+              'Upload-Length': String(file.size),
+            },
+            body: chunk,
+          });
+          if (res.ok) {
+            const d = await res.json() as { bytesReceived: number };
+            offset = d.bytesReceived;
+            chunkOk = true;
+            break;
+          }
+          const d = await res.json() as { code?: string; expected?: number; error?: string };
+          if (d.code === 'offset_mismatch' && typeof d.expected === 'number') {
+            // Server has a different offset — re-sync and retry immediately.
+            offset = d.expected;
+            chunkOk = true; // not really ok but we re-synced; outer loop will re-slice
+            break;
+          }
+          if (d.code === 'job_cancelled') {
+            return { ok: false, error: `Upload cancelled for "${file.name}"` };
+          }
+          lastError = d.error ?? `Chunk upload failed (status ${res.status})`;
+        } catch {
+          lastError = `Network error uploading "${file.name}"`;
+        }
+      }
+
+      if (!chunkOk) return { ok: false, error: lastError };
+    }
+    return { ok: true };
+  }
+
+  async function finalizeChunkedUpload(uploadId: string): Promise<{
+    ok: boolean;
+    code?: string;
+    error?: string;
+    existingAsset?: MediaAsset;
+    currentVersionNumber?: number;
+    uploadId?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/upload/${uploadId}/finalize`, {
+        method: 'POST',
+      });
+      if (res.ok) return { ok: true };
+      const d = await res.json() as {
+        code?: string;
+        error?: string;
+        existingAsset?: MediaAsset;
+        currentVersionNumber?: number;
+        uploadId?: string;
+      };
+      return { ok: false, ...d };
+    } catch {
+      return { ok: false, error: `Network error finalizing upload` };
+    }
+  }
+
+  async function confirmChunkedVersion(uploadId: string, replaceAssetId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/upload/${uploadId}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replaceAssetId }),
+      });
+      if (res.ok) return { ok: true };
+      const d = await res.json() as { error?: string };
+      return { ok: false, error: d.error ?? 'Version confirmation failed' };
+    } catch {
+      return { ok: false, error: 'Network error confirming version' };
+    }
+  }
+
+  async function abortChunkedUpload(uploadId: string): Promise<void> {
+    try {
+      await fetch(`/api/projects/${projectId}/media/upload/${uploadId}`, { method: 'DELETE' });
+    } catch { /* fire and forget */ }
+  }
+
+  // Orchestrates the full chunked upload flow for a single file.
+  async function uploadFile(
     file: File,
     replaceAssetId?: string,
     reservedJobId?: string,
@@ -474,38 +637,20 @@ const { openMenu } = useContextMenu();
     error?: string;
     existingAsset?: MediaAsset;
     currentVersionNumber?: number;
+    uploadId?: string;
   }> {
-    return new Promise((resolve) => {
-      const form = new FormData();
-      if (replaceAssetId) form.append('replaceAssetId', replaceAssetId);
-      form.append('file', file);
-      const xhr = new XMLHttpRequest();
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) { resolve({ ok: true }); return; }
-        try {
-          const d = JSON.parse(xhr.responseText) as {
-            error?: string;
-            code?: string;
-            existingAsset?: MediaAsset;
-            currentVersionNumber?: number;
-          };
-          resolve({
-            ok: false,
-            error: d.error ?? `Upload failed for "${file.name}"`,
-            code: d.code,
-            existingAsset: d.existingAsset,
-            currentVersionNumber: d.currentVersionNumber,
-          });
-        } catch {
-          resolve({ ok: false, error: `Upload failed for "${file.name}"` });
-        }
-      };
-      xhr.onerror = () => { resolve({ ok: false, error: `Network error uploading "${file.name}"` }); };
-      xhr.open('POST', `/api/projects/${projectId}/media`);
-      xhr.setRequestHeader('x-upload-filename', encodeURIComponent(file.name));
-      if (reservedJobId) xhr.setRequestHeader('x-ingest-job-id', reservedJobId);
-      xhr.send(form);
-    });
+    if (!reservedJobId) {
+      return { ok: false, error: `No ingest job ID for "${file.name}"` };
+    }
+
+    const session = await initiateChunkedUpload(file, reservedJobId, replaceAssetId);
+    if (!session) return { ok: false, error: `Failed to initiate upload for "${file.name}"` };
+
+    const chunksResult = await uploadChunks(file, session.uploadId, session.bytesReceived);
+    if (!chunksResult.ok) return { ok: false, error: chunksResult.error };
+
+    const finalResult = await finalizeChunkedUpload(session.uploadId);
+    return { ...finalResult, uploadId: session.uploadId };
   }
 
   async function uploadFiles(files: File[]) {
@@ -537,21 +682,39 @@ const { openMenu } = useContextMenu();
         }
       }
 
-      // Pre-reserve ingest queue entries for all files so every file appears as
-      // "queued" in the IngestTray immediately — before any upload has started.
-      const reserved = await reserveIngestJobs(files.map((f) => f.name));
+      // Resume detection: if a file matches a paused chunked upload (queued job
+      // with a tempPath and partial progress), reuse its existing jobId so the
+      // upload resumes from where it left off rather than starting a new job.
+      const resumeMap = new Map<number, string>(); // fileIndex → existing jobId
+      for (let i = 0; i < files.length; i++) {
+        const resumable = ingestJobs.find(
+          (j) => j.status === 'queued' && j.tempPath && (j.progress ?? 0) > 0 && j.filename === files[i].name,
+        );
+        if (resumable) resumeMap.set(i, resumable.jobId);
+      }
+
+      // Pre-reserve ingest queue entries only for files that aren't resuming.
+      const filesToReserve = files.filter((_, i) => !resumeMap.has(i));
+      const reserved = await reserveIngestJobs(filesToReserve);
+
+      // Build a complete jobId map: resumed jobs use existing IDs; new jobs use reserved IDs.
+      let reserveIdx = 0;
+      const jobIdMap = new Map<number, string | undefined>();
+      for (let i = 0; i < files.length; i++) {
+        jobIdMap.set(i, resumeMap.has(i) ? resumeMap.get(i) : reserved[reserveIdx++]?.jobId);
+      }
 
       // If the user cancelled out of the version confirm modal, abort the whole
       // batch — cancel every reserved slot and exit before any upload starts.
       if (isBatchCancelled()) {
-        for (const r of reserved) {
-          if (r?.jobId) cancelIngestJob(r.jobId);
+        for (const [i, jobId] of jobIdMap) {
+          if (jobId && !resumeMap.has(i)) cancelIngestJob(jobId);
         }
         return;
       }
 
       for (let i = 0; i < files.length; i++) {
-        const reservedJobId = reserved[i]?.jobId;
+        const reservedJobId = jobIdMap.get(i);
         // Skip files whose reserved queue slot was cancelled while waiting.
         if (reservedJobId && ingestJobs.some((j) => j.jobId === reservedJobId && j.status === 'cancelled')) {
           continue;
@@ -575,15 +738,17 @@ const { openMenu } = useContextMenu();
 
         // Fallback: server detected a version conflict that the pre-check missed
         // (e.g., a concurrent upload registered an asset between pre-check and upload).
-        if (firstAttempt.code === 'version_confirmation_required' && firstAttempt.existingAsset) {
+        // The file is already on the server — confirm or discard without re-uploading.
+        if (firstAttempt.code === 'version_confirmation_required' && firstAttempt.existingAsset && firstAttempt.uploadId) {
           const confirmed = await requestVersionConfirmation(
             firstAttempt.existingAsset,
             firstAttempt.currentVersionNumber ?? firstAttempt.existingAsset.frameio.version ?? 1,
           );
           if (confirmed) {
-            // Retry without reservedJobId — the first attempt already consumed or failed it
-            const retry = await uploadFile(files[i], firstAttempt.existingAsset.assetId);
-            if (!retry.ok) setUploadError(retry.error ?? `Upload failed for "${files[i].name}"`);
+            const confirmResult = await confirmChunkedVersion(firstAttempt.uploadId, firstAttempt.existingAsset.assetId);
+            if (!confirmResult.ok) setUploadError(confirmResult.error ?? `Upload failed for "${files[i].name}"`);
+          } else {
+            await abortChunkedUpload(firstAttempt.uploadId);
           }
           continue;
         }
@@ -697,6 +862,32 @@ const { openMenu } = useContextMenu();
       if (next.has(assetId)) next.delete(assetId); else next.add(assetId);
       return next;
     });
+  }
+
+  function handleAssetClick(asset: MediaAsset, idx: number, e: React.MouseEvent) {
+    if (e.ctrlKey || e.metaKey) {
+      toggleSelect(asset.assetId);
+      lastSelectedIdx.current = idx;
+      return;
+    }
+    if (e.shiftKey && lastSelectedIdx.current !== -1) {
+      const from = Math.min(lastSelectedIdx.current, idx);
+      const to   = Math.max(lastSelectedIdx.current, idx);
+      setSelectedIds(new Set(sorted.slice(from, to + 1).map((a) => a.assetId)));
+      return;
+    }
+    // Plain click — deselect if already sole selection, otherwise select only this
+    if (selectedIds.has(asset.assetId) && selectedIds.size === 1) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set([asset.assetId]));
+      lastSelectedIdx.current = idx;
+    }
+  }
+
+  function openAssetDetail(asset: MediaAsset) {
+    setSelectedAsset(asset);
+    setShowSharesPanel(false);
   }
 
   // ── Context menu ──────────────────────────────────────────────────────────
@@ -904,7 +1095,7 @@ const { openMenu } = useContextMenu();
 
   return (
     <>
-      <div className="proj-tab-content page-stack">
+      <div className="proj-tab-content page-stack" ref={contentRef}>
 
         {/* Frame.io connection banner */}
         {fioConnected === false && (
@@ -1042,8 +1233,8 @@ const { openMenu } = useContextMenu();
         )}
 
         {/* Selection action bar */}
-        {selectedIds.size > 0 && (
-          <div className="ma-selection-bar">
+        <div className={`ma-selection-bar-wrap${selectedIds.size === 0 ? ' ma-selection-bar-wrap--empty' : ''}`}>
+        <div className="ma-selection-bar">
             <span className="ma-selection-count">
               {selectedIds.size} selected
             </span>
@@ -1116,7 +1307,7 @@ const { openMenu } = useContextMenu();
               ✕ Clear
             </button>
           </div>
-        )}
+        </div>
 
         {/* Content */}
         {loading ? (
@@ -1129,28 +1320,30 @@ const { openMenu } = useContextMenu();
           </p>
         ) : viewMode === 'list' ? (
           <div className="ma-list">
-            {sorted.map((a) => (
+            {sorted.map((a, idx) => (
               <AssetRow
                 key={a.assetId}
                 asset={a}
                 isOpen={selectedAsset?.assetId === a.assetId}
                 isSelected={selectedIds.has(a.assetId)}
                 onSelect={() => toggleSelect(a.assetId)}
-                onClick={() => { setSelectedAsset((prev) => prev?.assetId === a.assetId ? null : a); setShowSharesPanel(false); }}
+                onClick={(e) => handleAssetClick(a, idx, e)}
+                onDoubleClick={() => openAssetDetail(a)}
                 onContextMenu={(e) => openAssetMenu(e, a)}
               />
             ))}
           </div>
         ) : (
           <div className="ma-grid">
-            {sorted.map((a) => (
+            {sorted.map((a, idx) => (
               <AssetCard
                 key={a.assetId}
                 asset={a}
                 isOpen={selectedAsset?.assetId === a.assetId}
                 isSelected={selectedIds.has(a.assetId)}
                 onSelect={() => toggleSelect(a.assetId)}
-                onClick={() => { setSelectedAsset((prev) => prev?.assetId === a.assetId ? null : a); setShowSharesPanel(false); }}
+                onClick={(e) => handleAssetClick(a, idx, e)}
+                onDoubleClick={() => openAssetDetail(a)}
                 onContextMenu={(e) => openAssetMenu(e, a)}
               />
             ))}

@@ -42,6 +42,37 @@ function initSchema(db: DatabaseSync): void {
     // Column already exists
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ingest_jobs_batch ON ingest_jobs(batch_id)`);
+
+  // Migration: add file_size so IngestTray can show size during queued/ingesting phases
+  try {
+    db.exec(`ALTER TABLE ingest_jobs ADD COLUMN file_size INTEGER`);
+  } catch {
+    // Column already exists
+  }
+
+  // Chunked upload sessions — one row per in-progress chunked upload.
+  // Persisted so uploads can be resumed after server restart or browser reload.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS upload_sessions (
+      upload_id          TEXT PRIMARY KEY,
+      job_id             TEXT NOT NULL,
+      project_id         TEXT NOT NULL,
+      filename           TEXT NOT NULL,
+      file_size          INTEGER NOT NULL,
+      bytes_received     INTEGER NOT NULL DEFAULT 0,
+      temp_path          TEXT NOT NULL,
+      replace_asset_id   TEXT,
+      status             TEXT NOT NULL DEFAULT 'uploading',
+      version_meta_json  TEXT,
+      created_at         TEXT NOT NULL,
+      updated_at         TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES ingest_jobs(job_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_job     ON upload_sessions(job_id);
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_project ON upload_sessions(project_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_status  ON upload_sessions(status, updated_at);
+  `);
 }
 
 export function getIngestQueueDb(): DatabaseSync {

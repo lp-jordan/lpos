@@ -13,10 +13,11 @@ export interface UseProjectsResult {
   deleteProject: (projectId: string) => Promise<void>;
 }
 
-export function useProjects(): UseProjectsResult {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useProjects(initialProjects?: Project[]): UseProjectsResult {
+  const [projects, setProjects] = useState<Project[]>(initialProjects ?? []);
+  const [loading, setLoading] = useState(!initialProjects);
   const socketRef = useRef<Socket | null>(null);
+  const seeded = useRef(!!initialProjects);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -30,9 +31,9 @@ export function useProjects(): UseProjectsResult {
     }
   }, []);
 
-  // Initial fetch + socket subscription for real-time updates
+  // Initial fetch (skipped when seeded server-side) + socket subscription for real-time updates
   useEffect(() => {
-    fetchProjects();
+    if (!seeded.current) fetchProjects();
 
     const socket = io('/', { transports: ['websocket'] });
     socketRef.current = socket;

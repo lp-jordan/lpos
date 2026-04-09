@@ -6,6 +6,9 @@ import type { TranscriptSearchSource } from '@/lib/transcripts/types';
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-6';
 const MAX_TOOL_ROUNDS = 5;
 const MAX_TRANSCRIPT_CHARS = 40000;
+// Hard cap per conversation to prevent runaway cost. Roughly ~$1.50 at Sonnet pricing.
+// Override via CLAUDE_MAX_TOKENS_PER_CALL env var.
+const MAX_TOKENS_PER_CALL = Number(process.env.CLAUDE_MAX_TOKENS_PER_CALL ?? 100_000);
 
 export interface CamiChatInput {
   projectId: string;
@@ -211,6 +214,7 @@ export async function runCamiChat(
   ];
 
   const sources: TranscriptSearchSource[] = [];
+  let totalTokens = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const isLastRound = round === MAX_TOOL_ROUNDS - 1;
@@ -222,6 +226,16 @@ export async function runCamiChat(
       tools: isLastRound ? [] : CAMI_TOOLS,
       messages,
     });
+
+    totalTokens += response.usage.input_tokens + response.usage.output_tokens;
+    if (totalTokens > MAX_TOKENS_PER_CALL) {
+      console.warn(`[cami] token limit reached: ${totalTokens.toLocaleString()} tokens (limit ${MAX_TOKENS_PER_CALL.toLocaleString()})`);
+      return {
+        answer: 'This conversation has used a large amount of context. Please start a new thread to continue.',
+        sources,
+        threadSummary: buildThreadSummary(input.conversation, input.message, ''),
+      };
+    }
 
     // Collect text from this response
     const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');

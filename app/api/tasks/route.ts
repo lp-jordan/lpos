@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -7,7 +6,7 @@ import { getTaskStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getAllUsers, getUserById } from '@/lib/store/user-store';
-import { getActivityDb } from '@/lib/store/activity-db';
+import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -28,6 +27,7 @@ export async function POST(req: NextRequest) {
     projectId?: string;
     clientName?: string | null;
     priority?: TaskPriority;
+    status?: import('@/lib/models/task').TaskStatus;
     notes?: string | null;
     assignedTo?: string[];
   };
@@ -44,19 +44,20 @@ export async function POST(req: NextRequest) {
     projectId: body.projectId,
     clientName: body.clientName ?? null,
     priority: body.priority,
+    status: body.status,
     notes: body.notes ?? null,
     createdBy: session.userId,
     assignedTo: body.assignedTo,
   });
 
   const actor = getUserById(session.userId);
-  const actorDisplay = actor?.name ?? null;
+  const actorName = actor?.name ?? undefined;
   const projectId = task.projectId !== 'unassigned' ? task.projectId : null;
 
-  const recorded = recordActivity({
+  recordActivity({
     actor_type: 'user',
     actor_id: session.userId,
-    actor_display: actorDisplay,
+    actor_display: actorName ?? null,
     occurred_at: task.createdAt,
     event_type: 'task.created',
     lifecycle_phase: 'created',
@@ -67,35 +68,32 @@ export async function POST(req: NextRequest) {
     client_id: task.clientName,
   });
 
-  // Write mention notifications for any @names in notes.
-  if (task.notes && recorded) {
-    const allUsers = getAllUsers();
-    const db = getActivityDb();
-    const now = new Date().toISOString();
-    const seen = new Set<string>();
+  // Notify assignees (not the creator) and @mentioned users in notes
+  const allUsers = getAllUsers();
+  const notified = new Set<string>([session.userId]);
+
+  const mentionedIds: string[] = [];
+  if (task.notes) {
     for (const [, token] of task.notes.matchAll(/@(\w+)/g)) {
-      const mentioned = allUsers.find(
-        (u) => u.name.split(' ')[0].toLowerCase() === token.toLowerCase(),
-      );
-      if (!mentioned || mentioned.id === session.userId || seen.has(mentioned.id)) continue;
-      seen.add(mentioned.id);
-      db.prepare(`
-        INSERT OR IGNORE INTO notification_candidates (
-          notification_candidate_id, project_id, client_id, event_id,
-          notification_type, severity, title, body, status,
-          recipient_scope_json, dedupe_key, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-      `).run(
-        randomUUID(), projectId, task.clientName, recorded.event.event_id,
-        'task_mention', 'info',
-        `${actorDisplay ?? 'Someone'} mentioned you in a task`,
-        task.description,
-        JSON.stringify({ userId: mentioned.id, taskId: task.taskId }),
-        `task-mention:${task.taskId}:${mentioned.id}`,
-        now, now,
-      );
+      const u = allUsers.find((u) => u.name.split(' ')[0].toLowerCase() === token.toLowerCase());
+      if (u && !notified.has(u.id)) {
+        mentionedIds.push(u.id);
+        notified.add(u.id);
+      }
     }
   }
+
+  await Promise.allSettled([
+    ...task.assignedTo
+      .filter((uid) => !notified.has(uid))
+      .map((uid) => {
+        notified.add(uid);
+        return notifyTaskEvent({ userId: uid, type: 'assigned', taskId: task.taskId, taskTitle: task.description, fromUserId: session.userId, fromName: actorName });
+      }),
+    ...mentionedIds.map((uid) =>
+      notifyTaskEvent({ userId: uid, type: 'mentioned', taskId: task.taskId, taskTitle: task.description, fromUserId: session.userId, fromName: actorName }),
+    ),
+  ]);
 
   return NextResponse.json({ task }, { status: 201 });
 }

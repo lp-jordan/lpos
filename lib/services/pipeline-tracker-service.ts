@@ -15,6 +15,8 @@ import type { UploadJob } from '@/lib/services/upload-queue-service';
 import type { UploadQueueService } from '@/lib/services/upload-queue-service';
 import type { TranscriptJob } from '@/lib/services/transcripter-service';
 import type { TranscripterService } from '@/lib/services/transcripter-service';
+import type { PromotionJob } from '@/lib/services/promotion-queue-service';
+import type { PromotionQueueService } from '@/lib/services/promotion-queue-service';
 import { patchAsset } from '@/lib/store/media-registry';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 import { triggerLeaderPassPublish } from '@/lib/services/leaderpass-publish';
@@ -29,10 +31,11 @@ import { STAGE_TERMINAL_STATUSES } from '@/lib/types/pipeline';
 // ── Stall thresholds per stage type (ms) ─────────────────────────────────────
 
 const STALL_THRESHOLDS: Record<PipelineStageType, number> = {
-  'ingest':           2 * 60_000,
-  'transcript':       5 * 60_000,
-  'upload:frameio':   2 * 60_000,
-  'upload:leaderpass': 2 * 60_000,
+  'ingest':             2 * 60_000,
+  'transcript':         5 * 60_000,
+  'upload:frameio':     2 * 60_000,
+  'upload:leaderpass':  2 * 60_000,
+  'promotion':          5 * 60_000,
 };
 const PROCESSING_STALL_MS    = 10 * 60_000;
 const HARD_TIMEOUT_MULT      = 2;      // auto-fail at 2x stall threshold
@@ -53,7 +56,7 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
   const active = stages.filter((s) => !isStageTerminal(s.status));
   if (active.length > 0) {
     // Return the highest-priority active stage label
-    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:leaderpass'] as PipelineStageType[]) {
+    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:leaderpass', 'promotion'] as PipelineStageType[]) {
       const match = active.find((s) => s.type === type);
       if (match) {
         if (type === 'ingest') return 'ingesting';
@@ -64,6 +67,7 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
         if (type === 'upload:leaderpass') {
           return match.status === 'processing' ? 'processing' : 'uploading_leaderpass';
         }
+        if (type === 'promotion') return 'processing';
       }
     }
     return 'ingesting';
@@ -101,6 +105,7 @@ export class PipelineTrackerService {
   private ingestService: IngestQueueService | null = null;
   private uploadService: UploadQueueService | null = null;
   private transcriptService: TranscripterService | null = null;
+  private promotionService: PromotionQueueService | null = null;
 
   constructor(
     private io: SocketIOServer,
@@ -111,14 +116,17 @@ export class PipelineTrackerService {
     ingest: IngestQueueService,
     upload: UploadQueueService,
     transcript: TranscripterService,
+    promotion?: PromotionQueueService,
   ): void {
     this.ingestService = ingest;
     this.uploadService = upload;
     this.transcriptService = transcript;
+    this.promotionService = promotion ?? null;
 
     ingest.onQueueChange((jobs) => this.syncIngest(jobs));
     upload.onQueueChange((jobs) => this.syncUpload(jobs));
     transcript.onQueueChange((jobs) => this.syncTranscript(jobs));
+    promotion?.onQueueChange((jobs) => this.syncPromotion(jobs));
   }
 
   start(): void {
@@ -274,6 +282,45 @@ export class PipelineTrackerService {
     if (changed) this.broadcast();
   }
 
+  private syncPromotion(jobs: PromotionJob[]): void {
+    const projectMap = this.buildProjectMap();
+    let changed = false;
+    for (const job of jobs) {
+      const existing = this.jobIndex.get(job.jobId);
+      if (existing) {
+        const entry = this.pipelines.get(existing);
+        if (entry) {
+          const stage = entry.stages.find((s) => s.jobId === job.jobId);
+          if (stage) Object.assign(stage, this.promotionToStage(job));
+          this.refreshEntry(entry);
+          changed = true;
+        }
+      } else {
+        // Don't create entries for already-terminal jobs arriving after a purge
+        if (isStageTerminal(job.status)) continue;
+
+        // Promotion jobs are always standalone — no assetId to correlate with
+        const projectName = projectMap.get(job.projectId) ?? job.projectId;
+        const entry: PipelineEntry = {
+          pipelineId:    job.jobId,
+          assetId:       null,
+          projectId:     job.projectId,
+          projectName,
+          filename:      job.filename,
+          overallStatus: 'processing',
+          stages:        [this.promotionToStage(job)],
+          createdAt:     job.queuedAt,
+          updatedAt:     job.updatedAt,
+        };
+        this.pipelines.set(entry.pipelineId, entry);
+        this.jobIndex.set(job.jobId, entry.pipelineId);
+        this.refreshEntry(entry);
+        changed = true;
+      }
+    }
+    if (changed) this.broadcast();
+  }
+
   private syncTranscript(jobs: TranscriptJob[]): void {
     const projectMap = this.buildProjectMap();
     let changed = false;
@@ -381,6 +428,21 @@ export class PipelineTrackerService {
     };
   }
 
+  private promotionToStage(job: PromotionJob): PipelineStage {
+    return {
+      type:        'promotion',
+      jobId:       job.jobId,
+      status:      job.status,
+      progress:    job.progress,
+      error:       job.error,
+      detail:      job.detail,
+      queuedAt:    job.queuedAt,
+      updatedAt:   job.updatedAt,
+      completedAt: job.completedAt,
+      stalled:     false,
+    };
+  }
+
   // ── Entry refresh ────────────────────────────────────────────────────────
 
   private refreshEntry(entry: PipelineEntry): void {
@@ -434,6 +496,9 @@ export class PipelineTrackerService {
               break;
             case 'transcript':
               this.transcriptService?.failJob(stage.jobId, reason);
+              break;
+            case 'promotion':
+              this.promotionService?.fail(stage.jobId, reason);
               break;
           }
           // The service's fail() triggers onQueueChange → sync, which will update
@@ -495,30 +560,56 @@ export class PipelineTrackerService {
 
   private handleRetry(pipelineId: string, stageType: PipelineStageType): void {
     const entry = this.pipelines.get(pipelineId);
-    if (!entry || !entry.assetId) return;
+    if (!entry) return;
     const stage = entry.stages.find((s) => s.type === stageType && s.status === 'failed');
     if (!stage) return;
+    // Non-promotion retries require an assetId to re-trigger the underlying service
+    if (stageType !== 'promotion' && !entry.assetId) return;
 
     switch (stageType) {
       case 'upload:frameio':
-        patchAsset(entry.projectId, entry.assetId, { frameio: { status: 'none', lastError: null } });
-        triggerFrameIOUpload(entry.projectId, entry.assetId);
+        patchAsset(entry.projectId, entry.assetId!, { frameio: { status: 'none', lastError: null } });
+        triggerFrameIOUpload(entry.projectId, entry.assetId!);
         break;
       case 'upload:leaderpass':
-        patchAsset(entry.projectId, entry.assetId, {
+        patchAsset(entry.projectId, entry.assetId!, {
           leaderpass: { status: 'none', lastError: null },
           cloudflare: { status: 'none', progress: 0, lastError: null },
         });
-        triggerLeaderPassPublish(entry.projectId, entry.assetId);
+        triggerLeaderPassPublish(entry.projectId, entry.assetId!);
         break;
       case 'transcript': {
         const txJobs = this.transcriptService?.getQueue() ?? [];
         const txJob = txJobs.find((j) => j.jobId === stage.jobId);
         if (txJob && this.transcriptService) {
-          patchAsset(entry.projectId, entry.assetId, {
+          patchAsset(entry.projectId, entry.assetId!, {
             transcription: { status: 'queued', jobId: null, completedAt: null },
           });
-          this.transcriptService.enqueue(entry.projectId, txJob.sourcePath, entry.assetId, entry.filename);
+          this.transcriptService.enqueue(entry.projectId, txJob.sourcePath, entry.assetId!, entry.filename);
+        }
+        break;
+      }
+      case 'promotion': {
+        const failedJob = this.promotionService?.getJob(stage.jobId);
+        if (failedJob && this.promotionService) {
+          // Drop the failed stage and re-queue the file as a new job
+          entry.stages = entry.stages.filter((s) => s.jobId !== stage.jobId);
+          this.jobIndex.delete(stage.jobId);
+          const newJobId = this.promotionService.add(
+            failedJob.projectId,
+            failedJob.filename,
+            failedJob.fileKey,
+            failedJob.mimeType,
+            failedJob.fileSize,
+            failedJob.destination,
+          );
+          const newJob = this.promotionService.getJob(newJobId);
+          if (newJob) {
+            entry.stages.push(this.promotionToStage(newJob));
+            this.jobIndex.set(newJobId, entry.pipelineId);
+          }
+          this.refreshEntry(entry);
+          this.broadcast();
         }
         break;
       }
@@ -541,6 +632,9 @@ export class PipelineTrackerService {
       case 'upload:frameio':
       case 'upload:leaderpass':
         this.uploadService?.cancel(stage.jobId);
+        break;
+      case 'promotion':
+        this.promotionService?.cancel(stage.jobId);
         break;
       // transcript cancellation handled by the transcripter's socket listener
     }

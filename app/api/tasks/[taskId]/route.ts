@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
@@ -7,7 +6,7 @@ import { getTaskStore } from '@/lib/services/container';
 import type { TaskPriority, TaskStatus } from '@/lib/models/task';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getAllUsers, getUserById } from '@/lib/store/user-store';
-import { getActivityDb } from '@/lib/store/activity-db';
+import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 
 export async function PATCH(
   req: NextRequest,
@@ -31,55 +30,65 @@ export async function PATCH(
   if (!updated) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
 
   const actor = getUserById(session.userId);
-  const actorDisplay = actor?.name ?? null;
+  const actorName = actor?.name ?? undefined;
   const projectId = updated.projectId !== 'unassigned' ? updated.projectId : null;
   const now = new Date().toISOString();
 
-  const statusChanged = body.status && prev && body.status !== prev.status;
-  const notesChanged = body.notes !== undefined && body.notes !== (prev?.notes ?? null);
+  const statusChanged = body.status !== undefined && prev !== null && body.status !== prev.status;
+  const assigneesChanged = body.assignedTo !== undefined;
 
-  const recorded = recordActivity({
+  recordActivity({
     actor_type: 'user',
     actor_id: session.userId,
-    actor_display: actorDisplay,
+    actor_display: actorName ?? null,
     occurred_at: now,
     event_type: statusChanged ? 'task.status.changed' : 'task.updated',
     lifecycle_phase: 'updated',
     source_kind: 'api',
     visibility: 'user_timeline',
     title: statusChanged
-      ? `Task marked ${body.status?.replace('_', ' ')}: ${updated.description}`
+      ? `Task marked ${body.status?.replace(/_/g, ' ')}: ${updated.description}`
       : `Task updated: ${updated.description}`,
     project_id: projectId,
     client_id: updated.clientName,
   });
 
-  // Write mention notifications for newly @mentioned users in notes.
-  if (notesChanged && updated.notes && recorded) {
-    const allUsers = getAllUsers();
-    const db = getActivityDb();
-    const seen = new Set<string>();
+  const allUsers = getAllUsers();
+  const notified = new Set<string>([session.userId]);
+
+  // Notify on status change
+  if (statusChanged) {
+    await Promise.allSettled(
+      updated.assignedTo
+        .filter((uid) => !notified.has(uid))
+        .map((uid) => {
+          notified.add(uid);
+          return notifyTaskEvent({ userId: uid, type: 'status_changed', taskId, taskTitle: updated.description, fromUserId: session.userId, fromName: actorName });
+        }),
+    );
+  }
+
+  // Notify newly added assignees
+  if (assigneesChanged && prev) {
+    const prevIds = new Set(prev.assignedTo);
+    await Promise.allSettled(
+      (body.assignedTo ?? [])
+        .filter((uid) => !prevIds.has(uid) && !notified.has(uid))
+        .map((uid) => {
+          notified.add(uid);
+          return notifyTaskEvent({ userId: uid, type: 'assigned', taskId, taskTitle: updated.description, fromUserId: session.userId, fromName: actorName });
+        }),
+    );
+  }
+
+  // Notify @mentioned users in notes if notes changed
+  if (body.notes !== undefined && body.notes && updated.notes) {
     for (const [, token] of updated.notes.matchAll(/@(\w+)/g)) {
-      const mentioned = allUsers.find(
-        (u) => u.name.split(' ')[0].toLowerCase() === token.toLowerCase(),
-      );
-      if (!mentioned || mentioned.id === session.userId || seen.has(mentioned.id)) continue;
-      seen.add(mentioned.id);
-      db.prepare(`
-        INSERT OR IGNORE INTO notification_candidates (
-          notification_candidate_id, project_id, client_id, event_id,
-          notification_type, severity, title, body, status,
-          recipient_scope_json, dedupe_key, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-      `).run(
-        randomUUID(), projectId, updated.clientName, recorded.event.event_id,
-        'task_mention', 'info',
-        `${actorDisplay ?? 'Someone'} mentioned you in a task`,
-        updated.description,
-        JSON.stringify({ userId: mentioned.id, taskId: updated.taskId }),
-        `task-mention:${updated.taskId}:${mentioned.id}`,
-        now, now,
-      );
+      const u = allUsers.find((u) => u.name.split(' ')[0].toLowerCase() === token.toLowerCase());
+      if (u && !notified.has(u.id)) {
+        notified.add(u.id);
+        await notifyTaskEvent({ userId: u.id, type: 'mentioned', taskId, taskTitle: updated.description, fromUserId: session.userId, fromName: actorName });
+      }
     }
   }
 

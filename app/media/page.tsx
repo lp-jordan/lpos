@@ -258,7 +258,7 @@ function ProjectAccordion({
   ).sort((a, b) => {
     const cmp = assetSort === 'name'
       ? a.name.localeCompare(b.name, undefined, { numeric: true })
-      : new Date(a.registeredAt).getTime() - new Date(b.registeredAt).getTime();
+      : new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
     return assetSortDir === 'asc' ? cmp : -cmp;
   });
 

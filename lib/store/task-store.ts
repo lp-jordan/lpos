@@ -1,82 +1,82 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Task, TaskPriority, TaskStatus } from '@/lib/models/task';
+import { getCoreDb, withTransaction } from './core-db';
 
-const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
-
-interface TasksFile {
-  tasks: Task[];
+interface TaskRow {
+  task_id: string;
+  description: string;
+  project_id: string;
+  client_name: string | null;
+  priority: string;
+  status: string;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  completed_at: string | null;
 }
 
-/** Shape of a task as it may exist on disk before the schema upgrade. */
-interface LegacyTask extends Omit<Task, 'projectId' | 'priority' | 'status' | 'notes'> {
-  projectId?: string | null;
-  priority?: TaskPriority;
-  status?: string; // broader string to handle old 'todo' value
-  notes?: string | null;
-  completed?: boolean;
+interface AssigneeRow {
+  task_id: string;
+  user_id: string;
 }
 
-function migrate(raw: LegacyTask): Task {
-  const rawStatus = raw.status === 'todo' ? 'not_started' : raw.status;
-  const status: TaskStatus = (rawStatus as TaskStatus) ?? (raw.completed ? 'done' : 'not_started');
+function rowToTask(row: TaskRow, assignedTo: string[]): Task {
   return {
-    taskId: raw.taskId,
-    description: raw.description,
-    projectId: raw.projectId ?? 'unassigned',
-    clientName: raw.clientName ?? null,
-    priority: raw.priority ?? 'medium',
-    status,
-    notes: raw.notes ?? null,
-    createdBy: raw.createdBy,
-    assignedTo: raw.assignedTo,
-    createdAt: raw.createdAt,
-    completedAt: status === 'done' ? (raw.completedAt ?? raw.createdAt) : undefined,
+    taskId: row.task_id,
+    description: row.description,
+    projectId: row.project_id,
+    clientName: row.client_name ?? null,
+    priority: row.priority as TaskPriority,
+    status: row.status as TaskStatus,
+    notes: row.notes ?? null,
+    createdBy: row.created_by,
+    assignedTo,
+    createdAt: row.created_at,
+    completedAt: row.completed_at ?? undefined,
   };
 }
 
+function buildAssigneeMap(rows: AssigneeRow[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const row of rows) {
+    const arr = map.get(row.task_id) ?? [];
+    arr.push(row.user_id);
+    map.set(row.task_id, arr);
+  }
+  return map;
+}
+
+function getAssigneesForTask(taskId: string): string[] {
+  return (getCoreDb().prepare('SELECT user_id FROM task_assignees WHERE task_id = ?').all(taskId) as { user_id: string }[])
+    .map((r) => r.user_id);
+}
+
 export class TaskStore {
-  private tasks: Task[] = [];
-
-  constructor() {
-    this.load();
-  }
-
-  // ── Persistence ──────────────────────────────────────────────────────────
-
-  private load() {
-    try {
-      if (fs.existsSync(TASKS_FILE)) {
-        const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8')) as { tasks: LegacyTask[] };
-        this.tasks = (data.tasks ?? []).map(migrate);
-      }
-    } catch {
-      this.tasks = [];
-    }
-  }
-
-  private persist() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(TASKS_FILE, JSON.stringify({ tasks: this.tasks }, null, 2));
-  }
-
   // ── Read ─────────────────────────────────────────────────────────────────
 
   getAll(): Task[] {
-    return [...this.tasks];
+    const db = getCoreDb();
+    const rows = db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all() as TaskRow[];
+    if (rows.length === 0) return [];
+    const assigneeMap = buildAssigneeMap(db.prepare('SELECT task_id, user_id FROM task_assignees').all() as AssigneeRow[]);
+    return rows.map((row) => rowToTask(row, assigneeMap.get(row.task_id) ?? []));
   }
 
-  /** Returns tasks where the user created or is assigned. */
   getForUser(userId: string): Task[] {
-    return this.tasks.filter(
-      (t) => t.createdBy === userId || t.assignedTo.includes(userId),
-    );
+    const db = getCoreDb();
+    const rows = db.prepare(`
+      SELECT DISTINCT t.* FROM tasks t
+      LEFT JOIN task_assignees ta ON t.task_id = ta.task_id
+      WHERE t.created_by = ? OR ta.user_id = ?
+      ORDER BY t.created_at DESC
+    `).all(userId, userId) as TaskRow[];
+    return rows.map((row) => rowToTask(row, getAssigneesForTask(row.task_id)));
   }
 
   getById(taskId: string): Task | null {
-    return this.tasks.find((t) => t.taskId === taskId) ?? null;
+    const row = getCoreDb().prepare('SELECT * FROM tasks WHERE task_id = ?').get(taskId) as TaskRow | undefined;
+    if (!row) return null;
+    return rowToTask(row, getAssigneesForTask(taskId));
   }
 
   // ── Write ────────────────────────────────────────────────────────────────
@@ -86,24 +86,36 @@ export class TaskStore {
     projectId: string;
     clientName?: string | null;
     priority?: TaskPriority;
+    status?: TaskStatus;
     notes?: string | null;
     createdBy: string;
     assignedTo?: string[];
   }): Task {
+    const db = getCoreDb();
     const task: Task = {
       taskId: randomUUID(),
       description: input.description.trim(),
       projectId: input.projectId,
       clientName: input.clientName ?? null,
       priority: input.priority ?? 'medium',
-      status: 'not_started',
+      status: input.status ?? 'not_started',
       notes: input.notes ?? null,
       createdBy: input.createdBy,
       assignedTo: input.assignedTo?.length ? input.assignedTo : [input.createdBy],
       createdAt: new Date().toISOString(),
     };
-    this.tasks.push(task);
-    this.persist();
+
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO tasks (task_id, description, project_id, client_name, priority, status, notes, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(task.taskId, task.description, task.projectId, task.clientName, task.priority, task.status, task.notes, task.createdBy, task.createdAt);
+
+      for (const userId of task.assignedTo) {
+        db.prepare('INSERT INTO task_assignees (task_id, user_id) VALUES (?, ?)').run(task.taskId, userId);
+      }
+    });
+
     return task;
   }
 
@@ -111,29 +123,43 @@ export class TaskStore {
     taskId: string,
     patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'notes'>>,
   ): Task | null {
-    const idx = this.tasks.findIndex((t) => t.taskId === taskId);
-    if (idx === -1) return null;
-    const prev = this.tasks[idx];
-    const nextStatus = patch.status ?? prev.status;
-    this.tasks[idx] = {
-      ...prev,
+    const db = getCoreDb();
+    const existing = this.getById(taskId);
+    if (!existing) return null;
+
+    const nextStatus = patch.status ?? existing.status;
+    const completedAt =
+      nextStatus === 'done' && existing.status !== 'done'
+        ? new Date().toISOString()
+        : nextStatus !== 'done'
+          ? null
+          : (existing.completedAt ?? null);
+
+    const next: Task = {
+      ...existing,
       ...patch,
-      completedAt:
-        nextStatus === 'done' && prev.status !== 'done'
-          ? new Date().toISOString()
-          : nextStatus !== 'done'
-            ? undefined
-            : prev.completedAt,
+      completedAt: completedAt ?? undefined,
     };
-    this.persist();
-    return this.tasks[idx];
+
+    withTransaction(db, () => {
+      db.prepare(
+        `UPDATE tasks SET description = ?, priority = ?, status = ?, notes = ?, completed_at = ?
+         WHERE task_id = ?`,
+      ).run(next.description, next.priority, next.status, next.notes, completedAt, taskId);
+
+      if (patch.assignedTo !== undefined) {
+        db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(taskId);
+        for (const userId of next.assignedTo) {
+          db.prepare('INSERT INTO task_assignees (task_id, user_id) VALUES (?, ?)').run(taskId, userId);
+        }
+      }
+    });
+
+    return next;
   }
 
   delete(taskId: string): boolean {
-    const idx = this.tasks.findIndex((t) => t.taskId === taskId);
-    if (idx === -1) return false;
-    this.tasks.splice(idx, 1);
-    this.persist();
-    return true;
+    const result = getCoreDb().prepare('DELETE FROM tasks WHERE task_id = ?').run(taskId);
+    return (result as { changes: number }).changes > 0;
   }
 }

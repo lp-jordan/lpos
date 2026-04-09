@@ -13,6 +13,7 @@ import {
   guessMime,
 } from '@/lib/store/scripts-registry';
 import { extractAndSave } from '@/lib/services/script-extractor';
+import { pushScriptToDrive } from '@/lib/services/drive-script-sync';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -73,8 +74,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     fs.renameSync(tmpPath, finalPath);
     patchScript(projectId, script.scriptId, { filePath: finalPath });
 
-    // Kick off extraction in background
+    // Kick off extraction and Drive push in background
     void extractAndSave(projectId, script.scriptId, finalPath, ext);
+    void pushScriptToDrive(projectId, script.scriptId, finalPath, script.name);
 
     return NextResponse.json({ script: { ...script, filePath: finalPath } }, { status: 201 });
   } catch (err) {

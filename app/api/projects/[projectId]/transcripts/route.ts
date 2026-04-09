@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listProjectTranscripts, readTranscriptDownload, getTranscriptPaths } from '@/lib/transcripts/store';
+import { listProjectTranscripts, readTranscriptDownload, getTranscriptPaths, resolveTranscriptDisplayName } from '@/lib/transcripts/store';
 import fs from 'node:fs';
 import { getProjectById } from '@/lib/selectors/projects';
 
@@ -26,10 +26,16 @@ export async function GET(
       'timecoded-txt': 'text/plain',
     };
 
+    const displayName = resolveTranscriptDisplayName(projectId, download);
+    const baseName = displayName.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9 _\-().]/g, '_').trim() || download;
+    const ext = type === 'timecoded-txt' ? 'txt' : type;
+    const suffix = type === 'timecoded-txt' ? '-timecoded' : '';
+    const downloadFilename = `${baseName}${suffix}.${ext}`;
+
     return new NextResponse(content, {
       headers: {
         'Content-Type': mimeTypes[type],
-        'Content-Disposition': `attachment; filename="${download}.${type}"`,
+        'Content-Disposition': `attachment; filename="${downloadFilename}"`,
       },
     });
   }

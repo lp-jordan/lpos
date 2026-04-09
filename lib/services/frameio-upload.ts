@@ -98,7 +98,7 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
     const folderId    = await getOrCreateProjectFolder(projectName);
 
     // ── Compression (transparent, only for files ≥ 1.9 GB) ───────────────
-    const fileSize    = asset.fileSize || fs.statSync(asset.filePath).size;
+    const fileSize    = asset.fileSize || (await fs.promises.stat(asset.filePath)).size;
     if (!fileSize) throw new Error(`Cannot upload "${filename}" to Frame.io — file size is 0 or unknown`);
     let   uploadPath  = asset.filePath;
     let   uploadSize  = fileSize;
@@ -119,7 +119,7 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
 
       proxyPath  = outputPath;
       uploadPath = outputPath;
-      uploadSize = fs.statSync(outputPath).size;
+      uploadSize = (await fs.promises.stat(outputPath)).size;
       // Keep original extension on the Frame.io filename so it's recognisable
       console.log(`[frameio] compressed to ${(uploadSize / 1e9).toFixed(2)} GB — uploading proxy`);
     }
@@ -173,37 +173,38 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
         stackId = null;
       }
     } else if (context?.priorFrameioFileId) {
-      // First version replacement — create a new stack from the old file + this one.
+      // First version replacement — migrate existing shares BEFORE creating the
+      // version stack. Once createVersionStack runs, Frame.io considers the prior
+      // file ID a stack entry rather than a standalone file; calling
+      // removeFileFromShare on a stacked ID removes the entire stack entry from the
+      // share (taking the newly-added v2 with it). Doing the swap while both files
+      // are still standalone ensures a clean add + remove.
+      try {
+        const allShareAssets = getAllShareAssets(projectId);
+        const affectedShares = Object.entries(allShareAssets)
+          .filter(([, fileIds]) => fileIds.includes(context.priorFrameioFileId!))
+          .map(([shareId]) => shareId);
+
+        for (const shareId of affectedShares) {
+          await addFilesToShare(shareId, [result.frameioAssetId]);
+          await removeFileFromShare(shareId, context.priorFrameioFileId!);
+          addShareAssets(projectId, shareId, [result.frameioAssetId]);
+          removeShareAsset(projectId, shareId, context.priorFrameioFileId!);
+        }
+
+        if (affectedShares.length > 0) {
+          console.log(`[frameio] migrated ${affectedShares.length} share(s) from file ${context.priorFrameioFileId} to ${result.frameioAssetId}`);
+        }
+      } catch (err) {
+        console.warn('[frameio] share migration failed (non-fatal):', (err as Error).message);
+      }
+
+      // Create the version stack after share migration so the prior file ID is
+      // still standalone when it is removed from the shares above.
       try {
         const stackResult = await createVersionStack(folderId, context.priorFrameioFileId, result.frameioAssetId);
         stackId      = stackResult.stackId;
         stackViewUrl = stackResult.viewUrl;
-
-        // Migrate existing shares: swap the old file ID for the stack so every
-        // share link that was sent out automatically shows the latest version.
-        try {
-          const allShareAssets  = getAllShareAssets(projectId);
-          const affectedShares  = Object.entries(allShareAssets)
-            .filter(([, fileIds]) => fileIds.includes(context.priorFrameioFileId!))
-            .map(([shareId]) => shareId);
-
-          for (const shareId of affectedShares) {
-            // Add the new file (not the stack) — Frame.io doesn't reliably accept
-            // version stack IDs as share assets, and adding the old file's ID after
-            // it has been moved into the stack causes Frame.io to remove the stack
-            // entry from the share entirely.
-            await addFilesToShare(shareId, [result.frameioAssetId]);
-            await removeFileFromShare(shareId, context.priorFrameioFileId!);
-            addShareAssets(projectId, shareId, [result.frameioAssetId]);
-            removeShareAsset(projectId, shareId, context.priorFrameioFileId!);
-          }
-
-          if (affectedShares.length > 0) {
-            console.log(`[frameio] migrated ${affectedShares.length} share(s) from file ${context.priorFrameioFileId} to stack ${stackId}`);
-          }
-        } catch (err) {
-          console.warn('[frameio] share migration failed (non-fatal):', (err as Error).message);
-        }
       } catch (err) {
         console.warn('[frameio] could not create version stack (non-fatal):', (err as Error).message);
       }
@@ -292,7 +293,7 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
   } finally {
     // Always clean up the temp proxy — original file is never touched
     if (proxyPath) {
-      try { fs.unlinkSync(proxyPath); } catch { /* ignore */ }
+      try { await fs.promises.unlink(proxyPath); } catch { /* ignore */ }
     }
   }
 }

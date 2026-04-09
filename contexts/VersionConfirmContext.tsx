@@ -115,7 +115,7 @@ function VersionConfirmModal({
           <h2 className="modal-title">Create New Version</h2>
         </div>
         <p className="modal-body-text">
-          {`"${asset.name}" already exists in this project as version ${currentVersionNumber}. Register this file as the next version and replace downstream pipeline mappings for future Frame.io and LeaderPass delivery?`}
+          {`"${asset.name.replace(/\.[^.]+$/, '').replace(/_?v\d+$/i, '') || asset.name}" already exists in this project (currently version ${currentVersionNumber}). Register this file as version ${currentVersionNumber + 1} and replace downstream pipeline mappings for future Frame.io and LeaderPass delivery?`}
         </p>
         <label className="version-confirm-all-label">
           <input

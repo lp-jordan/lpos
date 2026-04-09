@@ -20,4 +20,9 @@ export interface ScriptAsset {
   hasExtractedText: boolean;
   uploadedAt:       string;
   updatedAt:        string;
+  /** Set when this script is synced to/from Google Drive */
+  driveFileId?:     string;
+  driveWebViewUrl?: string;
+  /** True when the file originated from Drive (remote upload), not LPOS */
+  driveSource?:     boolean;
 }

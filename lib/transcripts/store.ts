@@ -118,11 +118,47 @@ export function listProjectTranscripts(projectId: string): TranscriptEntry[] {
         srt: fs.existsSync(srtPath),
         vtt: fs.existsSync(vttPath),
       },
+      ...(meta?.assetId ? { assetId: meta.assetId } : {}),
     };
   });
 
   transcripts.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
   return transcripts;
+}
+
+export function deleteTranscriptsByAsset(projectId: string, assetId: string): number {
+  const transcriptsDir = getTranscriptsDir(projectId);
+  const subtitlesDir   = getSubtitlesDir(projectId);
+  if (!fs.existsSync(transcriptsDir)) return 0;
+
+  let deleted = 0;
+  const metaFiles = fs.readdirSync(transcriptsDir).filter((f) => f.endsWith('.meta.json'));
+
+  for (const metaFile of metaFiles) {
+    const jobId = path.basename(metaFile, '.meta.json');
+    const meta  = readTranscriptMeta(projectId, jobId);
+    if (meta?.assetId !== assetId) continue;
+
+    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.meta.json`]) {
+      try { fs.unlinkSync(path.join(transcriptsDir, name)); } catch { /* already gone */ }
+    }
+    for (const name of [`${jobId}.srt`, `${jobId}.vtt`]) {
+      try { fs.unlinkSync(path.join(subtitlesDir, name)); } catch { /* already gone */ }
+    }
+    deleted++;
+  }
+
+  return deleted;
+}
+
+export function resolveTranscriptDisplayName(projectId: string, jobId: string): string {
+  const meta = readTranscriptMeta(projectId, jobId);
+  let filename = meta?.filename ?? jobId;
+  if (UUID_FILE_RE.test(filename) && meta?.assetId) {
+    const resolved = getAssetNameMap(projectId).get(meta.assetId);
+    if (resolved) filename = resolved;
+  }
+  return filename;
 }
 
 export function readTranscriptDownload(

@@ -29,6 +29,13 @@ export interface IngestJob {
   tempPath?:    string;   // upload-* temp file path
   stablePath?:  string;   // final assetId-based file path
   batchId?:     string;   // shared UUID for all jobs reserved together
+  fileSize?:    number;   // bytes — set at reserve time for display in IngestTray
+  // Chunked upload fields — populated for jobs using the chunked upload path
+  uploadId?:    string;   // upload_sessions.upload_id, present for chunked jobs
+  versionMeta?: {         // present when status = 'awaiting_confirmation'
+    existingAsset:        unknown;
+    currentVersionNumber: number;
+  };
 }
 
 interface IngestJobRow {
@@ -46,16 +53,21 @@ interface IngestJobRow {
   updated_at: string;
   completed_at: string | null;
   batch_id: string | null;
+  file_size: number | null;
 }
 
-const PURGE_AGE_MS = 24 * 60 * 60_000; // 24 hours
+const PURGE_AGE_MS = 7 * 24 * 60 * 60_000; // 7 days
 // Pre-reserved jobs with no upload started are treated as abandoned after this
 // period and auto-failed so they don't linger in the IngestTray indefinitely.
 const STALE_QUEUED_AFTER_MS = 10 * 60_000; // 10 minutes
 const STALE_SWEEP_INTERVAL_MS = 2 * 60_000; // sweep every 2 minutes
+// Chunked upload sessions with no progress for this long are timed out.
+const STALE_UPLOAD_SESSION_AFTER_MS = 60 * 60_000; // 1 hour
+// awaiting_confirmation sessions auto-expire after this long if user never responds.
+const STALE_AWAITING_CONFIRMATION_AFTER_MS = 7 * 24 * 60 * 60_000; // 7 days
 
-function rowToJob(row: IngestJobRow): IngestJob {
-  return {
+function rowToJob(row: IngestJobRow, db?: ReturnType<typeof getIngestQueueDb>): IngestJob {
+  const job: IngestJob = {
     jobId:       row.job_id,
     assetId:     row.asset_id,
     projectId:   row.project_id,
@@ -70,7 +82,24 @@ function rowToJob(row: IngestJobRow): IngestJob {
     updatedAt:   row.updated_at,
     completedAt: row.completed_at ?? undefined,
     batchId:     row.batch_id ?? undefined,
+    fileSize:    row.file_size ?? undefined,
   };
+
+  // For awaiting_confirmation jobs, attach upload session info so the
+  // IngestTray can display confirm/decline buttons without a separate fetch.
+  if (row.status === 'awaiting_confirmation' && db) {
+    const session = db.prepare(
+      `SELECT upload_id, version_meta_json FROM upload_sessions WHERE job_id = ? AND status = 'awaiting_confirmation' LIMIT 1`,
+    ).get(row.job_id) as { upload_id: string; version_meta_json: string | null } | undefined;
+    if (session) {
+      job.uploadId = session.upload_id;
+      if (session.version_meta_json) {
+        try { job.versionMeta = JSON.parse(session.version_meta_json); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  return job;
 }
 
 export class IngestQueueService {
@@ -90,7 +119,11 @@ export class IngestQueueService {
     this.recoverOnBoot().catch((err) => console.error('[ingest-queue] boot recovery error:', err));
     this.purgeOldJobs();
     this.sweepStaleQueuedJobs();
-    this.staleTimer = setInterval(() => this.sweepStaleQueuedJobs(), STALE_SWEEP_INTERVAL_MS);
+    this.sweepStaleUploadSessions();
+    this.staleTimer = setInterval(() => {
+      this.sweepStaleQueuedJobs();
+      this.sweepStaleUploadSessions();
+    }, STALE_SWEEP_INTERVAL_MS);
 
     this.io.of('/media-ingest').on('connection', (socket) => {
       socket.emit('queue', this.getQueue());
@@ -109,14 +142,14 @@ export class IngestQueueService {
   // ── Public API (called by media/route.ts) ─────────────────────────────────
 
   /** Register a new ingest job. Returns the jobId. */
-  add(projectId: string, filename: string, batchId?: string): string {
+  add(projectId: string, filename: string, batchId?: string, fileSize?: number): string {
     const jobId = randomUUID();
     const queuedAt = new Date().toISOString();
     const db = getIngestQueueDb();
     db.prepare(`
-      INSERT INTO ingest_jobs (job_id, asset_id, project_id, filename, status, progress, queued_at, updated_at, batch_id)
-      VALUES (?, '', ?, ?, 'queued', 0, ?, ?, ?)
-    `).run(jobId, projectId, filename, queuedAt, queuedAt, batchId ?? null);
+      INSERT INTO ingest_jobs (job_id, asset_id, project_id, filename, status, progress, queued_at, updated_at, batch_id, file_size)
+      VALUES (?, '', ?, ?, 'queued', 0, ?, ?, ?, ?)
+    `).run(jobId, projectId, filename, queuedAt, queuedAt, batchId ?? null, fileSize ?? null);
     this.broadcast();
     recordActivity({
       ...serviceActor('Ingest Queue', 'ingest-queue'),
@@ -322,7 +355,7 @@ export class IngestQueueService {
       if (!seen.has(row.job_id)) { seen.add(row.job_id); merged.push(row); }
     }
     merged.sort((a, b) => a.queued_at.localeCompare(b.queued_at));
-    return merged.map(rowToJob);
+    return merged.map((row) => rowToJob(row, db));
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -330,7 +363,7 @@ export class IngestQueueService {
   private getJob(jobId: string): IngestJob | null {
     const db = getIngestQueueDb();
     const row = db.prepare('SELECT * FROM ingest_jobs WHERE job_id = ?').get(jobId) as IngestJobRow | undefined;
-    return row ? rowToJob(row) : null;
+    return row ? rowToJob(row, db) : null;
   }
 
   private updateField(jobId: string, column: string, value: string): void {
@@ -357,6 +390,7 @@ export class IngestQueueService {
     if (incomplete.length === 0) return;
 
     let cleaned = 0;
+    let resumed = 0;
     for (const row of incomplete) {
       // If asset was registered (assetId set) AND stable file exists, the ingest
       // was essentially complete — just mark done.
@@ -369,6 +403,40 @@ export class IngestQueueService {
           ).run(now, now, row.job_id);
           continue;
         } catch { /* fall through to cleanup */ }
+      }
+
+      // Chunked upload: if an upload_sessions row exists with status='uploading'
+      // and the temp file is still on disk, the upload is resumable — reset the
+      // job to 'queued' so the IngestTray shows a resume prompt.
+      const session = db.prepare(
+        "SELECT upload_id, temp_path, bytes_received, file_size FROM upload_sessions WHERE job_id = ? AND status = 'uploading' LIMIT 1",
+      ).get(row.job_id) as { upload_id: string; temp_path: string; bytes_received: number; file_size: number } | undefined;
+
+      if (session) {
+        let tempExists = false;
+        try { await fs.promises.access(session.temp_path); tempExists = true; } catch { /* missing */ }
+
+        if (tempExists) {
+          // Temp file intact — mark job resumable (queued) and refresh session timestamp.
+          const now = new Date().toISOString();
+          const pct = session.file_size > 0
+            ? Math.min(94, Math.round((session.bytes_received / session.file_size) * 100))
+            : 0;
+          db.prepare(
+            "UPDATE ingest_jobs SET status = 'queued', progress = ?, error = NULL, detail = 'Resume upload to continue', updated_at = ? WHERE job_id = ?",
+          ).run(pct, now, row.job_id);
+          db.prepare(
+            "UPDATE upload_sessions SET updated_at = ? WHERE upload_id = ?",
+          ).run(now, session.upload_id);
+          resumed++;
+          continue;
+        }
+
+        // Session exists but temp file is gone — cancel the session.
+        const now = new Date().toISOString();
+        db.prepare(
+          "UPDATE upload_sessions SET status = 'cancelled', updated_at = ? WHERE upload_id = ?",
+        ).run(now, session.upload_id);
       }
 
       // Clean up orphaned files
@@ -386,20 +454,48 @@ export class IngestQueueService {
       cleaned++;
     }
 
-    if (cleaned > 0) {
-      console.log(`[ingest-queue] cleaned up ${cleaned} interrupted ingest(s)`);
+    if (resumed > 0) console.log(`[ingest-queue] ${resumed} chunked upload(s) ready to resume`);
+    if (cleaned > 0) console.log(`[ingest-queue] cleaned up ${cleaned} interrupted ingest(s)`);
+  }
+
+  private sweepStaleUploadSessions(): void {
+    const db = getIngestQueueDb();
+    const now = new Date().toISOString();
+
+    // Uploading sessions with no progress for >1 hour.
+    const uploadingCutoff = new Date(Date.now() - STALE_UPLOAD_SESSION_AFTER_MS).toISOString();
+    const staleSessions = db.prepare(
+      "SELECT upload_id, temp_path, job_id FROM upload_sessions WHERE status = 'uploading' AND updated_at < ?",
+    ).all(uploadingCutoff) as { upload_id: string; temp_path: string; job_id: string }[];
+
+    for (const session of staleSessions) {
+      try { fs.unlinkSync(session.temp_path); } catch { /* already gone */ }
+      db.prepare("UPDATE upload_sessions SET status = 'cancelled', updated_at = ? WHERE upload_id = ?")
+        .run(now, session.upload_id);
+      this.fail(session.job_id, 'Upload session timed out after 1 hour of inactivity');
+    }
+
+    // awaiting_confirmation sessions older than 7 days — user never responded.
+    const confirmCutoff = new Date(Date.now() - STALE_AWAITING_CONFIRMATION_AFTER_MS).toISOString();
+    const staleConfirm = db.prepare(
+      "SELECT upload_id, temp_path, job_id FROM upload_sessions WHERE status = 'awaiting_confirmation' AND updated_at < ?",
+    ).all(confirmCutoff) as { upload_id: string; temp_path: string; job_id: string }[];
+
+    for (const session of staleConfirm) {
+      try { fs.unlinkSync(session.temp_path); } catch { /* already gone */ }
+      db.prepare("UPDATE upload_sessions SET status = 'cancelled', updated_at = ? WHERE upload_id = ?")
+        .run(now, session.upload_id);
+      this.fail(session.job_id, 'Version confirmation expired after 7 days');
+    }
+
+    if (staleSessions.length + staleConfirm.length > 0) {
+      console.log(`[ingest-queue] swept ${staleSessions.length} stale upload session(s), ${staleConfirm.length} expired confirmation(s)`);
+      this.broadcast();
     }
   }
 
   private sweepStaleQueuedJobs(): void {
     const db = getIngestQueueDb();
-
-    // If anything is actively ingesting, queued jobs are legitimately waiting.
-    const activeRow = db.prepare(
-      "SELECT 1 FROM ingest_jobs WHERE status = 'ingesting' LIMIT 1",
-    ).get();
-    if (activeRow) return;
-
     const cutoff = new Date(Date.now() - STALE_QUEUED_AFTER_MS).toISOString();
 
     // Candidates: queued, no temp_path (upload never began), older than threshold.

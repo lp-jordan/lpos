@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ClientOwners } from '@/lib/models/client-owner';
 import type { UserSummary } from '@/lib/models/user';
 
@@ -12,11 +12,13 @@ export interface UseClientOwnersResult {
   renameClient: (oldName: string, newName: string) => Promise<void>;
 }
 
-export function useClientOwners(): UseClientOwnersResult {
-  const [owners, setOwners] = useState<ClientOwners>({});
-  const [users, setUsers] = useState<UserSummary[]>([]);
+export function useClientOwners(initialOwners?: ClientOwners, initialUsers?: UserSummary[]): UseClientOwnersResult {
+  const [owners, setOwners] = useState<ClientOwners>(initialOwners ?? {});
+  const [users, setUsers] = useState<UserSummary[]>(initialUsers ?? []);
+  const seeded = useRef(!!(initialOwners && initialUsers));
 
   useEffect(() => {
+    if (seeded.current) return;
     fetch('/api/client-owners')
       .then((r) => r.json() as Promise<{ owners: ClientOwners }>)
       .then(({ owners: o }) => setOwners(o))

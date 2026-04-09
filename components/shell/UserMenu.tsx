@@ -40,7 +40,7 @@ export function UserMenu({ user }: { user: UserSummary }) {
       <button
         type="button"
         className="user-menu-trigger"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Open user menu for ${user.name}`}

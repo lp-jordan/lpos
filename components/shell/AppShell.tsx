@@ -6,6 +6,7 @@ import { NavBar } from '@/components/shell/NavBar';
 import { Breadcrumb } from '@/components/shell/Breadcrumb';
 import { PipelineTray } from '@/components/shell/PipelineTray';
 import { UserMenu } from '@/components/shell/UserMenu';
+import { NotifBell } from '@/components/shell/NotifBell';
 import { WishListButton } from '@/components/shell/WishListButton';
 import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
@@ -18,6 +19,16 @@ function TrayGroup() {
     <div className="tray-group">
       <PipelineTray />
     </div>
+  );
+}
+
+function GuestSignOutButton() {
+  return (
+    <form action="/api/auth/logout" method="post">
+      <button type="submit" className="guest-signout-btn" data-guest-ok>
+        Sign out
+      </button>
+    </form>
   );
 }
 
@@ -56,10 +67,12 @@ export function AppShell({
             <div className="app-home" data-guest={isGuest || undefined}>
               <RestartCountdownBanner />
               {children}
-              {currentUser && <UserMenu user={currentUser} />}
-              {currentUser && <WishListButton currentUser={currentUser} home />}
-              <StorageGear home />
-              {!isStudio && <TrayGroup />}
+              {currentUser && !isGuest && <NotifBell />}
+              {currentUser && !isGuest && <UserMenu user={currentUser} />}
+              {currentUser && !isGuest && <WishListButton currentUser={currentUser} home />}
+              {isGuest && <GuestSignOutButton />}
+              {!isGuest && <StorageGear home />}
+              {!isGuest && <TrayGroup />}
             </div>
           </VersionConfirmProvider>
         </ContextMenuProvider>
@@ -73,15 +86,17 @@ export function AppShell({
           <VersionConfirmProvider>
             <div className="app-inner" data-guest={isGuest || undefined}>
               <RestartCountdownBanner />
-              {currentUser && !isSignIn && <UserMenu user={currentUser} />}
+              {currentUser && !isSignIn && !isGuest && <NotifBell />}
+              {currentUser && !isSignIn && !isGuest && <UserMenu user={currentUser} />}
+              {isGuest && <GuestSignOutButton />}
               <NavBar />
               <Breadcrumb />
             <main className="app-content">
               {children}
             </main>
-            {currentUser && !isSignIn && <WishListButton currentUser={currentUser} />}
-            <StorageGear />
-            {!isStudio && <TrayGroup />}
+            {currentUser && !isSignIn && !isGuest && <WishListButton currentUser={currentUser} />}
+            {!isGuest && <StorageGear />}
+            {!isGuest && !isStudio && <TrayGroup />}
           </div>
         </VersionConfirmProvider>
       </ContextMenuProvider>

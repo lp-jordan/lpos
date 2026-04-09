@@ -345,7 +345,7 @@ function ShareCard({
   // Prefer the live count from expanded files; fall back to the eager count from the list response.
   const count = share.files !== null ? share.files.length : share.fileCount;
   const fileCountLabel = count === null
-    ? (share.filesLoading ? 'Loading…' : '—')
+    ? (share.filesLoading ? 'Loading…' : null)
     : `${count} file${count !== 1 ? 's' : ''}`;
 
   return (
@@ -396,9 +396,9 @@ function ShareCard({
               </button>
             )}
             <span className="sh-card-meta">
-              {share.createdAt ? formatDate(share.createdAt) : ''}
-              {' · '}
-              {fileCountLabel}
+              {[share.createdAt ? formatDate(share.createdAt) : null, fileCountLabel]
+                .filter(Boolean)
+                .join(' · ')}
             </span>
           </div>
 

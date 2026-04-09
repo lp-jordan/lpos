@@ -1,60 +1,29 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import type { ClientOwners } from '@/lib/models/client-owner';
-
-const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const OWNERS_FILE = path.join(DATA_DIR, 'client-owners.json');
+import { getCoreDb } from './core-db';
 
 export class ClientOwnerStore {
-  private owners: ClientOwners = {};
-
-  constructor() {
-    this.load();
-  }
-
-  // ── Persistence ─────────────────────────────────────────────────────────
-
-  private load() {
-    try {
-      if (fs.existsSync(OWNERS_FILE)) {
-        this.owners = JSON.parse(fs.readFileSync(OWNERS_FILE, 'utf8')) as ClientOwners;
-      }
-    } catch {
-      this.owners = {};
-    }
-  }
-
-  private persist() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(OWNERS_FILE, JSON.stringify(this.owners, null, 2));
-  }
-
   // ── Read ─────────────────────────────────────────────────────────────────
 
   getAll(): ClientOwners {
-    return { ...this.owners };
+    const rows = getCoreDb().prepare('SELECT client_name, user_id FROM client_owners').all() as { client_name: string; user_id: string }[];
+    return Object.fromEntries(rows.map((r) => [r.client_name, r.user_id]));
   }
 
   // ── Write ────────────────────────────────────────────────────────────────
 
   set(clientName: string, userId: string): void {
-    this.owners[clientName] = userId;
-    this.persist();
+    getCoreDb().prepare(
+      'INSERT INTO client_owners (client_name, user_id) VALUES (?, ?) ON CONFLICT(client_name) DO UPDATE SET user_id = excluded.user_id',
+    ).run(clientName, userId);
   }
 
   remove(clientName: string): void {
-    delete this.owners[clientName];
-    this.persist();
+    getCoreDb().prepare('DELETE FROM client_owners WHERE client_name = ?').run(clientName);
   }
 
-  /**
-   * Re-keys the ownership entry when a client is renamed.
-   * If the old name had no owner this is a no-op.
-   */
   rename(oldName: string, newName: string): void {
-    if (!(oldName in this.owners)) return;
-    this.owners[newName] = this.owners[oldName];
-    delete this.owners[oldName];
-    this.persist();
+    getCoreDb().prepare(
+      'UPDATE client_owners SET client_name = ? WHERE client_name = ?',
+    ).run(newName, oldName);
   }
 }

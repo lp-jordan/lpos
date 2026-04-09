@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { registerWebhook, listWebhooks, deleteWebhook } from '@/lib/services/frameio';
+import { requireRole } from '@/lib/services/api-auth';
 
 const COMMENT_EVENTS = [
   'comment.created',
@@ -24,7 +25,10 @@ const COMMENT_EVENTS = [
   'comment.deleted',
 ];
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   try {
     const webhooks = await listWebhooks();
     return NextResponse.json({ webhooks });
@@ -34,6 +38,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   try {
     const body = await req.json() as { url?: string; name?: string };
 
@@ -60,6 +67,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   try {
     const body = await req.json() as { id?: string };
     if (!body.id?.trim()) {

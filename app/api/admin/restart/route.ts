@@ -7,17 +7,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getUserById } from '@/lib/store/user-store';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireRole } from '@/lib/services/api-auth';
 import {
   getIngestQueueService,
   getTranscripterService,
   getUploadQueueService,
 } from '@/lib/services/container';
 
-const ADMIN_EMAIL = 'jordan@leaderpass.com';
 const COUNTDOWN_SECONDS = 60;
 
 const INGEST_ACTIVE = new Set(['queued', 'ingesting', 'awaiting_confirmation']);
@@ -49,16 +46,9 @@ function scheduleRestart(): void {
   child.unref();
 }
 
-export async function POST(req: Request) {
-  // ── Auth ────────────────────────────────────────────────────────────────────
-  const cookieStore = await cookies();
-  const session = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
-  if (!session) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-
-  const user = getUserById(session.userId);
-  if (!user || user.email !== ADMIN_EMAIL) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-  }
+export async function POST(req: NextRequest) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
 
   const body = await req.json().catch(() => ({})) as { autoRestart?: boolean };
   const autoRestart = body.autoRestart !== false; // default true

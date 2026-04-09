@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { usePipelineQueue } from '@/hooks/usePipelineQueue';
 import type { PipelineEntry, PipelineStage, PipelineStageType } from '@/lib/types/pipeline';
 import {
@@ -17,6 +17,99 @@ import {
 } from '@/lib/pipeline-helpers';
 
 type StatusFilter = 'all' | 'active' | 'queued' | 'failed' | 'completed';
+
+// ── Previous jobs ─────────────────────────────────────────────────────────────
+
+interface HistoryJob {
+  filename:    string;
+  queuedAt:    string;
+  completedAt: string;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1_000) return '<1s';
+  const s = Math.round(ms / 1_000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
+}
+
+function formatUploadedAt(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function PreviousJobsModal({ onClose }: { onClose: () => void }) {
+  const [jobs, setJobs]     = useState<HistoryJob[] | null>(null);
+  const [error, setError]   = useState(false);
+
+  useEffect(() => {
+    fetch('/api/jobs/history')
+      .then((r) => r.json())
+      .then((d) => setJobs(d.jobs ?? []))
+      .catch(() => setError(true));
+  }, []);
+
+  // Close on backdrop click
+  const onBackdrop = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  }, [onClose]);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div className="pjobs-backdrop" onClick={onBackdrop}>
+      <div className="pjobs-modal" role="dialog" aria-modal="true" aria-label="Previous jobs">
+        <div className="pjobs-header">
+          <span className="pjobs-title">Previous jobs</span>
+          <button type="button" className="pjobs-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="pjobs-body">
+          {error && <p className="pjobs-message">Failed to load history.</p>}
+          {!error && jobs === null && <p className="pjobs-message">Loading…</p>}
+          {!error && jobs !== null && jobs.length === 0 && (
+            <p className="pjobs-message">No completed uploads in the last 7 days.</p>
+          )}
+          {!error && jobs !== null && jobs.length > 0 && (
+            <table className="pjobs-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Uploaded</th>
+                  <th>Duration</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job, i) => {
+                  const duration = Date.parse(job.completedAt) - Date.parse(job.queuedAt);
+                  return (
+                    <tr key={i}>
+                      <td className="pjobs-filename" title={job.filename}>{job.filename}</td>
+                      <td className="pjobs-when">{formatUploadedAt(job.queuedAt)}</td>
+                      <td className="pjobs-duration">{formatDuration(duration)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Stage row ────────────────────────────────────────────────────────────────
 
@@ -167,6 +260,7 @@ export function QueueView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [now, setNow] = useState(() => Date.now());
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 5_000);
@@ -295,6 +389,14 @@ export function QueueView() {
           ))}
         </div>
       )}
+
+      <div className="queue-history-trigger">
+        <button type="button" className="queue-history-btn" onClick={() => setShowHistory(true)}>
+          Previous jobs
+        </button>
+      </div>
+
+      {showHistory && <PreviousJobsModal onClose={() => setShowHistory(false)} />}
     </div>
   );
 }

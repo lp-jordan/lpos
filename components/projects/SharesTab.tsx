@@ -400,8 +400,10 @@ function ShareCard({
               </button>
             )}
             <span className="sh-card-meta">
-              {share.createdAt ? formatDate(share.createdAt) : ''}
-              {share.files !== null && ` · ${share.files.length} file${share.files.length !== 1 ? 's' : ''}`}
+              {[
+                share.createdAt ? formatDate(share.createdAt) : null,
+                share.files !== null ? `${share.files.length} file${share.files.length !== 1 ? 's' : ''}` : null,
+              ].filter(Boolean).join(' · ')}
             </span>
           </div>
 

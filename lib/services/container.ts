@@ -32,12 +32,18 @@ import {
 import { ProjectStore } from '@/lib/store/project-store';
 import { ClientOwnerStore } from '@/lib/store/client-owner-store';
 import { TaskStore } from '@/lib/store/task-store';
+import { TaskCommentStore } from '@/lib/store/task-comment-store';
+import { TaskNotificationStore } from '@/lib/store/task-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
 import { getRuntimeDependencyReport } from './runtime-dependencies';
 import { PipelineTrackerService } from './pipeline-tracker-service';
 import { PresentationService } from './presentation-service';
+import { DriveWatcherService } from './drive-watcher-service';
+import { pushTranscriptToDrive } from './drive-transcript-sync';
+import { PromotionQueueService } from './promotion-queue-service';
+import { PromotionProcessor } from './promotion-processor';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -60,6 +66,10 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_taskStore: TaskStore | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_taskCommentStore: TaskCommentStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_taskNotificationStore: TaskNotificationStore | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_projectNoteStore: ProjectNoteStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_wishStore: WishStore | undefined;
@@ -69,6 +79,10 @@ declare global {
   var __lpos_amaranService: AmaranService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_presentationService: PresentationService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_driveWatcherService: DriveWatcherService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_promotionQueueService: PromotionQueueService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
 }
@@ -86,9 +100,13 @@ let activityMonitorService: ActivityMonitorService | null = null;
 let pipelineTracker: PipelineTrackerService | null = null;
 let clientOwnerStore: ClientOwnerStore | null = null;
 let taskStore: TaskStore | null = null;
+let taskCommentStore: TaskCommentStore | null = null;
+let taskNotificationStore: TaskNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
 let presentationService: PresentationService | null = null;
+let driveWatcherService: DriveWatcherService | null = null;
+let promotionQueueService: PromotionQueueService | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -126,6 +144,9 @@ export async function initServices(io: SocketIOServer): Promise<void> {
         },
       });
     }
+    if (job.status === 'done') {
+      void pushTranscriptToDrive(job.projectId, job.jobId);
+    }
   });
 
   passPrepService = new PassPrepService(io, registry);
@@ -138,8 +159,15 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   globalThis.__lpos_ingestQueueService = ingestQueueService;
   ingestQueueService.start();
 
+  promotionQueueService = new PromotionQueueService(io);
+  promotionQueueService.start();
+  globalThis.__lpos_promotionQueueService = promotionQueueService;
+
+  const promotionProcessor = new PromotionProcessor(promotionQueueService, io);
+  promotionProcessor.start();
+
   pipelineTracker = new PipelineTrackerService(io, globalThis.__lpos_projectStore);
-  pipelineTracker.subscribe(ingestQueueService, uploadQueueService, transcripterService);
+  pipelineTracker.subscribe(ingestQueueService, uploadQueueService, transcripterService, promotionQueueService);
   pipelineTracker.start();
   globalThis.__lpos_pipelineTracker = pipelineTracker;
 
@@ -154,6 +182,11 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   presentationService = new PresentationService(io);
   globalThis.__lpos_presentationService = presentationService;
 
+  if (process.env.GOOGLE_DRIVE_SHARED_DRIVE_ID) {
+    driveWatcherService = new DriveWatcherService(io);
+    globalThis.__lpos_driveWatcherService = driveWatcherService;
+  }
+
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
@@ -161,12 +194,14 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     cameraControlService.start(),
     amaranService.start(),
     activityMonitorService.start(),
+    driveWatcherService?.start() ?? Promise.resolve(),
   ]);
 }
 
 export async function stopServices(): Promise<void> {
   pipelineTracker?.stop();
   uploadQueueService?.stop();
+  driveWatcherService?.stop();
   await Promise.all([
     slateService?.stop(),
     transcripterService?.stop(),
@@ -294,4 +329,35 @@ export function getPresentationService(): PresentationService {
   if (globalThis.__lpos_presentationService) return globalThis.__lpos_presentationService;
   if (presentationService) return presentationService;
   throw new Error('PresentationService not initialized — server.ts must be running');
+}
+
+export function getDriveWatcherService(): DriveWatcherService | null {
+  if (globalThis.__lpos_driveWatcherService) return globalThis.__lpos_driveWatcherService;
+  return driveWatcherService;
+}
+
+export function getPromotionQueueService(): PromotionQueueService {
+  if (globalThis.__lpos_promotionQueueService) return globalThis.__lpos_promotionQueueService;
+  if (promotionQueueService) return promotionQueueService;
+  throw new Error('PromotionQueueService not initialized — server.ts must be running');
+}
+
+export function getTaskCommentStore(): TaskCommentStore {
+  if (globalThis.__lpos_taskCommentStore) return globalThis.__lpos_taskCommentStore;
+  if (taskCommentStore) return taskCommentStore;
+  taskCommentStore = new TaskCommentStore();
+  globalThis.__lpos_taskCommentStore = taskCommentStore;
+  return taskCommentStore;
+}
+
+export function getTaskNotificationStore(): TaskNotificationStore {
+  if (globalThis.__lpos_taskNotificationStore) return globalThis.__lpos_taskNotificationStore;
+  if (taskNotificationStore) return taskNotificationStore;
+  taskNotificationStore = new TaskNotificationStore();
+  globalThis.__lpos_taskNotificationStore = taskNotificationStore;
+  return taskNotificationStore;
+}
+
+export function getIo(): import('socket.io').Server | undefined {
+  return globalThis.__lpos_io;
 }

@@ -2,6 +2,175 @@
 
 ---
 
+## 2026-04-02 — Theater mode defaults to comments open when comments exist
+
+**User prompt:** When there are comments on a video, let's default to show those in theater mode instead of defaulting to collapsed
+
+**Summary:** Changed `panelOpen` initial state in `VideoTheaterMode` from `false` to `comments.length > 0`.
+
+**Files changed:**
+- `lpos-dashboard/components/media/VideoTheaterMode.tsx` — `useState(false)` → `useState(comments.length > 0)` for `panelOpen`
+
+**Decision rationale:** `comments` is available at mount time, so the initial state can be derived directly. No prop or effect needed.
+
+---
+
+## 2026-04-02 — Pause sidebar player when theater mode opens
+
+**User prompt:** Can we make sure the sidebar player pauses when theater mode opens
+
+**Summary:** Added `sidebarVideoRef` (a `useRef<HTMLVideoElement>`) and an `openTheater(src)` helper that pauses the ref before calling `setTheaterSrc`. Both theater mode buttons (Frame.io and local stream branches) now call `openTheater` instead of `setTheaterSrc` directly. The `ref` is attached to both `<video>` elements. The comment-click path that opens theater (`setTheaterSrc` at line ~769) is left unchanged — a seek-driven open doesn't require pausing.
+
+**Files changed:**
+- `lpos-dashboard/components/media/MediaDetailPanel.tsx` — added `sidebarVideoRef`, `openTheater()`, wired `ref` and `onClick` on both video branches
+
+**Decision rationale:** Single ref is sufficient because only one video branch renders at a time (Frame.io or local, not both). `openTheater` keeps the pause + state update co-located so the order is guaranteed.
+
+---
+
+## 2026-04-02 — Revert sidebar player to native video + theater mode button below
+
+**User prompt:** Revert to default player for sidebar and just add a theater mode button below it for now
+
+**Summary:** Replaced `InlineVideoPlayer` in `MediaDetailPanel` with the native `<video controls>` element inside the existing `mad-video-wrap` container. Added a "Theater mode" button (`mad-action-btn`) below the video in a new `mad-video-theater-row` div. Removed the `InlineVideoPlayer` import (now unused in this file).
+
+**Files changed:**
+- `lpos-dashboard/components/media/MediaDetailPanel.tsx` — removed `InlineVideoPlayer` import; replaced both video branches with `mad-video-wrap` + native `<video>` + theater row button
+- `lpos-dashboard/app/globals.css` — added `.mad-video-theater-row` rule
+
+**Implementation summary:** Both the Frame.io stream and local stream branches now return a fragment containing the native video player and a `mad-video-theater-row` div with a `mad-action-btn` that calls `setTheaterSrc(src)`. The `mad-video-theater-row` uses `padding: 8px 18px 4px` to align the button with section content below.
+
+**Decision rationale:** User wanted to simplify back to native controls while keeping theater mode accessible. Keeps `InlineVideoPlayer` intact in its own file for potential future reuse.
+
+---
+
+## 2026-04-02 — Sidebar player: apply missing aspect-ratio fix to ivp-video-wrap
+
+**User prompt:** Dimensions are off on the sidebar player again. What happened there? / sure yes
+
+**Summary:** History recorded that `aspect-ratio: 16/9` was added to `.ivp-video-wrap` in a prior session ("sidebar player not showing — CSS fix"), but the property was absent from the actual CSS. The comment on `.ivp-video-wrap` still read "16:9 ratio established by the video element itself," confirming the fix was logged but never landed. Applied the one-line fix.
+
+**Files changed:**
+- `lpos-dashboard/app/globals.css` — added `aspect-ratio: 16 / 9` to `.ivp-video-wrap`; updated comment
+
+**Implementation summary:** Without `aspect-ratio` on the wrap, the container relied entirely on the child `<video aspect-ratio: 16/9>` for its height. When the video source errors before the box model resolves (proxy 401/404, Frame.io still processing), the video element may not contribute height, collapsing the wrap and the `ivp-error-overlay` to 0px — leaving only the controls bar visible. Adding `aspect-ratio: 16/9` to the wrap mirrors the old `mad-video-wrap { padding-top: 56.25% }` robustness: the container is always correctly sized regardless of video load state.
+
+**Decision rationale:** Smallest possible fix. The diagnosis and intent were already documented; the code simply didn't match the history.
+
+**Alternatives considered:** None — this was a straightforward re-application of the previously decided fix.
+
+**Commands run:** None.
+
+---
+
+## 2026-04-01 (guest slate tab lock, script upload fix)
+
+**Prompt:** Lock down guests in the studio tab — grey out all tabs except Presentation. Clean up UI. Upload box missing on project scripts page.
+
+**Summary:** Three fixes. (1) Split `app/slate/page.tsx` into a thin server wrapper (reads session role) and `components/slate/SlatePageContent.tsx` (client component receiving `isGuest` prop). Guests default to the Presentation tab, hash-based tab init is skipped for guests, and all non-presentation tabs render with `.sl-pill--locked` (opacity 0.2, pointer-events none). (2) Fixed `app/projects/[projectId]/scripts/page.tsx` — it was using the read-only `AssetList` instead of `ScriptsTab`, so the upload drop-zone was never rendered. Switched to `<ScriptsTab projectId={projectId} />`. (3) Added `.sl-pill--locked` CSS rule to `globals.css`.
+
+**Files changed:**
+- `app/slate/page.tsx` — rewritten as server wrapper; passes `isGuest` prop
+- `components/slate/SlatePageContent.tsx` — created; all former page.tsx client code + isGuest tab lock
+- `app/projects/[projectId]/scripts/page.tsx` — swapped AssetList → ScriptsTab
+- `app/globals.css` — added `.sl-pill--locked` style
+
+**Decision rationale:** Server wrapper pattern injects session data into a client page without an extra client-side fetch. Slate content is unchanged beyond the isGuest prop and tab lock logic.
+
+---
+
+## 2026-04-01 (daily guest PIN, local network access, RBAC completion)
+
+**Prompt (redacted — contains internal IP):** Implement daily rotating 4-digit guest PIN visible in admin settings; allow local network access at static LAN IP using that PIN; complete remaining PIN feature wiring (GuestPinCard, middleware public path, signin button href).
+
+**Summary:** Completed the guest PIN system across all layers. Created `lib/services/guest-pin.ts` (HMAC-SHA256 deterministic PIN, no storage), `app/guest-pin/page.tsx` (4-box PIN entry UI), rewrote `app/api/auth/guest/route.ts` to POST + verify PIN, added `APP_LOCAL_URL` to `.env.local` and Socket.io CORS, created `components/settings/GuestPinCard.tsx` (server component displaying today's PIN), updated `app/settings/page.tsx` to include `GuestPinCard`, added `/guest-pin` to middleware public paths, and changed the signin page guest button href from `/api/auth/guest` to `/guest-pin`. Also completed the full RBAC session shape change (role in JWT), admin management UI + API, guest home screen with Presentation/Script Upload tiles, path allow-list enforcement in middleware, join links for pre-authorized device flow, and `/slate#presentation` hash-based tab deep-link.
+
+**Files changed:**
+- `lib/services/guest-pin.ts` — created; daily HMAC PIN
+- `app/guest-pin/page.tsx` — created; 4-digit PIN entry UI
+- `app/api/auth/guest/route.ts` — rewritten to POST + PIN verification
+- `components/settings/GuestPinCard.tsx` — created; admin-only PIN display
+- `app/settings/page.tsx` — imports and renders GuestPinCard
+- `middleware.ts` — `/guest-pin` added to public path list; Socket.io CORS updated
+- `app/signin/page.tsx` — guest button href → `/guest-pin`
+- `server.ts` — Socket.io CORS allows `APP_LOCAL_URL` alongside `APP_BASE_URL`
+- `.env.local` — added `APP_LOCAL_URL=http://172.20.10.137:3000`
+- `lib/models/user.ts` — added `UserRole` type
+- `lib/store/admin-store.ts` — created; bootstrap admin + persistent admins.json
+- `lib/services/session-auth.ts` — role added to session payload
+- `lib/services/api-auth.ts` — created; `requireRole()` helper
+- `app/api/auth/google/callback/route.ts` — assigns role from admin-store on login
+- `app/api/admin/admins/route.ts` — created; GET/POST/DELETE admin management
+- `app/api/admin/restart/route.ts` — replaced hardcoded email check with requireRole
+- `app/api/storage/config/route.ts` — added requireRole('admin') to PUT
+- `app/api/projects/[projectId]/media/route.ts` — file extension allowlist, 415 on reject
+- `lib/services/ingest-queue-service.ts` — removed global stale sweep guard
+- `components/settings/AdminsPanel.tsx` — created; admin list management UI
+- `app/guest/page.tsx` — created; guest home with Presentation + Script Upload tiles
+- `app/guest/scripts/page.tsx` — created; project picker for script upload
+- `app/api/auth/join/presentation/route.ts` — created; pre-authorized device join link
+- `app/api/auth/join/scripts/[projectId]/route.ts` — created; pre-authorized device join link
+- `app/slate/page.tsx` — hash-based tab deep-link on mount
+- `lib/services/frameio-tokens.ts` — AES-256-GCM encryption at rest
+- `docs/credential-rotation-runbook.md` — created
+
+**Decision rationale:** PIN is HMAC-derived (no storage, no DB, no race conditions) — same PIN re-derived on every call until midnight UTC. Local IP access uses same app stack; no separate server needed. GuestPinCard is a server component so the PIN is never sent as a prop to the client.
+
+**Assumptions / follow-ups:** Error message audit (plain-English API errors across all routes) is still pending.
+
+---
+
+## 2026-04-01 (sidebar player not showing — CSS fix)
+
+**Prompt:** "Let's try option A first."
+
+**Summary:** Added `aspect-ratio: 16 / 9` to `.ivp-video-wrap` in `globals.css`. The wrap previously had no explicit height and relied entirely on the child `<video aspect-ratio: 16/9>` to establish its dimensions. When the video source fails or hasn't loaded yet, the video element may not contribute height, collapsing the wrap to 0px and making both the error overlay and video area invisible. Setting `aspect-ratio` on the wrap itself makes it self-sufficient.
+
+**Files changed:**
+- `app/globals.css` — added `aspect-ratio: 16 / 9` to `.ivp-video-wrap`
+
+**Decision rationale:** Mirrors the robustness of the old `.mad-video-wrap { padding-top: 56.25% }` pattern — the container always has correct dimensions regardless of the video element's load state. One-line fix, no component changes needed.
+
+---
+
+## 2026-04-01 (sidebar player not showing — diagnosis)
+
+**Prompt:** "Please inspect the sidebar player and determine why it is not showing."
+
+**Summary:** Analysis-only task. No files changed. Identified two distinct root causes for the sidebar player (`InlineVideoPlayer` in `MediaDetailPanel`) appearing absent:
+
+1. **Primary cause — no source available**: The rendering IIFE at `MediaDetailPanel.tsx:545–587` returns `null` when both `asset.frameio.assetId` and `asset.filePath` are falsy. This is by design — there is nothing to stream — but produces a silent absence with no error indicator. Affects registered-type assets before Frame.io upload, and any asset where `filePath` is null.
+
+2. **Previously fixed regression** (also 2026-04-01 entry below): The `setUnavailable(true)` early-return with a zero-height `ivp-unavail` div caused the player to pop in briefly and then vanish. That fix is correctly applied in the current code.
+
+3. **Residual CSS fragility (low risk)**: `.ivp-video-wrap` has no `aspect-ratio` of its own and relies on the child `<video aspect-ratio: 16/9>` to establish its height. If the video element fails to establish height (e.g., source errors before box model resolves), the wrap collapses and the error overlay is also 0px, leaving only the controls bar visible.
+
+**Files changed:** None.
+
+**Decision rationale:** No code change warranted without confirming which scenario the user is experiencing. The fix for scenario 2 is already live. Scenario 1 is intentional but could benefit from a visible placeholder when no source is available.
+
+**Follow-ups / open questions:** Should there be a "no preview available — upload to Frame.io to enable streaming" placeholder shown when neither `frameio.assetId` nor `filePath` is set? Currently the section is completely absent.
+
+---
+
+## 2026-04-01 (InlineVideoPlayer error-overlay fix)
+
+**Prompt:** "I can see it pop in for half a second and then disappear again. Something is blocking this"
+
+**Summary:** Fixed a regression where the inline video player in the media sidebar would briefly appear then vanish. Root cause: `onError` fired on the `<video>` element when the frameio-stream proxy returned a non-video response (401/404). This triggered `setUnavailable(true)`, which caused an early return that replaced the entire player with a standalone `ivp-unavail` div. That div had no inherent height in its context, so it appeared invisible.
+
+**Fix:** Removed the early-return `ivp-unavail` pattern entirely. The full player structure (`ivp-root`, `ivp-video-wrap`, controls) now always renders. When `unavailable = true`, an `ivp-error-overlay` div with `position: absolute; inset: 0` overlays the video area, keeping the player dimensions (provided by `<video>` with `aspect-ratio: 16/9`) and controls bar intact.
+
+**Files changed:**
+- `components/media/InlineVideoPlayer.tsx` — removed early-return block; added conditional overlay inside `ivp-video-wrap`
+- `app/globals.css` — replaced `.ivp-unavail` with `.ivp-error-overlay` (absolute overlay pattern)
+
+**Decision rationale:** Keeping the video element in the DOM at all times means dimensions are always established by the `<video>` element's `aspect-ratio: 16/9`. An overlay approach is robust against proxy errors, auth failures, and Frame.io processing delays — the player chrome stays visible regardless of stream availability.
+
+**Alternatives considered:** Giving `ivp-unavail` an explicit fixed height — rejected because it's fragile and loses the player controls. Hiding the `<video>` with `visibility: hidden` when unavailable — unnecessary since the video renders behind the overlay anyway.
+
+---
+
 ## 2026-03-31 (large-file upload timeout fix)
 
 **Prompt:** Uploads getting stuck waiting. Follow-up: file is 9 GB — largest attempted so far.

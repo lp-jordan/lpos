@@ -73,3 +73,47 @@ All versioning failures are non-fatal (logged as warnings) to avoid blocking the
 
 ### Data flow
 Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → poll for `ready` status → asset patched with stream UIDs and URLs.
+
+---
+
+## Authentication & Access Control
+
+### Roles
+| Role | How assigned | Access |
+|------|-------------|--------|
+| `admin` | Google OAuth login with email in admin list (`data/admins.json` or bootstrap `LPOS_BOOTSTRAP_ADMIN`) | Full access + admin settings |
+| `user` | Google OAuth login (any provisioned account) | Full app access |
+| `guest` | Daily PIN entry at `/guest-pin` | `/guest`, `/guest/scripts`, `/slate`, `/api/presentation/*`, `/projects/[id]/scripts` only |
+
+### Key files
+| File | Role |
+|------|------|
+| `lib/services/session-auth.ts` | JWT-like HMAC session tokens with `role` field |
+| `lib/services/api-auth.ts` | `requireRole(req, minimumRole)` helper for route handlers |
+| `lib/store/admin-store.ts` | Bootstrap admin + persistent extra admins in `data/admins.json` |
+| `lib/services/guest-pin.ts` | Daily 4-digit PIN via HMAC-SHA256(LPOS_AUTH_SECRET, date) |
+| `middleware.ts` | Edge auth gate; path allow-list enforcement for guests |
+| `app/api/auth/google/callback/route.ts` | Assigns role on Google OAuth login |
+| `app/api/auth/guest/route.ts` | POST; verifies PIN, issues guest session |
+| `app/api/admin/admins/route.ts` | GET/POST/DELETE admin email management |
+
+### Guest access flow
+1. Device navigates to `http://172.20.10.137:3000` (LAN) or Tailscale URL.
+2. Sign-in page → "Continue as Guest" → `/guest-pin` (public path, no auth required).
+3. Operator provides today's 4-digit PIN (visible in Settings → Guest Access PIN).
+4. PIN verified server-side; guest session cookie set → redirect to `/guest`.
+5. Guest home shows two tiles: **Presentation** and **Script Upload**.
+6. Any navigation outside the allow-list → redirect to `/guest?blocked=1`.
+
+### Daily PIN
+- Derived via HMAC-SHA256(`LPOS_AUTH_SECRET`, `lpos-guest-pin:YYYY-MM-DD`).
+- No storage required; same PIN re-derived on every call until midnight UTC.
+- Visible to admins at Settings → Guest Access PIN.
+- Local URL for studio devices: `http://172.20.10.137:3000` (allowed via `APP_LOCAL_URL` in Socket.io CORS).
+
+### Admin management
+- Bootstrap admin hardcoded via `LPOS_BOOTSTRAP_ADMIN` env (default: `jordan@leaderpass.com`). Cannot be removed via UI.
+- Additional admins managed via Settings → Admins panel (`AdminsPanel` component → `POST /api/admin/admins`).
+
+### Credential rotation
+See `docs/credential-rotation-runbook.md` for step-by-step rotation of all secrets.

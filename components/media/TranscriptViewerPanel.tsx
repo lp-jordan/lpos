@@ -621,9 +621,24 @@ export function TranscriptViewerPanel({
             </div>
 
             <div className="txv-body">
+              {!loading && !error && content && (
+                <CopyButton text={content} />
+              )}
               {loading && <p className="txv-loading">Loading...</p>}
               {error && <p className="txv-error">{error}</p>}
-              {!loading && !error && content && <pre className="txv-text">{content}</pre>}
+              {!loading && !error && content && (
+                <pre
+                  className="txv-text"
+                  onCopy={(e) => {
+                    const selection = window.getSelection();
+                    if (!selection || selection.isCollapsed) return;
+                    e.preventDefault();
+                    e.clipboardData.setData('text/plain', selection.toString());
+                  }}
+                >
+                  {content}
+                </pre>
+              )}
               {!loading && !error && !content && isOpen && <p className="txv-loading">No TXT transcript available.</p>}
             </div>
           </>
@@ -785,6 +800,39 @@ export function TranscriptViewerPanel({
   }
 
   return panel;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <button
+      type="button"
+      className="txv-copy-btn"
+      onClick={handleCopy}
+      aria-label="Copy transcript to clipboard"
+      title="Copy to clipboard"
+    >
+      {copied ? (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+      {copied ? 'Copied!' : 'Copy'}
+    </button>
+  );
 }
 
 function renderExcerptContent(excerpt: string, matchText: string | undefined): React.ReactNode {

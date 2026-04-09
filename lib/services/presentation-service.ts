@@ -102,6 +102,52 @@ export async function convertPdfToImages(pdfPath: string, outDir: string): Promi
   return pdfToImages(pdfPath, outDir);
 }
 
+const WRITER_EXTS  = new Set(['.doc', '.docx', '.odt', '.rtf']);
+const CALC_EXTS    = new Set(['.xls', '.xlsx', '.ods']);
+const IMPRESS_EXTS = new Set(['.ppt', '.pptx', '.odp']);
+
+function officeFilter(filename: string): string {
+  const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+  if (CALC_EXTS.has(ext))    return 'calc_pdf_Export';
+  if (IMPRESS_EXTS.has(ext)) return 'impress_pdf_Export:EmbedStandardFonts=true,IsSkipEmptyPages=false';
+  if (WRITER_EXTS.has(ext))  return 'writer_pdf_Export';
+  return 'writer_pdf_Export'; // sensible fallback
+}
+
+/**
+ * Convert any supported Office document (DOCX, XLSX, PPTX, DOC, XLS, PPT,
+ * ODT, ODS, ODP, RTF) to PDF using the appropriate LibreOffice export filter.
+ * Returns the path of the generated PDF inside outDir.
+ */
+export async function convertOfficeToPdf(officePath: string, outDir: string): Promise<string> {
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const binary = resolveLibreOfficeBinary();
+  if (!binary) {
+    throw new Error(
+      'LibreOffice not found. Install LibreOffice and ensure soffice.exe is at the default path.',
+    );
+  }
+
+  const filter = officeFilter(officePath);
+
+  await runLibreOffice(binary, [
+    '--headless',
+    '--convert-to', `pdf:${filter}`,
+    '--outdir', outDir,
+    officePath,
+  ]);
+
+  const pdfFiles = fs.readdirSync(outDir).filter((f) => f.toLowerCase().endsWith('.pdf'));
+  if (pdfFiles.length === 0) {
+    throw new Error('LibreOffice did not produce a PDF — check that the file is a valid Office document.');
+  }
+  return path.join(outDir, pdfFiles[0]);
+}
+
+/** @deprecated Use convertOfficeToPdf */
+export const convertDocxToPdf = convertOfficeToPdf;
+
 export async function convertPptxToImages(pptxPath: string, outDir: string): Promise<string[]> {
   fs.mkdirSync(outDir, { recursive: true });
 

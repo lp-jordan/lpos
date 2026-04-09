@@ -2,13 +2,23 @@ export const APP_SESSION_COOKIE = 'lpos_session';
 export const GOOGLE_STATE_COOKIE = 'lpos_google_state';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+import type { UserRole } from '@/lib/models/user';
+
 export interface SessionPayload {
   userId: string;
+  role: UserRole;
   expiresAt: number;
 }
 
 function getSessionSecret(): string {
-  return process.env.LPOS_AUTH_SECRET?.trim() || 'lpos-dev-secret-change-me';
+  const secret = process.env.LPOS_AUTH_SECRET?.trim();
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('LPOS_AUTH_SECRET environment variable must be set in production.');
+    }
+    return 'lpos-dev-secret-change-me';
+  }
+  return secret;
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -31,7 +41,9 @@ function decodePayload(encoded: string): SessionPayload | null {
     const json = new TextDecoder().decode(base64UrlToBytes(encoded));
     const payload = JSON.parse(json) as Partial<SessionPayload>;
     if (typeof payload.userId !== 'string' || typeof payload.expiresAt !== 'number') return null;
-    return { userId: payload.userId, expiresAt: payload.expiresAt };
+    // Backwards-compat: tokens issued before role was added default to 'user'.
+    const role: UserRole = payload.role === 'admin' || payload.role === 'guest' ? payload.role : 'user';
+    return { userId: payload.userId, role, expiresAt: payload.expiresAt };
   } catch {
     return null;
   }
@@ -53,9 +65,10 @@ async function sign(value: string): Promise<string> {
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
-export async function createSessionToken(userId: string): Promise<string> {
+export async function createSessionToken(userId: string, role: UserRole): Promise<string> {
   const payload = encodePayload({
     userId,
+    role,
     expiresAt: Date.now() + SESSION_TTL_MS,
   });
   const signature = await sign(payload);

@@ -7,9 +7,10 @@ import { useContextMenu } from '@/contexts/ContextMenuContext';
 
 interface Props {
   projectId: string;
+  readOnly?: boolean;
 }
 
-export function ScriptsTab({ projectId }: Readonly<Props>) {
+export function ScriptsTab({ projectId, readOnly = false }: Readonly<Props>) {
   const [scripts,        setScripts]        = useState<ScriptAsset[]>([]);
   const [loading,        setLoading]        = useState(true);
   const [search,         setSearch]         = useState('');
@@ -70,7 +71,7 @@ export function ScriptsTab({ projectId }: Readonly<Props>) {
     return true;
   });
 
-  // ── Row click — select + open editor ─────────────────────────────────────
+  // ── Row click — select only; double-click opens editor ───────────────────
 
   function handleRowClick(script: ScriptAsset, idx: number, e: React.MouseEvent) {
     // Ignore clicks on the delete button inside the row
@@ -96,9 +97,12 @@ export function ScriptsTab({ projectId }: Readonly<Props>) {
       return;
     }
 
-    // Plain click — select this row and open editor
+    // Plain click — select only, do not open editor
     setSelectedIds(new Set([script.scriptId]));
     lastSelectedIdx.current = idx;
+  }
+
+  function handleRowDoubleClick(script: ScriptAsset) {
     setEditingScript(script);
   }
 
@@ -124,7 +128,7 @@ export function ScriptsTab({ projectId }: Readonly<Props>) {
         onClick: () => setEditingScript(script),
       }] : []),
       ...(!isMulti ? [{ type: 'separator' as const }] : []),
-      {
+      ...(!readOnly ? [{
         type: 'item' as const,
         label: count > 1 ? `Delete ${count} scripts` : 'Delete',
         icon: <TrashIcon />,
@@ -136,7 +140,7 @@ export function ScriptsTab({ projectId }: Readonly<Props>) {
             void handleDelete(script);
           }
         },
-      },
+      }] : []),
     ]);
   }
 
@@ -351,7 +355,9 @@ export function ScriptsTab({ projectId }: Readonly<Props>) {
                 script={s}
                 isEditing={editingScript?.scriptId === s.scriptId}
                 isSelected={selectedIds.has(s.scriptId)}
+                readOnly={readOnly}
                 onClick={(e) => handleRowClick(s, idx, e)}
+                onDoubleClick={() => handleRowDoubleClick(s)}
                 onContextMenu={(e) => handleRowContextMenu(s, idx, e)}
                 onDelete={() => handleDelete(s)}
               />
@@ -380,14 +386,18 @@ function ScriptRow({
   script,
   isEditing,
   isSelected,
+  readOnly,
   onClick,
+  onDoubleClick,
   onContextMenu,
   onDelete,
 }: {
   script: ScriptAsset;
   isEditing: boolean;
   isSelected: boolean;
+  readOnly?: boolean;
   onClick: (e: React.MouseEvent) => void;
+  onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onDelete: () => void;
 }) {
@@ -401,10 +411,14 @@ function ScriptRow({
         isSelected ? 'proj-file-row--selected' : '',
       ].filter(Boolean).join(' ')}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       role="row"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') onClick(e as unknown as React.MouseEvent); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onDoubleClick(); }
+        if (e.key === ' ')     { e.preventDefault(); onClick(e as unknown as React.MouseEvent); }
+      }}
     >
       <ScriptIcon mimeType={script.mimeType} />
       <div className="proj-file-info">
@@ -418,16 +432,18 @@ function ScriptRow({
       <span className={`proj-file-status proj-file-status--${script.status}`}>
         {script.status === 'processing' ? 'Extracting…' : script.status}
       </span>
-      <div className="proj-file-actions">
-        <button
-          type="button"
-          className="proj-file-action proj-file-action--danger"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          title="Delete script"
-        >
-          <TrashIcon small />
-        </button>
-      </div>
+      {!readOnly && (
+        <div className="proj-file-actions">
+          <button
+            type="button"
+            className="proj-file-action proj-file-action--danger"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete script"
+          >
+            <TrashIcon small />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

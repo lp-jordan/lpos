@@ -7,6 +7,7 @@ interface Props {
   id?: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   users: UserSummary[];
   placeholder?: string;
   rows?: number;
@@ -26,7 +27,7 @@ function insertMention(value: string, cursor: number, firstName: string): { valu
   return { value: replaced + after, cursor: replaced.length };
 }
 
-export function MentionTextarea({ id, value, onChange, users, placeholder, rows = 3, autoFocus }: Readonly<Props>) {
+export function MentionTextarea({ id, value, onChange, onBlur, users, placeholder, rows = 3, autoFocus }: Readonly<Props>) {
   const [query, setQuery] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -85,7 +86,7 @@ export function MentionTextarea({ id, value, onChange, users, placeholder, rows 
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
-        onBlur={() => setTimeout(() => setQuery(null), 150)}
+        onBlur={() => { setTimeout(() => setQuery(null), 150); onBlur?.(); }}
       />
       {query !== null && matches.length > 0 && (
         <ul className="mention-dropdown">

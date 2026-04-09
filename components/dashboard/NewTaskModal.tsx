@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { Project } from '@/lib/models/project';
-import type { Task, TaskPriority } from '@/lib/models/task';
+import type { Task, TaskPriority, TaskStatus } from '@/lib/models/task';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from './MentionTextarea';
 
@@ -11,6 +11,7 @@ interface Props {
   users: UserSummary[];
   currentUserId: string;
   defaultProjectId?: string;
+  defaultStatus?: TaskStatus;
   onCreated: (task: Task) => void;
   onClose: () => void;
 }
@@ -20,13 +21,14 @@ export function NewTaskModal({
   users,
   currentUserId,
   defaultProjectId,
+  defaultStatus,
   onCreated,
   onClose,
 }: Readonly<Props>) {
   const [description, setDescription] = useState('');
   const [projectId, setProjectId] = useState(defaultProjectId ?? '');
   const [priority, setPriority] = useState<TaskPriority>('medium');
-  const [assigneeId, setAssigneeId] = useState(currentUserId);
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([currentUserId]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -39,6 +41,12 @@ export function NewTaskModal({
   }
 
   const lockedProject = !!defaultProjectId;
+
+  function toggleAssignee(uid: string) {
+    setAssigneeIds((prev) =>
+      prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid],
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,8 +64,9 @@ export function NewTaskModal({
           projectId,
           clientName: project?.clientName ?? null,
           priority,
-          assignedTo: [assigneeId],
+          assignedTo: assigneeIds.length > 0 ? assigneeIds : [currentUserId],
           notes: notes.trim() || null,
+          status: defaultStatus,
         }),
       });
       if (!res.ok) {
@@ -137,19 +146,21 @@ export function NewTaskModal({
                 <option value="low">Low</option>
               </select>
             </div>
+          </div>
 
-            <div className="modal-field">
-              <label className="modal-label" htmlFor="nt-assignee">Assignee</label>
-              <select
-                id="nt-assignee"
-                className="modal-input modal-select"
-                value={assigneeId}
-                onChange={(e) => setAssigneeId(e.target.value)}
-              >
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>{u.name}</option>
-                ))}
-              </select>
+          <div className="modal-field">
+            <label className="modal-label">Assignees</label>
+            <div className="modal-assignee-list">
+              {users.map((u) => (
+                <label key={u.id} className="modal-assignee-option">
+                  <input
+                    type="checkbox"
+                    checked={assigneeIds.includes(u.id)}
+                    onChange={() => toggleAssignee(u.id)}
+                  />
+                  <span className="modal-assignee-name">{u.name}</span>
+                </label>
+              ))}
             </div>
           </div>
 

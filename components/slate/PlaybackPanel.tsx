@@ -24,6 +24,7 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
   const [activeClipPath, setActiveClipPath] = useState<string | null>(null);
   const [preparedClipPaths, setPreparedClipPaths] = useState<string[]>([]);
   const [loadingClipPath, setLoadingClipPath] = useState<string | null>(null);
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [videoAspectRatio, setVideoAspectRatio] = useState<number>(DEFAULT_PLAYER_ASPECT_RATIO);
   const connected = connection?.connected ?? false;
@@ -49,6 +50,7 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
   async function handleClipSelect(remotePath: string) {
     if (!connection?.host) return;
     setLoadingClipPath(remotePath);
+    setDownloadPercent(null);
     setPlaybackError(null);
 
     try {
@@ -58,21 +60,49 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
         body: JSON.stringify({ host: connection.host, remotePath }),
       });
 
-      const payload = await response.json() as { error?: string; playbackUrl?: string };
-      if (!response.ok || !payload.playbackUrl) {
+      if (!response.ok || !response.body) {
+        const payload = await response.json() as { error?: string };
         throw new Error(payload.error || 'Failed to prepare playback file');
       }
 
-      setPlaybackUrl(payload.playbackUrl);
-      setActiveClipPath(remotePath);
-      setPreparedClipPaths((current) => (
-        current.includes(remotePath) ? current : [...current, remotePath]
-      ));
-      setVideoAspectRatio((current) => current || DEFAULT_PLAYER_ASPECT_RATIO);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = JSON.parse(line.slice(6)) as {
+            percent?: number;
+            done?: boolean;
+            playbackUrl?: string;
+            error?: string;
+          };
+
+          if (payload.error) throw new Error(payload.error);
+          if (typeof payload.percent === 'number') setDownloadPercent(payload.percent);
+          if (payload.done && payload.playbackUrl) {
+            setPlaybackUrl(payload.playbackUrl);
+            setActiveClipPath(remotePath);
+            setPreparedClipPaths((current) => (
+              current.includes(remotePath) ? current : [...current, remotePath]
+            ));
+            setVideoAspectRatio((current) => current || DEFAULT_PLAYER_ASPECT_RATIO);
+          }
+        }
+      }
     } catch (err) {
       setPlaybackError((err as Error).message);
     } finally {
       setLoadingClipPath(null);
+      setDownloadPercent(null);
     }
   }
 
@@ -91,7 +121,8 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
         <div className="sl-playback-player-card">
           {loadingClipPath && (
             <div className="sl-playback-player-status">
-              Preparing {pathLeaf(loadingClipPath)} for playback...
+              Preparing {pathLeaf(loadingClipPath)} for playback
+              {downloadPercent !== null ? ` — ${downloadPercent}%` : '…'}
             </div>
           )}
           {playbackUrl ? (
@@ -180,7 +211,9 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
                     <div className="sl-playback-file-copy">
                       <span className="sl-playback-file-name">{file.name}</span>
                       {loadingClipPath === file.path && (
-                        <span className="sl-playback-file-status">Preparing playback...</span>
+                        <span className="sl-playback-file-status">
+                          {downloadPercent !== null ? `Downloading… ${downloadPercent}%` : 'Preparing…'}
+                        </span>
                       )}
                     </div>
                   </button>

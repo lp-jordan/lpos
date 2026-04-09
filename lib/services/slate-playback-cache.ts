@@ -14,7 +14,11 @@ export interface CachedPlaybackFile {
   filename: string;
 }
 
-export async function cacheFtpPlaybackFile(host: string, remotePath: string): Promise<CachedPlaybackFile> {
+export async function cacheFtpPlaybackFile(
+  host: string,
+  remotePath: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<CachedPlaybackFile> {
   await ensureCacheDir();
   await cleanupExpiredCacheFiles();
 
@@ -24,10 +28,10 @@ export async function cacheFtpPlaybackFile(host: string, remotePath: string): Pr
   const targetPath = path.join(CACHE_DIR, `${cacheKey}${ext}`);
 
   if (!fs.existsSync(targetPath)) {
-    const client = new MinimalFtpDownloadClient(host, 21);
+    const client = new MinimalFtpDownloadClient(host, 21, { dataTimeoutMs: 5 * 60 * 1000 });
     try {
       await client.connectAnonymous();
-      await client.download(remotePath, targetPath);
+      await client.download(remotePath, targetPath, onProgress);
     } finally {
       await client.close();
     }
@@ -83,14 +87,18 @@ async function cleanupExpiredCacheFiles(): Promise<void> {
 class MinimalFtpDownloadClient {
   private control: net.Socket | null = null;
   private buffer = '';
-  private readonly timeoutMs = 15000;
+  private readonly controlTimeoutMs = 15000;
+  private readonly dataTimeoutMs: number;
   private closing = false;
   private lastResponseCode = 0;
 
   constructor(
     private readonly host: string,
     private readonly port: number,
-  ) {}
+    options: { dataTimeoutMs?: number } = {},
+  ) {
+    this.dataTimeoutMs = options.dataTimeoutMs ?? 15000;
+  }
 
   async connectAnonymous(): Promise<void> {
     this.closing = false;
@@ -105,7 +113,19 @@ class MinimalFtpDownloadClient {
     await this.sendCommand('TYPE I', [200]);
   }
 
-  async download(remotePath: string, outputPath: string): Promise<void> {
+  async download(
+    remotePath: string,
+    outputPath: string,
+    onProgress?: (received: number, total: number) => void,
+  ): Promise<void> {
+    let totalBytes = -1;
+    try {
+      const sizeResponse = await this.sendCommand(`SIZE ${normalizeFtpCommandPath(remotePath)}`, [213]);
+      totalBytes = parseInt(sizeResponse.message.slice(4).trim(), 10);
+    } catch {
+      // SIZE not supported by this server — proceed without progress tracking.
+    }
+
     const pasv = await this.sendCommand('PASV', [227]);
     const endpoint = parsePasvEndpoint(pasv.message);
     const dataSocket = net.createConnection(endpoint);
@@ -113,11 +133,12 @@ class MinimalFtpDownloadClient {
 
     const dataPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
+      let receivedBytes = 0;
       const timeout = setTimeout(() => {
         cleanup();
         settled = true;
         reject(new Error(`FTP data connection timed out for ${this.host}:${this.port}`));
-      }, this.timeoutMs);
+      }, this.dataTimeoutMs);
 
       const cleanup = () => {
         clearTimeout(timeout);
@@ -143,6 +164,10 @@ class MinimalFtpDownloadClient {
 
       dataSocket.on('data', (chunk: Buffer) => {
         output.write(chunk);
+        if (onProgress && totalBytes > 0) {
+          receivedBytes += chunk.length;
+          onProgress(receivedBytes, totalBytes);
+        }
       });
       dataSocket.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code === 'ECONNRESET') {
@@ -156,7 +181,9 @@ class MinimalFtpDownloadClient {
     });
 
     await this.sendCommand(`RETR ${normalizeFtpCommandPath(remotePath)}`, [125, 150]);
-    await this.readExpected([226, 250]);
+    // Use the data timeout for the 226 response — the server only sends it after the
+    // full transfer completes, so it can take as long as the data download itself.
+    await this.readExpected([226, 250], this.dataTimeoutMs);
     await dataPromise;
   }
 
@@ -183,7 +210,7 @@ class MinimalFtpDownloadClient {
     return this.readExpected(expectedCodes);
   }
 
-  private async readExpected(expectedCodes: number[]): Promise<{ code: number; message: string }> {
+  private async readExpected(expectedCodes: number[], timeoutMs = this.controlTimeoutMs): Promise<{ code: number; message: string }> {
     if (!this.control) throw new Error('FTP control connection is not established');
 
     return new Promise((resolve, reject) => {
@@ -193,7 +220,7 @@ class MinimalFtpDownloadClient {
         cleanup();
         settled = true;
         reject(new Error(`FTP control response timed out for ${this.host}:${this.port}`));
-      }, this.timeoutMs);
+      }, timeoutMs);
 
       const cleanup = () => {
         clearTimeout(timeout);

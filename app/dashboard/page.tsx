@@ -6,6 +6,7 @@ import {
   getClientOwnerStore,
   getProjectStore,
   getTaskStore,
+  getTaskCommentStore,
   getProjectNoteStore,
 } from '@/lib/services/container';
 import { getActivityDb } from '@/lib/store/activity-db';
@@ -69,6 +70,11 @@ export default async function DashboardPage() {
 
   // Tasks for this user
   const tasks = getTaskStore().getForUser(session.userId);
+  const commentCounts: Record<string, number> = {};
+  const commentStore = getTaskCommentStore();
+  for (const task of tasks) {
+    commentCounts[task.taskId] = commentStore.getCountForTask(task.taskId);
+  }
 
   // Unresolved handoff notes tagged to this user
   const notes = getProjectNoteStore().getUnresolvedForUser(session.userId);
@@ -89,6 +95,7 @@ export default async function DashboardPage() {
       users={users}
       activity={activity}
       tasks={tasks}
+      commentCounts={commentCounts}
       notes={notes}
       userMap={userMap}
     />

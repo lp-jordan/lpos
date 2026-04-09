@@ -32,6 +32,7 @@
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { getValidAccessToken } from './frameio-tokens';
+import { withRetry } from '@/lib/utils/retry';
 
 const BASE_V4 = 'https://api.frame.io/v4';
 
@@ -50,20 +51,34 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 async function fioFetch(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...(await authHeaders()),
-      ...((init?.headers as Record<string, string>) ?? {}),
+  const method = init?.method ?? 'GET';
+  return withRetry(
+    async () => {
+      const res = await fetch(url, {
+        ...init,
+        headers: {
+          ...(await authHeaders()),
+          ...((init?.headers as Record<string, string>) ?? {}),
+        },
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Frame.io V4 ${method} ${url} → ${res.status}: ${body}`);
+      }
+
+      return res;
     },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Frame.io V4 ${init?.method ?? 'GET'} ${url} → ${res.status}: ${body}`);
-  }
-
-  return res;
+    4,
+    (err) => {
+      if (err instanceof TypeError) return true; // network error
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/→ 429\b/.test(msg)) return true;
+      // Only retry 5xx on safe (read-only) methods to avoid duplicate creates
+      if (/→ (500|502|503|504)\b/.test(msg)) return method === 'GET' || method === 'HEAD';
+      return false;
+    },
+  );
 }
 
 // ── Discovery (cached per process) ───────────────────────────────────────────
@@ -563,51 +578,78 @@ export async function createShareLink(
 ): Promise<FrameIOShare> {
   const { accountId, projectId } = await discover();
 
-  // Create the share — V4 spec requires type="asset" and access field.
-  // asset_ids can be included directly in the creation body.
-  const shareRes = await fioFetch(
-    `${BASE_V4}/accounts/${accountId}/projects/${projectId}/shares`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        data: {
-          type:                'asset',
-          access:              'public',
-          name:                shareName,
-          asset_ids:           fileIds,
-          downloading_enabled: settings?.downloading_enabled ?? true,
+  // Work from a mutable copy so we can drop stale IDs on retry.
+  const activeIds = [...fileIds];
+
+  // Frame.io rejects the entire share creation if any asset_id is not found,
+  // and names the offending ID in the error detail. Retry after stripping it.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (activeIds.length === 0) {
+      throw new Error('Frame.io createShareLink: all provided asset IDs were rejected as not found on Frame.io.');
+    }
+
+    let shareRes: Response;
+    try {
+      shareRes = await fioFetch(
+        `${BASE_V4}/accounts/${accountId}/projects/${projectId}/shares`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            data: {
+              type:                'asset',
+              access:              'public',
+              name:                shareName,
+              asset_ids:           activeIds,
+              downloading_enabled: settings?.downloading_enabled ?? true,
+            },
+          }),
         },
-      }),
-    },
-  );
+      );
+    } catch (err) {
+      // "Assets: <uuid> not found." — strip the bad ID and retry.
+      const uuidMatch = /Assets:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+not found/i
+        .exec((err as Error).message);
+      if (uuidMatch) {
+        const badId = uuidMatch[1];
+        const idx = activeIds.indexOf(badId);
+        if (idx !== -1) {
+          console.warn(`[frameio] createShareLink: skipping asset ${badId} — not found on Frame.io`);
+          activeIds.splice(idx, 1);
+          continue;
+        }
+      }
+      throw err;
+    }
 
-  const shareBody = await shareRes.json() as {
-    data?: {
-      id: string; name?: string; short_url?: string; url?: string; link?: string;
-      inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
-      access?: 'public' | 'private';
+    const shareBody = await shareRes.json() as {
+      data?: {
+        id: string; name?: string; short_url?: string; url?: string; link?: string;
+        inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
+        access?: 'public' | 'private';
+      };
     };
-  };
-  const share = shareBody.data;
+    const share = shareBody.data;
 
-  if (!share?.id) {
-    throw new Error(
-      `Frame.io createShareLink: no share id returned. Got: ${JSON.stringify(shareBody)}`,
-    );
+    if (!share?.id) {
+      throw new Error(
+        `Frame.io createShareLink: no share id returned. Got: ${JSON.stringify(shareBody)}`,
+      );
+    }
+
+    const shareUrl = share.short_url ?? share.url ?? share.link ?? `https://app.frame.io/r/${share.id}`;
+
+    return {
+      id:                  share.id,
+      name:                share.name ?? shareName,
+      shareUrl,
+      createdAt:           share.inserted_at ?? new Date().toISOString(),
+      fileCount:           activeIds.length,
+      downloading_enabled: share.downloading_enabled ?? true,
+      commenting_enabled:    share.commenting_enabled ?? null,
+      access:              share.access ?? 'public',
+    };
   }
-
-  const shareUrl = share.short_url ?? share.url ?? share.link ?? `https://app.frame.io/r/${share.id}`;
-
-  return {
-    id:                  share.id,
-    name:                share.name ?? shareName,
-    shareUrl,
-    createdAt:           share.inserted_at ?? new Date().toISOString(),
-    fileCount:           fileIds.length,
-    downloading_enabled: share.downloading_enabled ?? true,
-    commenting_enabled:    share.commenting_enabled ?? null,
-    access:              share.access ?? 'public',
-  };
 }
 
 /**
@@ -769,8 +811,9 @@ export async function getComments(fileId: string): Promise<FrameIOComment[]> {
     return {
       id:           c.id,
       text:         c.text,
-      timestamp:    c.timestamp ?? null,
-      duration:     c.duration ?? null,
+      // Frame.io stores timestamps in 1/60-second units; convert to seconds for display
+      timestamp:    c.timestamp != null ? c.timestamp / 60 : null,
+      duration:     c.duration  != null ? c.duration  / 60 : null,
       authorName:   author?.name ?? '',
       authorAvatar: author?.avatar_url ?? null,
       createdAt:    c.inserted_at ?? c.created_at ?? '',
@@ -805,8 +848,9 @@ export async function postComment(
 
   const body: Record<string, unknown> = { text };
   if (timestamp !== null) {
-    body.timestamp = Math.floor(timestamp);
-    if (duration !== null && duration > 0) body.duration = Math.round(duration);
+    // Convert seconds → Frame.io 1/60-second units
+    body.timestamp = Math.round(timestamp * 60);
+    if (duration !== null && duration > 0) body.duration = Math.round(duration * 60);
   }
 
   const res    = await fioFetch(
@@ -834,13 +878,49 @@ export async function postComment(
   return {
     id:           c.id,
     text:         c.text,
-    timestamp:    c.timestamp ?? null,
-    duration:     c.duration ?? null,
+    timestamp:    c.timestamp != null ? c.timestamp / 60 : null,
+    duration:     c.duration  != null ? c.duration  / 60 : null,
     authorName:   author?.name ?? '',
     authorAvatar: author?.avatar_url ?? null,
     createdAt:    c.inserted_at ?? c.created_at ?? '',
     completed:    c.completed ?? false,
     replies:      [],
+  };
+}
+
+/**
+ * Post a reply to an existing comment.
+ * POST /v4/accounts/{id}/files/{file_id}/comments  (with parent_id)
+ */
+export async function postReply(
+  fileId:   string,
+  parentId: string,
+  text:     string,
+): Promise<FrameIOCommentReply> {
+  const { accountId } = await discover();
+  const res    = await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`,
+    { method: 'POST', body: JSON.stringify({ data: { text, parent_id: parentId } }) },
+  );
+  const result = await res.json() as {
+    data?: {
+      id:           string;
+      text:         string;
+      inserted_at?: string | null;
+      created_at?:  string | null;
+      author?:      { name?: string; avatar_url?: string | null };
+      owner?:       { name?: string; avatar_url?: string | null };
+    };
+  };
+  const c = result.data;
+  if (!c) throw new Error('Frame.io postReply returned no data');
+  const author = c.author ?? c.owner;
+  return {
+    id:           c.id,
+    text:         c.text,
+    authorName:   author?.name ?? '',
+    authorAvatar: author?.avatar_url ?? null,
+    createdAt:    c.inserted_at ?? c.created_at ?? '',
   };
 }
 
@@ -865,6 +945,18 @@ export async function updateComment(commentId: string, text: string): Promise<vo
   await fioFetch(
     `${BASE_V4}/accounts/${accountId}/comments/${commentId}`,
     { method: 'PATCH', body: JSON.stringify({ data: { text } }) },
+  );
+}
+
+/**
+ * Toggle the completed/resolved state of a comment.
+ * PATCH /v4/accounts/{id}/comments/{comment_id}
+ */
+export async function toggleCommentCompleted(commentId: string, completed: boolean): Promise<void> {
+  const { accountId } = await discover();
+  await fioFetch(
+    `${BASE_V4}/accounts/${accountId}/comments/${commentId}`,
+    { method: 'PATCH', body: JSON.stringify({ data: { completed } }) },
   );
 }
 

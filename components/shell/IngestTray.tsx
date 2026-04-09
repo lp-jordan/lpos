@@ -9,10 +9,17 @@ const RUNNING: Set<IngestJobStatus> = new Set(['ingesting']);
 const TERMINAL: Set<IngestJobStatus> = new Set(['done', 'failed', 'cancelled', 'awaiting_confirmation']);
 const STALLED_AFTER_MS = 2 * 60 * 1000;
 
-function phaseLabel(status: IngestJobStatus, progress: number): string {
+function formatBytes(bytes: number): string {
+  if (bytes < 1024)        return `${bytes} B`;
+  if (bytes < 1024 ** 2)   return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3)   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function phaseLabel(status: IngestJobStatus, progress: number, resumable?: boolean): string {
   switch (status) {
-    case 'queued':                return 'Waiting to start';
-    case 'ingesting':             return `Ingesting${progress > 0 ? ` ${progress}%` : ''}`;
+    case 'queued':                return resumable ? `Paused at ${progress}%` : 'Waiting to start';
+    case 'ingesting':             return progress > 0 ? `Ingesting ${progress}%` : 'Starting upload…';
     case 'done':                  return 'Done';
     case 'failed':                return 'Failed';
     case 'cancelled':             return 'Cancelled';
@@ -32,19 +39,20 @@ function formatElapsed(ms: number): string {
 function describeJob(job: IngestJob, now: number): string | null {
   const updatedAgo = Math.max(0, now - Date.parse(job.updatedAt));
   const queuedAgo = Math.max(0, now - Date.parse(job.queuedAt));
+  const sizeStr = job.fileSize ? ` · ${formatBytes(job.fileSize)}` : '';
 
   if (job.status === 'queued') {
-    return `Queued ${formatElapsed(queuedAgo)} ago`;
+    return `Queued ${formatElapsed(queuedAgo)} ago${sizeStr}`;
   }
 
   if (job.status === 'ingesting') {
-    if (job.detail) {
-      return `${job.detail} - updated ${formatElapsed(updatedAgo)} ago`;
-    }
     if (updatedAgo >= STALLED_AFTER_MS) {
       return `No progress update for ${formatElapsed(updatedAgo)}`;
     }
-    return `Updated ${formatElapsed(updatedAgo)} ago`;
+    if (job.detail) {
+      return `${job.detail}${sizeStr}`;
+    }
+    return `Updated ${formatElapsed(updatedAgo)} ago${sizeStr}`;
   }
 
   if (job.completedAt) {
@@ -61,14 +69,26 @@ const XIcon = () => (
   </svg>
 );
 
-function JobRow({ job, now, onCancel }: { job: IngestJob; now: number; onCancel: () => void }) {
+function JobRow({
+  job, now, onCancel, onConfirmVersion, onDeclineVersion, confirming,
+}: {
+  job: IngestJob;
+  now: number;
+  onCancel: () => void;
+  onConfirmVersion: (job: IngestJob) => void;
+  onDeclineVersion: (job: IngestJob) => void;
+  confirming?: boolean;
+}) {
   const isActive   = ACTIVE.has(job.status);
   const isTerminal = TERMINAL.has(job.status);
   const [collapsed, setCollapsed] = useState(isTerminal);
   const detail = describeJob(job, now);
 
+  // A queued job with a tempPath and partial progress is a resumable chunked upload.
+  const isResumable = job.status === 'queued' && !!job.tempPath && (job.progress ?? 0) > 0;
+
   return (
-    <div className={`tt-job tt-job--${job.status}`}>
+    <div className={`tt-job tt-job--${job.status}${isResumable ? ' tt-job--resumable' : ''}`}>
       <div
         className="tt-job-top"
         onClick={isTerminal ? () => setCollapsed((v) => !v) : undefined}
@@ -77,7 +97,7 @@ function JobRow({ job, now, onCancel }: { job: IngestJob; now: number; onCancel:
         <div className="tt-job-info">
           {isTerminal && <span className="tt-job-toggle">{collapsed ? '▸' : '▾'}</span>}
           <span className="tt-job-name" title={job.filename}>{job.filename}</span>
-          <span className="tt-job-phase">{phaseLabel(job.status, job.progress)}</span>
+          <span className="tt-job-phase">{phaseLabel(job.status, job.progress, isResumable)}</span>
         </div>
         {isActive && (
           <button
@@ -102,8 +122,31 @@ function JobRow({ job, now, onCancel }: { job: IngestJob; now: number; onCancel:
           {job.status === 'failed' && job.error && (
             <p className="tt-error">{job.error}</p>
           )}
+          {isResumable && (
+            <p className="tt-warning">Re-drop <strong>{job.filename}</strong> to the media tab to resume from {job.progress}%.</p>
+          )}
           {job.status === 'awaiting_confirmation' && (
-            <p className="tt-warning">Go to the project's media tab to confirm this version upload.</p>
+            <div className="tt-confirmation">
+              <p className="tt-warning">New version detected for <strong>{job.filename}</strong>.</p>
+              <div className="tt-confirmation-actions">
+                <button
+                  type="button"
+                  className="tt-action-btn tt-action-btn--primary"
+                  disabled={confirming}
+                  onClick={(e) => { e.stopPropagation(); onConfirmVersion(job); }}
+                >
+                  {confirming ? 'Confirming…' : 'Confirm version'}
+                </button>
+                <button
+                  type="button"
+                  className="tt-action-btn"
+                  disabled={confirming}
+                  onClick={(e) => { e.stopPropagation(); onDeclineVersion(job); }}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -117,6 +160,27 @@ export function IngestTray() {
   const [visible, setVisible] = useState(false);
   const [cleared, setCleared] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
+  const [confirmingIds, setConfirmingIds] = useState<Set<string>>(new Set());
+
+  async function handleConfirmVersion(job: IngestJob) {
+    if (!job.uploadId || !job.versionMeta?.existingAsset) return;
+    const { assetId } = job.versionMeta.existingAsset as { assetId: string };
+    setConfirmingIds((prev) => new Set([...prev, job.jobId]));
+    try {
+      await fetch(`/api/projects/${job.projectId}/media/upload/${job.uploadId}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replaceAssetId: assetId }),
+      });
+    } finally {
+      setConfirmingIds((prev) => { const next = new Set(prev); next.delete(job.jobId); return next; });
+    }
+  }
+
+  async function handleDeclineVersion(job: IngestJob) {
+    if (!job.uploadId) return;
+    await fetch(`/api/projects/${job.projectId}/media/upload/${job.uploadId}`, { method: 'DELETE' });
+  }
 
   const jobs = useMemo(() => allJobs.filter((j) => !cleared.has(j.jobId)), [allJobs, cleared]);
   const waitingJobs = jobs.filter((j) => j.status === 'queued');
@@ -197,7 +261,15 @@ export function IngestTray() {
           <div className="tt-card-subtitle">Live job status. Shows running, waiting, and recent results.</div>
           <div className="tt-jobs">
             {displayJobs.map((job) => (
-              <JobRow key={job.jobId} job={job} now={now} onCancel={() => cancel(job.jobId)} />
+              <JobRow
+                key={job.jobId}
+                job={job}
+                now={now}
+                onCancel={() => cancel(job.jobId)}
+                onConfirmVersion={handleConfirmVersion}
+                onDeclineVersion={handleDeclineVersion}
+                confirming={confirmingIds.has(job.jobId)}
+              />
             ))}
           </div>
         </div>

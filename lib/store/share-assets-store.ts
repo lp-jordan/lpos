@@ -5,62 +5,50 @@
  * only add (POST .../assets) and remove (DELETE .../assets/{id}) are available.
  * We therefore maintain a local mirror so the UI can display membership.
  *
- * Stored at: data/projects/{projectId}/share-assets.json
- * Shape: { [shareId: string]: string[] }  — Frame.io file IDs
+ * Shape per row: project_id + share_id → file_ids (JSON array of Frame.io file IDs)
  */
 
-import path from 'node:path';
-import fs   from 'node:fs';
+import { getCoreDb } from './core-db';
 
-function storePath(projectId: string): string {
-  return path.join(process.cwd(), 'data', 'projects', projectId, 'share-assets.json');
+function getFileIds(projectId: string, shareId: string): string[] {
+  const row = getCoreDb()
+    .prepare('SELECT file_ids FROM share_assets WHERE project_id = ? AND share_id = ?')
+    .get(projectId, shareId) as { file_ids: string } | undefined;
+  return row ? (JSON.parse(row.file_ids) as string[]) : [];
 }
 
-function read(projectId: string): Record<string, string[]> {
-  try {
-    return JSON.parse(fs.readFileSync(storePath(projectId), 'utf-8')) as Record<string, string[]>;
-  } catch {
-    return {};
-  }
-}
-
-function write(projectId: string, data: Record<string, string[]>): void {
-  const p = storePath(projectId);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf-8');
+function setFileIds(projectId: string, shareId: string, fileIds: string[]): void {
+  getCoreDb().prepare(
+    `INSERT INTO share_assets (project_id, share_id, file_ids) VALUES (?, ?, ?)
+     ON CONFLICT(project_id, share_id) DO UPDATE SET file_ids = excluded.file_ids`,
+  ).run(projectId, shareId, JSON.stringify(fileIds));
 }
 
 export function getShareAssets(projectId: string, shareId: string): string[] {
-  return read(projectId)[shareId] ?? [];
+  return getFileIds(projectId, shareId);
 }
 
-/** Return the full shareId → fileIds map for a project. */
 export function getAllShareAssets(projectId: string): Record<string, string[]> {
-  return read(projectId);
+  const rows = getCoreDb()
+    .prepare('SELECT share_id, file_ids FROM share_assets WHERE project_id = ?')
+    .all(projectId) as { share_id: string; file_ids: string }[];
+  return Object.fromEntries(rows.map((r) => [r.share_id, JSON.parse(r.file_ids) as string[]]));
 }
 
 export function setShareAssets(projectId: string, shareId: string, fileIds: string[]): void {
-  const data = read(projectId);
-  data[shareId] = fileIds;
-  write(projectId, data);
+  setFileIds(projectId, shareId, fileIds);
 }
 
 export function addShareAssets(projectId: string, shareId: string, fileIds: string[]): void {
-  const data     = read(projectId);
-  const existing = new Set(data[shareId] ?? []);
+  const existing = new Set(getFileIds(projectId, shareId));
   for (const id of fileIds) existing.add(id);
-  data[shareId]  = [...existing];
-  write(projectId, data);
+  setFileIds(projectId, shareId, [...existing]);
 }
 
 export function removeShareAsset(projectId: string, shareId: string, fileId: string): void {
-  const data    = read(projectId);
-  data[shareId] = (data[shareId] ?? []).filter((id) => id !== fileId);
-  write(projectId, data);
+  setFileIds(projectId, shareId, getFileIds(projectId, shareId).filter((id) => id !== fileId));
 }
 
 export function deleteShareRecord(projectId: string, shareId: string): void {
-  const data = read(projectId);
-  delete data[shareId];
-  write(projectId, data);
+  getCoreDb().prepare('DELETE FROM share_assets WHERE project_id = ? AND share_id = ?').run(projectId, shareId);
 }

@@ -7,6 +7,7 @@ import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { deleteFrameioFile } from '@/lib/services/frameio';
 import { getTranscripterService } from '@/lib/services/container';
+import { deleteTranscriptsByAsset } from '@/lib/transcripts/store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -83,8 +84,9 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
       }
     }
 
-    // ── Cancel any in-progress transcription for this asset ───────────────
+    // ── Cancel in-progress transcription and delete all completed transcripts
     getTranscripterService().cancelByAsset(assetId);
+    deleteTranscriptsByAsset(projectId, assetId);
 
     // ── Local registry + optional disk file ───────────────────────────────
     const removed = removeAsset(projectId, assetId);

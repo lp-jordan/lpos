@@ -1,46 +1,75 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-// ── Fake asset data ───────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-type AssetType = 'pdf' | 'docx' | 'png' | 'jpg' | 'mp4' | 'zip';
+type AssetType = 'pdf' | 'docx' | 'image' | 'video' | 'other';
+type FilterType = 'all' | AssetType;
+type Destination = 'assets' | 'scripts';
 
-type FakeAsset = {
-  id: string;
-  name: string;
-  type: AssetType;
-  size: string;
-  uploadedBy: string;
-  uploadedAt: string;
-  sendToScripts?: boolean;
-};
+interface IngestFile {
+  file_name:    string;
+  file_size:    number;
+  mime_type:    string;
+  file_key:     string;
+  created_at:   string;
+  processed:    boolean;
+  promoted_to:  string | null;
+  promoted_at:  string | null;
+}
 
-const FAKE_ASSETS: FakeAsset[] = [
-  // Documents
-  { id: 'f1', name: 'Brand Guidelines 2025.pdf',        type: 'pdf',  size: '4.2 MB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 14, 2025', sendToScripts: true },
-  { id: 'f2', name: 'Campaign Brief — Spring.docx',     type: 'docx', size: '890 KB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 14, 2025', sendToScripts: true },
-  { id: 'f3', name: 'Q1 Strategy Deck.pdf',             type: 'pdf',  size: '11.7 MB', uploadedBy: 'Marcus T.',    uploadedAt: 'Mar 11, 2025', sendToScripts: true },
-  { id: 'f4', name: 'Onboarding Checklist.docx',        type: 'docx', size: '240 KB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 10, 2025', sendToScripts: true },
-  { id: 'f5', name: 'Messaging Framework v3.pdf',       type: 'pdf',  size: '1.8 MB',  uploadedBy: 'Marcus T.',    uploadedAt: 'Mar 9,  2025', sendToScripts: true },
-  // Brand assets
-  { id: 'f6', name: 'Logo — Full Color.png',            type: 'png',  size: '320 KB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 14, 2025' },
-  { id: 'f7', name: 'Logo — White Knockout.png',        type: 'png',  size: '290 KB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 14, 2025' },
-  { id: 'f8', name: 'Logo — Dark.png',                  type: 'png',  size: '305 KB',  uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 14, 2025' },
-  { id: 'f9', name: 'Brand Color Palette.png',          type: 'png',  size: '88 KB',   uploadedBy: 'Sarah K.',     uploadedAt: 'Mar 13, 2025' },
-  { id: 'f10', name: 'Hero Image — Office.jpg',         type: 'jpg',  size: '3.1 MB',  uploadedBy: 'Marcus T.',    uploadedAt: 'Mar 12, 2025' },
-  { id: 'f11', name: 'Headshot — CEO.jpg',              type: 'jpg',  size: '1.4 MB',  uploadedBy: 'Marcus T.',    uploadedAt: 'Mar 12, 2025' },
-  { id: 'f12', name: 'Team Photo — Full.jpg',           type: 'jpg',  size: '5.6 MB',  uploadedBy: 'Marcus T.',    uploadedAt: 'Mar 11, 2025' },
-];
+interface IngestData {
+  token:     string | null;
+  clientUrl: string | null;
+  files:     IngestFile[];
+}
 
-// ── Type metadata ─────────────────────────────────────────────────────────────
+interface FileWithType extends IngestFile {
+  assetType: AssetType;
+}
 
-const TYPE_META: Record<AssetType, { label: string; color: string; icon: React.ReactNode }> = {
+// ── Type resolution ───────────────────────────────────────────────────────────
+
+function mimeToType(mime: string, fileName: string): AssetType {
+  if (mime === 'application/pdf') return 'pdf';
+  if (mime.includes('wordprocessingml') || mime.includes('msword') || mime.includes('opendocument.text')) return 'docx';
+  if (mime.startsWith('text/') || mime === 'application/x-fountain' || mime === 'application/x-fdx') return 'docx';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  if (ext === 'pdf') return 'pdf';
+  if (['docx','doc','odt','rtf','txt','md','fountain','fdx'].includes(ext)) return 'docx';
+  if (['png','jpg','jpeg','gif','webp','bmp','heic','svg'].includes(ext)) return 'image';
+  if (['mp4','mov','avi','mkv','webm'].includes(ext)) return 'video';
+  return 'other';
+}
+
+const isPreviewable = (f: FileWithType): boolean =>
+  f.assetType === 'image' || f.assetType === 'pdf' || f.assetType === 'docx';
+
+// ── Formatting helpers ────────────────────────────────────────────────────────
+
+function formatSize(bytes: number): string {
+  if (!bytes) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(2)} GB`;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+
+const ICONS: Record<AssetType, { color: string; label: string; svg: React.ReactNode }> = {
   pdf: {
-    label: 'PDF',
     color: '#e8706a',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    label: 'PDF',
+    svg: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
         <polyline points="14 2 14 8 20 8"/>
         <path d="M9 13h6M9 17h4"/>
@@ -48,240 +77,634 @@ const TYPE_META: Record<AssetType, { label: string; color: string; icon: React.R
     ),
   },
   docx: {
-    label: 'DOCX',
     color: '#5b9cf6',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    label: 'DOC',
+    svg: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
         <polyline points="14 2 14 8 20 8"/>
         <path d="M9 13h6M9 17h6"/>
       </svg>
     ),
   },
-  png: {
-    label: 'PNG',
+  image: {
     color: '#7ec87e',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    label: 'IMG',
+    svg: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <rect x="3" y="3" width="18" height="18" rx="2"/>
         <circle cx="8.5" cy="8.5" r="1.5"/>
         <polyline points="21 15 16 10 5 21"/>
       </svg>
     ),
   },
-  jpg: {
-    label: 'JPG',
-    color: '#c4a35a',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="3" y="3" width="18" height="18" rx="2"/>
-        <circle cx="8.5" cy="8.5" r="1.5"/>
-        <polyline points="21 15 16 10 5 21"/>
-      </svg>
-    ),
-  },
-  mp4: {
-    label: 'MP4',
+  video: {
     color: '#a78bfa',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    label: 'VID',
+    svg: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <polygon points="23 7 16 12 23 17 23 7"/>
         <rect x="1" y="5" width="15" height="14" rx="2"/>
       </svg>
     ),
   },
-  zip: {
-    label: 'ZIP',
+  other: {
     color: '#94a3b8',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
+    label: 'FILE',
+    svg: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/>
+        <polyline points="13 2 13 9 20 9"/>
       </svg>
     ),
   },
 };
 
-// ── Props ─────────────────────────────────────────────────────────────────────
+// ── Preview panel ─────────────────────────────────────────────────────────────
 
-interface Props {
+function PreviewPanel({
+  file,
+  projectId,
+  onClose,
+}: {
+  file: FileWithType | null;
   projectId: string;
-  projectName: string;
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
-
-export function ClientAssetsTab({ projectId, projectName }: Props) {
-  const [copied,        setCopied]        = useState(false);
-  const [sentToScripts, setSentToScripts] = useState<Set<string>>(new Set());
-  const [filter,        setFilter]        = useState<'all' | AssetType>('all');
-
-  // Fake persistent URL derived from project
-  const slug       = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const clientUrl  = `https://assets.leaderpass.co/c/${slug}`;
-
-  function handleCopy() {
-    void navigator.clipboard.writeText(clientUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function handleShare() {
-    void navigator.clipboard.writeText(clientUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  function handleSendToScripts(id: string) {
-    setSentToScripts((prev) => new Set([...prev, id]));
-  }
-
-  const filtered = filter === 'all'
-    ? FAKE_ASSETS
-    : FAKE_ASSETS.filter((a) => a.type === filter);
-
-  const docCount   = FAKE_ASSETS.filter((a) => a.type === 'pdf' || a.type === 'docx').length;
-  const imageCount = FAKE_ASSETS.filter((a) => a.type === 'png' || a.type === 'jpg').length;
+  onClose: () => void;
+}) {
+  const isOpen = file !== null;
+  const downloadHref = file
+    ? `/api/ingest/${projectId}/download?key=${encodeURIComponent(file.file_key)}`
+    : '#';
+  const meta = file ? ICONS[file.assetType] : null;
 
   return (
-    <div className="ca-tab proj-tab-content page-stack">
-
-      {/* ── Portal URL bar ── */}
-      <div className="ca-url-bar">
-        <div className="ca-url-bar-left">
-          <div className="ca-url-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-            </svg>
-          </div>
-          <div className="ca-url-info">
-            <span className="ca-url-label">Client Upload Portal</span>
-            <span className="ca-url-value">{clientUrl}</span>
-          </div>
-        </div>
-        <div className="ca-url-actions">
-          <button type="button" className="ca-url-copy" onClick={handleCopy} title="Copy link">
-            {copied
-              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-            }
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
-          <button type="button" className="ca-url-share" onClick={handleShare}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-            </svg>
-            Share
-          </button>
-        </div>
-      </div>
-
-      {/* ── Stats row ── */}
-      <div className="ca-stats">
-        <div className="ca-stat">
-          <span className="ca-stat-num">{FAKE_ASSETS.length}</span>
-          <span className="ca-stat-label">Total files</span>
-        </div>
-        <div className="ca-stat-divider" />
-        <div className="ca-stat">
-          <span className="ca-stat-num">{docCount}</span>
-          <span className="ca-stat-label">Documents</span>
-        </div>
-        <div className="ca-stat-divider" />
-        <div className="ca-stat">
-          <span className="ca-stat-num">{imageCount}</span>
-          <span className="ca-stat-label">Images</span>
-        </div>
-        <div className="ca-stat-divider" />
-        <div className="ca-stat">
-          <span className="ca-stat-num">2</span>
-          <span className="ca-stat-label">Contributors</span>
-        </div>
-      </div>
-
-      {/* ── Filter pills ── */}
-      <div className="ca-filters">
-        {(['all', 'pdf', 'docx', 'png', 'jpg'] as const).map((f) => (
-          <button
-            key={f}
-            type="button"
-            className={`ca-filter-pill${filter === f ? ' ca-filter-pill--active' : ''}`}
-            onClick={() => setFilter(f)}
-          >
-            {f === 'all' ? `All (${FAKE_ASSETS.length})` : f.toUpperCase()}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Asset list ── */}
-      <div className="ca-asset-list">
-        {filtered.map((asset) => {
-          const meta    = TYPE_META[asset.type];
-          const sent    = sentToScripts.has(asset.id);
-          return (
-            <div key={asset.id} className="ca-asset-row">
-              {/* Type icon */}
-              <div className="ca-asset-icon" style={{ color: meta.color }}>
-                {meta.icon}
+    <>
+      <div
+        className={`m-detail-overlay${isOpen ? ' m-detail-overlay--open' : ''}`}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <aside
+        className={`asset-preview-panel${isOpen ? ' asset-preview-panel--open' : ''}`}
+        aria-label="File preview"
+      >
+        {file && meta && (
+          <div className="asset-preview-inner">
+            <div className="asset-preview-header">
+              <div className="asset-preview-header-info">
+                <span className="asset-preview-ext" style={{ color: meta.color }}>{meta.label}</span>
+                <span className="asset-preview-filename" title={file.file_name}>{file.file_name}</span>
               </div>
-
-              {/* Name + meta */}
-              <div className="ca-asset-info">
-                <span className="ca-asset-name">{asset.name}</span>
-                <span className="ca-asset-meta">
-                  <span className="ca-asset-badge" style={{ color: meta.color, borderColor: `${meta.color}44`, background: `${meta.color}12` }}>
-                    {meta.label}
-                  </span>
-                  <span>{asset.size}</span>
-                  <span>·</span>
-                  <span>Uploaded by {asset.uploadedBy}</span>
-                  <span>·</span>
-                  <span>{asset.uploadedAt}</span>
-                </span>
-              </div>
-
-              {/* Actions */}
-              <div className="ca-asset-actions">
-                {asset.sendToScripts && (
-                  <button
-                    type="button"
-                    className={`ca-asset-btn ca-asset-btn--scripts${sent ? ' ca-asset-btn--sent' : ''}`}
-                    onClick={() => handleSendToScripts(asset.id)}
-                    disabled={sent}
-                  >
-                    {sent
-                      ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg> In Scripts</>
-                      : '→ Scripts'
-                    }
-                  </button>
-                )}
-                <button type="button" className="ca-asset-btn" title="Download">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                <a href={downloadHref} className="ca-icon-btn" title="Download" download>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                     <polyline points="7 10 12 15 17 10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
                   </svg>
+                </a>
+                <button type="button" className="m-detail-close" onClick={onClose} aria-label="Close preview">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
                 </button>
               </div>
             </div>
-          );
-        })}
-      </div>
 
-      {/* ── Upload prompt ── */}
-      <div className="ca-upload-prompt">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-          <polyline points="17 8 12 3 7 8"/>
-          <line x1="12" y1="3" x2="12" y2="15"/>
-        </svg>
-        <div>
-          <p className="ca-upload-prompt-title">Client uploads appear here automatically</p>
-          <p className="ca-upload-prompt-sub">Share the portal link above and files will sync as they come in.</p>
+            <div className="asset-preview-body">
+              {file.assetType === 'image' ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={downloadHref}
+                  alt={file.file_name}
+                  className="asset-preview-img"
+                />
+              ) : (
+                <iframe
+                  src={downloadHref}
+                  className="asset-preview-pdf-frame"
+                  title={file.file_name}
+                />
+              )}
+            </div>
+
+            <div className="asset-preview-footer">
+              <span className="asset-preview-meta-item">{formatSize(file.file_size)}</span>
+              <span className="asset-preview-meta-item">{formatDate(file.created_at)}</span>
+            </div>
+          </div>
+        )}
+      </aside>
+    </>
+  );
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+
+interface Props {
+  projectId:   string;
+  projectName: string;
+  clientName:  string;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function ClientAssetsTab({ projectId, projectName: _projectName, clientName }: Props) {
+  const [data,        setData]        = useState<IngestData | null>(null);
+  const [loading,     setLoading]     = useState(true);
+  const [creating,    setCreating]    = useState(false);
+  const [copied,      setCopied]      = useState(false);
+  const [filter,      setFilter]      = useState<FilterType>('all');
+  const [selected,    setSelected]    = useState<Set<string>>(new Set());
+  const [destination, setDestination] = useState<Destination>('assets');
+  const [promoting,   setPromoting]   = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [preview,     setPreview]     = useState<FileWithType | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Data loading ───────────────────────────────────────────────────────────
+
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      const res = await fetch(`/api/ingest/${projectId}`);
+      if (res.ok) setData(await res.json());
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+    // Poll every 20 s so newly uploaded files appear without a manual refresh
+    pollRef.current = setInterval(() => void load(true), 20_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [load]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
+  async function handleCreate() {
+    setCreating(true);
+    try {
+      const res = await fetch(`/api/ingest/${projectId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientName }),
+      });
+      if (res.ok) await load();
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function handleCopy() {
+    if (!data?.clientUrl) return;
+    void navigator.clipboard.writeText(data.clientUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function toggleSelect(fileKey: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileKey)) next.delete(fileKey);
+      else next.add(fileKey);
+      return next;
+    });
+  }
+
+  function toggleSelectAll(visibleKeys: string[]) {
+    const allSelected = visibleKeys.every((k) => selected.has(k));
+    if (allSelected) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        visibleKeys.forEach((k) => next.delete(k));
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        visibleKeys.forEach((k) => next.add(k));
+        return next;
+      });
+    }
+  }
+
+  async function handlePromote() {
+    if (selected.size === 0 || promoting) return;
+    setPromoting(true);
+    setPromoteError(null);
+    try {
+      const pendingByKey = new Map(
+        (data?.files ?? []).filter((f) => !f.processed).map((f) => [f.file_key, f])
+      );
+      let filesToPromote = [...selected]
+        .map((key) => pendingByKey.get(key))
+        .filter((f): f is IngestFile => !!f);
+
+      // Scripts only accepts text documents — filter out everything else
+      if (destination === 'scripts') {
+        filesToPromote = filesToPromote.filter((f) => {
+          const t = mimeToType(f.mime_type ?? '', f.file_name);
+          return t === 'pdf' || t === 'docx';
+        });
+      }
+
+      if (!filesToPromote.length) return;
+
+      const res = await fetch(`/api/ingest/${projectId}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: filesToPromote.map((f) => ({
+            fileKey:  f.file_key,
+            filename: f.file_name,
+            mimeType: f.mime_type ?? 'application/octet-stream',
+            fileSize: f.file_size ?? 0,
+          })),
+          destination,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setPromoteError(body.error ?? `Server error ${res.status}`);
+        return;
+      }
+
+      setSelected(new Set());
+      // Reload after a short delay so the pipeline tracker has time to start
+      setTimeout(() => void load(true), 1500);
+    } catch (err) {
+      setPromoteError((err as Error).message ?? 'Transfer failed');
+    } finally {
+      setPromoting(false);
+    }
+  }
+
+  // ── Derived state ──────────────────────────────────────────────────────────
+
+  const allFiles = (data?.files ?? []).map((f) => ({
+    ...f,
+    assetType: mimeToType(f.mime_type ?? '', f.file_name),
+  })) as FileWithType[];
+
+  const pending   = allFiles.filter((f) => !f.processed);
+  const processed = allFiles.filter((f) => f.processed);
+
+  const filteredPending = filter === 'all'
+    ? pending
+    : pending.filter((f) => f.assetType === filter);
+
+  const availableTypes = [...new Set(pending.map((f) => f.assetType))];
+
+  const docCount   = pending.filter((f) => f.assetType === 'pdf' || f.assetType === 'docx').length;
+  const imageCount = pending.filter((f) => f.assetType === 'image').length;
+  const videoCount = pending.filter((f) => f.assetType === 'video').length;
+
+  const visiblePendingKeys = filteredPending.map((f) => f.file_key);
+  const allVisibleSelected = visiblePendingKeys.length > 0 && visiblePendingKeys.every((k) => selected.has(k));
+
+  // Whether any selected file is a text document (eligible for Scripts)
+  const selectedHasDoc = allFiles.some((f) =>
+    selected.has(f.file_key) && (f.assetType === 'pdf' || f.assetType === 'docx')
+  );
+
+  // ── No token state ─────────────────────────────────────────────────────────
+
+  if (!loading && data?.token == null) {
+    return (
+      <div className="ca-tab proj-tab-content page-stack">
+        <div className="ca-no-link">
+          <div className="ca-no-link-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+            </svg>
+          </div>
+          <p className="ca-no-link-title">No upload link yet</p>
+          <p className="ca-no-link-sub">Generate a unique link for {clientName} to upload files directly to this project.</p>
+          <button type="button" className="btn" onClick={handleCreate} disabled={creating}>
+            {creating ? 'Generating…' : 'Generate upload link'}
+          </button>
         </div>
       </div>
+    );
+  }
+
+  if (loading) {
+    return <div className="ca-tab proj-tab-content page-stack ca-loading">Loading…</div>;
+  }
+
+  // ── Main layout (split when preview is open) ───────────────────────────────
+
+  return (
+    <div className="ca-tab proj-tab-content page-stack">
+
+      <div className="ca-main">
+
+        {/* ── Portal URL bar ── */}
+        <div className="ca-url-bar">
+          <div className="ca-url-bar-left">
+            <div className="ca-url-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+              </svg>
+            </div>
+            <div className="ca-url-info">
+              <span className="ca-url-label">Client Upload Portal</span>
+              <span className="ca-url-value">{data?.clientUrl}</span>
+            </div>
+          </div>
+          <div className="ca-url-actions">
+            <button type="button" className="ca-url-copy" onClick={handleCopy} title="Copy link">
+              {copied
+                ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+              }
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+            <a href={data?.clientUrl ?? '#'} target="_blank" rel="noopener noreferrer" className="ca-url-share">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+              Open
+            </a>
+          </div>
+        </div>
+
+        {/* ── Stats row ── */}
+        <div className="ca-stats">
+          <div className="ca-stat">
+            <span className="ca-stat-num">{pending.length}</span>
+            <span className="ca-stat-label">Pending</span>
+          </div>
+          <div className="ca-stat-divider" />
+          <div className="ca-stat">
+            <span className="ca-stat-num">{docCount}</span>
+            <span className="ca-stat-label">Documents</span>
+          </div>
+          <div className="ca-stat-divider" />
+          <div className="ca-stat">
+            <span className="ca-stat-num">{imageCount}</span>
+            <span className="ca-stat-label">Images</span>
+          </div>
+          <div className="ca-stat-divider" />
+          <div className="ca-stat">
+            <span className="ca-stat-num">{videoCount}</span>
+            <span className="ca-stat-label">Videos</span>
+          </div>
+          {processed.length > 0 && (
+            <>
+              <div className="ca-stat-divider" />
+              <div className="ca-stat">
+                <span className="ca-stat-num">{processed.length}</span>
+                <span className="ca-stat-label">Transferred</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* ── Filter pills ── */}
+        {pending.length > 0 && (
+          <div className="ca-filters">
+            <button
+              type="button"
+              className={`ca-filter-pill${filter === 'all' ? ' ca-filter-pill--active' : ''}`}
+              onClick={() => setFilter('all')}
+            >
+              All ({pending.length})
+            </button>
+            {availableTypes.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`ca-filter-pill${filter === t ? ' ca-filter-pill--active' : ''}`}
+                onClick={() => setFilter(t as FilterType)}
+              >
+                {ICONS[t].label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ── Batch action bar ── */}
+        {selected.size > 0 && (
+          <div className="ca-batch-bar">
+            <span className="ca-batch-count">{selected.size} selected</span>
+            <div className="ca-batch-actions">
+              {promoteError && (
+                <span className="ca-batch-error" title={promoteError}>
+                  {promoteError}
+                </span>
+              )}
+              <label className="ca-batch-dest-label">
+                To
+                <select
+                  className="ca-batch-dest"
+                  value={destination}
+                  onChange={(e) => {
+                    setDestination(e.target.value as Destination);
+                    setPromoteError(null);
+                  }}
+                >
+                  <option value="assets">Assets</option>
+                  <option value="scripts" disabled={!selectedHasDoc}>
+                    Scripts{!selectedHasDoc ? ' (docs only)' : ''}
+                  </option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn btn--sm ca-promote-btn"
+                onClick={handlePromote}
+                disabled={promoting}
+              >
+                {promoting ? 'Queuing…' : 'Transfer'}
+              </button>
+              <button
+                type="button"
+                className="ca-icon-btn"
+                onClick={() => { setSelected(new Set()); setPromoteError(null); }}
+                title="Clear selection"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Pending file list ── */}
+        {filteredPending.length > 0 ? (
+          <div className="ca-asset-list">
+            {/* Select-all row */}
+            <div className="ca-asset-row ca-asset-row--header">
+              <label className="ca-checkbox" title={allVisibleSelected ? 'Deselect all' : 'Select all'}>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={() => toggleSelectAll(visiblePendingKeys)}
+                />
+                <span className="ca-checkbox-mark" />
+              </label>
+              <span className="ca-asset-row-hdr-label">
+                {filter === 'all' ? `${pending.length} file${pending.length !== 1 ? 's' : ''}` : `${filteredPending.length} of ${pending.length}`}
+              </span>
+            </div>
+
+            {filteredPending.map((file) => {
+              const meta        = ICONS[file.assetType];
+              const isSelected  = selected.has(file.file_key);
+              const isPreviewed = preview?.file_key === file.file_key;
+              const canPreview  = isPreviewable(file);
+              const downloadHref = `/api/ingest/${projectId}/download?key=${encodeURIComponent(file.file_key)}`;
+
+              return (
+                <div
+                  key={file.file_key}
+                  className={`ca-asset-row${isSelected ? ' ca-asset-row--selected' : ''}${isPreviewed ? ' ca-asset-row--previewed' : ''}`}
+                >
+                  <label className="ca-checkbox" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(file.file_key)}
+                    />
+                    <span className="ca-checkbox-mark" />
+                  </label>
+
+                  <div
+                    className="ca-asset-icon"
+                    style={{ color: meta.color }}
+                    onClick={() => canPreview && setPreview(isPreviewed ? null : file)}
+                  >
+                    {meta.svg}
+                  </div>
+
+                  <div
+                    className={`ca-asset-info${canPreview ? ' ca-asset-info--clickable' : ''}`}
+                    onClick={() => canPreview && setPreview(isPreviewed ? null : file)}
+                  >
+                    <span className="ca-asset-name">{file.file_name}</span>
+                    <span className="ca-asset-meta">
+                      <span
+                        className="ca-asset-badge"
+                        style={{ color: meta.color, borderColor: `${meta.color}44`, background: `${meta.color}12` }}
+                      >
+                        {meta.label}
+                      </span>
+                      <span>{formatSize(file.file_size)}</span>
+                      <span>·</span>
+                      <span>{formatDate(file.created_at)}</span>
+                    </span>
+                  </div>
+
+                  <div className="ca-asset-actions">
+                    {canPreview && (
+                      <button
+                        type="button"
+                        className="ca-asset-btn"
+                        title="Preview"
+                        onClick={() => setPreview(isPreviewed ? null : file)}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                          <circle cx="12" cy="12" r="3"/>
+                        </svg>
+                      </button>
+                    )}
+                    <a href={downloadHref} className="ca-asset-btn" title="Download" download>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : pending.length === 0 ? (
+          <div className="ca-upload-prompt">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <div>
+              <p className="ca-upload-prompt-title">Client uploads appear here automatically</p>
+              <p className="ca-upload-prompt-sub">Share the portal link above and files will sync as they come in.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="ca-upload-prompt">
+            <p className="ca-upload-prompt-sub">No {filter} files in the queue.</p>
+          </div>
+        )}
+
+        {/* ── Processed section ── */}
+        {processed.length > 0 && (
+          <div className="ca-processed-section">
+            <p className="ca-processed-heading">Transferred ({processed.length})</p>
+            <div className="ca-asset-list ca-asset-list--processed">
+              {processed.map((file) => {
+                const meta = ICONS[file.assetType];
+                return (
+                  <div key={file.file_key} className="ca-asset-row ca-asset-row--processed">
+                    <div className="ca-asset-icon" style={{ color: meta.color }}>
+                      {meta.svg}
+                    </div>
+                    <div className="ca-asset-info">
+                      <span className="ca-asset-name">{file.file_name}</span>
+                      <span className="ca-asset-meta">
+                        <span
+                          className="ca-asset-badge"
+                          style={{ color: meta.color, borderColor: `${meta.color}44`, background: `${meta.color}12` }}
+                        >
+                          {meta.label}
+                        </span>
+                        <span>{formatSize(file.file_size)}</span>
+                        <span>·</span>
+                        <span className="ca-processed-dest">
+                          → {file.promoted_to ?? 'assets'}
+                        </span>
+                        {file.promoted_at && (
+                          <>
+                            <span>·</span>
+                            <span>{formatDate(file.promoted_at)}</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <div className="ca-asset-actions">
+                      <span className="ca-processed-badge">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                        Done
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+      </div>{/* end .ca-main */}
+
+      <PreviewPanel
+        file={preview}
+        projectId={projectId}
+        onClose={() => setPreview(null)}
+      />
 
     </div>
   );

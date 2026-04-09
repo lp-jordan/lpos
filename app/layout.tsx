@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import '@/app/globals.css';
 import { AppShell } from '@/components/shell/AppShell';
+import { ServiceWorkerRegistrar } from '@/components/shell/ServiceWorkerRegistrar';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById } from '@/lib/store/user-store';
 import { toUserSummary } from '@/lib/store/user-store';
@@ -19,6 +20,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="en">
       <body>
+        <ServiceWorkerRegistrar />
         <AppShell currentUser={currentUser}>{children}</AppShell>
       </body>
     </html>

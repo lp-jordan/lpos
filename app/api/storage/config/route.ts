@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStorageAllocationDecision, invalidateStorageCache } from '@/lib/services/storage-volume-service';
 import { storageAuthSummary } from '@/lib/services/storage-auth';
 import { patchStorageConfig, readStorageConfig, sanitizeStorageConfig } from '@/lib/store/storage-config-store';
+import { requireRole } from '@/lib/services/api-auth';
 
 export async function GET(req: NextRequest) {
   const auth = storageAuthSummary(req);
@@ -35,6 +36,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   void readStorageConfig();
 
   const body = await req.json().catch(() => ({})) as {

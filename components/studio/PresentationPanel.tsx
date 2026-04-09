@@ -3,12 +3,51 @@
 import { useRef, useState, useEffect, type DragEvent, type ChangeEvent } from 'react';
 import { usePresentation } from '@/hooks/usePresentation';
 
+function ClearConfirmModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onCancel]);
+
+  return (
+    <div className="pres-clear-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="pres-clear-modal" role="dialog" aria-modal="true">
+        <p className="pres-clear-msg">Type <strong>clear</strong> to remove the presentation.</p>
+        <input
+          className="pres-clear-input"
+          type="text"
+          autoFocus
+          placeholder="clear"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && value === 'clear') onConfirm(); }}
+        />
+        <div className="pres-clear-actions">
+          <button type="button" className="pres-clear-cancel" onClick={onCancel}>Cancel</button>
+          <button
+            type="button"
+            className="pres-clear-confirm"
+            disabled={value !== 'clear'}
+            onClick={onConfirm}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PresentationPanel() {
   const presentation = usePresentation();
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   useEffect(() => {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -197,11 +236,18 @@ export function PresentationPanel() {
           <button
             type="button"
             className="pres-ctrl-btn pres-ctrl-btn--clear"
-            onClick={presentation.clear}
+            onClick={() => setConfirmingClear(true)}
           >
             Clear
           </button>
         </div>
+      )}
+
+      {confirmingClear && (
+        <ClearConfirmModal
+          onConfirm={() => { presentation.clear(); setConfirmingClear(false); }}
+          onCancel={() => setConfirmingClear(false)}
+        />
       )}
     </div>
   );

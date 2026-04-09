@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useRouter } from 'next/navigation';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
 import { useTranscriptQueue } from '@/hooks/useTranscriptQueue';
 import { useUploadQueue } from '@/hooks/useUploadQueue';
@@ -32,28 +31,33 @@ interface ToastInput {
   durationMs?: number;
 }
 
-interface ToastRecord extends ToastInput {
+export interface NotificationRecord {
   id: string;
+  kind: ToastKind;
+  title: string;
+  body: string;
+  tone: ToastTone;
+  projectId?: string;
+  assetId?: string;
+  jobId?: string;
+  timestamp: number;
 }
 
 interface ToastContextValue {
   toast: (input: ToastInput) => string;
   dismissToast: (id: string) => void;
+  notifications: NotificationRecord[];
+  unreadCount: number;
+  markAllRead: () => void;
 }
-
-const DEFAULT_DURATION_MS = 5000;
 
 const ToastContext = createContext<ToastContextValue>({
   toast: () => '',
   dismissToast: () => {},
+  notifications: [],
+  unreadCount: 0,
+  markAllRead: () => {},
 });
-
-function buildToastHref(toast: Pick<ToastRecord, 'projectId' | 'assetId'>): string | null {
-  if (!toast.projectId) return null;
-  if (!toast.assetId) return `/projects/${toast.projectId}`;
-  const params = new URLSearchParams({ assetId: toast.assetId });
-  return `/projects/${toast.projectId}?${params.toString()}`;
-}
 
 function QueueToastObserver({ pushToast }: Readonly<{ pushToast: (input: ToastInput) => string }>) {
   const { jobs: ingestJobs } = useIngestQueue();
@@ -98,7 +102,6 @@ function QueueToastObserver({ pushToast }: Readonly<{ pushToast: (input: ToastIn
           projectId: job.projectId,
           assetId: job.assetId || undefined,
           jobId: job.jobId,
-          durationMs: 7000,
         });
       }
     });
@@ -138,7 +141,6 @@ function QueueToastObserver({ pushToast }: Readonly<{ pushToast: (input: ToastIn
           projectId: job.projectId,
           assetId: job.assetId,
           jobId: job.jobId,
-          durationMs: 7000,
         });
       }
     });
@@ -179,7 +181,6 @@ function QueueToastObserver({ pushToast }: Readonly<{ pushToast: (input: ToastIn
           projectId: job.projectId,
           assetId: job.assetId,
           jobId: job.jobId,
-          durationMs: 7000,
         });
       }
     });
@@ -190,88 +191,57 @@ function QueueToastObserver({ pushToast }: Readonly<{ pushToast: (input: ToastIn
   return null;
 }
 
+const MAX_NOTIFICATIONS = 50;
+
 export function ToastProvider({ children }: Readonly<{ children: React.ReactNode }>) {
-  const router = useRouter();
-  const [toasts, setToasts] = useState<ToastRecord[]>([]);
-  const timersRef = useRef<Map<string, number>>(new Map());
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [lastReadAt, setLastReadAt] = useState<number>(() => Date.now());
   const sequenceRef = useRef(0);
 
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-    const timer = timersRef.current.get(id);
-    if (timer) {
-      window.clearTimeout(timer);
-      timersRef.current.delete(id);
-    }
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => n.timestamp > lastReadAt).length,
+    [notifications, lastReadAt],
+  );
+
+  const markAllRead = useCallback(() => {
+    setLastReadAt(Date.now());
   }, []);
 
   const toast = useCallback((input: ToastInput) => {
     const id = input.id ?? `toast-${sequenceRef.current++}`;
 
-    setToasts((prev) => {
-      const nextToast: ToastRecord = { ...input, id };
-      return [...prev.filter((toastItem) => toastItem.id !== id), nextToast];
+    setNotifications((prev) => {
+      const record: NotificationRecord = {
+        id,
+        kind: input.kind,
+        title: input.title,
+        body: input.body,
+        tone: input.tone,
+        projectId: input.projectId,
+        assetId: input.assetId,
+        jobId: input.jobId,
+        timestamp: Date.now(),
+      };
+      const filtered = prev.filter((n) => n.id !== id);
+      return [record, ...filtered].slice(0, MAX_NOTIFICATIONS);
     });
 
-    const priorTimer = timersRef.current.get(id);
-    if (priorTimer) window.clearTimeout(priorTimer);
-
-    const timer = window.setTimeout(() => {
-      dismissToast(id);
-    }, input.durationMs ?? DEFAULT_DURATION_MS);
-
-    timersRef.current.set(id, timer);
     return id;
-  }, [dismissToast]);
-
-  useEffect(() => () => {
-    timersRef.current.forEach((timer) => window.clearTimeout(timer));
-    timersRef.current.clear();
   }, []);
 
-  const contextValue = useMemo(() => ({ toast, dismissToast }), [toast, dismissToast]);
+  const dismissToast = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  const contextValue = useMemo(
+    () => ({ toast, dismissToast, notifications, unreadCount, markAllRead }),
+    [toast, dismissToast, notifications, unreadCount, markAllRead],
+  );
 
   return (
     <ToastContext.Provider value={contextValue}>
       {children}
       <QueueToastObserver pushToast={toast} />
-      <div className="toast-viewport" aria-live="polite" aria-label="Notifications">
-        {toasts.map((toastItem) => {
-          const href = buildToastHref(toastItem);
-          const isClickable = Boolean(href);
-          return (
-            <div
-              key={toastItem.id}
-              className={`app-toast app-toast--${toastItem.tone}${isClickable ? ' app-toast--clickable' : ''}`}
-              role="status"
-            >
-              <button
-                type="button"
-                className="app-toast-body"
-                onClick={() => {
-                  if (href) router.push(href);
-                  dismissToast(toastItem.id);
-                }}
-                disabled={!isClickable}
-              >
-                <span className="app-toast-title">{toastItem.title}</span>
-                <span className="app-toast-copy">{toastItem.body}</span>
-              </button>
-              <button
-                type="button"
-                className="app-toast-close"
-                onClick={() => dismissToast(toastItem.id)}
-                aria-label={`Dismiss ${toastItem.title}`}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-          );
-        })}
-      </div>
     </ToastContext.Provider>
   );
 }

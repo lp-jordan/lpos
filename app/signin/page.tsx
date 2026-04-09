@@ -39,7 +39,7 @@ export default async function SignInPage(props: {
           <span>Continue with Google</span>
         </a>
 
-        <a href="/api/auth/guest" className="signin-guest-button">
+        <a href="/guest-pin" className="signin-guest-button">
           Continue as Guest
         </a>
       </div>

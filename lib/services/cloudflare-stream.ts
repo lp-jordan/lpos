@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MediaAsset } from '@/lib/models/media-asset';
+import { withRetry } from '@/lib/utils/retry';
 
 const TUS_VERSION = '1.0.0';
 const DEFAULT_CHUNK_BYTES = Number(process.env.CLOUDFLARE_STREAM_CHUNK_BYTES ?? 32 * 1024 * 1024);
@@ -241,10 +242,18 @@ export async function createCloudflareTusUpload(asset: MediaAsset): Promise<Clou
     requestHeaderNames: Object.keys(headers),
   });
 
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream`, {
-    method: 'POST',
-    headers,
-  });
+  const response = await withRetry(
+    () => fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream`, {
+      method: 'POST',
+      headers,
+    }),
+    4,
+    (err) => {
+      if (err instanceof TypeError) return true;
+      const msg = err instanceof Error ? err.message : String(err);
+      return /\b(429|500|502|503|504)\b/.test(msg);
+    },
+  );
 
   if (response.status !== 201) {
     let bodyText = '';
@@ -317,7 +326,7 @@ export async function uploadFileToCloudflareTus(
           break;
         }
 
-        await sleep(1_000 * (attempt + 1));
+        await sleep(Math.min(1_000 * 2 ** attempt, 16_000));
       }
 
       if (!response?.ok) {
@@ -368,9 +377,11 @@ function derivePlaybackUrls(uid: string, customerSubdomain: string | null): Pick
 
 export async function getCloudflareVideoState(uid: string): Promise<CloudflareVideoState> {
   const config = getConfig();
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
-    headers: authHeaders(config),
-  });
+  const response = await withRetry(() =>
+    fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
+      headers: authHeaders(config),
+    }),
+  );
   const result = await parseCloudflareResponse<CloudflareVideoResult>(response);
   const fallbackUrls = derivePlaybackUrls(uid, config.customerSubdomain);
   const ready = Boolean(result.readyToStream);

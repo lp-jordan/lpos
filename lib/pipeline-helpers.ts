@@ -12,10 +12,11 @@ export function formatElapsed(ms: number): string {
 
 export function stageLabel(type: PipelineStageType): string {
   switch (type) {
-    case 'ingest':           return 'Ingest';
-    case 'transcript':       return 'Transcript';
-    case 'upload:frameio':   return 'Frame.io';
+    case 'ingest':            return 'Ingest';
+    case 'transcript':        return 'Transcript';
+    case 'upload:frameio':    return 'Frame.io';
     case 'upload:leaderpass': return 'LeaderPass';
+    case 'promotion':         return 'Transfer';
   }
 }
 
@@ -54,6 +55,14 @@ export function phaseLabel(stage: PipelineStage): string {
       if (status === 'failed')      return 'Failed';
       if (status === 'cancelled')   return 'Cancelled';
       return status;
+    case 'promotion':
+      if (status === 'queued')        return 'Queued';
+      if (status === 'downloading')   return progress > 0 ? `Downloading ${progress}%` : 'Downloading';
+      if (status === 'promoting')     return progress > 0 ? `Transferring ${progress}%` : 'Transferring';
+      if (status === 'done')          return 'Transferred';
+      if (status === 'failed')        return 'Failed';
+      if (status === 'cancelled')     return 'Cancelled';
+      return status;
   }
 }
 
@@ -77,7 +86,7 @@ export function overallBadgeClass(status: PipelineEntry['overallStatus']): strin
   return 'tt-overall-badge--active';
 }
 
-export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript']);
+export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript', 'promotion']);
 
 export function isActive(entry: PipelineEntry): boolean {
   return !PIPELINE_TERMINAL_STATUSES.has(entry.overallStatus);

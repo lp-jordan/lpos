@@ -4,16 +4,12 @@ import { Readable } from 'node:stream';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getProjectStore, getTranscripterService, getIngestQueueService } from '@/lib/services/container';
-import {
-  readRegistry, registerAsset, migrateLooseFiles, patchAsset, getAsset,
-} from '@/lib/store/media-registry';
+import { getProjectStore, getIngestQueueService } from '@/lib/services/container';
+import { readRegistry, migrateLooseFiles } from '@/lib/store/media-registry';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
-import { recordActivity } from '@/lib/services/activity-monitor-service';
-import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
-import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
-import { probeDuration } from '@/lib/services/media-probe';
+import { finalizeUploadedAsset } from '@/lib/services/media-finalization';
+import { ALLOWED_UPLOAD_EXTENSIONS } from '@/lib/upload-constants';
 
 function getIngestQueue() {
   try { return getIngestQueueService(); } catch { return null; }
@@ -81,7 +77,20 @@ export async function POST(
     });
 
     bb.on('file', (_field, stream, info) => {
-      const ext = path.extname(info.filename) || '';
+      const ext = path.extname(info.filename).toLowerCase() || '';
+
+      if (!ALLOWED_UPLOAD_EXTENSIONS.has(ext)) {
+        stream.resume(); // drain so busboy doesn't stall
+        if (!responseIssued) {
+          responseIssued = true;
+          resolve(NextResponse.json(
+            { error: `File type "${ext || '(none)'}" is not allowed. Only video and audio files may be uploaded.` },
+            { status: 415 },
+          ));
+        }
+        return;
+      }
+
       const tmpName = `upload-${Date.now()}${ext}`;
       const dest = path.join(mediaDir, tmpName);
       const replaceAssetId = formFields.replaceAssetId?.trim() || undefined;
@@ -117,6 +126,11 @@ export async function POST(
             return;
           }
 
+          // All bytes received — briefly surface "Registering asset…" so the user
+          // knows the file arrived and post-stream processing is under way (rather
+          // than showing a frozen progress bar stuck at 95%).
+          if (ingestJobId) ingestQueue?.setProgress(ingestJobId, 95, 'Registering asset…');
+
           if (ingestJobId && ingestQueue?.isCancelled(ingestJobId)) {
             try { fs.unlinkSync(dest); } catch { /* ignore */ }
             // setProgress() may have overwritten the status to 'ingesting' during
@@ -130,116 +144,46 @@ export async function POST(
             // Hash was accumulated in-stream during the write — no second file read.
             const preComputedHash = !replaceAssetId ? `sha256:${hash.digest('hex')}` : null;
 
-            const versionCandidate = !replaceAssetId
-              ? findCanonicalVersionCandidate(projectId, info.filename, dest, preComputedHash)
-              : null;
+            const result = await finalizeUploadedAsset({
+              projectId,
+              project,
+              filename: info.filename,
+              tempPath: dest,
+              mediaDir,
+              preComputedHash: preComputedHash ?? '',
+              replaceAssetId,
+              jobId: ingestJobId ?? undefined,
+              actor,
+            });
 
-            if (versionCandidate?.duplicate) {
+            if (result.outcome === 'duplicate') {
               responseIssued = true;
               try { fs.unlinkSync(dest); } catch { /* ignore */ }
               if (ingestJobId) ingestQueue?.fail(ingestJobId, 'Duplicate version');
               resolve(NextResponse.json({
-                error: `This file already matches the current version of ${versionCandidate.asset.name}.`,
+                error: `This file already matches the current version of ${result.asset.name}.`,
                 code: 'duplicate_version',
-                existingAsset: versionCandidate.asset,
+                existingAsset: result.asset,
               }, { status: 409 }));
               res();
               return;
             }
 
-            if (versionCandidate) {
+            if (result.outcome === 'version_confirmation_required') {
               responseIssued = true;
               try { fs.unlinkSync(dest); } catch { /* ignore */ }
               if (ingestJobId) ingestQueue?.setAwaitingConfirmation(ingestJobId);
               resolve(NextResponse.json({
-                error: `This looks like a new version of ${versionCandidate.asset.name}. Confirm to replace the existing pipeline asset.`,
+                error: `This looks like a new version of ${result.existingAsset.name}. Confirm to replace the existing pipeline asset.`,
                 code: 'version_confirmation_required',
-                existingAsset: versionCandidate.asset,
-                currentVersionNumber: versionCandidate.currentVersionNumber,
+                existingAsset: result.existingAsset,
+                currentVersionNumber: result.currentVersionNumber,
               }, { status: 409 }));
               res();
               return;
             }
 
-            // Capture the prior version's Frame.io IDs BEFORE registering the new
-            // version — once registerAsset runs, the new version becomes current and
-            // the prior version's distribution record is no longer returned by getAsset.
-            let priorFrameioFileId: string | null = null;
-            let priorFrameioStackId: string | null = null;
-            if (replaceAssetId) {
-              const priorAsset = getAsset(projectId, replaceAssetId);
-              priorFrameioFileId  = priorAsset?.frameio.assetId ?? null;
-              priorFrameioStackId = priorAsset?.frameio.stackId ?? null;
-            }
-
-            const stat = fs.statSync(dest);
-            const asset = registerAsset({
-              projectId,
-              originalFilename: info.filename,
-              filePath: dest,
-              fileSize: stat.size,
-              storageType: 'uploaded',
-              existingAssetId: replaceAssetId,
-              preComputedHash,
-            });
-
-            const stableName = `${asset.assetId}${ext}`;
-            const stableDest = path.join(mediaDir, stableName);
-            fs.renameSync(dest, stableDest);
-            if (ingestJobId) ingestQueue?.setStablePath(ingestJobId, stableDest);
-            patchAsset(projectId, asset.assetId, { filePath: stableDest });
-            recordActivity({
-              ...actor,
-              occurred_at: new Date().toISOString(),
-              event_type: 'asset.registered',
-              lifecycle_phase: 'created',
-              source_kind: 'api',
-              visibility: 'user_timeline',
-              title: `Asset uploaded: ${asset.name || asset.originalFilename}`,
-              summary: `${asset.originalFilename} was uploaded to ${project.name}`,
-              client_id: project.clientName || null,
-              project_id: projectId,
-              asset_id: asset.assetId,
-              details_json: {
-                originalFilename: asset.originalFilename,
-                filePath: stableDest,
-                storageType: asset.storageType,
-              },
-              search_text: `${asset.originalFilename} ${project.name} ${project.clientName}`.trim(),
-            });
-
-            // Probe duration in background — don't block the upload response
-            probeDuration(stableDest).then((dur) => {
-              if (dur != null) patchAsset(projectId, asset.assetId, { duration: dur });
-            }).catch(() => {});
-
-            if (ingestJobId) {
-              ingestQueue?.setAssetId(ingestJobId, asset.assetId);
-              ingestQueue?.complete(ingestJobId);
-            }
-
-            let jobId = '';
-            // Skip auto-transcription for new versions — the existing transcript
-            // remains current until the operator manually retranscribes.
-            if (!replaceAssetId) {
-              try {
-                const job = getTranscripterService().enqueue(projectId, stableDest, asset.assetId, asset.originalFilename);
-                jobId = job.jobId;
-                patchAsset(projectId, asset.assetId, {
-                  transcription: { status: 'queued', jobId, completedAt: null },
-                });
-              } catch (err) {
-                console.error('[upload] failed to enqueue transcription:', err);
-              }
-            }
-
-            triggerFrameIOUpload(projectId, asset.assetId, {
-              actor,
-              clientId: project.clientName || null,
-              priorFrameioFileId,
-              priorFrameioStackId,
-            });
-            results.push({ assetId: asset.assetId, filename: info.filename, jobId });
+            results.push({ assetId: result.asset.assetId, filename: info.filename, jobId: '' });
             res();
           } catch (err) {
             const msg = (err as Error).message;

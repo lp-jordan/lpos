@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { clearSessionCookieOptions, APP_SESSION_COOKIE, GOOGLE_STATE_COOKIE, createSessionToken } from '@/lib/services/session-auth';
 import { buildAppUrl } from '@/lib/services/app-origin';
 import { upsertGoogleUser } from '@/lib/store/user-store';
+import { isAdminEmail } from '@/lib/store/admin-store';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
@@ -90,7 +91,8 @@ export async function GET(req: NextRequest) {
     avatarUrl: profile.picture ?? null,
   });
 
-  const sessionToken = await createSessionToken(user.id);
+  const role = isAdminEmail(user.email) ? 'admin' : 'user';
+  const sessionToken = await createSessionToken(user.id, role);
   const response = NextResponse.redirect(buildAppUrl('/', req));
   response.cookies.set(APP_SESSION_COOKIE, sessionToken, {
     httpOnly: true,

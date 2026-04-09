@@ -11,8 +11,10 @@
  * refresh token (extremely rare).
  */
 
-import fs   from 'node:fs';
-import path from 'node:path';
+import fs                                           from 'node:fs';
+import path                                         from 'node:path';
+import { hkdfSync, randomBytes, createCipheriv,
+         createDecipheriv }                         from 'node:crypto';
 
 const DATA_DIR   = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const TOKEN_FILE = path.join(DATA_DIR, 'frameio-tokens.json');
@@ -29,12 +31,58 @@ export interface StoredTokens {
   connected_at:  string;   // ISO-8601 — when the user first connected
 }
 
+// ── Encryption helpers ────────────────────────────────────────────────────────
+// AES-256-GCM, key derived from LPOS_AUTH_SECRET via HKDF-SHA256.
+// On-disk format: base64( iv[12] || authTag[16] || ciphertext ).
+
+function deriveKey(): Buffer {
+  const secret = process.env.LPOS_AUTH_SECRET;
+  if (!secret) throw new Error('LPOS_AUTH_SECRET is not set — cannot encrypt Frame.io tokens');
+  return Buffer.from(
+    hkdfSync('sha256', secret, 'lpos-frameio-tokens-v1', '', 32),
+  );
+}
+
+function encryptTokens(tokens: StoredTokens): string {
+  const key        = deriveKey();
+  const iv         = randomBytes(12);
+  const cipher     = createCipheriv('aes-256-gcm', key, iv);
+  const plaintext  = JSON.stringify(tokens);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const authTag    = cipher.getAuthTag();
+  return Buffer.concat([iv, authTag, ciphertext]).toString('base64');
+}
+
+function decryptTokens(encoded: string): StoredTokens {
+  const key        = deriveKey();
+  const buf        = Buffer.from(encoded, 'base64');
+  const iv         = buf.subarray(0, 12);
+  const authTag    = buf.subarray(12, 28);
+  const ciphertext = buf.subarray(28);
+  const decipher   = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  const plaintext  = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  return JSON.parse(plaintext) as StoredTokens;
+}
+
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function read(): StoredTokens | null {
   try {
     if (!fs.existsSync(TOKEN_FILE)) return null;
-    return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf-8')) as StoredTokens;
+    const raw = fs.readFileSync(TOKEN_FILE, 'utf-8').trim();
+
+    // Try encrypted format first (base64 blob).
+    try {
+      return decryptTokens(raw);
+    } catch {
+      // Legacy: plaintext JSON written before encryption was added.
+      // Decrypt failed — attempt plain parse, then immediately re-write encrypted.
+      const legacy = JSON.parse(raw) as StoredTokens;
+      console.log('[frameio-tokens] migrating token file to encrypted format…');
+      write(legacy);
+      return legacy;
+    }
   } catch {
     return null;
   }
@@ -42,7 +90,7 @@ function read(): StoredTokens | null {
 
 function write(tokens: StoredTokens): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2), 'utf-8');
+  fs.writeFileSync(TOKEN_FILE, encryptTokens(tokens), 'utf-8');
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────

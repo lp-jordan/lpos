@@ -4,6 +4,7 @@ export interface TranscriptEntry {
   completedAt: string;
   txtSize: number;
   files: { txt: boolean; json: boolean; srt: boolean; vtt: boolean };
+  assetId?: string;
 }
 
 export interface TranscriptSearchSource {

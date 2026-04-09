@@ -101,6 +101,12 @@ function normalizeAssetKey(name: string): string {
     .replace(/[^A-Z0-9_]/g, '');
 }
 
+// Strips trailing version indicators from an already-normalized key (e.g. MYVIDEO_V2 → MYVIDEO).
+// Only matches an explicit V followed by digits so numeric-only suffixes like "A1" are unaffected.
+function stripVersionSuffix(normalizedKey: string): string {
+  return normalizedKey.replace(/_?V\d+$/, '');
+}
+
 function parseTags(tagsJson: string): string[] {
   try {
     const parsed = JSON.parse(tagsJson) as unknown;
@@ -1028,7 +1034,29 @@ export function findCanonicalVersionCandidate(
     || normalizeAssetKey(asset.originalFilename) === incomingKey
   ));
 
-  if (!matchingAsset) return null;
+  if (!matchingAsset) {
+    // Second pass: if the incoming filename contains an explicit version suffix (e.g. _v2, v3),
+    // strip it and try to match on the base name so "MyVideo_v2.mp4" links to the existing
+    // "MyVideo_v1.mp4" asset rather than creating a new one.
+    const incomingBase = stripVersionSuffix(incomingKey);
+    if (incomingBase && incomingBase !== incomingKey) {
+      const baseMatch = [...assets].reverse().find((asset) => (
+        stripVersionSuffix(normalizeAssetKey(asset.name)) === incomingBase
+        || stripVersionSuffix(normalizeAssetKey(asset.originalFilename)) === incomingBase
+      ));
+      if (baseMatch) {
+        // Treat as a new version of the matched asset, never a duplicate.
+        const currentVersion = getLatestNonDuplicateVersionForAsset(baseMatch.assetId);
+        return {
+          asset: baseMatch,
+          duplicate: false,
+          currentVersionNumber: currentVersion?.version_number ?? 1,
+          incomingLabel: stripExtension(filename),
+        };
+      }
+    }
+    return null;
+  }
 
   const currentVersion = getLatestNonDuplicateVersionForAsset(matchingAsset.assetId);
   const currentMedia = currentVersion ? getPrimaryMediaFileForVersion(currentVersion.asset_version_id) : null;

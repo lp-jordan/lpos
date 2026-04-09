@@ -90,6 +90,9 @@ export interface ScriptPatch {
   fileSize?:         number | null;
   status?:           ScriptStatus;
   hasExtractedText?: boolean;
+  driveFileId?:      string;
+  driveWebViewUrl?:  string;
+  driveSource?:      boolean;
 }
 
 export function patchScript(projectId: string, scriptId: string, patch: ScriptPatch): ScriptAsset | null {

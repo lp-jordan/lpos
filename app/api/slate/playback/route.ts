@@ -3,6 +3,9 @@ import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import { cacheFtpPlaybackFile, getCachedPlaybackFile } from '@/lib/services/slate-playback-cache';
 
+// Video files can be large — allow up to 5 minutes for the FTP download to complete.
+export const maxDuration = 300;
+
 const MIME_MAP: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
@@ -11,25 +14,46 @@ const MIME_MAP: Record<string, string> = {
 };
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json() as { host?: string; remotePath?: string };
-    const host = body.host?.trim();
-    const remotePath = body.remotePath?.trim();
+  const body = await req.json() as { host?: string; remotePath?: string };
+  const host = body.host?.trim();
+  const remotePath = body.remotePath?.trim();
 
-    if (!host || !remotePath) {
-      return NextResponse.json({ error: 'host and remotePath are required' }, { status: 400 });
-    }
-
-    const cached = await cacheFtpPlaybackFile(host, remotePath);
-    return NextResponse.json({
-      ok: true,
-      cacheKey: cached.cacheKey,
-      playbackUrl: `/api/slate/playback?key=${encodeURIComponent(cached.cacheKey)}`,
-      filename: cached.filename,
-    });
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  if (!host || !remotePath) {
+    return NextResponse.json({ error: 'host and remotePath are required' }, { status: 400 });
   }
+
+  const encoder = new TextEncoder();
+  const sseEvent = (data: object) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const cached = await cacheFtpPlaybackFile(host, remotePath, (received, total) => {
+          const percent = Math.min(99, Math.round((received / total) * 100));
+          controller.enqueue(sseEvent({ percent }));
+        });
+
+        controller.enqueue(sseEvent({
+          done: true,
+          cacheKey: cached.cacheKey,
+          playbackUrl: `/api/slate/playback?key=${encodeURIComponent(cached.cacheKey)}`,
+          filename: cached.filename,
+        }));
+      } catch (err) {
+        controller.enqueue(sseEvent({ error: (err as Error).message }));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }
 
 export async function GET(req: NextRequest) {

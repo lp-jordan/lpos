@@ -1,13 +1,13 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs';
 import type { Server as SocketIOServer } from 'socket.io';
 import type { ActivityActor } from '@/lib/models/activity';
 import type { Project } from '@/lib/models/project';
 import { recordActivity, systemActor } from '@/lib/services/activity-monitor-service';
+import { getCoreDb } from './core-db';
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -30,55 +30,57 @@ interface ActivityContext {
   source_kind?: 'api' | 'ui' | 'background_service' | 'manual_admin';
 }
 
+interface ProjectRow {
+  project_id: string;
+  name: string;
+  client_name: string;
+  phase: string;
+  sub_phase: string;
+  created_at: string;
+  updated_at: string;
+  archived: number;
+}
+
+function rowToProject(row: ProjectRow): Project {
+  return {
+    projectId: row.project_id,
+    name: row.name,
+    clientName: row.client_name,
+    phase: row.phase as Project['phase'],
+    subPhase: row.sub_phase as Project['subPhase'],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archived: row.archived === 1 ? true : undefined,
+  };
+}
+
 export class ProjectStore {
-  private projects: Project[] = [];
   private io: SocketIOServer | undefined;
 
   constructor(io?: SocketIOServer) {
     this.io = io;
     ensureDir(DATA_DIR);
-    this.load();
   }
 
-  /** Attach (or re-attach) the Socket.io server after lazy init. */
   attachIo(io: SocketIOServer) {
     this.io = io;
   }
 
-  // ── Persistence ────────────────────────────────────────────────────────
-
-  private load() {
-    if (!fs.existsSync(PROJECTS_FILE)) { this.projects = []; return; }
-    try {
-      const raw = JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8')) as Project[];
-      // Silent migration: backfill phase/subPhase for projects created before this feature.
-      this.projects = raw.map((p) => ({
-        phase: 'pre_production' as const,
-        subPhase: 'discovery' as const,
-        ...p,
-      }));
-    } catch {
-      this.projects = [];
-    }
-  }
-
-  private persist() {
-    ensureDir(DATA_DIR);
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify(this.projects, null, 2));
-  }
+  // ── Helpers ────────────────────────────────────────────────────────────
 
   private broadcast() {
-    this.io?.emit('projects:changed', this.projects);
+    this.io?.emit('projects:changed', this.getAll());
   }
 
   // ── Read ───────────────────────────────────────────────────────────────
 
   getAll(): Project[] {
-    return [...this.projects];
+    return (getCoreDb().prepare('SELECT * FROM projects ORDER BY created_at DESC').all() as ProjectRow[]).map(rowToProject);
   }
 
   getById(projectId: string): Project | null {
-    return this.projects.find((p) => p.projectId === projectId) ?? null;
+    const row = getCoreDb().prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as ProjectRow | undefined;
+    return row ? rowToProject(row) : null;
   }
 
   // ── Write ──────────────────────────────────────────────────────────────
@@ -95,8 +97,11 @@ export class ProjectStore {
       updatedAt: 'just now',
     };
 
-    this.projects.push(project);
-    this.persist();
+    getCoreDb().prepare(
+      `INSERT INTO projects (project_id, name, client_name, phase, sub_phase, created_at, updated_at, archived)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    ).run(project.projectId, project.name, project.clientName, project.phase, project.subPhase, project.createdAt, project.updatedAt);
+
     ensureProjectDirs(project.projectId);
     this.broadcast();
     recordActivity({
@@ -110,10 +115,7 @@ export class ProjectStore {
       summary: `${project.clientName || 'Unassigned client'} project ${project.name} was created`,
       client_id: project.clientName || null,
       project_id: project.projectId,
-      details_json: {
-        name: project.name,
-        clientName: project.clientName,
-      },
+      details_json: { name: project.name, clientName: project.clientName },
       search_text: `${project.name} ${project.clientName}`.trim(),
     });
 
@@ -121,21 +123,28 @@ export class ProjectStore {
     return project;
   }
 
-  update(projectId: string, patch: Partial<Pick<Project, 'name' | 'clientName' | 'updatedAt' | 'archived' | 'phase' | 'subPhase'>>, context?: ActivityContext): Project | null {
-    const idx = this.projects.findIndex((p) => p.projectId === projectId);
-    if (idx === -1) return null;
+  update(
+    projectId: string,
+    patch: Partial<Pick<Project, 'name' | 'clientName' | 'updatedAt' | 'archived' | 'phase' | 'subPhase'>>,
+    context?: ActivityContext,
+  ): Project | null {
+    const db = getCoreDb();
+    const previous = this.getById(projectId);
+    if (!previous) return null;
 
-    const previous = this.projects[idx];
-    this.projects[idx] = {
+    const next: Project = {
       ...previous,
       ...patch,
       updatedAt: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     };
 
-    this.persist();
+    db.prepare(
+      `UPDATE projects SET name = ?, client_name = ?, phase = ?, sub_phase = ?, updated_at = ?, archived = ?
+       WHERE project_id = ?`,
+    ).run(next.name, next.clientName, next.phase, next.subPhase, next.updatedAt, next.archived === true ? 1 : 0, projectId);
+
     this.broadcast();
-    const updated = this.projects[idx];
-    const archivedNow = previous.archived !== true && updated.archived === true;
+    const archivedNow = previous.archived !== true && next.archived === true;
     recordActivity({
       ...(context?.actor ?? systemActor('Project Store')),
       occurred_at: new Date().toISOString(),
@@ -143,26 +152,21 @@ export class ProjectStore {
       lifecycle_phase: 'updated',
       source_kind: context?.source_kind ?? 'background_service',
       visibility: 'user_timeline',
-      title: archivedNow ? `Project archived: ${updated.name}` : `Project updated: ${updated.name}`,
-      summary: archivedNow ? `${updated.name} was archived` : `${updated.name} project details were updated`,
-      client_id: updated.clientName || null,
-      project_id: updated.projectId,
-      details_json: {
-        previous,
-        updated,
-      },
-      search_text: `${updated.name} ${updated.clientName}`.trim(),
+      title: archivedNow ? `Project archived: ${next.name}` : `Project updated: ${next.name}`,
+      summary: archivedNow ? `${next.name} was archived` : `${next.name} project details were updated`,
+      client_id: next.clientName || null,
+      project_id: next.projectId,
+      details_json: { previous, updated: next },
+      search_text: `${next.name} ${next.clientName}`.trim(),
     });
-    return updated;
+    return next;
   }
 
   delete(projectId: string, context?: ActivityContext): boolean {
-    const idx = this.projects.findIndex((p) => p.projectId === projectId);
-    if (idx === -1) return false;
+    const project = this.getById(projectId);
+    if (!project) return false;
 
-    const project = this.projects[idx];
-    this.projects.splice(idx, 1);
-    this.persist();
+    getCoreDb().prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
     this.broadcast();
     recordActivity({
       ...(context?.actor ?? systemActor('Project Store')),
@@ -175,9 +179,7 @@ export class ProjectStore {
       summary: `${project.name} was removed from LPOS`,
       client_id: project.clientName || null,
       project_id: project.projectId,
-      details_json: {
-        project,
-      },
+      details_json: { project },
       search_text: `${project.name} ${project.clientName}`.trim(),
     });
 

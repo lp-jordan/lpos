@@ -75,6 +75,13 @@ function summarizeError(message: string): string {
   return lines.slice(0, 3).join('\n');
 }
 
+const VERSION_COLORS = [
+  { bg: 'rgba(100,149,237,0.15)', color: '#6495ed' }, // v1 — cornflower blue
+  { bg: 'rgba(155,122,204,0.15)', color: '#9b7acc' }, // v2 — soft purple
+  { bg: 'rgba(74,184,193,0.15)',  color: '#4ab8c1' }, // v3 — teal
+  { bg: 'rgba(219,175,95,0.16)',  color: '#dbaf5f' }, // v4 — gold
+];
+
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg', '.opus', '.wma']);
 function isAudioFile(filename: string): boolean {
   const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
@@ -83,8 +90,19 @@ function isAudioFile(filename: string): boolean {
 
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
+  const sidebarVideoRef = useRef<HTMLVideoElement>(null);
   const [showLeaderPassErrorDetails, setShowLeaderPassErrorDetails] = useState(false);
   const [theaterSrc,                 setTheaterSrc]                 = useState<string | null>(null);
+  const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
+  const [moreInfoOpen,               setMoreInfoOpen]               = useState(false);
+  const [fioDropdownOpen,            setFioDropdownOpen]            = useState(false);
+
+  function openTheater(src: string) {
+    const t = sidebarVideoRef.current?.currentTime ?? 0;
+    sidebarVideoRef.current?.pause();
+    setTheaterSrc(src);
+    if (t > 0) setTheaterSeekTarget(t);
+  }
 
   // ── Metadata edit ──────────────────────────────────────────────────────────
   const [name, setName]               = useState('');
@@ -307,6 +325,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
   const [editingCommentId,  setEditingCommentId]  = useState<string | null>(null);
   const [editText,          setEditText]          = useState('');
+  const [replyingToId,      setReplyingToId]      = useState<string | null>(null);
+  const [replyText,         setReplyText]         = useState('');
+  const [replyPosting,      setReplyPosting]      = useState(false);
 
   const fetchComments = useCallback(async () => {
     if (!asset?.frameio.assetId) return;
@@ -374,6 +395,50 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
+  async function handlePostReply(parentId: string) {
+    if (!asset || !replyText.trim()) return;
+    setReplyPosting(true);
+    try {
+      const res  = await fetch(
+        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ text: replyText.trim(), parentId }),
+        },
+      );
+      const data = await res.json() as { reply?: { id: string; text: string; authorName: string; authorAvatar: string | null; createdAt: string }; parentId?: string };
+      if (res.ok && data.reply && data.parentId) {
+        setComments(prev => prev.map(c =>
+          c.id === data.parentId ? { ...c, replies: [...c.replies, data.reply!] } : c,
+        ));
+        setReplyingToId(null);
+        setReplyText('');
+      }
+    } catch { /* ignore */ } finally {
+      setReplyPosting(false);
+    }
+  }
+
+  async function handleToggleComplete(commentId: string, completed: boolean) {
+    if (!asset) return;
+    // Optimistic update
+    setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed } : c));
+    try {
+      await fetch(
+        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ commentId, completed }),
+        },
+      );
+    } catch {
+      // Revert on failure
+      setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed: !completed } : c));
+    }
+  }
+
   // ── Re-transcribe ──────────────────────────────────────────────────────────
   async function handleRetranscribe() {
     if (!asset) return;
@@ -394,8 +459,18 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           projectId={projectId}
           frameioAssetId={asset.frameio.assetId}
           comments={comments}
+          seekTarget={theaterSeekTarget}
           onClose={() => setTheaterSrc(null)}
           onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
+          onCommentCompleted={(id, completed) =>
+            setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c))
+          }
+          onReplyPosted={(reply, parentId) =>
+            setComments(prev => prev.map(c =>
+              c.id === parentId ? { ...c, replies: [...c.replies, reply] } : c,
+            ))
+          }
+          onSeekHandled={() => setTheaterSeekTarget(null)}
         />
       )}
 
@@ -408,7 +483,23 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
             {/* ── Header ── */}
             <div className="mad-header">
               <div className="mad-header-info">
-                <span className="mad-header-title">{asset.name}</span>
+                <div className="mad-header-title-row">
+                  <span className="mad-header-title">{asset.name}</span>
+                  {(() => {
+                    const slot = VERSION_COLORS[(asset.frameio.version - 1) % VERSION_COLORS.length];
+                    return (
+                      <span className="ma-badge ma-badge--version" style={{ background: slot.bg, color: slot.color }}>
+                        v{asset.frameio.version}
+                      </span>
+                    );
+                  })()}
+                  {asset.fileSize !== null && (
+                    <span className="mad-header-meta-item">{formatBytes(asset.fileSize)}</span>
+                  )}
+                  {asset.duration !== null && asset.duration > 0 && (
+                    <span className="mad-header-meta-item">{formatTimestamp(asset.duration)}</span>
+                  )}
+                </div>
                 {asset.name !== asset.originalFilename && (
                   <span className="mad-header-filename">{asset.originalFilename}</span>
                 )}
@@ -495,40 +586,100 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       <audio className="mad-audio-player" src={src} controls preload="metadata" key={asset.assetId} />
                     </div>
                   ) : (
-                    <div className="mad-video-wrap">
-                      <video
-                        className="mad-video"
-                        src={src}
-                        controls
-                        preload="metadata"
-                        key={asset.assetId}
-                        onError={(e) => {
-                          const el = e.currentTarget;
-                          el.style.display = 'none';
-                          const msg = el.parentElement?.querySelector('.mad-video-unavail');
-                          if (msg) (msg as HTMLElement).style.display = 'flex';
-                        }}
-                      />
-                      <div className="mad-video-unavail" style={{ display: 'none' }}>
-                        <span>Preview unavailable — Frame.io may still be processing</span>
-                        {(asset.frameio.playerUrl ?? asset.frameio.reviewLink) && (
-                          <a href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
-                            Open in Frame.io ↗
-                          </a>
-                        )}
+                    <>
+                      <div className="mad-video-wrap">
+                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
                       </div>
-                      <button
-                        type="button"
-                        className="mad-video-theater-btn"
-                        onClick={() => setTheaterSrc(src)}
-                        aria-label="Open in theater mode"
-                        title="Theater mode"
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-                        </svg>
-                      </button>
-                    </div>
+                      <div className="mad-video-theater-row">
+                        <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+                          </svg>
+                          Theater mode
+                        </button>
+                        {/* Frame.io logo + share-links dropdown */}
+                        <div className="mad-fio-menu-wrap">
+                          <button
+                            type="button"
+                            className={`mad-fio-menu-btn${fioDropdownOpen ? ' mad-fio-menu-btn--active' : ''}`}
+                            onClick={() => setFioDropdownOpen(o => !o)}
+                            aria-label="Frame.io options"
+                            title="Frame.io"
+                          >
+                            frame.io
+                          </button>
+                          {fioDropdownOpen && (
+                            <>
+                              <div className="mad-fio-menu-backdrop" onClick={() => setFioDropdownOpen(false)} />
+                              <div className="mad-fio-menu">
+                                {(asset.frameio.playerUrl || asset.frameio.reviewLink) && (
+                                  <a
+                                    href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="mad-fio-menu-item mad-fio-menu-item--link"
+                                    onClick={() => setFioDropdownOpen(false)}
+                                  >
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                                      <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                                    </svg>
+                                    Open in Frame.io
+                                  </a>
+                                )}
+                                <button
+                                  type="button"
+                                  className="mad-fio-menu-item"
+                                  onClick={() => { void handleGenerateShareLink(); }}
+                                  disabled={shareGenerating}
+                                >
+                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                  </svg>
+                                  {shareGenerating ? 'Generating…' : 'New share link'}
+                                </button>
+                                {existingShareLinks.length > 0 && <div className="mad-fio-menu-divider" />}
+                                {existingShareLinks.map((link) => (
+                                  <div key={link.shareId} className="mad-fio-menu-share-row">
+                                    <span className="mad-fio-menu-share-url">{link.shareUrl}</span>
+                                    <button
+                                      type="button"
+                                      className="mad-fio-menu-share-btn"
+                                      onClick={() => handleCopyLink(link.shareUrl)}
+                                      title="Copy link"
+                                    >
+                                      {copied ? '✓' : (
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                                        </svg>
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="mad-fio-menu-share-btn mad-fio-menu-share-btn--danger"
+                                      onClick={() => void handleDeleteShareLink(link.shareId)}
+                                      disabled={deletingShareId === link.shareId}
+                                      title="Delete share link"
+                                      aria-label="Delete share link"
+                                    >
+                                      {deletingShareId === link.shareId ? '…' : (
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                                          <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                                        </svg>
+                                      )}
+                                    </button>
+                                  </div>
+                                ))}
+                                {shareError && <p className="mad-fio-menu-error">{shareError}</p>}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </>
                   );
                 }
                 if (asset.filePath) {
@@ -541,131 +692,59 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       <audio className="mad-audio-player" src={src} controls preload="metadata" key={asset.assetId} />
                     </div>
                   ) : (
-                    <div className="mad-video-wrap">
-                      <video className="mad-video" src={src} controls preload="metadata" key={asset.assetId} />
-                      <button
-                        type="button"
-                        className="mad-video-theater-btn"
-                        onClick={() => setTheaterSrc(src)}
-                        aria-label="Open in theater mode"
-                        title="Theater mode"
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-                        </svg>
-                      </button>
-                    </div>
+                    <>
+                      <div className="mad-video-wrap">
+                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
+                      </div>
+                      <div className="mad-video-theater-row">
+                        <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+                          </svg>
+                          Theater mode
+                        </button>
+                      </div>
+                    </>
                   );
                 }
                 return null;
               })()}
 
-              {/* ── Frame.io section ── */}
-              <div className="mad-section">
-                <div className="mad-section-head">
-                  <span className="mad-section-title">Frame.io</span>
-                  <span className={`mad-fio-badge mad-fio-badge--${fioStatus}`}>
-                    {FRAMEIO_STATUS_LABEL[fioStatus]}
-                  </span>
-                  {(asset.frameio.playerUrl || asset.frameio.reviewLink) && !isUploading && (
-                    <a
-                      href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mad-icon-btn"
-                      title="Open in Frame.io"
-                      aria-label="Open in Frame.io"
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                        <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                      </svg>
-                    </a>
-                  )}
-                  {asset.frameio.assetId && !isUploading && (
+              {/* ── Frame.io upload / error (only shown when actionable) ── */}
+              {(fioStatus === 'none' || isUploading || fioError) && (
+                <div className="mad-section">
+                  {/* Upload button */}
+                  {fioStatus === 'none' && !isUploading && (
                     <button
                       type="button"
-                      className="mad-icon-btn"
-                      onClick={() => void handleGenerateShareLink()}
-                      disabled={shareGenerating}
-                      title={shareGenerating ? 'Generating…' : 'Generate share link'}
-                      aria-label="Generate share link"
+                      className="mad-action-btn mad-action-btn--primary"
+                      onClick={handleUploadToFrameIO}
+                      disabled={!asset.filePath}
+                      title={!asset.filePath ? 'No local file path — cannot upload' : undefined}
                     >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                       </svg>
+                      Upload to Frame.io
                     </button>
                   )}
+
+                  {/* Uploading state */}
+                  {isUploading && (
+                    <div className="mad-uploading-row">
+                      <span className="mad-spinner" aria-hidden="true" />
+                      <span className="mad-uploading-label">Uploading to Frame.io…</span>
+                    </div>
+                  )}
+
+                  {/* Errors */}
+                  {fioError && <p className="mad-error">{fioError}</p>}
+                  {!fioError && asset.frameio.lastError && fioStatus === 'none' && (
+                    <p className="mad-error">Last attempt failed: {asset.frameio.lastError}</p>
+                  )}
                 </div>
-
-                {/* Upload button */}
-                {fioStatus === 'none' && !isUploading && (
-                  <button
-                    type="button"
-                    className="mad-action-btn mad-action-btn--primary"
-                    onClick={handleUploadToFrameIO}
-                    disabled={!asset.filePath}
-                    title={!asset.filePath ? 'No local file path — cannot upload' : undefined}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                      <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                    Upload to Frame.io
-                  </button>
-                )}
-
-                {/* Uploading state */}
-                {isUploading && (
-                  <div className="mad-uploading-row">
-                    <span className="mad-spinner" aria-hidden="true" />
-                    <span className="mad-uploading-label">Uploading to Frame.io…</span>
-                  </div>
-                )}
-
-                {/* Local error (e.g. network, bad request) */}
-                {fioError && <p className="mad-error">{fioError}</p>}
-                {/* Server-side error from last background upload attempt */}
-                {!fioError && asset.frameio.lastError && fioStatus === 'none' && (
-                  <p className="mad-error">Last attempt failed: {asset.frameio.lastError}</p>
-                )}
-
-                {/* Persisted share links for this asset */}
-                {existingShareLinks.length > 0 && !isUploading && (
-                  <div className={existingShareLinks.length >= 3 ? 'mad-share-links-scroll' : undefined}>
-                    {existingShareLinks.map((link) => (
-                      <div key={link.shareId} className="mad-copy-row mad-copy-row--generated">
-                        <span className="mad-copy-url">{link.shareUrl}</span>
-                        <button
-                          type="button"
-                          className="mad-copy-btn mad-copy-btn--primary"
-                          onClick={() => handleCopyLink(link.shareUrl)}
-                        >
-                          {copied ? '✓' : 'Copy'}
-                        </button>
-                        <button
-                          type="button"
-                          className="mad-copy-btn mad-copy-btn--danger"
-                          onClick={() => void handleDeleteShareLink(link.shareId)}
-                          disabled={deletingShareId === link.shareId}
-                          aria-label="Delete share link"
-                          title="Delete share link"
-                        >
-                          {deletingShareId === link.shareId ? '…' : (
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-                              <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-                            </svg>
-                          )}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {shareError && <p className="mad-error">{shareError}</p>}
-              </div>
+              )}
 
               {/* ── Frame.io Comments ── */}
               {asset.frameio.assetId && (
@@ -706,18 +785,46 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                               : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{(c.authorName || '?')[0]}</div>
                             }
                             <span className="mad-comment-author">
-                              {c.authorName || (c.fromFrame ? 'Frame.io Reviewer' : 'Unknown')}
+                              {c.authorName || (c.fromFrame ? 'Frame.io' : 'Unknown')}
                             </span>
                             {c.fromFrame && (
                               <span className="mad-comment-source" title="Left via Frame.io">Frame.io</span>
                             )}
-                            {c.timestamp !== null && (
-                              <span className="mad-comment-time">
-                                {formatTimestamp(c.timestamp)}
-                                {c.duration ? ` → ${formatTimestamp(c.timestamp + c.duration)}` : ''}
-                              </span>
-                            )}
+                            {c.timestamp !== null && (() => {
+                              const label = `${formatTimestamp(c.timestamp)}${c.duration ? ` → ${formatTimestamp(c.timestamp + c.duration)}` : ''}`;
+                              return (
+                                <button
+                                  type="button"
+                                  className="mad-comment-time mad-comment-time--seek"
+                                  title="Open in theater at this timestamp"
+                                  onClick={() => {
+                                    setTheaterSeekTarget(c.timestamp);
+                                    if (!theaterSrc) {
+                                      const src = asset.frameio.assetId
+                                        ? `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`
+                                        : asset.filePath ?? null;
+                                      if (src) setTheaterSrc(src);
+                                    }
+                                  }}
+                                >
+                                  {label}
+                                  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft: 3, opacity: 0.7 }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                </button>
+                              );
+                            })()}
                             <span className="mad-comment-date">{formatCommentDate(c.createdAt)}</span>
+                            {/* Complete / cross-off toggle */}
+                            <button
+                              type="button"
+                              className={`mad-comment-action mad-comment-check${c.completed ? ' mad-comment-check--done' : ''}`}
+                              onClick={() => void handleToggleComplete(c.id, !c.completed)}
+                              title={c.completed ? 'Mark incomplete' : 'Mark complete'}
+                              aria-label={c.completed ? 'Mark incomplete' : 'Mark complete'}
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                              </svg>
+                            </button>
                             {c.canEdit && editingCommentId !== c.id && (
                               <button
                                 type="button"
@@ -769,16 +876,42 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           ) : (
                             <p className="mad-comment-text">{c.text}</p>
                           )}
-                          {c.replies.length > 0 && (
+                          {(c.replies.length > 0 || replyingToId === c.id) && (
                             <div className="mad-comment-replies">
                               {c.replies.map((r) => (
                                 <div key={r.id} className="mad-comment-reply">
-                                  <span className="mad-comment-author">{r.authorName}</span>
+                                  <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
                                   <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
                                   <p className="mad-comment-text">{r.text}</p>
                                 </div>
                               ))}
+                              {replyingToId === c.id && (
+                                <div className="mad-reply-compose">
+                                  <input
+                                    className="mad-reply-input"
+                                    placeholder="Write a reply…"
+                                    value={replyText}
+                                    autoFocus
+                                    onChange={e => setReplyText(e.target.value)}
+                                    onKeyDown={e => {
+                                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handlePostReply(c.id); }
+                                      if (e.key === 'Escape') { setReplyingToId(null); setReplyText(''); }
+                                    }}
+                                  />
+                                  <div className="mad-reply-actions">
+                                    <button type="button" className="mad-comment-trigger" onClick={() => { setReplyingToId(null); setReplyText(''); }}>Cancel</button>
+                                    <button type="button" className="mad-action-btn mad-action-btn--primary" onClick={() => void handlePostReply(c.id)} disabled={replyPosting || !replyText.trim()}>
+                                      {replyPosting ? '…' : 'Reply'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
+                          )}
+                          {replyingToId !== c.id && (
+                            <button type="button" className="mad-comment-trigger mad-reply-btn" onClick={() => { setReplyingToId(c.id); setReplyText(''); }}>
+                              Reply
+                            </button>
                           )}
                         </div>
                       ))}
@@ -787,153 +920,145 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 </div>
               )}
 
-              {/* ── Cloudflare Stream section ── */}
-              <div className="mad-section">
-                <div className="mad-section-head">
-                  <span className="mad-section-title">Push to LeaderPass</span>
-                  <span className={`mad-fio-badge mad-fio-badge--${asset.leaderpass.status === 'published' ? 'approved' : asset.leaderpass.status === 'failed' ? 'rejected' : asset.leaderpass.status === 'awaiting_platform' ? 'in_review' : asset.leaderpass.status === 'preparing' ? 'uploading' : 'none'}`}>
-                    {LEADERPASS_STATUS_LABEL[asset.leaderpass.status]}
-                  </span>
-                  {(asset.leaderpass.status !== 'none' || asset.cloudflare.status !== 'none') && (
-                    <button
-                      type="button"
-                      className="mad-subtle-btn"
-                      onClick={() => void handleResetLeaderPass()}
-                      disabled={lpResetting}
-                    >
-                      {lpResetting ? 'Resetting…' : 'Reset'}
-                    </button>
-                  )}
-                </div>
-                {(asset.leaderpass.status === 'none' || asset.leaderpass.status === 'failed') && (
-                  <button
-                    type="button"
-                    className="mad-action-btn mad-action-btn--cloud"
-                    onClick={() => void handlePushToLeaderPass()}
-                    disabled={!asset.filePath || lpPublishing}
+              {/* ── More info (collapsed by default) ── */}
+              <div className="mad-section mad-more-info-section">
+                <button
+                  type="button"
+                  className="mad-more-info-toggle"
+                  onClick={() => setMoreInfoOpen(o => !o)}
+                  aria-expanded={moreInfoOpen}
+                >
+                  <span className="mad-section-title">More info</span>
+                  <svg
+                    className={`mad-more-info-chevron${moreInfoOpen ? ' mad-more-info-chevron--open' : ''}`}
+                    width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                    aria-hidden="true"
                   >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
-                      <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
-                    </svg>
-                    {lpPublishing ? 'Queuing…' : 'Push to LeaderPass'}
-                  </button>
-                )}
-              </div>
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
 
-              {/* ── Transcription section ── */}
-              <div className="mad-section">
-                <div className="mad-section-head">
-                  <span className="mad-section-title">Transcription</span>
-                  <div className="mad-tx-status-group">
-                    <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
-                      {{
-                        none:       'Not Transcribed',
-                        queued:     'Queued',
-                        processing: 'Transcribing…',
-                        done:       'Done',
-                        failed:     'Failed',
-                      }[asset.transcription.status]}
-                    </span>
-                    {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
-                      <span
-                        className="mad-tx-version-pill"
-                        title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
-                      >
-                        v{asset.transcription.sourceVersionNumber ?? '?'}
-                      </span>
-                    )}
+                {moreInfoOpen && (
+                  <div className="mad-more-info-content">
+
+                    {/* Transcription */}
+                    <div className="mad-more-info-sub">
+                      <div className="mad-section-head">
+                        <span className="mad-section-title">Transcription</span>
+                        <div className="mad-tx-status-group">
+                          <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
+                            {{
+                              none:       'Not Transcribed',
+                              queued:     'Queued',
+                              processing: 'Transcribing…',
+                              done:       'Done',
+                              failed:     'Failed',
+                            }[asset.transcription.status]}
+                          </span>
+                          {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
+                            <span
+                              className="mad-tx-version-pill"
+                              title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
+                            >
+                              v{asset.transcription.sourceVersionNumber ?? '?'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => onGoToTranscript(asset.transcription.jobId!)}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                          </svg>
+                          Go to Transcript
+                        </button>
+                      )}
+                      {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
+                        <button
+                          type="button"
+                          className="mad-action-btn"
+                          onClick={handleRetranscribe}
+                          disabled={!asset.filePath}
+                          title={!asset.filePath ? 'No local file path' : undefined}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                          </svg>
+                          {asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start Transcription'}
+                        </button>
+                      )}
+                      {asset.transcription.completedAt && (
+                        <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
+                      )}
+                    </div>
+
+                    {/* Metadata */}
+                    <div className="mad-more-info-sub">
+                      <div className="mad-section-head">
+                        <span className="mad-section-title">Metadata</span>
+                        {metaDirty && (
+                          <button
+                            type="button"
+                            className="mad-save-btn"
+                            onClick={handleSaveMeta}
+                            disabled={metaSaving}
+                          >
+                            {metaSaving ? 'Saving…' : 'Save'}
+                          </button>
+                        )}
+                      </div>
+                      <div className="mad-field">
+                        <label className="mad-field-label">Display Name</label>
+                        <input
+                          className="mad-field-input"
+                          type="text"
+                          value={name}
+                          onChange={(e) => { setName(e.target.value); setMetaDirty(true); }}
+                        />
+                      </div>
+                      <div className="mad-field">
+                        <label className="mad-field-label">Description</label>
+                        <textarea
+                          className="mad-field-textarea"
+                          rows={3}
+                          value={description}
+                          onChange={(e) => { setDescription(e.target.value); setMetaDirty(true); }}
+                          placeholder="Optional notes…"
+                        />
+                      </div>
+                    </div>
+
+                    {/* File Info */}
+                    <div className="mad-more-info-sub">
+                      <span className="mad-section-title">File Info</span>
+                      <div className="mad-info-grid">
+                        <span className="mad-info-label">Filename</span>
+                        <span className="mad-info-value">{asset.originalFilename}</span>
+                        <span className="mad-info-label">Size</span>
+                        <span className="mad-info-value">{formatBytes(asset.fileSize)}</span>
+                        <span className="mad-info-label">Registered</span>
+                        <span className="mad-info-value">{formatDate(asset.registeredAt)}</span>
+                        <span className="mad-info-label">Type</span>
+                        <span className="mad-info-value">{asset.storageType}</span>
+                        {asset.filePath && (
+                          <>
+                            <span className="mad-info-label">Path</span>
+                            <span className="mad-info-value mad-info-value--mono">{asset.filePath}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
                   </div>
-                </div>
-                {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
-                  <button
-                    type="button"
-                    className="mad-action-btn mad-action-btn--primary"
-                    onClick={() => onGoToTranscript(asset.transcription.jobId!)}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                      <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-                    </svg>
-                    Go to Transcript
-                  </button>
                 )}
-                {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
-                  <button
-                    type="button"
-                    className="mad-action-btn"
-                    onClick={handleRetranscribe}
-                    disabled={!asset.filePath}
-                    title={!asset.filePath ? 'No local file path' : undefined}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                      <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                    </svg>
-                    {asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start Transcription'}
-                  </button>
-                )}
-                {asset.transcription.completedAt && (
-                  <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
-                )}
-              </div>
-
-              {/* ── Metadata section ── */}
-              <div className="mad-section">
-                <div className="mad-section-head">
-                  <span className="mad-section-title">Metadata</span>
-                  {metaDirty && (
-                    <button
-                      type="button"
-                      className="mad-save-btn"
-                      onClick={handleSaveMeta}
-                      disabled={metaSaving}
-                    >
-                      {metaSaving ? 'Saving…' : 'Save'}
-                    </button>
-                  )}
-                </div>
-                <div className="mad-field">
-                  <label className="mad-field-label">Display Name</label>
-                  <input
-                    className="mad-field-input"
-                    type="text"
-                    value={name}
-                    onChange={(e) => { setName(e.target.value); setMetaDirty(true); }}
-                  />
-                </div>
-                <div className="mad-field">
-                  <label className="mad-field-label">Description</label>
-                  <textarea
-                    className="mad-field-textarea"
-                    rows={3}
-                    value={description}
-                    onChange={(e) => { setDescription(e.target.value); setMetaDirty(true); }}
-                    placeholder="Optional notes…"
-                  />
-                </div>
-              </div>
-
-              {/* ── File info section ── */}
-              <div className="mad-section">
-                <span className="mad-section-title">File Info</span>
-                <div className="mad-info-grid">
-                  <span className="mad-info-label">Filename</span>
-                  <span className="mad-info-value">{asset.originalFilename}</span>
-                  <span className="mad-info-label">Size</span>
-                  <span className="mad-info-value">{formatBytes(asset.fileSize)}</span>
-                  <span className="mad-info-label">Registered</span>
-                  <span className="mad-info-value">{formatDate(asset.registeredAt)}</span>
-                  <span className="mad-info-label">Type</span>
-                  <span className="mad-info-value">{asset.storageType}</span>
-                  {asset.filePath && (
-                    <>
-                      <span className="mad-info-label">Path</span>
-                      <span className="mad-info-value mad-info-value--mono">{asset.filePath}</span>
-                    </>
-                  )}
-                </div>
               </div>
 
             </div>

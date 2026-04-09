@@ -86,7 +86,7 @@ export function migrateLooseFiles(projectId: string): void {
 
   for (const filename of fs.readdirSync(mediaDir)) {
     if (filename.endsWith('.meta.json') || filename.startsWith('.')) continue;
-    if (/^upload-\d+/.test(filename)) continue;
+    if (/^upload-\d+/.test(filename) || /^chunk-upload-/.test(filename)) continue;
     if (!videoExts.has(path.extname(filename).toLowerCase())) continue;
 
     const fullPath = path.join(mediaDir, filename);

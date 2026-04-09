@@ -1,50 +1,41 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { WishItem } from '@/lib/models/wish';
+import { getCoreDb } from './core-db';
 
-const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const WISHES_FILE = path.join(DATA_DIR, 'wishes.json');
+interface WishRow {
+  wish_id: string;
+  title: string;
+  description: string | null;
+  submitted_by: string;
+  submitted_by_name: string;
+  completed: number;
+  created_at: string;
+  completed_at: string | null;
+}
 
-interface WishesFile {
-  wishes: WishItem[];
+function rowToWish(row: WishRow): WishItem {
+  return {
+    wishId: row.wish_id,
+    title: row.title,
+    description: row.description ?? undefined,
+    submittedBy: row.submitted_by,
+    submittedByName: row.submitted_by_name,
+    completed: row.completed === 1,
+    createdAt: row.created_at,
+    completedAt: row.completed_at ?? undefined,
+  };
 }
 
 export class WishStore {
-  private wishes: WishItem[] = [];
-
-  constructor() {
-    this.load();
-  }
-
-  // ── Persistence ──────────────────────────────────────────────────────────
-
-  private load() {
-    try {
-      if (fs.existsSync(WISHES_FILE)) {
-        const data = JSON.parse(fs.readFileSync(WISHES_FILE, 'utf8')) as WishesFile;
-        this.wishes = data.wishes ?? [];
-      }
-    } catch {
-      this.wishes = [];
-    }
-  }
-
-  private persist() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(WISHES_FILE, JSON.stringify({ wishes: this.wishes }, null, 2));
-  }
-
   // ── Read ─────────────────────────────────────────────────────────────────
 
   getAll(): WishItem[] {
-    return [...this.wishes].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    );
+    return (getCoreDb().prepare('SELECT * FROM wishes ORDER BY created_at DESC').all() as WishRow[]).map(rowToWish);
   }
 
   getById(wishId: string): WishItem | null {
-    return this.wishes.find((w) => w.wishId === wishId) ?? null;
+    const row = getCoreDb().prepare('SELECT * FROM wishes WHERE wish_id = ?').get(wishId) as WishRow | undefined;
+    return row ? rowToWish(row) : null;
   }
 
   // ── Write ─────────────────────────────────────────────────────────────────
@@ -64,34 +55,42 @@ export class WishStore {
       completed: false,
       createdAt: new Date().toISOString(),
     };
-    this.wishes.push(wish);
-    this.persist();
+
+    getCoreDb().prepare(
+      `INSERT INTO wishes (wish_id, title, description, submitted_by, submitted_by_name, completed, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?)`,
+    ).run(wish.wishId, wish.title, wish.description ?? null, wish.submittedBy, wish.submittedByName, wish.createdAt);
+
     return wish;
   }
 
   update(wishId: string, patch: Partial<Pick<WishItem, 'completed'>>): WishItem | null {
-    const idx = this.wishes.findIndex((w) => w.wishId === wishId);
-    if (idx === -1) return null;
-    const prev = this.wishes[idx];
-    this.wishes[idx] = {
-      ...prev,
+    const db = getCoreDb();
+    const existing = this.getById(wishId);
+    if (!existing) return null;
+
+    const completedAt =
+      patch.completed === true && !existing.completed
+        ? new Date().toISOString()
+        : patch.completed === false
+          ? null
+          : (existing.completedAt ?? null);
+
+    const next: WishItem = {
+      ...existing,
       ...patch,
-      completedAt:
-        patch.completed === true && !prev.completed
-          ? new Date().toISOString()
-          : patch.completed === false
-            ? undefined
-            : prev.completedAt,
+      completedAt: completedAt ?? undefined,
     };
-    this.persist();
-    return this.wishes[idx];
+
+    db.prepare(
+      'UPDATE wishes SET completed = ?, completed_at = ? WHERE wish_id = ?',
+    ).run(next.completed ? 1 : 0, completedAt, wishId);
+
+    return next;
   }
 
   delete(wishId: string): boolean {
-    const idx = this.wishes.findIndex((w) => w.wishId === wishId);
-    if (idx === -1) return false;
-    this.wishes.splice(idx, 1);
-    this.persist();
-    return true;
+    const result = getCoreDb().prepare('DELETE FROM wishes WHERE wish_id = ?').run(wishId);
+    return (result as { changes: number }).changes > 0;
   }
 }

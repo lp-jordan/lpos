@@ -71,7 +71,6 @@ export function PassPrepTab({ projectId, queuedJobIds }: Props) {
   const [settings,          setSettings]         = useState<PPSettings>({ audience: '', tone: '', additionalGuidance: '' });
   const [generatingPlan,    setGeneratingPlan]    = useState(false);
   const [planError,         setPlanError]         = useState<string | null>(null);
-  const [warnDismissed,     setWarnDismissed]     = useState(false);
 
   // Pass Plan
   const [passes, setPasses] = useState<PPPass[]>([]);
@@ -291,16 +290,10 @@ export function PassPrepTab({ projectId, queuedJobIds }: Props) {
         onToggle={() => toggleCollapse('preflight')}
       >
         <div className="pp-preflight">
-          {queuedJobIds.length === 0 && !warnDismissed && (
-            <button
-              type="button"
-              className="pp-warn pp-warn--clickable"
-              onClick={() => setWarnDismissed(true)}
-              title="Click to proceed with demo data"
-            >
-              <span>No transcripts queued — go to the Transcripts tab and send some to Pass Prep first.</span>
-              <span className="pp-warn-bypass">Proceed with demo data →</span>
-            </button>
+          {queuedJobIds.length === 0 && (
+            <div className="pp-warn">
+              No transcripts queued — go to the Transcripts tab and send some to Pass Prep first.
+            </div>
           )}
           {queuedJobIds.length > 0 && (
             <div className="pp-queued-files">
@@ -353,7 +346,7 @@ export function PassPrepTab({ projectId, queuedJobIds }: Props) {
               type="button"
               className="pp-btn pp-btn--primary"
               onClick={() => void handleGeneratePlan()}
-              disabled={generatingPlan || (queuedJobIds.length === 0 && !warnDismissed)}
+              disabled={generatingPlan || queuedJobIds.length === 0}
             >
               {generatingPlan
                 ? <><span className="pp-spinner" /> Generating Pass Plan…</>
