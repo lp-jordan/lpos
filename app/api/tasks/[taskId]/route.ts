@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getTaskStore } from '@/lib/services/container';
-import type { TaskPriority, TaskStatus } from '@/lib/models/task';
+import type { TaskPriority } from '@/lib/models/task';
+import type { TaskPhase } from '@/lib/models/task-phase';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getAllUsers, getUserById } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
@@ -18,11 +19,13 @@ export async function PATCH(
 
   const { taskId } = await params;
   const body = await req.json() as {
-    status?: TaskStatus;
+    status?: string;
     description?: string;
     assignedTo?: string[];
     priority?: TaskPriority;
+    phase?: TaskPhase;
     notes?: string | null;
+    projectId?: string;
   };
 
   const prev = getTaskStore().getById(taskId);

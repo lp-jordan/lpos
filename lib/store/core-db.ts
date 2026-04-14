@@ -146,11 +146,30 @@ function initSchema(db: DatabaseSync): void {
   `);
 }
 
+function runMigrations(db: DatabaseSync): void {
+  // v2: phase column on tasks
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN phase TEXT NOT NULL DEFAULT 'pre_production'`);
+    // Backfill: keep 'done', reset legacy statuses to the pre_production default
+    db.exec(`UPDATE tasks SET status = 'onboarding' WHERE status NOT IN ('done')`);
+  } catch {
+    // Column already exists — migration already ran
+  }
+
+  // v3: slack_email override on users
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN slack_email TEXT`);
+  } catch {
+    // Column already exists — migration already ran
+  }
+}
+
 export function getCoreDb(): DatabaseSync {
   if (globalThis.__lpos_core_db) return globalThis.__lpos_core_db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const db = new DatabaseSync(DB_PATH);
   initSchema(db);
+  runMigrations(db);
   globalThis.__lpos_core_db = db;
   return db;
 }

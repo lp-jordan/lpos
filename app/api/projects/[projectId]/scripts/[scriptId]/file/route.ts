@@ -13,6 +13,7 @@ import os   from 'node:os';
 import { Readable } from 'node:stream';
 import { getScript, patchScript } from '@/lib/store/scripts-registry';
 import { extractAndSave } from '@/lib/services/script-extractor';
+import { getIo } from '@/lib/services/container';
 
 type Ctx = { params: Promise<{ projectId: string; scriptId: string }> };
 
@@ -69,14 +70,19 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     // Replace the stored file in-place
     fs.renameSync(tmp, script.filePath);
 
-    // Update file size in registry
+    // Update file size in registry (patchScript also bumps updatedAt)
     const newSize = fs.statSync(script.filePath).size;
     patchScript(projectId, scriptId, { fileSize: newSize });
 
     // Re-extract text in the background
     void extractAndSave(projectId, scriptId, script.filePath, ext);
 
-    return NextResponse.json({ ok: true });
+    // Notify all connected clients (LPOS UI + other LP instances).
+    // LP suppresses this on its own saved scripts by comparing updatedAt.
+    const updated = getScript(projectId, scriptId);
+    getIo()?.emit('scripts:changed', { projectId, scriptId, updatedAt: updated?.updatedAt });
+
+    return NextResponse.json({ ok: true, updatedAt: updated?.updatedAt });
   } catch (err) {
     if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

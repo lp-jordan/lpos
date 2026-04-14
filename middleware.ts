@@ -2,6 +2,16 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 
+// ── Machine-client bearer token (LeaderPrompt) ────────────────────────────────
+
+function hasMachineToken(req: NextRequest): boolean {
+  const lpToken = process.env.LPOS_LP_TOKEN?.trim();
+  if (!lpToken) return false;
+  const auth = req.headers.get('authorization') ?? '';
+  const [scheme, token] = auth.split(' ');
+  return scheme === 'Bearer' && token === lpToken;
+}
+
 // ── Public paths — no session required ───────────────────────────────────────
 
 function isPublicPath(pathname: string): boolean {
@@ -45,6 +55,9 @@ export async function middleware(req: NextRequest) {
     }
     return NextResponse.next();
   }
+
+  // Machine clients (LeaderPrompt) skip cookie auth
+  if (hasMachineToken(req)) return NextResponse.next();
 
   const session = await verifySessionToken(req.cookies.get(APP_SESSION_COOKIE)?.value);
 

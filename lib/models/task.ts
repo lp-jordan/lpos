@@ -1,16 +1,18 @@
+import type { TaskPhase } from './task-phase';
+
 export type TaskPriority = 'urgent' | 'high' | 'medium' | 'low';
-export type TaskStatus = 'not_started' | 'in_progress' | 'blocked' | 'waiting_on_client' | 'done';
 
 export interface Task {
   taskId: string;
   description: string;
-  projectId: string;           // required
-  clientName: string | null;   // denormalised for display
+  projectId: string;
+  clientName: string | null;
+  phase: TaskPhase;
   priority: TaskPriority;
-  status: TaskStatus;          // 'done' replaces the old completed boolean
+  status: string;
   notes: string | null;
-  createdBy: string;           // userId
-  assignedTo: string[];        // userId[]
-  createdAt: string;           // ISO string
-  completedAt?: string;        // ISO string — set when status transitions to 'done'
+  createdBy: string;
+  assignedTo: string[];
+  createdAt: string;
+  completedAt?: string;
 }

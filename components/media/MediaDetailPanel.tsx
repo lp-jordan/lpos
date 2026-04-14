@@ -22,6 +22,7 @@ import {
   LEADERPASS_STATUS_LABEL,
 } from '@/lib/models/media-asset';
 import type { FrameIOComment } from '@/lib/services/frameio';
+import { formatTimecode } from '@/lib/utils/time';
 
 type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
@@ -791,7 +792,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                               <span className="mad-comment-source" title="Left via Frame.io">Frame.io</span>
                             )}
                             {c.timestamp !== null && (() => {
-                              const label = `${formatTimestamp(c.timestamp)}${c.duration ? ` → ${formatTimestamp(c.timestamp + c.duration)}` : ''}`;
+                              const label = `${formatTimecode(c.timestamp)}${c.duration ? ` → ${formatTimecode(c.timestamp + c.duration)}` : ''}`;
                               return (
                                 <button
                                   type="button"

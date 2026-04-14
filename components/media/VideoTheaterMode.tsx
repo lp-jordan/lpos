@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { FrameIOComment, FrameIOCommentReply } from '@/lib/services/frameio';
+import { formatTimecode } from '@/lib/utils/time';
 
 interface Props {
   src:                  string;
@@ -296,7 +297,7 @@ export function VideoTheaterMode({
                   style={{ width: duration ? `${(currentTime / duration) * 100}%` : '0%' }}
                 />
                 {duration > 0 && timedComments.map(c => {
-                  const label = `${fmt(c.timestamp ?? 0)}${c.duration ? ` → ${fmt((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Frame.io'}: ${c.text}${fmtCreatedAt(c.createdAt) ? ` (${fmtCreatedAt(c.createdAt)})` : ''}`;
+                  const label = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Frame.io'}: ${c.text}${fmtCreatedAt(c.createdAt) ? ` (${fmtCreatedAt(c.createdAt)})` : ''}`;
                   if (c.duration && c.duration > 0) {
                     return (
                       <button
@@ -309,7 +310,7 @@ export function VideoTheaterMode({
                         }}
                         title={label}
                         onClick={e => { e.stopPropagation(); seekTo(c.timestamp ?? 0); }}
-                        aria-label={`Jump to comment at ${fmt(c.timestamp ?? 0)}`}
+                        aria-label={`Jump to comment at ${formatTimecode(c.timestamp ?? 0)}`}
                       />
                     );
                   }
@@ -321,7 +322,7 @@ export function VideoTheaterMode({
                       style={{ left: `${((c.timestamp ?? 0) / duration) * 100}%` }}
                       title={label}
                       onClick={e => { e.stopPropagation(); seekTo(c.timestamp ?? 0); }}
-                      aria-label={`Jump to comment at ${fmt(c.timestamp ?? 0)}`}
+                      aria-label={`Jump to comment at ${formatTimecode(c.timestamp ?? 0)}`}
                     />
                   );
                 })}
@@ -340,8 +341,8 @@ export function VideoTheaterMode({
             {commentMode ? (
               <div className="vt-comment-bar">
                 <span className="vt-comment-ts">
-                  @ {fmt(commentTime)}
-                  {commentDuration !== null && <> → {fmt(commentTime + commentDuration)}</>}
+                  @ {formatTimecode(commentTime)}
+                  {commentDuration !== null && <> → {formatTimecode(commentTime + commentDuration)}</>}
                 </span>
                 <input
                   ref={commentInputRef}
@@ -410,7 +411,7 @@ export function VideoTheaterMode({
                 <div className="vt-cp-comment-top">
                   {c.timestamp !== null ? (
                     <button type="button" className="vt-cp-ts" onClick={() => seekTo(c.timestamp ?? 0)} title="Jump to this point">
-                      {fmt(c.timestamp)}{c.duration ? ` → ${fmt(c.timestamp + c.duration)}` : ''}
+                      {formatTimecode(c.timestamp)}{c.duration ? ` → ${formatTimecode(c.timestamp + c.duration)}` : ''}
                     </button>
                   ) : (
                     <span className="vt-cp-general">General</span>

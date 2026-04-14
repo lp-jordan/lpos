@@ -35,7 +35,7 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
   return (
     <button
       type="button"
-      className={`notif-item notif-task-item${notif.read ? '' : ' notif-task-item--unread'}`}
+      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
       onClick={onClick}
       role="menuitem"
     >

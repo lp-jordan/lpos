@@ -17,7 +17,7 @@ function useTimecode() {
   useEffect(() => {
     function tick() {
       const now = new Date();
-      const frames = Math.floor(now.getMilliseconds() / 40);
+      const frames = Math.floor(now.getMilliseconds() * 24000 / 1001000);
       setTc(`${now.toTimeString().split(' ')[0]}:${String(frames).padStart(2, '0')}`);
     }
     tick();
@@ -380,7 +380,10 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
                     {slate.currentProjectId ? 'No notes yet.' : 'Select a project to begin.'}
                   </p>
                 )}
-                {slate.notes.map((n, index) => (
+                {[...slate.notes].reverse().map((n, displayIdx) => {
+                  // Map display index (newest-first) back to actual server index (oldest-first)
+                  const index = slate.notes.length - 1 - displayIdx;
+                  return (
                   <div
                     key={`${n.timestamp}-${index}`}
                     className={`sl-note-row${selected.has(index) ? ' sl-note-row--selected' : ''}`}
@@ -477,7 +480,8 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
                       </>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>)}

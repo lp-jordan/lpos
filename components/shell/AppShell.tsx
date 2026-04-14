@@ -12,6 +12,7 @@ import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { VersionConfirmProvider } from '@/contexts/VersionConfirmContext';
 import { RestartCountdownBanner } from '@/components/shell/RestartCountdownBanner';
+import { PresenceReporter } from '@/components/PresenceReporter';
 import type { UserSummary } from '@/lib/models/user';
 
 function TrayGroup() {
@@ -65,6 +66,7 @@ export function AppShell({
         <ContextMenuProvider>
           <VersionConfirmProvider>
             <div className="app-home" data-guest={isGuest || undefined}>
+              <PresenceReporter />
               <RestartCountdownBanner />
               {children}
               {currentUser && !isGuest && <NotifBell />}
@@ -85,13 +87,14 @@ export function AppShell({
         <ContextMenuProvider>
           <VersionConfirmProvider>
             <div className="app-inner" data-guest={isGuest || undefined}>
+              <PresenceReporter />
               <RestartCountdownBanner />
               {currentUser && !isSignIn && !isGuest && <NotifBell />}
               {currentUser && !isSignIn && !isGuest && <UserMenu user={currentUser} />}
               {isGuest && <GuestSignOutButton />}
               <NavBar />
               <Breadcrumb />
-            <main className="app-content">
+            <main className={`app-content${pathname === '/dashboard' ? ' app-content--wide' : ''}`}>
               {children}
             </main>
             {currentUser && !isSignIn && !isGuest && <WishListButton currentUser={currentUser} />}

@@ -34,6 +34,7 @@ import {
   ensureLposRootFolder,
   getCachedProjectFolders,
   getCachedRootFolderId,
+  getClientFolderIdMap,
 } from './drive-folder-service';
 import {
   upsertChannel,
@@ -45,6 +46,8 @@ import {
   getDriveFolderByDriveId,
   getDriveAssetsByProject,
   deleteDriveAssetByEntityId,
+  upsertOrphanedFolder,
+  getOrphanedFolderByDriveId,
 } from '@/lib/store/drive-sync-db';
 import {
   registerScript,
@@ -347,7 +350,11 @@ export class DriveWatcherService {
       if (!parentId) return;
 
       const ctx = this.resolveContext(parentId);
-      if (!ctx || ctx.folderType !== 'assets') return; // only track Assets tree
+      if (!ctx) {
+        await this.handleOrphanedFolder(folderId, folderName, metadata);
+        return;
+      }
+      if (ctx.folderType !== 'assets') return; // only track Assets tree
 
       upsertDriveAsset({
         entityType:    'asset',
@@ -543,6 +550,39 @@ export class DriveWatcherService {
     } catch (err) {
       console.error(`[drive-watcher] failed to index asset ${fileId}:`, err);
     }
+  }
+
+  // ── Orphaned folder handling ────────────────────────────────────────────────
+
+  /**
+   * Called when a new folder can't be resolved to any LPOS project. If the
+   * folder's parent is a known client folder it's a project-level orphan —
+   * queue it and notify all connected clients so admins can act on it.
+   */
+  private async handleOrphanedFolder(
+    folderId:   string,
+    folderName: string,
+    metadata:   { parents?: string[] | null },
+  ): Promise<void> {
+    const parentId = metadata.parents?.[0];
+    if (!parentId) return;
+
+    const clientFolderMap = getClientFolderIdMap(); // folderId → clientName
+    const clientName = clientFolderMap[parentId];
+    if (!clientName) return; // parent isn't a known client folder — ignore
+
+    if (getOrphanedFolderByDriveId(folderId)) return; // already queued
+
+    upsertOrphanedFolder({ driveFileId: folderId, name: folderName, clientName, parentDriveId: parentId });
+
+    console.log(`[drive-watcher] orphaned project folder queued: "${clientName} / ${folderName}"`);
+
+    this.io.emit('drive:orphaned-folder', {
+      folderName,
+      clientName,
+      driveFileId: folderId,
+      detectedAt:  new Date().toISOString(),
+    });
   }
 
   // ── Context resolution ──────────────────────────────────────────────────────

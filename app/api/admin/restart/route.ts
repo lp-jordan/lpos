@@ -31,13 +31,13 @@ function scheduleRestart(): void {
   const isWindows = process.platform === 'win32';
 
   const child = isWindows
-    ? spawn('cmd', ['/c', 'timeout /t 4 /nobreak >nul && npm start'], {
+    ? spawn('cmd', ['/c', 'timeout /t 4 /nobreak >nul && npm run build && npm start'], {
         cwd,
         detached: true,
         stdio: 'ignore',
         shell: false,
       })
-    : spawn('sh', ['-c', 'sleep 4 && npm start'], {
+    : spawn('sh', ['-c', 'sleep 4 && npm run build && npm start'], {
         cwd,
         detached: true,
         stdio: 'ignore',

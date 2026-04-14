@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as SocketIOServer } from 'socket.io';
+import {
+  recordUploadJobStart,
+  sweepStaleUploadJobs,
+  updateUploadJobStatus,
+} from '@/lib/store/job-record-store';
 
 const UPLOAD_TIMEOUT_MS = 3 * 60_000; // 3 minutes without progress → auto-fail
 const TIMEOUT_SWEEP_MS  = 30_000;     // check every 30s
@@ -46,6 +51,9 @@ export class UploadQueueService {
     attach('/upload-queue');
     attach('/frameio-uploads');
     this.sweepTimer = setInterval(() => this.timeoutSweep(), TIMEOUT_SWEEP_MS);
+
+    const swept = sweepStaleUploadJobs();
+    console.log(`[UploadQueue] swept ${swept} stale jobs`);
   }
 
   stop(): void {
@@ -66,6 +74,7 @@ export class UploadQueueService {
       queuedAt,
       updatedAt: queuedAt,
     });
+    recordUploadJobStart({ jobId, projectId, assetId, filename, provider, queuedAt });
     this.broadcast();
     return jobId;
   }
@@ -83,16 +92,20 @@ export class UploadQueueService {
   }
 
   complete(jobId: string): void {
-    this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, completedAt: new Date().toISOString() });
+    const completedAt = new Date().toISOString();
+    this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, completedAt });
+    updateUploadJobStatus(jobId, 'done', completedAt);
   }
 
   fail(jobId: string, error: string): void {
     this.patch(jobId, { status: 'failed', error, detail: undefined, completedAt: new Date().toISOString() });
+    updateUploadJobStatus(jobId, 'failed');
   }
 
   cancel(jobId: string): void {
     this.cancelledIds.add(jobId);
     this.patch(jobId, { status: 'cancelled', detail: undefined, error: undefined, completedAt: new Date().toISOString() });
+    updateUploadJobStatus(jobId, 'cancelled');
   }
 
   isCancelled(jobId: string): boolean {

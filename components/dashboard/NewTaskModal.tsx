@@ -2,7 +2,9 @@
 
 import { useState } from 'react';
 import type { Project } from '@/lib/models/project';
-import type { Task, TaskPriority, TaskStatus } from '@/lib/models/task';
+import type { Task, TaskPriority } from '@/lib/models/task';
+import type { TaskPhase } from '@/lib/models/task-phase';
+import { PHASE_CONFIGS } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from './MentionTextarea';
 
@@ -11,7 +13,7 @@ interface Props {
   users: UserSummary[];
   currentUserId: string;
   defaultProjectId?: string;
-  defaultStatus?: TaskStatus;
+  defaultPhase?: TaskPhase;
   onCreated: (task: Task) => void;
   onClose: () => void;
 }
@@ -21,17 +23,26 @@ export function NewTaskModal({
   users,
   currentUserId,
   defaultProjectId,
-  defaultStatus,
+  defaultPhase,
   onCreated,
   onClose,
 }: Readonly<Props>) {
   const [description, setDescription] = useState('');
-  const [projectId, setProjectId] = useState(defaultProjectId ?? '');
+  const [projectId, setProjectId] = useState(defaultProjectId ?? 'general');
+  const [phase, setPhase] = useState<TaskPhase>(defaultPhase ?? 'pre_production');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([currentUserId]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [closing, setClosing] = useState(false);
+
+  function handleClose() {
+    setClosing(true);
+    setTimeout(onClose, 140);
+  }
+
+  const phaseConfig = PHASE_CONFIGS.find((c) => c.value === phase)!;
 
   // Group projects by client for the <optgroup> picker
   const clientMap = new Map<string, Project[]>();
@@ -42,6 +53,10 @@ export function NewTaskModal({
 
   const lockedProject = !!defaultProjectId;
 
+  function handlePhaseChange(next: TaskPhase) {
+    setPhase(next);
+  }
+
   function toggleAssignee(uid: string) {
     setAssigneeIds((prev) =>
       prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid],
@@ -51,11 +66,10 @@ export function NewTaskModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!description.trim()) { setError('Description is required.'); return; }
-    if (!projectId) { setError('Project is required.'); return; }
     setSaving(true);
     setError('');
     try {
-      const project = projects.find((p) => p.projectId === projectId);
+      const project = projectId !== 'general' ? projects.find((p) => p.projectId === projectId) : undefined;
       const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -63,10 +77,11 @@ export function NewTaskModal({
           description: description.trim(),
           projectId,
           clientName: project?.clientName ?? null,
+          phase,
+          status: phaseConfig.defaultStatus,
           priority,
           assignedTo: assigneeIds.length > 0 ? assigneeIds : [currentUserId],
           notes: notes.trim() || null,
-          status: defaultStatus,
         }),
       });
       if (!res.ok) {
@@ -75,7 +90,7 @@ export function NewTaskModal({
       }
       const data = await res.json() as { task: Task };
       onCreated(data.task);
-      onClose();
+      handleClose();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -84,11 +99,11 @@ export function NewTaskModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className={`modal-overlay${closing ? ' modal-overlay--closing' : ''}`} onClick={handleClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">New Task</h2>
-          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -110,28 +125,21 @@ export function NewTaskModal({
             />
           </div>
 
-          <div className="modal-field">
-            <label className="modal-label" htmlFor="nt-project">Project</label>
-            <select
-              id="nt-project"
-              className="modal-input modal-select"
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              disabled={lockedProject}
-              autoFocus={lockedProject}
-            >
-              {!lockedProject && <option value="">— Select a project —</option>}
-              {[...clientMap.entries()].map(([client, clientProjects]) => (
-                <optgroup key={client} label={client}>
-                  {clientProjects.map((p) => (
-                    <option key={p.projectId} value={p.projectId}>{p.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-
           <div className="modal-field-row">
+            <div className="modal-field">
+              <label className="modal-label" htmlFor="nt-phase">Phase</label>
+              <select
+                id="nt-phase"
+                className="modal-input modal-select"
+                value={phase}
+                onChange={(e) => handlePhaseChange(e.target.value as TaskPhase)}
+              >
+                {PHASE_CONFIGS.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="modal-field">
               <label className="modal-label" htmlFor="nt-priority">Priority</label>
               <select
@@ -146,6 +154,27 @@ export function NewTaskModal({
                 <option value="low">Low</option>
               </select>
             </div>
+          </div>
+
+          <div className="modal-field">
+            <label className="modal-label" htmlFor="nt-project">Project</label>
+            <select
+              id="nt-project"
+              className="modal-input modal-select"
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              disabled={lockedProject}
+              autoFocus={lockedProject}
+            >
+              {!lockedProject && <option value="general">General</option>}
+              {[...clientMap.entries()].map(([client, clientProjects]) => (
+                <optgroup key={client} label={client}>
+                  {clientProjects.map((p) => (
+                    <option key={p.projectId} value={p.projectId}>{p.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </div>
 
           <div className="modal-field">
@@ -179,7 +208,7 @@ export function NewTaskModal({
           {error && <p className="modal-error">{error}</p>}
 
           <div className="modal-actions">
-            <button type="button" className="modal-btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
+            <button type="button" className="modal-btn-ghost" onClick={handleClose} disabled={saving}>Cancel</button>
             <button type="submit" className="modal-btn-primary" disabled={saving}>
               {saving ? 'Creating…' : 'Create Task'}
             </button>

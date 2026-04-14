@@ -72,6 +72,19 @@ function initSchema(db: DatabaseSync): void {
       expires_at   TEXT NOT NULL,
       created_at   TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS drive_orphaned_folders (
+      id              TEXT PRIMARY KEY,
+      drive_file_id   TEXT NOT NULL UNIQUE,
+      name            TEXT NOT NULL,
+      client_name     TEXT NOT NULL,
+      parent_drive_id TEXT NOT NULL,
+      detected_at     TEXT NOT NULL,
+      resolved_at     TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orphaned_client_name
+      ON drive_orphaned_folders(client_name, name);
   `);
 }
 
@@ -327,4 +340,67 @@ export function deleteChannel(channelId: string): void {
   getDriveSyncDb()
     .prepare('DELETE FROM drive_watch_channels WHERE channel_id = ?')
     .run(channelId);
+}
+
+// ── drive_orphaned_folders ────────────────────────────────────────────────────
+
+export interface DriveOrphanedFolder {
+  id:            string;
+  driveFileId:   string;
+  name:          string;
+  clientName:    string;
+  parentDriveId: string;
+  detectedAt:    string;
+  resolvedAt:    string | null;
+}
+
+export function upsertOrphanedFolder(input: {
+  driveFileId:   string;
+  name:          string;
+  clientName:    string;
+  parentDriveId: string;
+}): void {
+  const db  = getDriveSyncDb();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO drive_orphaned_folders
+      (id, drive_file_id, name, client_name, parent_drive_id, detected_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(drive_file_id) DO NOTHING
+  `).run(randomUUID(), input.driveFileId, input.name, input.clientName, input.parentDriveId, now);
+}
+
+export function getOrphanedFolderByDriveId(driveFileId: string): DriveOrphanedFolder | undefined {
+  const row = getDriveSyncDb().prepare(
+    'SELECT * FROM drive_orphaned_folders WHERE drive_file_id = ? LIMIT 1'
+  ).get(driveFileId) as Record<string, unknown> | undefined;
+  return row ? rowToOrphaned(row) : undefined;
+}
+
+export function getOrphanedFolderByClientProject(
+  clientName: string,
+  name:       string,
+): DriveOrphanedFolder | undefined {
+  const row = getDriveSyncDb().prepare(
+    'SELECT * FROM drive_orphaned_folders WHERE client_name = ? AND name = ? AND resolved_at IS NULL LIMIT 1'
+  ).get(clientName, name) as Record<string, unknown> | undefined;
+  return row ? rowToOrphaned(row) : undefined;
+}
+
+export function markOrphanedFolderResolved(driveFileId: string): void {
+  getDriveSyncDb().prepare(
+    'UPDATE drive_orphaned_folders SET resolved_at = ? WHERE drive_file_id = ?'
+  ).run(new Date().toISOString(), driveFileId);
+}
+
+function rowToOrphaned(row: Record<string, unknown>): DriveOrphanedFolder {
+  return {
+    id:            row.id as string,
+    driveFileId:   row.drive_file_id as string,
+    name:          row.name as string,
+    clientName:    row.client_name as string,
+    parentDriveId: row.parent_drive_id as string,
+    detectedAt:    row.detected_at as string,
+    resolvedAt:    row.resolved_at as string | null,
+  };
 }

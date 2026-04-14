@@ -10,15 +10,16 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import type { Task, TaskStatus } from '@/lib/models/task';
+import type { Task } from '@/lib/models/task';
+import type { TaskPhase } from '@/lib/models/task-phase';
+import { PHASE_CONFIGS, getPhaseConfig, isTerminalStatus } from '@/lib/models/task-phase';
 import type { Project } from '@/lib/models/project';
 import type { UserSummary } from '@/lib/models/user';
 import { TaskColumn } from './TaskColumn';
 import { TaskCard } from './TaskCard';
-import { TaskSidePanel } from './TaskSidePanel';
+import { TaskDetailModal } from './TaskDetailModal';
+import { TaskContextMenu } from './TaskContextMenu';
 import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
-
-const STATUS_ORDER: TaskStatus[] = ['not_started', 'in_progress', 'blocked', 'waiting_on_client', 'done'];
 
 interface Props {
   initialTasks: Task[];
@@ -33,26 +34,43 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(initialCommentCounts);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
-  const [doneCollapsed, setDoneCollapsed] = useState(true);
+  const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
-  const [newTaskStatus, setNewTaskStatus] = useState<TaskStatus>('not_started');
-  const [filterProject, setFilterProject] = useState('');
-  const [filterPriority, setFilterPriority] = useState('');
+  const [activePhase, setActivePhase] = useState<TaskPhase>('pre_production');
+  const [viewScope, setViewScope] = useState<'mine' | 'all'>('mine');
+  const [phaseAnimKey, setPhaseAnimKey] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
 
   const selectedTask = tasks.find((t) => t.taskId === selectedTaskId) ?? null;
+  const phaseConfig = getPhaseConfig(activePhase);
 
-  // Filtered tasks
-  const filtered = tasks.filter((t) => {
-    if (filterProject && t.projectId !== filterProject) return false;
-    if (filterPriority && t.priority !== filterPriority) return false;
+  const projectsMap: Record<string, string> = Object.fromEntries(
+    allProjects.map((p) => [p.projectId, p.name]),
+  );
+
+  // Filtered tasks: scope (mine/all) + active phase
+  const visibleTasks = tasks.filter((t) => {
+    if (t.phase !== activePhase) return false;
+    if (viewScope === 'mine') {
+      return t.assignedTo.includes(currentUserId);
+    }
     return true;
   });
 
-  const byStatus = (status: TaskStatus) => filtered.filter((t) => t.status === status);
+  const byStatus = (status: string) => visibleTasks.filter((t) => t.status === status);
+
+  function switchPhase(phase: TaskPhase) {
+    if (phase === activePhase) return;
+    setActivePhase(phase);
+    setPhaseAnimKey((k) => k + 1);
+    setDoneCollapsed(true);
+    setSelectedTaskId(null);
+  }
 
   function handleDragStart(event: DragStartEvent) {
     const task = tasks.find((t) => t.taskId === event.active.id);
@@ -65,13 +83,20 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     if (!over) return;
 
     const taskId = active.id as string;
-    const newStatus = over.id as TaskStatus;
+    // over.id may be a column status string OR another card's taskId (imprecise drop).
+    // If it's a card, resolve to that card's current status.
+    const overId = over.id as string;
+    const overTask = tasks.find((t) => t.taskId === overId);
+    const newStatus = overTask ? overTask.status : overId;
 
     const task = tasks.find((t) => t.taskId === taskId);
     if (!task || task.status === newStatus) return;
 
-    // Optimistic update
-    setTasks((prev) => prev.map((t) => t.taskId === taskId ? { ...t, status: newStatus, completedAt: newStatus === 'done' ? new Date().toISOString() : undefined } : t));
+    setTasks((prev) => prev.map((t) =>
+      t.taskId === taskId
+        ? { ...t, status: newStatus, completedAt: isTerminalStatus(task.phase, newStatus) ? new Date().toISOString() : undefined }
+        : t,
+    ));
 
     fetch(`/api/tasks/${taskId}`, {
       method: 'PATCH',
@@ -83,7 +108,6 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
         setTasks((prev) => prev.map((t) => t.taskId === taskId ? d.task : t));
       })
       .catch(() => {
-        // Rollback on failure
         setTasks((prev) => prev.map((t) => t.taskId === taskId ? task : t));
       });
   }
@@ -102,88 +126,148 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     setCommentCounts((prev) => ({ ...prev, [task.taskId]: 0 }));
   }, []);
 
-  function openNewTask(status: TaskStatus) {
-    setNewTaskStatus(status);
-    setShowNewTask(true);
+  function handleCardContextMenu(e: React.MouseEvent, taskId: string) {
+    e.preventDefault();
+    setContextMenu({ taskId, x: e.clientX, y: e.clientY });
   }
 
-  // Unique projects for filter
-  const projectOptions = allProjects.filter((p) => tasks.some((t) => t.projectId === p.projectId));
+  async function handleRenameCommit(taskId: string, title: string) {
+    setRenamingTaskId(null);
+    setTasks((prev) => prev.map((t) => t.taskId === taskId ? { ...t, description: title } : t));
+    await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: title }),
+    });
+  }
 
-  const hasPanel = selectedTask !== null;
+  async function handleContextReassign(taskId: string, userIds: string[]) {
+    setTasks((prev) => prev.map((t) => t.taskId === taskId ? { ...t, assignedTo: userIds } : t));
+    await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignedTo: userIds }),
+    });
+  }
+
+  async function handleContextDelete(taskId: string) {
+    setTasks((prev) => prev.filter((t) => t.taskId !== taskId));
+    setSelectedTaskId(null);
+    await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+  }
 
   return (
-    <div className={`task-board${hasPanel ? ' task-board--with-panel' : ''}`}>
-      {/* Board area */}
-      <div className="task-board-main">
-        {/* Filter bar */}
-        <div className="task-board-toolbar">
-          <select
-            className="task-filter-select"
-            value={filterProject}
-            onChange={(e) => setFilterProject(e.target.value)}
-          >
-            <option value="">All Projects</option>
-            {projectOptions.map((p) => (
-              <option key={p.projectId} value={p.projectId}>{p.clientName} — {p.name}</option>
-            ))}
-          </select>
-          <select
-            className="task-filter-select"
-            value={filterPriority}
-            onChange={(e) => setFilterPriority(e.target.value)}
-          >
-            <option value="">All Priorities</option>
-            <option value="urgent">Urgent</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
+    <div className="task-board">
+      {/* Toolbar */}
+      <div className="task-board-toolbar">
+        {/* Phase tabs */}
+        <div className="task-phase-tabs">
+          {PHASE_CONFIGS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              className={`task-phase-tab${activePhase === c.value ? ' task-phase-tab--active' : ''}`}
+              onClick={() => switchPhase(c.value)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Mine / All toggle */}
+        <div className="task-scope-toggle">
           <button
             type="button"
-            className="task-board-add-btn"
-            onClick={() => openNewTask('not_started')}
+            className={`task-scope-btn${viewScope === 'mine' ? ' task-scope-btn--active' : ''}`}
+            onClick={() => setViewScope('mine')}
           >
-            + New Task
+            Mine
+          </button>
+          <button
+            type="button"
+            className={`task-scope-btn${viewScope === 'all' ? ' task-scope-btn--active' : ''}`}
+            onClick={() => setViewScope('all')}
+          >
+            All
           </button>
         </div>
 
-        {/* Kanban columns */}
-        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="task-board-columns">
-            {STATUS_ORDER.map((status) => (
-              <TaskColumn
-                key={status}
-                status={status}
-                tasks={byStatus(status)}
-                users={users}
-                commentCounts={commentCounts}
-                selectedTaskId={selectedTaskId}
-                collapsed={status === 'done' ? doneCollapsed : false}
-                onToggleCollapse={() => setDoneCollapsed((v) => !v)}
-                onSelectTask={(id) => setSelectedTaskId((prev) => prev === id ? null : id)}
-                onAddTask={() => openNewTask(status)}
-              />
-            ))}
-          </div>
-
-          <DragOverlay>
-            {draggingTask && (
-              <TaskCard
-                task={draggingTask}
-                users={users}
-                commentCount={commentCounts[draggingTask.taskId] ?? 0}
-                selected={false}
-                onClick={() => {}}
-              />
-            )}
-          </DragOverlay>
-        </DndContext>
+        <button
+          type="button"
+          className="task-board-add-btn"
+          onClick={() => setShowNewTask(true)}
+        >
+          + New Task
+        </button>
       </div>
 
-      {/* Side panel */}
+      {/* Kanban */}
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div key={phaseAnimKey} className="task-board-columns task-board-columns--anim">
+          {phaseConfig.statuses.map((s) => (
+            <TaskColumn
+              key={s.value}
+              status={s.value}
+              label={s.label}
+              color={s.color}
+              isTerminal={s.value === phaseConfig.terminalStatus}
+              tasks={byStatus(s.value)}
+              users={users}
+              commentCounts={commentCounts}
+              projectsMap={projectsMap}
+              selectedTaskId={selectedTaskId}
+              renamingTaskId={renamingTaskId}
+              collapsed={s.value === phaseConfig.terminalStatus ? doneCollapsed : false}
+              onToggleCollapse={() => setDoneCollapsed((v) => !v)}
+              onSelectTask={(id) => setSelectedTaskId((prev) => prev === id ? null : id)}
+              onAddTask={() => setShowNewTask(true)}
+              onCardContextMenu={handleCardContextMenu}
+              onRenameCommit={handleRenameCommit}
+              onRenameCancel={() => setRenamingTaskId(null)}
+            />
+          ))}
+        </div>
+
+        <DragOverlay>
+          {draggingTask && (
+            <TaskCard
+              task={draggingTask}
+              users={users}
+              commentCount={commentCounts[draggingTask.taskId] ?? 0}
+              projectName={projectsMap[draggingTask.projectId] ?? null}
+              selected={false}
+              isRenaming={false}
+              onClick={() => {}}
+              onContextMenu={() => {}}
+              onRenameCommit={() => {}}
+              onRenameCancel={() => {}}
+            />
+          )}
+        </DragOverlay>
+      </DndContext>
+
+      {/* Context menu */}
+      {contextMenu && (() => {
+        const ctxTask = tasks.find((t) => t.taskId === contextMenu.taskId);
+        if (!ctxTask) return null;
+        return (
+          <TaskContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            taskId={contextMenu.taskId}
+            assignedTo={ctxTask.assignedTo}
+            users={users}
+            onRename={() => setRenamingTaskId(contextMenu.taskId)}
+            onReassign={(ids) => void handleContextReassign(contextMenu.taskId, ids)}
+            onDelete={() => void handleContextDelete(contextMenu.taskId)}
+            onClose={() => setContextMenu(null)}
+          />
+        );
+      })()}
+
+      {/* Task detail modal */}
       {selectedTask && (
-        <TaskSidePanel
+        <TaskDetailModal
           task={selectedTask}
           allProjects={allProjects}
           users={users}
@@ -200,7 +284,7 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           projects={allProjects}
           users={users}
           currentUserId={currentUserId}
-          defaultStatus={newTaskStatus}
+          defaultPhase={activePhase}
           onCreated={handleCreated}
           onClose={() => setShowNewTask(false)}
         />

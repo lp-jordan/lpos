@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { getIngestQueueService } from '@/lib/services/container';
 import { getIngestQueueDb } from '@/lib/store/ingest-queue-db';
+import { invalidateStorageCache } from '@/lib/services/storage-volume-service';
 
 function getIngestQueue() {
   try { return getIngestQueueService(); } catch { return null; }
@@ -84,6 +85,14 @@ export async function PATCH(
       nodeStream.on('error', reject);
     });
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EIO' || code === 'EROFS' || code === 'EACCES') {
+      invalidateStorageCache();
+      return NextResponse.json(
+        { error: 'Storage drive unavailable. The drive may have been disconnected.', code: 'drive_error' },
+        { status: 507 },
+      );
+    }
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 

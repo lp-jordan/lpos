@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import type { Task, TaskStatus, TaskPriority } from '@/lib/models/task';
+import type { Task, TaskPriority } from '@/lib/models/task';
+import { getPhaseConfig } from '@/lib/models/task-phase';
 import type { Project } from '@/lib/models/project';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from './MentionTextarea';
@@ -13,16 +14,6 @@ interface Props {
   onUpdated: (task: Task) => void;
   onClose: () => void;
 }
-
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  not_started: 'Not Started',
-  in_progress: 'In Progress',
-  blocked: 'Blocked',
-  waiting_on_client: 'Waiting',
-  done: 'Done',
-};
-
-const STATUS_ORDER: TaskStatus[] = ['not_started', 'in_progress', 'blocked', 'waiting_on_client', 'done'];
 
 const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: 'Urgent',
@@ -44,18 +35,15 @@ function relativeTime(iso: string): string {
 }
 
 export function TaskDetailModal({ task, projects, users, onUpdated, onClose }: Readonly<Props>) {
-  const [status, setStatus] = useState<TaskStatus>(task.status);
+  const [status, setStatus] = useState(task.status);
   const [notes, setNotes] = useState(task.notes ?? '');
+  const [projectId, setProjectId] = useState(task.projectId ?? 'general');
   const [statusOpen, setStatusOpen] = useState(false);
+  const phaseStatuses = getPhaseConfig(task.phase).statuses;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const dirty = status !== task.status || notes !== (task.notes ?? '');
-
-  const project =
-    task.projectId !== 'unassigned'
-      ? projects.find((p) => p.projectId === task.projectId)
-      : null;
+  const dirty = status !== task.status || notes !== (task.notes ?? '') || projectId !== (task.projectId ?? 'general');
 
   const assignees = users.filter((u) => task.assignedTo.includes(u.id));
 
@@ -66,7 +54,7 @@ export function TaskDetailModal({ task, projects, users, onUpdated, onClose }: R
       const res = await fetch(`/api/tasks/${task.taskId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, notes: notes.trim() || null }),
+        body: JSON.stringify({ status, notes: notes.trim() || null, projectId }),
       });
       if (!res.ok) {
         const data = await res.json() as { error?: string };
@@ -105,18 +93,18 @@ export function TaskDetailModal({ task, projects, users, onUpdated, onClose }: R
                   className={`task-status-pill task-status-pill--${status}`}
                   onClick={() => setStatusOpen((v) => !v)}
                 >
-                  {STATUS_LABEL[status]}
+                  {phaseStatuses.find((s) => s.value === status)?.label ?? status}
                 </button>
                 {statusOpen && (
                   <div className="task-status-dropdown" onMouseLeave={() => setStatusOpen(false)}>
-                    {STATUS_ORDER.map((s) => (
+                    {phaseStatuses.map((s) => (
                       <button
-                        key={s}
+                        key={s.value}
                         type="button"
-                        className={`task-status-option${s === status ? ' task-status-option--active' : ''}`}
-                        onClick={() => { setStatus(s); setStatusOpen(false); }}
+                        className={`task-status-option${s.value === status ? ' task-status-option--active' : ''}`}
+                        onClick={() => { setStatus(s.value); setStatusOpen(false); }}
                       >
-                        {STATUS_LABEL[s]}
+                        {s.label}
                       </button>
                     ))}
                   </div>
@@ -131,16 +119,21 @@ export function TaskDetailModal({ task, projects, users, onUpdated, onClose }: R
               </span>
             </div>
 
-            {project && (
-              <div className="task-detail-field">
-                <span className="task-detail-label">Project</span>
-                <span className="task-detail-value">
-                  <strong className="task-detail-value-strong">{project.clientName}</strong>
-                  {' — '}
-                  {project.name}
-                </span>
-              </div>
-            )}
+            <div className="task-detail-field">
+              <span className="task-detail-label">Project</span>
+              <select
+                className="task-panel-select"
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+              >
+                <option value="general">General</option>
+                {projects.map((p) => (
+                  <option key={p.projectId} value={p.projectId}>
+                    {p.clientName} — {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             {assignees.length > 0 && (
               <div className="task-detail-field">

@@ -8,6 +8,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Server as SocketIOServer } from 'socket.io';
+import {
+  recordPromotionJobStart,
+  sweepStalePromotionJobs,
+  updatePromotionJobStatus,
+} from '@/lib/store/job-record-store';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -53,6 +58,8 @@ export class PromotionQueueService {
     this.io?.of('/promotion-queue').on('connection', (socket) => {
       socket.emit('queue', this.getQueue());
     });
+    const swept = sweepStalePromotionJobs();
+    console.log(`[PromotionQueue] swept ${swept} stale jobs`);
     console.log('[promotion-queue] service running');
   }
 
@@ -92,6 +99,7 @@ export class PromotionQueueService {
       updatedAt: now,
     });
 
+    recordPromotionJobStart({ jobId, projectId, filename, fileKey, destination, storageType, queuedAt: now });
     this.broadcast();
     return jobId;
   }
@@ -107,11 +115,13 @@ export class PromotionQueueService {
   complete(jobId: string, entityId: string): void {
     const now = new Date().toISOString();
     this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, entityId, completedAt: now });
+    updatePromotionJobStatus(jobId, 'done', now);
   }
 
   fail(jobId: string, error: string): void {
     const now = new Date().toISOString();
     this.patch(jobId, { status: 'failed', error, detail: undefined, completedAt: now });
+    updatePromotionJobStatus(jobId, 'failed');
   }
 
   cancel(jobId: string): void {
@@ -119,6 +129,7 @@ export class PromotionQueueService {
     if (!job || job.status === 'done' || job.status === 'failed') return;
     const now = new Date().toISOString();
     this.patch(jobId, { status: 'cancelled', detail: undefined, error: undefined, completedAt: now });
+    updatePromotionJobStatus(jobId, 'cancelled');
   }
 
   getQueue(): PromotionJob[] {

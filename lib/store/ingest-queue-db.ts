@@ -35,6 +35,34 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_ingest_jobs_completed ON ingest_jobs(completed_at);
   `);
 
+  // Lightweight publish & promotion job records for stale-sweep on boot
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS upload_job_records (
+      job_id       TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL,
+      asset_id     TEXT NOT NULL,
+      filename     TEXT NOT NULL,
+      provider     TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'in_progress',
+      queued_at    TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS promotion_job_records (
+      job_id       TEXT PRIMARY KEY,
+      project_id   TEXT NOT NULL,
+      filename     TEXT NOT NULL,
+      file_key     TEXT NOT NULL,
+      destination  TEXT NOT NULL,
+      storage_type TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'in_progress',
+      queued_at    TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      completed_at TEXT
+    );
+  `);
+
   // Migration: add batch_id for stale-sweep batch awareness (safe to run repeatedly)
   try {
     db.exec(`ALTER TABLE ingest_jobs ADD COLUMN batch_id TEXT`);

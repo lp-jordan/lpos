@@ -11,6 +11,7 @@ import {
   overallBadgeClass,
   isActive,
   hasFailed,
+  stageRemainingMs,
   RETRYABLE_STAGES,
   STAGE_TERMINAL_STATUSES,
   PIPELINE_TERMINAL_STATUSES,
@@ -317,6 +318,20 @@ export function QueueView() {
   const totalFailed    = pipelines.filter(hasFailed).length;
   const totalCancelled = pipelines.filter((p) => p.overallStatus === 'cancelled').length;
 
+  // Aggregate ETA across all active stages with measurable progress
+  const totalRemainingMs = useMemo(() => {
+    let sum = 0;
+    let hasAny = false;
+    for (const entry of pipelines) {
+      if (!isActive(entry)) continue;
+      for (const stage of entry.stages) {
+        const r = stageRemainingMs(stage, now);
+        if (r !== null) { sum += r; hasAny = true; }
+      }
+    }
+    return hasAny ? sum : null;
+  }, [pipelines, now]);
+
   return (
     <div className="queue-view">
       <div className="queue-header">
@@ -326,6 +341,9 @@ export function QueueView() {
           {totalQueued > 0 && <span className="queue-summary-badge queue-summary-badge--queued">{totalQueued} queued</span>}
           {totalFailed > 0 && <span className="queue-summary-badge queue-summary-badge--failed">{totalFailed} failed</span>}
           {pipelines.length === 0 && <span className="queue-summary-badge">No entries</span>}
+          {totalRemainingMs !== null && (
+            <span className="queue-summary-remaining">~{formatElapsed(totalRemainingMs)} remaining</span>
+          )}
           {totalFailed > 0 && (
             <button
               type="button"

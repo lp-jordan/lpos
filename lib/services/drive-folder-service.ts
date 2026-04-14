@@ -22,7 +22,7 @@
 
 import fs   from 'node:fs';
 import path from 'node:path';
-import { ensureFolder, findFolder, getDriveClient } from './drive-client';
+import { ensureFolder, findFolder, getDriveClient, listChildren, moveFile } from './drive-client';
 
 const DATA_DIR    = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const CACHE_PATH  = path.join(DATA_DIR, 'drive-folders.json');
@@ -203,6 +203,38 @@ export async function renameProjectFolder(
     console.log(`[drive-folders] Renamed Drive folder "${oldProjectName}" → "${newProjectName}"`);
   } catch (err) {
     console.error(`[drive-folders] Failed to rename Drive folder for "${oldProjectName}":`, err);
+  }
+}
+
+/**
+ * Returns a map of Drive folder ID → client name for all cached client folders.
+ * Used by the Drive watcher to identify whether an unknown folder's parent
+ * is a known client folder (i.e. the unknown folder is a project-level orphan).
+ */
+export function getClientFolderIdMap(): Record<string, string> {
+  const cache = getCache();
+  return Object.fromEntries(
+    Object.entries(cache.clientFolders).map(([name, id]) => [id, name]),
+  );
+}
+
+const STANDARD_SUBFOLDERS = new Set(['Scripts', 'Transcripts', 'Assets', 'Workbooks']);
+
+/**
+ * Moves any non-standard children of an orphaned folder into the Assets subfolder.
+ * Standard subfolders (Scripts, Transcripts, Assets, Workbooks) are skipped —
+ * ensureProjectFolders() will have already created them inside the adopted folder.
+ */
+export async function adoptOrphanedFolderContents(
+  orphanedFolderId: string,
+  assetsFolderId:   string,
+  driveId:          string,
+): Promise<void> {
+  const children = await listChildren(orphanedFolderId, driveId);
+  for (const child of children) {
+    if (!child.id || !child.name || STANDARD_SUBFOLDERS.has(child.name)) continue;
+    await moveFile(child.id, assetsFolderId, orphanedFolderId);
+    console.log(`[drive-folders] adopted orphaned item into assets: ${child.name}`);
   }
 }
 

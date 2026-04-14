@@ -48,6 +48,14 @@ const GAPPS_PREVIEWABLE = new Set([
   'application/vnd.google-apps.presentation',
 ]);
 
+const PDF_MIMES   = new Set(['application/pdf']);
+const PDF_EXTS    = new Set(['.pdf']);
+const VIDEO_MIMES = new Set([
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'video/x-msvideo', 'video/x-matroska', 'video/ogg', 'video/x-m4v',
+]);
+const VIDEO_EXTS  = new Set(['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.ogv']);
+
 const PDF_CACHE_DIR = path.join(os.tmpdir(), 'lpos-doc-preview');
 
 function fileExt(name: string): string {
@@ -126,8 +134,10 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const isImage     = IMAGE_MIMES.has(mime) || IMAGE_EXTS.has(ext);
   const isOfficeDoc = OFFICE_EXTS.has(ext);
   const isGApps     = GAPPS_PREVIEWABLE.has(mime);
+  const isPdf       = PDF_MIMES.has(mime)   || PDF_EXTS.has(ext);
+  const isVideo     = VIDEO_MIMES.has(mime) || VIDEO_EXTS.has(ext);
 
-  if (!isImage && !isOfficeDoc && !isGApps) {
+  if (!isImage && !isOfficeDoc && !isGApps && !isPdf && !isVideo) {
     return NextResponse.json({ error: 'Preview not supported for this file type' }, { status: 415 });
   }
 
@@ -150,6 +160,48 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         headers: {
           'Content-Type':  mime === 'application/octet-stream' ? 'image/jpeg' : mime,
           'Cache-Control': 'private, max-age=300',
+        },
+      });
+    }
+
+    if (isPdf) {
+      const buffer = await readBytes();
+      return new NextResponse(buffer, {
+        status: 200,
+        headers: {
+          'Content-Type':  'application/pdf',
+          'Cache-Control': 'private, max-age=300',
+        },
+      });
+    }
+
+    if (isVideo) {
+      const buffer   = await readBytes();
+      const fileSize = buffer.length;
+      const rangeHdr = req.headers.get('range');
+
+      if (rangeHdr) {
+        const [startStr, endStr] = rangeHdr.replace(/bytes=/, '').split('-');
+        const start = parseInt(startStr, 10);
+        const end   = endStr ? parseInt(endStr, 10) : fileSize - 1;
+        return new NextResponse(buffer.subarray(start, end + 1), {
+          status: 206,
+          headers: {
+            'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges':  'bytes',
+            'Content-Length': String(end - start + 1),
+            'Content-Type':   mime,
+          },
+        });
+      }
+
+      return new NextResponse(buffer, {
+        status: 200,
+        headers: {
+          'Accept-Ranges':  'bytes',
+          'Content-Length': String(fileSize),
+          'Content-Type':   mime,
+          'Cache-Control':  'private, max-age=60',
         },
       });
     }

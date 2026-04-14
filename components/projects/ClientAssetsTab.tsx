@@ -46,7 +46,7 @@ function mimeToType(mime: string, fileName: string): AssetType {
 }
 
 const isPreviewable = (f: FileWithType): boolean =>
-  f.assetType === 'image' || f.assetType === 'pdf' || f.assetType === 'docx';
+  f.assetType === 'image' || f.assetType === 'pdf' || f.assetType === 'docx' || f.assetType === 'video';
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
@@ -172,7 +172,14 @@ function PreviewPanel({
             </div>
 
             <div className="asset-preview-body">
-              {file.assetType === 'image' ? (
+              {file.assetType === 'video' ? (
+                // eslint-disable-next-line jsx-a11y/media-has-caption
+                <video
+                  src={downloadHref}
+                  controls
+                  className="asset-preview-video"
+                />
+              ) : file.assetType === 'image' ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={downloadHref}
@@ -215,12 +222,15 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
   const [creating,    setCreating]    = useState(false);
   const [copied,      setCopied]      = useState(false);
   const [filter,      setFilter]      = useState<FilterType>('all');
-  const [selected,    setSelected]    = useState<Set<string>>(new Set());
-  const [destination, setDestination] = useState<Destination>('assets');
-  const [promoting,   setPromoting]   = useState(false);
-  const [promoteError, setPromoteError] = useState<string | null>(null);
-  const [preview,     setPreview]     = useState<FileWithType | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [selected,     setSelected]     = useState<Set<string>>(new Set());
+  const [destination,  setDestination]  = useState<Destination>('assets');
+  const [promoting,       setPromoting]       = useState(false);
+  const [promoteError,    setPromoteError]    = useState<string | null>(null);
+  const [preview,         setPreview]         = useState<FileWithType | null>(null);
+  const [promotedOpen,    setPromotedOpen]    = useState(false);
+  const pollRef         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSelectedIdx = useRef<number>(-1);
+  const fileListRef     = useRef<HTMLDivElement>(null);
 
   // ── Data loading ───────────────────────────────────────────────────────────
 
@@ -240,6 +250,17 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
     pollRef.current = setInterval(() => void load(true), 20_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [load]);
+
+  // Deselect when clicking outside the file list
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (fileListRef.current && !fileListRef.current.contains(e.target as Node)) {
+        setSelected(new Set());
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, []);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -264,30 +285,31 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function toggleSelect(fileKey: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(fileKey)) next.delete(fileKey);
-      else next.add(fileKey);
-      return next;
-    });
+  function handleRowClick(file: FileWithType, idx: number, e: React.MouseEvent) {
+    if (e.ctrlKey || e.metaKey) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(file.file_key)) next.delete(file.file_key);
+        else next.add(file.file_key);
+        return next;
+      });
+      lastSelectedIdx.current = idx;
+      return;
+    }
+
+    if (e.shiftKey && lastSelectedIdx.current !== -1) {
+      const from = Math.min(lastSelectedIdx.current, idx);
+      const to   = Math.max(lastSelectedIdx.current, idx);
+      setSelected(new Set(filteredPending.slice(from, to + 1).map((f) => f.file_key)));
+      return;
+    }
+
+    setSelected(new Set([file.file_key]));
+    lastSelectedIdx.current = idx;
   }
 
-  function toggleSelectAll(visibleKeys: string[]) {
-    const allSelected = visibleKeys.every((k) => selected.has(k));
-    if (allSelected) {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        visibleKeys.forEach((k) => next.delete(k));
-        return next;
-      });
-    } else {
-      setSelected((prev) => {
-        const next = new Set(prev);
-        visibleKeys.forEach((k) => next.add(k));
-        return next;
-      });
-    }
+  function handleRowDoubleClick(file: FileWithType) {
+    if (isPreviewable(file)) setPreview(preview?.file_key === file.file_key ? null : file);
   }
 
   async function handlePromote() {
@@ -320,7 +342,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
             fileKey:  f.file_key,
             filename: f.file_name,
             mimeType: f.mime_type ?? 'application/octet-stream',
-            fileSize: f.file_size ?? 0,
+            fileSize: Number(f.file_size ?? 0),
           })),
           destination,
         }),
@@ -336,7 +358,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
       // Reload after a short delay so the pipeline tracker has time to start
       setTimeout(() => void load(true), 1500);
     } catch (err) {
-      setPromoteError((err as Error).message ?? 'Transfer failed');
+      setPromoteError((err as Error).message ?? 'Promotion failed');
     } finally {
       setPromoting(false);
     }
@@ -361,9 +383,6 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
   const docCount   = pending.filter((f) => f.assetType === 'pdf' || f.assetType === 'docx').length;
   const imageCount = pending.filter((f) => f.assetType === 'image').length;
   const videoCount = pending.filter((f) => f.assetType === 'video').length;
-
-  const visiblePendingKeys = filteredPending.map((f) => f.file_key);
-  const allVisibleSelected = visiblePendingKeys.length > 0 && visiblePendingKeys.every((k) => selected.has(k));
 
   // Whether any selected file is a text document (eligible for Scripts)
   const selectedHasDoc = allFiles.some((f) =>
@@ -401,7 +420,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
   return (
     <div className="ca-tab proj-tab-content page-stack">
 
-      <div className="ca-main">
+      <div className="ca-main" ref={fileListRef}>
 
         {/* ── Portal URL bar ── */}
         <div className="ca-url-bar">
@@ -462,7 +481,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
               <div className="ca-stat-divider" />
               <div className="ca-stat">
                 <span className="ca-stat-num">{processed.length}</span>
-                <span className="ca-stat-label">Transferred</span>
+                <span className="ca-stat-label">Promoted</span>
               </div>
             </>
           )}
@@ -523,7 +542,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
                 onClick={handlePromote}
                 disabled={promoting}
               >
-                {promoting ? 'Queuing…' : 'Transfer'}
+                {promoting ? 'Promoting…' : 'Promote'}
               </button>
               <button
                 type="button"
@@ -543,54 +562,31 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
         {/* ── Pending file list ── */}
         {filteredPending.length > 0 ? (
           <div className="ca-asset-list">
-            {/* Select-all row */}
-            <div className="ca-asset-row ca-asset-row--header">
-              <label className="ca-checkbox" title={allVisibleSelected ? 'Deselect all' : 'Select all'}>
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={() => toggleSelectAll(visiblePendingKeys)}
-                />
-                <span className="ca-checkbox-mark" />
-              </label>
-              <span className="ca-asset-row-hdr-label">
-                {filter === 'all' ? `${pending.length} file${pending.length !== 1 ? 's' : ''}` : `${filteredPending.length} of ${pending.length}`}
-              </span>
-            </div>
-
-            {filteredPending.map((file) => {
-              const meta        = ICONS[file.assetType];
-              const isSelected  = selected.has(file.file_key);
-              const isPreviewed = preview?.file_key === file.file_key;
-              const canPreview  = isPreviewable(file);
+            {filteredPending.map((file, idx) => {
+              const meta         = ICONS[file.assetType];
+              const isSelected   = selected.has(file.file_key);
+              const isPreviewed  = preview?.file_key === file.file_key;
+              const canPreview   = isPreviewable(file);
               const downloadHref = `/api/ingest/${projectId}/download?key=${encodeURIComponent(file.file_key)}`;
 
               return (
                 <div
                   key={file.file_key}
-                  className={`ca-asset-row${isSelected ? ' ca-asset-row--selected' : ''}${isPreviewed ? ' ca-asset-row--previewed' : ''}`}
+                  className={`ca-asset-row ca-asset-row--clickable${isSelected ? ' ca-asset-row--selected' : ''}${isPreviewed ? ' ca-asset-row--previewed' : ''}`}
+                  onClick={(e) => handleRowClick(file, idx, e)}
+                  onDoubleClick={() => handleRowDoubleClick(file)}
+                  role="row"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && canPreview) handleRowDoubleClick(file);
+                    if (e.key === ' ') { e.preventDefault(); handleRowClick(file, idx, e as unknown as React.MouseEvent); }
+                  }}
                 >
-                  <label className="ca-checkbox" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelect(file.file_key)}
-                    />
-                    <span className="ca-checkbox-mark" />
-                  </label>
-
-                  <div
-                    className="ca-asset-icon"
-                    style={{ color: meta.color }}
-                    onClick={() => canPreview && setPreview(isPreviewed ? null : file)}
-                  >
+                  <div className="ca-asset-icon" style={{ color: meta.color }}>
                     {meta.svg}
                   </div>
 
-                  <div
-                    className={`ca-asset-info${canPreview ? ' ca-asset-info--clickable' : ''}`}
-                    onClick={() => canPreview && setPreview(isPreviewed ? null : file)}
-                  >
+                  <div className="ca-asset-info">
                     <span className="ca-asset-name">{file.file_name}</span>
                     <span className="ca-asset-meta">
                       <span
@@ -602,24 +598,18 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
                       <span>{formatSize(file.file_size)}</span>
                       <span>·</span>
                       <span>{formatDate(file.created_at)}</span>
+                      {canPreview && <span className="ca-asset-preview-hint">double-click to preview</span>}
                     </span>
                   </div>
 
                   <div className="ca-asset-actions">
-                    {canPreview && (
-                      <button
-                        type="button"
-                        className="ca-asset-btn"
-                        title="Preview"
-                        onClick={() => setPreview(isPreviewed ? null : file)}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                          <circle cx="12" cy="12" r="3"/>
-                        </svg>
-                      </button>
-                    )}
-                    <a href={downloadHref} className="ca-asset-btn" title="Download" download>
+                    <a
+                      href={downloadHref}
+                      className="ca-asset-btn"
+                      title="Download"
+                      download
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                         <polyline points="7 10 12 15 17 10"/>
@@ -631,29 +621,23 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
               );
             })}
           </div>
-        ) : pending.length === 0 ? (
-          <div className="ca-upload-prompt">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            <div>
-              <p className="ca-upload-prompt-title">Client uploads appear here automatically</p>
-              <p className="ca-upload-prompt-sub">Share the portal link above and files will sync as they come in.</p>
-            </div>
-          </div>
-        ) : (
+        ) : filter !== 'all' ? (
           <div className="ca-upload-prompt">
             <p className="ca-upload-prompt-sub">No {filter} files in the queue.</p>
           </div>
-        )}
+        ) : null}
 
         {/* ── Processed section ── */}
         {processed.length > 0 && (
           <div className="ca-processed-section">
-            <p className="ca-processed-heading">Transferred ({processed.length})</p>
-            <div className="ca-asset-list ca-asset-list--processed">
+            <button
+              type="button"
+              className="ca-processed-heading ca-processed-toggle"
+              onClick={() => setPromotedOpen((o) => !o)}
+            >
+              Promoted ({processed.length})
+            </button>
+            {promotedOpen && <div className="ca-asset-list ca-asset-list--processed">
               {processed.map((file) => {
                 const meta = ICONS[file.assetType];
                 return (
@@ -694,7 +678,7 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
                   </div>
                 );
               })}
-            </div>
+            </div>}
           </div>
         )}
 

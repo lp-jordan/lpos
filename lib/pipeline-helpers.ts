@@ -103,3 +103,15 @@ export function hasFailed(entry: PipelineEntry): boolean {
 }
 
 export { PIPELINE_TERMINAL_STATUSES, STAGE_TERMINAL_STATUSES };
+
+/**
+ * Linear rate extrapolation: given a stage's elapsed time and current progress,
+ * returns estimated milliseconds remaining, or null if not estimable.
+ */
+export function stageRemainingMs(stage: PipelineStage, now: number): number | null {
+  if (STAGE_TERMINAL_STATUSES.has(stage.status)) return null;
+  if (stage.progress <= 0) return null;
+  const elapsed = Math.max(0, now - Date.parse(stage.queuedAt));
+  if (elapsed === 0) return null;
+  return (elapsed * (100 - stage.progress)) / stage.progress;
+}

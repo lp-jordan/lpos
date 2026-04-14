@@ -38,7 +38,9 @@ export class ProjectNoteStore {
   // ── Read ─────────────────────────────────────────────────────────────────
 
   getForProject(projectId: string): ProjectNote[] {
-    return this.notes.filter((n) => n.projectId === projectId);
+    return this.notes
+      .filter((n) => n.projectId === projectId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   /** Returns unresolved notes that tag this user. */

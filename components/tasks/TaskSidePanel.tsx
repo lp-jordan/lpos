@@ -1,13 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Task, TaskStatus, TaskPriority } from '@/lib/models/task';
+import type { Task, TaskPriority } from '@/lib/models/task';
 import type { Project } from '@/lib/models/project';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from '@/components/dashboard/MentionTextarea';
 import { CommentThread } from './CommentThread';
 
-const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
+const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'not_started', label: 'Not Started' },
   { value: 'in_progress', label: 'In Progress' },
   { value: 'blocked', label: 'Blocked' },
@@ -42,9 +42,10 @@ export function TaskSidePanel({
   onClose,
 }: Readonly<Props>) {
   const [title, setTitle] = useState(task.description);
-  const [status, setStatus] = useState<TaskStatus>(task.status);
+  const [status, setStatus] = useState(task.status);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [assigneeIds, setAssigneeIds] = useState<string[]>(task.assignedTo);
+  const [projectId, setProjectId] = useState(task.projectId ?? 'general');
   const [notes, setNotes] = useState(task.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -57,6 +58,7 @@ export function TaskSidePanel({
     setStatus(task.status);
     setPriority(task.priority);
     setAssigneeIds(task.assignedTo);
+    setProjectId(task.projectId ?? 'general');
     setNotes(task.notes ?? '');
     setConfirmDelete(false);
   }, [task.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -95,7 +97,7 @@ export function TaskSidePanel({
     }
   }
 
-  function handleStatusChange(s: TaskStatus) {
+  function handleStatusChange(s: string) {
     setStatus(s);
     void patch({ status: s });
   }
@@ -103,6 +105,11 @@ export function TaskSidePanel({
   function handlePriorityChange(p: TaskPriority) {
     setPriority(p);
     void patch({ priority: p });
+  }
+
+  function handleProjectChange(pid: string) {
+    setProjectId(pid);
+    void patch({ projectId: pid });
   }
 
   function handleNotesBlur() {
@@ -125,7 +132,6 @@ export function TaskSidePanel({
     if (res.ok) onDeleted(task.taskId);
   }
 
-  const project = allProjects.find((p) => p.projectId === task.projectId);
   const assignees = users.filter((u) => assigneeIds.includes(u.id));
 
   return (
@@ -176,7 +182,7 @@ export function TaskSidePanel({
             <select
               className={`task-panel-select task-status-select--${status}`}
               value={status}
-              onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
+              onChange={(e) => handleStatusChange(e.target.value)}
             >
               {STATUS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -197,14 +203,21 @@ export function TaskSidePanel({
             </select>
           </div>
 
-          {project && (
-            <div className="task-panel-field">
-              <span className="task-panel-field-label">Project</span>
-              <span className="task-panel-field-value">
-                <strong>{project.clientName}</strong> — {project.name}
-              </span>
-            </div>
-          )}
+          <div className="task-panel-field">
+            <span className="task-panel-field-label">Project</span>
+            <select
+              className="task-panel-select"
+              value={projectId}
+              onChange={(e) => handleProjectChange(e.target.value)}
+            >
+              <option value="general">General</option>
+              {allProjects.map((p) => (
+                <option key={p.projectId} value={p.projectId}>
+                  {p.clientName} — {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className="task-panel-field task-panel-field--assignees" ref={assigneeRef}>
             <span className="task-panel-field-label">Assigned to</span>

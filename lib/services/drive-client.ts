@@ -197,6 +197,25 @@ export async function getFileMetadata(fileId: string): Promise<drive_v3.Schema$F
 }
 
 /**
+ * Move a file or folder to a new parent folder.
+ * In Shared Drives, moves use addParents/removeParents query params, not requestBody.parents.
+ */
+export async function moveFile(
+  fileId:      string,
+  newParentId: string,
+  oldParentId: string,
+): Promise<void> {
+  const drive = getDriveClient();
+  await driveCall(() => drive.files.update({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+    addParents:    newParentId,
+    removeParents: oldParentId,
+    fields:        'id',
+  }));
+}
+
+/**
  * List all direct children (files and subfolders) inside a folder.
  */
 export async function listChildren(

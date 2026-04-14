@@ -547,17 +547,15 @@ export function AssetsTab({ projectId }: { projectId: string }) {
                 <div
                   key={node.entityId}
                   className={`assets-folder-row${isOpen ? ' assets-folder-row--open' : ''}`}
-                  style={{
-                    paddingLeft: 14 + indent,
-                    border: 'none',
-                    borderBottom: '1px solid var(--line)',
-                    borderRadius: 0,
-                  }}
+                  style={{ paddingLeft: 14 + indent, position: 'relative' }}
                   onClick={() => toggleFolder(node.driveFileId)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleFolder(node.driveFileId); }}
                 >
+                  {depth > 0 && Array.from({ length: depth }, (_, i) => (
+                    <span key={i} className="assets-indent-guide" style={{ left: 14 + i * 20 + 10 }} />
+                  ))}
                   <ChevronIcon open={isOpen} />
                   <FolderIcon  open={isOpen} />
                   <span className="assets-folder-name">{node.name}</span>
@@ -576,12 +574,15 @@ export function AssetsTab({ projectId }: { projectId: string }) {
               <div
                 key={node.entityId}
                 className={`ca-asset-row${canPreview ? ' ca-asset-row--previewable' : ''}`}
-                style={{ paddingLeft: 14 + indent }}
+                style={{ paddingLeft: 14 + indent, position: 'relative' }}
                 onClick={canPreview ? () => setPreviewAsset(node) : undefined}
                 role={canPreview ? 'button' : undefined}
                 tabIndex={canPreview ? 0 : undefined}
                 onKeyDown={canPreview ? (e) => { if (e.key === 'Enter' || e.key === ' ') setPreviewAsset(node); } : undefined}
               >
+                {depth > 0 && Array.from({ length: depth }, (_, i) => (
+                  <span key={i} className="assets-indent-guide" style={{ left: 14 + i * 20 + 10 }} />
+                ))}
                 <div className="ca-asset-icon" style={{ color }}>
                   <CategoryIcon category={cat} />
                 </div>

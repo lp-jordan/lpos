@@ -137,20 +137,23 @@ function buildReason(
 
 // ── Decision cache ───────────────────────────────────────────────────────────
 // detectHostVolumes() probes all 24 Windows drive letters synchronously on
-// every call. Drive letters don't change mid-session on their own — a user
-// adding a new volume still has to enable it in Storage Settings, which goes
-// through the PUT /api/storage/config route and calls invalidateStorageCache().
-// So we cache for the lifetime of the process and only invalidate explicitly.
+// every call. We cache the result with a 2-minute TTL so that drive
+// disconnections are detected within one TTL window without any background
+// polling. Config changes and I/O errors call invalidateStorageCache()
+// immediately for faster recovery.
 
+const CACHE_TTL_MS = 2 * 60 * 1_000; // 2 minutes
 let _cachedDecision: StorageAllocationDecision | null = null;
+let _cacheExpiresAt = 0;
 
 /** Invalidate the cached storage decision — call after config changes or on error. */
 export function invalidateStorageCache(): void {
   _cachedDecision = null;
+  _cacheExpiresAt = 0;
 }
 
 export function getStorageAllocationDecision(): StorageAllocationDecision {
-  if (_cachedDecision) return _cachedDecision;
+  if (_cachedDecision && Date.now() < _cacheExpiresAt) return _cachedDecision;
 
   const config = readStorageConfig();
   const detected = detectHostVolumes();
@@ -193,7 +196,10 @@ export function getStorageAllocationDecision(): StorageAllocationDecision {
 
   // Only cache when an active volume exists — if nothing is eligible we want
   // to re-probe on the next request so the user's fix is picked up immediately.
-  if (decision.active) _cachedDecision = decision;
+  if (decision.active) {
+    _cachedDecision = decision;
+    _cacheExpiresAt = Date.now() + CACHE_TTL_MS;
+  }
 
   return decision;
 }

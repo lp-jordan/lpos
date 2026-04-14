@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Task, TaskPriority, TaskStatus } from '@/lib/models/task';
+import type { Task, TaskPriority } from '@/lib/models/task';
+import type { TaskPhase } from '@/lib/models/task-phase';
 import { getCoreDb, withTransaction } from './core-db';
 
 interface TaskRow {
@@ -7,6 +8,7 @@ interface TaskRow {
   description: string;
   project_id: string;
   client_name: string | null;
+  phase: string;
   priority: string;
   status: string;
   notes: string | null;
@@ -26,8 +28,9 @@ function rowToTask(row: TaskRow, assignedTo: string[]): Task {
     description: row.description,
     projectId: row.project_id,
     clientName: row.client_name ?? null,
+    phase: row.phase as TaskPhase,
     priority: row.priority as TaskPriority,
-    status: row.status as TaskStatus,
+    status: row.status,
     notes: row.notes ?? null,
     createdBy: row.created_by,
     assignedTo,
@@ -85,8 +88,9 @@ export class TaskStore {
     description: string;
     projectId: string;
     clientName?: string | null;
+    phase: TaskPhase;
     priority?: TaskPriority;
-    status?: TaskStatus;
+    status?: string;
     notes?: string | null;
     createdBy: string;
     assignedTo?: string[];
@@ -97,6 +101,7 @@ export class TaskStore {
       description: input.description.trim(),
       projectId: input.projectId,
       clientName: input.clientName ?? null,
+      phase: input.phase,
       priority: input.priority ?? 'medium',
       status: input.status ?? 'not_started',
       notes: input.notes ?? null,
@@ -107,9 +112,9 @@ export class TaskStore {
 
     withTransaction(db, () => {
       db.prepare(
-        `INSERT INTO tasks (task_id, description, project_id, client_name, priority, status, notes, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(task.taskId, task.description, task.projectId, task.clientName, task.priority, task.status, task.notes, task.createdBy, task.createdAt);
+        `INSERT INTO tasks (task_id, description, project_id, client_name, phase, priority, status, notes, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(task.taskId, task.description, task.projectId, task.clientName, task.phase, task.priority, task.status, task.notes, task.createdBy, task.createdAt);
 
       for (const userId of task.assignedTo) {
         db.prepare('INSERT INTO task_assignees (task_id, user_id) VALUES (?, ?)').run(task.taskId, userId);
@@ -121,7 +126,7 @@ export class TaskStore {
 
   update(
     taskId: string,
-    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'notes'>>,
+    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'notes' | 'phase' | 'projectId'>>,
   ): Task | null {
     const db = getCoreDb();
     const existing = this.getById(taskId);
@@ -143,9 +148,9 @@ export class TaskStore {
 
     withTransaction(db, () => {
       db.prepare(
-        `UPDATE tasks SET description = ?, priority = ?, status = ?, notes = ?, completed_at = ?
+        `UPDATE tasks SET description = ?, phase = ?, priority = ?, status = ?, notes = ?, completed_at = ?, project_id = ?
          WHERE task_id = ?`,
-      ).run(next.description, next.priority, next.status, next.notes, completedAt, taskId);
+      ).run(next.description, next.phase, next.priority, next.status, next.notes, completedAt, next.projectId, taskId);
 
       if (patch.assignedTo !== undefined) {
         db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(taskId);

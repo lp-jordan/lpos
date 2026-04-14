@@ -39,7 +39,19 @@ export function RestartCountdownBanner() {
       <span>
         LPOS is restarting in{' '}
         <strong className="restart-banner-countdown">{secondsLeft}s</strong>
-        {' '}— run for your lives!
+        {' '}—{' '}
+        <span className="restart-banner-tail-wrap">
+          {/* anchor sizing to the longer phrase so the banner width stays stable */}
+          <span aria-hidden="true" style={{ visibility: 'hidden' }}>
+            please <strong>Refresh</strong> when the countdown reaches 0.
+          </span>
+          <span className={`restart-banner-tail restart-banner-tail--overlay${secondsLeft <= 5 ? ' restart-banner-tail--hidden' : ''}`}>
+            run for your lives!
+          </span>
+          <span className={`restart-banner-tail restart-banner-tail--overlay${secondsLeft <= 5 ? '' : ' restart-banner-tail--hidden'}`}>
+            please <strong>Refresh</strong> when the countdown reaches 0.
+          </span>
+        </span>
       </span>
     </div>
   );

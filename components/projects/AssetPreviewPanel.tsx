@@ -16,6 +16,8 @@ type PreviewState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'image'; url: string }
+  | { status: 'pdf';   url: string }
+  | { status: 'video'; url: string }
   | { status: 'docx';  url: string }
   | { status: 'error'; message: string };
 
@@ -31,6 +33,13 @@ const OFFICE_EXTS = new Set([
   '.xls', '.xlsx', '.ods',
   '.ppt', '.pptx', '.odp',
 ]);
+const PDF_MIMES   = new Set(['application/pdf']);
+const PDF_EXTS    = new Set(['.pdf']);
+const VIDEO_MIMES = new Set([
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'video/x-msvideo', 'video/x-matroska', 'video/ogg', 'video/x-m4v',
+]);
+const VIDEO_EXTS  = new Set(['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v', '.ogv']);
 
 const GAPPS_PREVIEWABLE = new Set([
   'application/vnd.google-apps.document',
@@ -46,7 +55,12 @@ function fileExt(name: string): string {
 export function isPreviewable(asset: PreviewableAsset): boolean {
   const mime = asset.mimeType ?? '';
   const ext  = fileExt(asset.name);
-  return IMAGE_MIMES.has(mime) || IMAGE_EXTS.has(ext) || OFFICE_EXTS.has(ext) || GAPPS_PREVIEWABLE.has(mime);
+  return (
+    IMAGE_MIMES.has(mime) || IMAGE_EXTS.has(ext) ||
+    OFFICE_EXTS.has(ext)  || GAPPS_PREVIEWABLE.has(mime) ||
+    PDF_MIMES.has(mime)   || PDF_EXTS.has(ext) ||
+    VIDEO_MIMES.has(mime) || VIDEO_EXTS.has(ext)
+  );
 }
 
 function formatBytes(n: number | null): string {
@@ -92,6 +106,8 @@ export function AssetPreviewPanel({ asset, projectId, onClose }: Readonly<Props>
     const ext  = fileExt(asset.name);
     const isImage     = IMAGE_MIMES.has(mime) || IMAGE_EXTS.has(ext);
     const isOfficeDoc = OFFICE_EXTS.has(ext) || GAPPS_PREVIEWABLE.has(mime);
+    const isPdf       = PDF_MIMES.has(mime)   || PDF_EXTS.has(ext);
+    const isVideo     = VIDEO_MIMES.has(mime) || VIDEO_EXTS.has(ext);
 
     if (isImage) {
       setPreview({
@@ -101,22 +117,30 @@ export function AssetPreviewPanel({ asset, projectId, onClose }: Readonly<Props>
       return;
     }
 
-    if (isOfficeDoc) {
-      // Fetch the PDF blob so we can show a real loading spinner during conversion
-      // (first open: 4–8 s; subsequent opens: instant from server cache).
+    if (isVideo) {
+      setPreview({
+        status: 'video',
+        url: `/api/projects/${projectId}/assets/${asset.entityId}/preview`,
+      });
+      return;
+    }
+
+    if (isPdf || isOfficeDoc) {
+      // Fetch as blob: avoids Content-Disposition issues and shows a loading spinner
+      // during DOCX conversion (4–8 s first open; cached thereafter). PDFs load instantly.
       setPreview({ status: 'loading' });
       let cancelled = false;
 
       fetch(`/api/projects/${projectId}/assets/${asset.entityId}/preview`)
         .then((r) => {
-          if (!r.ok) return r.json().then((d: { error?: string }) => { throw new Error(d.error ?? 'Conversion failed'); });
+          if (!r.ok) return r.json().then((d: { error?: string }) => { throw new Error(d.error ?? 'Preview failed'); });
           return r.blob();
         })
         .then((blob) => {
           if (cancelled) return;
           const url = URL.createObjectURL(blob);
           objectUrlRef.current = url;
-          setPreview({ status: 'docx', url });
+          setPreview({ status: isPdf ? 'pdf' : 'docx', url });
         })
         .catch((err: Error) => {
           if (!cancelled) setPreview({ status: 'error', message: err.message });
@@ -192,11 +216,20 @@ export function AssetPreviewPanel({ asset, projectId, onClose }: Readonly<Props>
                 </div>
               )}
 
-              {preview.status === 'docx' && (
+              {(preview.status === 'pdf' || preview.status === 'docx') && (
                 <iframe
                   src={preview.url}
                   className="asset-preview-pdf-frame"
                   title={asset.name}
+                />
+              )}
+
+              {preview.status === 'video' && (
+                // eslint-disable-next-line jsx-a11y/media-has-caption
+                <video
+                  src={preview.url}
+                  controls
+                  className="asset-preview-video"
                 />
               )}
 

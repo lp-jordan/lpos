@@ -3,6 +3,10 @@ import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { AdminsPanel } from '@/components/settings/AdminsPanel';
 import { GuestPinCard } from '@/components/settings/GuestPinCard';
+import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
+import { SlackTestCard } from '@/components/settings/SlackTestCard';
+import { SlackUsersCard } from '@/components/settings/SlackUsersCard';
+import { LpReleasesCard } from '@/components/settings/LpReleasesCard';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -51,6 +55,10 @@ export default async function SettingsPage() {
         </div>
       )}
 
+      {role === 'admin' && <LpReleasesCard />}
+      {role === 'admin' && <ActiveClientsCard />}
+      {role === 'admin' && <SlackTestCard />}
+      {role === 'admin' && <SlackUsersCard />}
       {role === 'admin' && <GuestPinCard />}
       {role === 'admin' && <AdminsPanel />}
     </section>

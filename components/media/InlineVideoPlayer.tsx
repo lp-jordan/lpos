@@ -10,6 +10,7 @@
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { FrameIOComment } from '@/lib/services/frameio';
+import { formatTimecode } from '@/lib/utils/time';
 
 interface Props {
   src:             string;
@@ -145,7 +146,7 @@ export function InlineVideoPlayer({
             />
             {duration > 0 && timedComments.map(c => {
               const pct = ((c.timestamp ?? 0) / duration) * 100;
-              const tip = `${fmt(c.timestamp ?? 0)}${c.duration ? ` → ${fmt((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Frame.io'}: ${c.text}`;
+              const tip = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Frame.io'}: ${c.text}`;
               if (c.duration && c.duration > 0) {
                 return (
                   <button
@@ -155,7 +156,7 @@ export function InlineVideoPlayer({
                     style={{ left: `${pct}%`, width: `${(c.duration / duration) * 100}%` }}
                     title={tip}
                     onClick={e => { e.stopPropagation(); seekTo(c.timestamp ?? 0); }}
-                    aria-label={`Jump to ${fmt(c.timestamp ?? 0)}`}
+                    aria-label={`Jump to ${formatTimecode(c.timestamp ?? 0)}`}
                   />
                 );
               }
@@ -167,7 +168,7 @@ export function InlineVideoPlayer({
                   style={{ left: `${pct}%` }}
                   title={tip}
                   onClick={e => { e.stopPropagation(); seekTo(c.timestamp ?? 0); }}
-                  aria-label={`Jump to ${fmt(c.timestamp ?? 0)}`}
+                  aria-label={`Jump to ${formatTimecode(c.timestamp ?? 0)}`}
                 />
               );
             })}

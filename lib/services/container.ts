@@ -24,6 +24,7 @@ import { UploadQueueService } from './upload-queue-service';
 import { IngestQueueService } from './ingest-queue-service';
 import { CameraControlService } from './camera-control-service';
 import { AmaranService } from './amaran-service';
+import { WledService } from './wled-service';
 import {
   ActivityMonitorService,
   getActivityMonitorService,
@@ -44,6 +45,9 @@ import { DriveWatcherService } from './drive-watcher-service';
 import { pushTranscriptToDrive } from './drive-transcript-sync';
 import { PromotionQueueService } from './promotion-queue-service';
 import { PromotionProcessor } from './promotion-processor';
+import { PresenceService } from './presence-service';
+import { LpReleaseService } from './lp-release-service';
+import { BackupService } from './backup-service';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -78,11 +82,19 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_amaranService: AmaranService | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_wledService: WledService | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_presentationService: PresentationService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_driveWatcherService: DriveWatcherService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_promotionQueueService: PromotionQueueService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_presenceService: PresenceService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_lpReleaseService: LpReleaseService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_backupService: BackupService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
 }
@@ -96,6 +108,7 @@ let uploadQueueService: UploadQueueService | null = null;
 let ingestQueueService: IngestQueueService | null = null;
 let cameraControlService: CameraControlService | null = null;
 let amaranService: AmaranService | null = null;
+let wledService:   WledService   | null = null;
 let activityMonitorService: ActivityMonitorService | null = null;
 let pipelineTracker: PipelineTrackerService | null = null;
 let clientOwnerStore: ClientOwnerStore | null = null;
@@ -107,6 +120,9 @@ let wishStore: WishStore | null = null;
 let presentationService: PresentationService | null = null;
 let driveWatcherService: DriveWatcherService | null = null;
 let promotionQueueService: PromotionQueueService | null = null;
+let presenceService: PresenceService | null = null;
+let lpReleaseService: LpReleaseService | null = null;
+let backupService: BackupService | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -120,6 +136,10 @@ export async function initServices(io: SocketIOServer): Promise<void> {
 
   // Persist io + projectStore globally so API routes can reach them
   globalThis.__lpos_io = io;
+
+  presenceService = new PresenceService();
+  presenceService.init(io);
+  globalThis.__lpos_presenceService = presenceService;
 
   if (globalThis.__lpos_projectStore) {
     globalThis.__lpos_projectStore.attachIo(io);
@@ -175,6 +195,8 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   globalThis.__lpos_cameraControlService = cameraControlService;
   amaranService = new AmaranService(io);
   globalThis.__lpos_amaranService = amaranService;
+  wledService = new WledService(io);
+  globalThis.__lpos_wledService = wledService;
   activityMonitorService = new ActivityMonitorService(io, registry);
   globalThis.__lpos_activityMonitorService = activityMonitorService;
   setActivityMonitorService(activityMonitorService);
@@ -187,12 +209,21 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     globalThis.__lpos_driveWatcherService = driveWatcherService;
   }
 
+  lpReleaseService = new LpReleaseService(io);
+  globalThis.__lpos_lpReleaseService = lpReleaseService;
+  lpReleaseService.start();
+
+  backupService = new BackupService();
+  backupService.start();
+  globalThis.__lpos_backupService = backupService;
+
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
     passPrepService.start(),
     cameraControlService.start(),
     amaranService.start(),
+    wledService.start(),
     activityMonitorService.start(),
     driveWatcherService?.start() ?? Promise.resolve(),
   ]);
@@ -202,6 +233,9 @@ export async function stopServices(): Promise<void> {
   pipelineTracker?.stop();
   uploadQueueService?.stop();
   driveWatcherService?.stop();
+  lpReleaseService?.stop();
+  backupService?.stop();
+  wledService?.stop();
   await Promise.all([
     slateService?.stop(),
     transcripterService?.stop(),
@@ -273,6 +307,14 @@ export function getAmaranService(): AmaranService {
   amaranService = new AmaranService();
   globalThis.__lpos_amaranService = amaranService;
   return amaranService;
+}
+
+export function getWledService(): WledService {
+  if (globalThis.__lpos_wledService) return globalThis.__lpos_wledService;
+  if (wledService) return wledService;
+  wledService = new WledService();
+  globalThis.__lpos_wledService = wledService;
+  return wledService;
 }
 
 export function getActivityService(): ActivityMonitorService {
@@ -360,4 +402,18 @@ export function getTaskNotificationStore(): TaskNotificationStore {
 
 export function getIo(): import('socket.io').Server | undefined {
   return globalThis.__lpos_io;
+}
+
+export function getPresenceService(): PresenceService {
+  if (globalThis.__lpos_presenceService) return globalThis.__lpos_presenceService;
+  if (presenceService) return presenceService;
+  throw new Error('PresenceService not initialized — server.ts must be running');
+}
+
+export function getLpReleaseService(): LpReleaseService | null {
+  return globalThis.__lpos_lpReleaseService ?? lpReleaseService ?? null;
+}
+
+export function getBackupService(): BackupService | null {
+  return globalThis.__lpos_backupService ?? backupService ?? null;
 }

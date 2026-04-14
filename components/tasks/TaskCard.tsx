@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Task, TaskPriority } from '@/lib/models/task';
+import { isTerminalStatus } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
 
 const PRIORITY_LABEL: Record<TaskPriority, string> = {
@@ -32,15 +34,42 @@ interface Props {
   task: Task;
   users: UserSummary[];
   commentCount: number;
+  projectName: string | null;
   selected: boolean;
+  isRenaming: boolean;
   onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onRenameCommit: (title: string) => void;
+  onRenameCancel: () => void;
 }
 
-export function TaskCard({ task, users, commentCount, selected, onClick }: Readonly<Props>) {
+export function TaskCard({
+  task,
+  users,
+  commentCount,
+  projectName,
+  selected,
+  isRenaming,
+  onClick,
+  onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
+}: Readonly<Props>) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.taskId,
     data: { task },
+    disabled: isRenaming,
   });
+
+  const [renameValue, setRenameValue] = useState(task.description);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isRenaming) {
+      setRenameValue(task.description);
+      setTimeout(() => inputRef.current?.select(), 0);
+    }
+  }, [isRenaming, task.description]);
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -48,26 +77,58 @@ export function TaskCard({ task, users, commentCount, selected, onClick }: Reado
     opacity: isDragging ? 0.4 : 1,
   };
 
+  const isDone = isTerminalStatus(task.phase, task.status);
   const assignees = users.filter((u) => task.assignedTo.includes(u.id)).slice(0, 3);
   const showPriority = task.priority === 'urgent' || task.priority === 'high';
+
+  function handleRenameKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = renameValue.trim();
+      if (val) onRenameCommit(val);
+      else onRenameCancel();
+    }
+    if (e.key === 'Escape') onRenameCancel();
+  }
+
+  function handleRenameBlur() {
+    const val = renameValue.trim();
+    if (val && val !== task.description) onRenameCommit(val);
+    else onRenameCancel();
+  }
 
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
-      className={`task-card${selected ? ' task-card--selected' : ''}${isDragging ? ' task-card--dragging' : ''}`}
-      onClick={onClick}
+      {...(isRenaming ? {} : listeners)}
+      className={`task-card${isDone ? ' task-card--done' : ''}${selected ? ' task-card--selected' : ''}${isDragging ? ' task-card--dragging' : ''}${isRenaming ? ' task-card--renaming' : ''}`}
+      onClick={isRenaming ? undefined : onClick}
+      onContextMenu={isRenaming ? undefined : onContextMenu}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
+      onKeyDown={(e) => {
+        if (!isRenaming && (e.key === 'Enter' || e.key === ' ')) onClick();
+      }}
     >
-      <div className="task-card-title">{task.description}</div>
+      {isRenaming ? (
+        <input
+          ref={inputRef}
+          className="task-card-rename-input"
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onKeyDown={handleRenameKeyDown}
+          onBlur={handleRenameBlur}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <div className="task-card-title">{task.description}</div>
+      )}
 
-      {task.clientName && (
+      {projectName && (
         <div className="task-card-project">
-          {task.clientName}
+          {projectName}
         </div>
       )}
 

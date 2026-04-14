@@ -31,6 +31,10 @@ export interface AmaranConfig {
   autoConnect: boolean;
 }
 
+export interface WledConfig {
+  ip: string;          // IP address of the WLED device (e.g. "192.168.1.50")
+}
+
 export interface CameraConfig {
   provider: CameraProviderKind;
   model: SonyCameraModel;
@@ -47,12 +51,18 @@ export interface CameraConfig {
 export interface StudioConfig {
   camera: CameraConfig;
   amaran: AmaranConfig;
+  wled:   WledConfig;
 }
 
 export interface StudioConfigPatch {
   camera?: Partial<CameraConfig>;
   amaran?: Partial<AmaranConfig>;
+  wled?:  Partial<WledConfig>;
 }
+
+const WLED_DEFAULTS: WledConfig = {
+  ip: '',
+};
 
 const DEFAULTS: StudioConfig = {
   camera: {
@@ -76,6 +86,7 @@ const DEFAULTS: StudioConfig = {
     port: 33782,
     autoConnect: true,
   },
+  wled: { ...WLED_DEFAULTS },
 };
 
 function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
@@ -115,6 +126,9 @@ function normalizeStudioConfig(raw?: Partial<StudioConfig>): StudioConfig {
       port: typeof raw?.amaran?.port === 'number' && raw.amaran.port > 0 ? raw.amaran.port : DEFAULTS.amaran.port,
       autoConnect: raw?.amaran?.autoConnect ?? DEFAULTS.amaran.autoConnect,
     },
+    wled: {
+      ip: typeof raw?.wled?.ip === 'string' ? raw.wled.ip.trim() : WLED_DEFAULTS.ip,
+    },
   };
 }
 
@@ -148,6 +162,10 @@ export function patchStudioConfig(patch: StudioConfigPatch): StudioConfig {
     amaran: {
       ...current.amaran,
       ...(patch.amaran ?? {}),
+    },
+    wled: {
+      ...current.wled,
+      ...(patch.wled ?? {}),
     },
   });
   writeStudioConfig(next);

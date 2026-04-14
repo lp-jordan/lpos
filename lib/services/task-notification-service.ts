@@ -10,6 +10,8 @@ import webpush from 'web-push';
 import type { TaskNotifType } from '@/lib/models/task-notification';
 import { getTaskNotificationStore, getIo } from '@/lib/services/container';
 import { getCoreDb } from '@/lib/store/core-db';
+import { getUserById } from '@/lib/store/user-store';
+import { sendSlackTaskDm } from '@/lib/services/slack-service';
 
 // ── VAPID init (best-effort — skipped if keys not configured) ─────────────
 
@@ -67,7 +69,20 @@ export async function notifyTaskEvent(input: {
     io.to(`user:${input.userId}`).emit('task:notification', notif);
   }
 
-  // 3. Browser push (best-effort)
+  // 3. Slack DM (best-effort)
+  const recipient = getUserById(input.userId);
+  if (recipient) {
+    sendSlackTaskDm({
+      email: recipient.slackEmail ?? recipient.email,
+      type: input.type,
+      taskTitle: input.taskTitle,
+      fromName: input.fromName,
+    }).catch((err: unknown) => {
+      console.warn('[task-notif] Slack DM failed:', err);
+    });
+  }
+
+  // 4. Browser push (best-effort)
   if (vapidReady) {
     const subs = getPushSubs(input.userId);
     const label: Record<TaskNotifType, string> = {

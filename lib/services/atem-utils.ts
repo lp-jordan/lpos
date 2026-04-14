@@ -102,7 +102,7 @@ export interface AudioMonitorState {
 }
 
 export function createTimestamp(date = new Date()): string {
-  const frames = Math.floor(date.getMilliseconds() / 40);
+  const frames = Math.floor(date.getMilliseconds() * 24000 / 1001000);
   return `${date.toTimeString().split(' ')[0]}:${String(frames).padStart(2, '0')}`;
 }
 

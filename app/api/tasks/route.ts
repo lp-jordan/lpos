@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getTaskStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
+import type { TaskPhase } from '@/lib/models/task-phase';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getAllUsers, getUserById } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
@@ -26,8 +27,9 @@ export async function POST(req: NextRequest) {
     description?: string;
     projectId?: string;
     clientName?: string | null;
+    phase?: TaskPhase;
     priority?: TaskPriority;
-    status?: import('@/lib/models/task').TaskStatus;
+    status?: string;
     notes?: string | null;
     assignedTo?: string[];
   };
@@ -35,14 +37,15 @@ export async function POST(req: NextRequest) {
   if (!body.description?.trim()) {
     return NextResponse.json({ error: 'description is required' }, { status: 400 });
   }
-  if (!body.projectId?.trim()) {
-    return NextResponse.json({ error: 'projectId is required' }, { status: 400 });
+  if (!body.phase) {
+    return NextResponse.json({ error: 'phase is required' }, { status: 400 });
   }
 
   const task = getTaskStore().create({
     description: body.description,
-    projectId: body.projectId,
+    projectId: body.projectId?.trim() || 'general',
     clientName: body.clientName ?? null,
+    phase: body.phase,
     priority: body.priority,
     status: body.status,
     notes: body.notes ?? null,
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   const actor = getUserById(session.userId);
   const actorName = actor?.name ?? undefined;
-  const projectId = task.projectId !== 'unassigned' ? task.projectId : null;
+  const projectId = task.projectId !== 'unassigned' && task.projectId !== 'general' ? task.projectId : null;
 
   recordActivity({
     actor_type: 'user',

@@ -805,7 +805,7 @@ function ClientCard({ clientName, count, mediaCount, scriptCount, owner, onClick
       <div className="proj-client-card-body">
         <span className="proj-client-card-initial">{clientName.charAt(0).toUpperCase()}</span>
         <div className="proj-client-card-info">
-          <span className="proj-client-card-name">{clientName}</span>
+          <span className="proj-client-card-name" title={clientName}>{clientName}</span>
           <div className="proj-client-card-stats">
             <span className="proj-client-card-stat">{count} project{count !== 1 ? 's' : ''}</span>
             <span className="proj-client-card-stat">{mediaCount > 0 ? `${mediaCount} media` : 'No media'}</span>

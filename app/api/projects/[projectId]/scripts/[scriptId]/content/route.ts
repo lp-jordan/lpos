@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs   from 'node:fs';
 import path from 'node:path';
 import { getScript, getExtractedText, saveExtractedText, patchScript } from '@/lib/store/scripts-registry';
+import { getIo } from '@/lib/services/container';
 
 type Ctx = { params: Promise<{ projectId: string; scriptId: string }> };
 
@@ -87,7 +88,9 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     }
   }
 
-  // patchScript already bumped updatedAt — LP's poll will detect the change
+  // patchScript already bumped updatedAt — notify LP via socket (instant) and
+  // keep the poll path as fallback.
   const updated = getScript(projectId, scriptId);
+  getIo()?.emit('scripts:changed', { projectId, scriptId, updatedAt: updated?.updatedAt });
   return NextResponse.json({ ok: true, updatedAt: updated?.updatedAt });
 }
