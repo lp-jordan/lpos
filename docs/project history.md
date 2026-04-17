@@ -2,6 +2,42 @@
 
 ---
 
+## 2026-04-16 — Capture whisper stderr for better transcription failure diagnostics
+
+**Prompt:** Whisper has never worked on this mac since we migrated lpos over from windows — add stderr capture so the actual crash reason surfaces.
+
+**Summary:** `runWhisper` in `MediaProcessor` was spawning whisper with no `stdio` config, so crash output was lost and jobs only reported `whisper killed by signal SIGABRT`. Added stderr capture so the actual whisper error message is appended to the job failure reason.
+
+**Files changed:** `lib/services/media-processor.ts`
+
+**Implementation:** Added `stdio: ['ignore', 'pipe', 'pipe']` to the whisper `spawn` call, buffered stderr, and appended it to the rejection message when whisper exits non-zero or is signalled.
+
+**Rationale:** Whisper has never worked on this Mac since migration from Windows. SIGABRT is most likely a binary/platform issue (e.g. wrong architecture, Metal backend crash, model mismatch) — need the actual stderr to diagnose. Memory pressure was ruled out as the cause given the hardware.
+
+**Alternatives considered:** Logging stderr separately — rejected in favour of surfacing it directly in the job error where it's immediately visible.
+
+**Commands/tests:** None run.
+
+---
+
+## 2026-04-16 — Fix FOREIGN KEY crash in purgeOldJobs on server start
+
+**Prompt:** `[lpos] failed to start: Error: FOREIGN KEY constraint failed at IngestQueueService.purgeOldJobs` — what's this
+
+**Summary:** Server failed to start because `purgeOldJobs` deleted rows from `ingest_jobs` while child rows in `upload_sessions` still referenced them via a FK. Fixed by deleting the matching `upload_sessions` rows first in the same method.
+
+**Files changed:** `lib/services/ingest-queue-service.ts`
+
+**Implementation:** Added a `DELETE FROM upload_sessions WHERE job_id IN (SELECT job_id FROM ingest_jobs WHERE ...)` step immediately before the existing `DELETE FROM ingest_jobs` delete, using the same cutoff timestamp.
+
+**Rationale:** SQLite enforces FK constraints (`PRAGMA foreign_keys = ON` is set in `initSchema`). The `upload_sessions` table declares `FOREIGN KEY (job_id) REFERENCES ingest_jobs(job_id)` with no `ON DELETE CASCADE`, so parent rows can't be deleted while child rows exist. Deleting children first is the minimal, safe fix — no schema migration needed.
+
+**Alternatives considered:** Adding `ON DELETE CASCADE` to the FK — would require recreating the table in SQLite (no `ALTER TABLE ... ADD CONSTRAINT`), more invasive than needed.
+
+**Commands/tests:** None run.
+
+---
+
 ## 2026-04-02 — Theater mode defaults to comments open when comments exist
 
 **User prompt:** When there are comments on a video, let's default to show those in theater mode instead of defaulting to collapsed

@@ -22,26 +22,25 @@ const TRANSCRIPT_ACTIVE = new Set(['queued', 'extracting_audio', 'transcribing',
 const UPLOAD_ACTIVE = new Set(['queued', 'compressing', 'uploading', 'processing']);
 
 /**
- * Spawn a detached child that waits a few seconds for the current process to
- * fully release the port, then re-runs `npm start` in the same directory.
+ * Spawn a detached child that builds the app and then restarts via launchctl.
  * The child is unref'd so it outlives this process.
+ *
+ * We do NOT kill the current process here — launchctl kickstart -k handles
+ * that after the build completes, giving the new build a clean start.
+ * launchd's KeepAlive.SuccessfulExit=false means it won't auto-restart on
+ * the SIGTERM that kickstart sends, so there's no race with a stale restart.
  */
 function scheduleRestart(): void {
   const cwd = process.cwd();
-  const isWindows = process.platform === 'win32';
+  const uid = process.getuid?.() ?? 501;
 
-  const child = isWindows
-    ? spawn('cmd', ['/c', 'timeout /t 4 /nobreak >nul && npm run build && npm start'], {
-        cwd,
-        detached: true,
-        stdio: 'ignore',
-        shell: false,
-      })
-    : spawn('sh', ['-c', 'sleep 4 && npm run build && npm start'], {
-        cwd,
-        detached: true,
-        stdio: 'ignore',
-      });
+  // Clear the crash-loop guard file before restarting so that an intentional
+  // restart doesn't count toward the guard's failure window.
+  const child = spawn(
+    'sh',
+    ['-c', `rm -f /tmp/lpos-crash-guard && sleep 4 && npm run build && launchctl kickstart -k "gui/${uid}/com.lpos.dashboard"`],
+    { cwd, detached: true, stdio: 'ignore' },
+  );
 
   child.unref();
 }

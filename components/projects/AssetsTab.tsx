@@ -254,6 +254,18 @@ function PresentIcon() {
   );
 }
 
+function SendToScriptsIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="8" y1="13" x2="13" y2="13"/>
+      <polyline points="10 10 13 13 10 16"/>
+    </svg>
+  );
+}
+
 function DownloadIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
@@ -310,7 +322,16 @@ function RenameInput({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function AssetsTab({ projectId }: { projectId: string }) {
+const SENDABLE_EXTS = new Set(['.pdf', '.doc', '.docx', '.txt']);
+
+function isSendableToScripts(asset: DriveAsset): boolean {
+  if (asset.isFolder) return false;
+  if (asset.mimeType === 'application/vnd.google-apps.document') return true;
+  const ext = asset.name.slice(asset.name.lastIndexOf('.')).toLowerCase();
+  return SENDABLE_EXTS.has(ext);
+}
+
+export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScripts }: { projectId: string; sentScriptIds?: Set<string>; onSendToScripts?: (asset: DriveAsset) => void }) {
   const [items,      setItems]      = useState<DriveAsset[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState<string | null>(null);
@@ -323,6 +344,7 @@ export function AssetsTab({ projectId }: { projectId: string }) {
   const [previewAsset,     setPreviewAsset]     = useState<DriveAsset | null>(null);
   const [presentingId,     setPresentingId]     = useState<string | null>(null);
   const [presentedId,      setPresentedId]      = useState<string | null>(null);
+  const [sendingScriptId,  setSendingScriptId]  = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -441,6 +463,26 @@ export function AssetsTab({ projectId }: { projectId: string }) {
     a.href  = `/api/projects/${projectId}/assets/${asset.entityId}/download`;
     a.download = asset.name;
     a.click();
+  }
+
+  async function handleSendToScripts(asset: DriveAsset) {
+    setSendingScriptId(asset.entityId);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/scripts/from-asset`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ assetId: asset.entityId }),
+      });
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
+        throw new Error(data.error ?? 'Failed to send to Scripts');
+      }
+      onSendToScripts?.(asset);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSendingScriptId(null);
+    }
   }
 
   // ── Depth for indentation ───────────────────────────────────────────────────
@@ -630,6 +672,22 @@ export function AssetsTab({ projectId }: { projectId: string }) {
                         : presentedId === node.entityId
                           ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                           : <PresentIcon />
+                      }
+                    </button>
+                  )}
+                  {isSendableToScripts(node) && (
+                    <button
+                      type="button"
+                      className={`ca-asset-btn${sentScriptIds.has(node.entityId) ? ' ca-asset-btn--sent' : ''}`}
+                      title={sentScriptIds.has(node.entityId) ? 'Sent to Scripts' : 'Send to Scripts'}
+                      disabled={sendingScriptId === node.entityId || sentScriptIds.has(node.entityId)}
+                      onClick={(e) => { e.stopPropagation(); void handleSendToScripts(node); }}
+                    >
+                      {sendingScriptId === node.entityId
+                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                        : sentScriptIds.has(node.entityId)
+                          ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                          : <SendToScriptsIcon />
                       }
                     </button>
                   )}

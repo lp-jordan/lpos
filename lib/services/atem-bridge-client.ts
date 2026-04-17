@@ -5,6 +5,7 @@ import { resolveAtemBridgeCommand } from './runtime-dependencies';
 interface BridgeCommand {
   command: string;
   args: string[];
+  cwd?: string;
 }
 
 type LogFn = (...args: unknown[]) => void;
@@ -30,8 +31,13 @@ export class AtemBridgeClient {
 
   async ensureHelper(): Promise<boolean> {
     if (await this.isHealthy()) {
-      this.helperReady = true;
-      return true;
+      if (!this.helperProcess) {
+        // Orphaned bridge from a previous session — shut it down and start fresh.
+        await this.shutdownOrphan();
+      } else {
+        this.helperReady = true;
+        return true;
+      }
     }
     if (this.helperStartingPromise) return this.helperStartingPromise;
     if (Date.now() < this.nextStartAttemptAt) return false;
@@ -56,6 +62,7 @@ export class AtemBridgeClient {
       this.helperProcess = spawn(command.command, command.args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        ...(command.cwd ? { cwd: command.cwd } : {}),
       });
     } catch (error) {
       this.nextStartAttemptAt = Date.now() + 5000;
@@ -97,6 +104,14 @@ export class AtemBridgeClient {
 
   private resolveHelperCommand(): BridgeCommand | null {
     return resolveAtemBridgeCommand();
+  }
+
+  private async shutdownOrphan(): Promise<void> {
+    this.log('Found orphaned ATEM bridge — shutting it down');
+    try {
+      await fetch(`${this.baseUrl}/v1/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) });
+      await new Promise((r) => setTimeout(r, 400));
+    } catch { /* already gone, that's fine */ }
   }
 
   private async isHealthy(): Promise<boolean> {

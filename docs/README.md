@@ -98,7 +98,7 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 | `app/api/admin/admins/route.ts` | GET/POST/DELETE admin email management |
 
 ### Guest access flow
-1. Device navigates to `http://172.20.10.137:3000` (LAN) or Tailscale URL.
+1. Device navigates to `http://172.20.10.138:3000` (LAN) or Tailscale URL.
 2. Sign-in page → "Continue as Guest" → `/guest-pin` (public path, no auth required).
 3. Operator provides today's 4-digit PIN (visible in Settings → Guest Access PIN).
 4. PIN verified server-side; guest session cookie set → redirect to `/guest`.
@@ -109,7 +109,7 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 - Derived via HMAC-SHA256(`LPOS_AUTH_SECRET`, `lpos-guest-pin:YYYY-MM-DD`).
 - No storage required; same PIN re-derived on every call until midnight UTC.
 - Visible to admins at Settings → Guest Access PIN.
-- Local URL for studio devices: `http://172.20.10.137:3000` (allowed via `APP_LOCAL_URL` in Socket.io CORS).
+- Local URL for studio devices: `http://172.20.10.138:3000` (allowed via `APP_LOCAL_URL` in Socket.io CORS).
 
 ### Admin management
 - Bootstrap admin hardcoded via `LPOS_BOOTSTRAP_ADMIN` env (default: `jordan@leaderpass.com`). Cannot be removed via UI.

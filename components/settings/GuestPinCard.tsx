@@ -1,5 +1,7 @@
 import { getTodayPin } from '@/lib/services/guest-pin';
 
+const GUEST_PIN_URL = `${process.env.APP_LOCAL_URL ?? 'http://localhost:3000'}/guest-pin`;
+
 export function GuestPinCard() {
   const pin = getTodayPin();
 
@@ -27,7 +29,7 @@ export function GuestPinCard() {
         <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted, #888)', margin: 0 }}>
           Valid today only
           <br />
-          (<code>http://172.20.10.137:3000/guest-pin</code>)
+          (<code>{GUEST_PIN_URL}</code>)
         </p>
       </div>
     </div>

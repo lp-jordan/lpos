@@ -53,6 +53,9 @@ export async function POST(req: NextRequest) {
       case 'refreshStatus':
         await service.refreshStatus();
         break;
+      case 'rediscover':
+        await service.rediscover();
+        break;
       default:
         return NextResponse.json({ error: `Unknown method: ${body.method ?? '(none)'}` }, { status: 400 });
     }

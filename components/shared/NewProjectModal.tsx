@@ -7,17 +7,31 @@ interface Props {
   onClose: () => void;
   onCreated: (project: Project) => void;
   defaultClientName?: string;
+  existingClients?: string[];
 }
 
-export function NewProjectModal({ onClose, onCreated, defaultClientName }: Readonly<Props>) {
-  const [clientName, setClientName] = useState(defaultClientName ?? '');
-  const [name, setName] = useState('');
+export function NewProjectModal({ onClose, onCreated, defaultClientName, existingClients = [] }: Readonly<Props>) {
+  // If a defaultClientName is pinned, skip the mode toggle entirely.
+  // Otherwise default to 'existing' when there are clients, 'new' when there aren't.
+  const hasPinnedClient = !!defaultClientName;
+  const initialMode = hasPinnedClient || existingClients.length === 0 ? 'new' : 'existing';
+
+  const [mode, setMode] = useState<'existing' | 'new'>(initialMode);
+  const [selectedClient, setSelectedClient] = useState(existingClients[0] ?? '');
+  const [newClientName, setNewClientName] = useState(defaultClientName ?? '');
+  const [projectName, setProjectName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const clientName = hasPinnedClient
+    ? defaultClientName
+    : mode === 'existing'
+      ? selectedClient
+      : newClientName;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!clientName.trim() || !name.trim()) {
+    if (!clientName?.trim() || !projectName.trim()) {
       setError('Client name and project name are required.');
       return;
     }
@@ -27,7 +41,7 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName }: Reado
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), clientName: clientName.trim() }),
+        body: JSON.stringify({ name: projectName.trim(), clientName: clientName.trim() }),
       });
       if (!res.ok) {
         const data = await res.json() as { error?: string };
@@ -53,21 +67,63 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName }: Reado
           </button>
         </div>
 
+        {/* Mode toggle — only shown when there are existing clients and no pinned client */}
+        {!hasPinnedClient && existingClients.length > 0 && (
+          <div className="modal-mode-toggle">
+            <button
+              type="button"
+              className={`modal-mode-btn${mode === 'existing' ? ' active' : ''}`}
+              onClick={() => setMode('existing')}
+            >
+              Existing Client
+            </button>
+            <button
+              type="button"
+              className={`modal-mode-btn${mode === 'new' ? ' active' : ''}`}
+              onClick={() => setMode('new')}
+            >
+              New Client
+            </button>
+          </div>
+        )}
+
         <form className="modal-form" onSubmit={handleSubmit}>
+          {/* Client field */}
           <div className="modal-field">
             <label className="modal-label" htmlFor="np-client">Client</label>
-            <input
-              id="np-client"
-              className="modal-input"
-              type="text"
-              placeholder="LeaderPass"
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              readOnly={!!defaultClientName}
-              disabled={!!defaultClientName}
-              autoFocus={!defaultClientName}
-              autoComplete="off"
-            />
+            {hasPinnedClient ? (
+              <input
+                id="np-client"
+                className="modal-input"
+                type="text"
+                value={defaultClientName}
+                readOnly
+                disabled
+              />
+            ) : mode === 'existing' ? (
+              <select
+                id="np-client"
+                className="modal-input"
+                value={selectedClient}
+                onChange={(e) => setSelectedClient(e.target.value)}
+                autoFocus
+              >
+                {existingClients.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id="np-client"
+                className="modal-input"
+                type="text"
+                placeholder="Acme Productions"
+                value={newClientName}
+                onChange={(e) => setNewClientName(e.target.value)}
+                autoFocus
+                autoComplete="off"
+              />
+            )}
           </div>
 
           <div className="modal-field">
@@ -77,9 +133,9 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName }: Reado
               className="modal-input"
               type="text"
               placeholder="Annual Summit Highlights"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus={!!defaultClientName}
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              autoFocus={hasPinnedClient}
               autoComplete="off"
             />
           </div>

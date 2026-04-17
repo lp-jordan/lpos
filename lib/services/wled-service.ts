@@ -35,7 +35,7 @@ export interface WledStatus {
   reachable:  boolean;
   power:      boolean;
   brightness: number;    // 0–100
-  cct:        number;    // 0–100 (0 = cold/blue, 100 = warm/amber)
+  cct:        number;    // 0–100 (0 = warm/amber, 100 = cold/blue)
   effectId:   number;
   effectName: string;
   effects:    WledEffect[];
@@ -212,7 +212,7 @@ export class WledService {
     this.emitStatus();
   }
 
-  /** cct: 0–100 (0 = cold/blue, 100 = warm/amber) */
+  /** cct: 0–100 (0 = warm/amber, 100 = cold/blue) */
   async setCct(pct: number): Promise<void> {
     const cct = Math.round(Math.max(0, Math.min(100, pct)) * 2.55);
     await this.postState({ seg: [{ cct }] });

@@ -30,6 +30,7 @@ export interface AtemState {
   previewInput: number | null;
   programInput: number | null;
   recording: AtemRecordingState;
+  output4Mode: 'program' | 'multiview' | null;
   lastError: string;
   lastCommandAt: string | null;
 }
@@ -156,6 +157,7 @@ export function createDefaultAtemState(overrides: Partial<AtemState> = {}): Atem
     previewInput: null,
     programInput: null,
     recording: { isRecording: false, filename: '', status: 'disconnected' },
+    output4Mode: null,
     lastError: '',
     lastCommandAt: null,
     ...overrides,

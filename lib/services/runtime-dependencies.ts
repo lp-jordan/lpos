@@ -81,13 +81,13 @@ export function resolveWhisperBinaryPath(): string | null {
   return null;
 }
 
-export function resolveAtemBridgeCommand(): { command: string; args: string[] } | null {
+export function resolveAtemBridgeCommand(): { command: string; args: string[]; cwd: string } | null {
   const bridgeDir = getAtemBridgeDir();
   const exePath = path.join(bridgeDir, 'atem-bridge.exe');
-  if (pathExists(exePath)) return { command: exePath, args: [] };
+  if (pathExists(exePath)) return { command: exePath, args: [], cwd: bridgeDir };
 
   const scriptPath = path.join(bridgeDir, 'atem-bridge.js');
-  if (pathExists(scriptPath)) return { command: process.execPath, args: [scriptPath] };
+  if (pathExists(scriptPath)) return { command: process.execPath, args: [scriptPath], cwd: bridgeDir };
 
   return null;
 }

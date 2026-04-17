@@ -1,0 +1,3 @@
+/Users/lpos/lp-app-ecosystem/lpos-dashboard/native/sony-camera-bridge/build-mac/CMakeFiles/sony-camera-bridge.dir
+/Users/lpos/lp-app-ecosystem/lpos-dashboard/native/sony-camera-bridge/build-mac/CMakeFiles/edit_cache.dir
+/Users/lpos/lp-app-ecosystem/lpos-dashboard/native/sony-camera-bridge/build-mac/CMakeFiles/rebuild_cache.dir

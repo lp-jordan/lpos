@@ -59,7 +59,8 @@ export async function extractAndSave(
 
     saveExtractedText(projectId, scriptId, html);
     patchScript(projectId, scriptId, { status: 'ready', hasExtractedText: true });
-  } catch {
+  } catch (err) {
+    console.error(`[script-extractor] failed to extract ${scriptId} (${ext}):`, err);
     patchScript(projectId, scriptId, { status: 'uploaded' });
   }
 }

@@ -21,7 +21,7 @@ export interface SlateProject {
 }
 
 export interface AtemToast {
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'info';
   message: string;
 }
 
@@ -79,6 +79,7 @@ const DEFAULT_ATEM_STATE: AtemState = {
   previewInput: null,
   programInput: null,
   recording: { isRecording: false, filename: '', status: 'disconnected' },
+  output4Mode: null,
   lastError: '',
   lastCommandAt: null,
 };

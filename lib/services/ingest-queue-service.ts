@@ -534,6 +534,13 @@ export class IngestQueueService {
   private purgeOldJobs(): void {
     const db = getIngestQueueDb();
     const cutoff = new Date(Date.now() - PURGE_AGE_MS).toISOString();
+    // Delete child upload_sessions rows first to satisfy the FK constraint.
+    db.prepare(
+      `DELETE FROM upload_sessions WHERE job_id IN (
+         SELECT job_id FROM ingest_jobs
+         WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?
+       )`,
+    ).run(cutoff);
     const result = db.prepare(
       "DELETE FROM ingest_jobs WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?",
     ).run(cutoff);

@@ -191,9 +191,13 @@ export class MediaProcessor extends EventEmitter {
         '-osrt', // output SRT subtitles
         '-ovtt', // output VTT subtitles
         '-of', outputPrefix,
-      ]);
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
       this.currentProc = proc;
+
+      let stderrBuf = '';
+      proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString(); });
+      proc.stdout?.on('data', () => { /* suppress — whisper writes progress to stdout */ });
 
       let pct = 20;
       const timer = setInterval(() => {
@@ -201,7 +205,7 @@ export class MediaProcessor extends EventEmitter {
         this.emit('progress', { phase: 'transcribing', percent: pct } satisfies ProcessorProgress);
       }, 2000);
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
         this.currentProc = null;
         clearInterval(timer);
         if (this.aborted) { reject(new Error('Job canceled')); return; }
@@ -213,7 +217,9 @@ export class MediaProcessor extends EventEmitter {
             vttPath:  `${outputPrefix}.vtt`,
           });
         } else {
-          reject(new Error(`whisper exited with code ${code}`));
+          const reason = signal ? `killed by signal ${signal}` : `exited with code ${code}`;
+          const detail = stderrBuf.trim();
+          reject(new Error(detail ? `whisper ${reason}\n${detail}` : `whisper ${reason}`));
         }
       });
       proc.on('error', (err) => { this.currentProc = null; clearInterval(timer); reject(err); });

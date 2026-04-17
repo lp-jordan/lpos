@@ -76,18 +76,44 @@ Notes:
 ## Workstation Setup
 
 1. Apply for and download Sony's Camera Remote SDK from Sony.
-2. Build a local bridge executable against Sony's SDK.
-3. Place the bridge at:
-   - `vendor/sony-camera-bridge/win-x64/sony-camera-bridge.exe`
-   - or update `camera.sdkBridge.executablePath` in `data/studio-config.json`
-4. Start LPOS.
-5. In the Camera panel:
+2. Unpack `RemoteCli.zip` from the Sony SDK download into `vendor/` so the layout is:
+   ```
+   vendor/RemoteCli/app/CRSDK/       ← SDK headers
+   vendor/RemoteCli/external/crsdk/  ← SDK runtime libs
+   ```
+3. Build the bridge for your platform (see below).
+4. Update `camera.sdkBridge.executablePath` in `data/studio-config.json` if the path differs from the default.
+5. Start LPOS.
+6. In the Camera panel:
    - Provider: `Sony SDK`
    - Model: `FX6` or `FX3`
    - Host: camera IP
-6. Connect the camera.
+7. Connect the camera.
 
 If `autoStart` is `true`, LPOS will try to launch the bridge automatically.
+
+### macOS (arm64 — Mac mini)
+
+```bash
+brew install cmake   # if not already installed
+bash scripts/build-sony-camera-bridge.sh
+```
+
+Output: `vendor/sony-camera-bridge/mac-arm64/sony-camera-bridge`
+
+Update `data/studio-config.json`:
+```json
+"executablePath": "/Users/lpos/lp-app-ecosystem/lpos-dashboard/vendor/sony-camera-bridge/mac-arm64/sony-camera-bridge"
+```
+
+### Windows (x64)
+
+Run the helper script:
+- `scripts/build-sony-camera-bridge.cmd`
+
+Output: `vendor/sony-camera-bridge/win-x64/sony-camera-bridge.exe`
+
+Default `executablePath` in `data/studio-config.json` already points here.
 
 ## Legacy Fallback
 

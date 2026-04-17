@@ -46,6 +46,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
   const [tab, setTab] = useState<Tab>('media');
   const [passPrepTranscripts, setPassPrepTranscripts] = useState<string[]>([]);
   const [selectedTranscriptJobId, setSelectedTranscriptJobId] = useState<string | null>(null);
+  const [sentScriptAssetIds, setSentScriptAssetIds] = useState<Set<string>>(new Set());
   const deepLinkedAssetId = searchParams.get('assetId');
 
   const workbooks = assets.filter((asset) => asset.type === 'workbook');
@@ -58,6 +59,11 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
   function handleGoToTranscript(jobId: string) {
     setSelectedTranscriptJobId(jobId);
     setTab('transcripts');
+  }
+
+  function handleSendToScripts(asset: { entityId: string }) {
+    setSentScriptAssetIds((prev) => new Set([...prev, asset.entityId]));
+    setTab('scripts');
   }
 
   const tabs: { id: Tab; label: string }[] = [
@@ -133,7 +139,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
         />
       )}
 
-      {tab === 'assets' && <AssetsTab projectId={project.projectId} />}
+      {tab === 'assets' && <AssetsTab projectId={project.projectId} sentScriptIds={sentScriptAssetIds} onSendToScripts={handleSendToScripts} />}
 
       {tab === 'passPrep' && (
         <PassPrepTab

@@ -1,5 +1,15 @@
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  pragma comment(lib, "Ws2_32.lib")
+#else
+#  include <arpa/inet.h>
+#  include <csignal>
+#  include <netinet/in.h>
+#  include <sys/select.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
 
 #include "CameraRemote_SDK.h"
 #include "IDeviceCallback.h"
@@ -26,7 +36,13 @@
 #include <utility>
 #include <vector>
 
-#pragma comment(lib, "Ws2_32.lib")
+#ifndef _WIN32
+// POSIX compatibility shims so the rest of the file compiles unchanged.
+using SOCKET = int;
+constexpr int INVALID_SOCKET = -1;
+constexpr int SOCKET_ERROR   = -1;
+inline int closesocket(int fd) { return ::close(fd); }
+#endif
 
 namespace SDK = SCRSDK;
 
@@ -1039,6 +1055,7 @@ bool streamLiveView(SOCKET client, const CameraIdentity& identity) {
   return true;
 }
 
+#ifdef _WIN32
 BOOL WINAPI onConsoleSignal(DWORD signal) {
   switch (signal) {
     case CTRL_C_EVENT:
@@ -1051,6 +1068,7 @@ BOOL WINAPI onConsoleSignal(DWORD signal) {
       return FALSE;
   }
 }
+#endif
 
 } // namespace
 
@@ -1064,18 +1082,27 @@ int main(int argc, char* argv[]) {
     }
   }
 
+#ifdef _WIN32
   SetConsoleCtrlHandler(onConsoleSignal, TRUE);
+#else
+  std::signal(SIGINT,  [](int) { running = false; });
+  std::signal(SIGTERM, [](int) { running = false; });
+#endif
 
+#ifdef _WIN32
   WSADATA wsaData{};
   if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
     std::cerr << "[sony-camera-bridge] WSAStartup failed\n";
     return 1;
   }
+#endif
 
   SOCKET server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (server == INVALID_SOCKET) {
     std::cerr << "[sony-camera-bridge] socket() failed\n";
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 1;
   }
 
@@ -1084,20 +1111,24 @@ int main(int argc, char* argv[]) {
   addr.sin_port = htons(static_cast<u_short>(port));
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
-  constexpr BOOL reuseAddress = TRUE;
+  constexpr int reuseAddress = 1;
   setsockopt(server, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuseAddress), sizeof(reuseAddress));
 
   if (bind(server, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
     std::cerr << "[sony-camera-bridge] bind() failed on 127.0.0.1:" << port << '\n';
     closesocket(server);
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 1;
   }
 
   if (listen(server, SOMAXCONN) == SOCKET_ERROR) {
     std::cerr << "[sony-camera-bridge] listen() failed\n";
     closesocket(server);
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 1;
   }
 
@@ -1113,7 +1144,13 @@ int main(int argc, char* argv[]) {
     timeout.tv_sec = 1;
     timeout.tv_usec = 0;
 
+#ifdef _WIN32
+    // On Windows the first argument to select() is ignored.
     const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+    // On POSIX, nfds must be the highest fd + 1.
+    const int ready = select(server + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
     if (ready <= 0) continue;
 
     SOCKET client = accept(server, nullptr, nullptr);
@@ -1148,6 +1185,8 @@ int main(int argc, char* argv[]) {
   }
 
   closesocket(server);
+#ifdef _WIN32
   WSACleanup();
+#endif
   return 0;
 }

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/lpos/lp-app-ecosystem/lpos-dashboard/native/sony-camera-bridge/build-mac/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

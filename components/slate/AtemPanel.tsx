@@ -17,6 +17,7 @@ interface Props {
   onStartRecording: (filename?: string) => void;
   onStopRecording: () => void;
   onOutput4Toggle: () => void;
+  output4Mode: 'multiview' | 'program';
 }
 
 const CAMERAS = [1, 2, 3, 4, 5, 6];
@@ -35,6 +36,7 @@ export function AtemPanel({
   onStartRecording,
   onStopRecording,
   onOutput4Toggle,
+  output4Mode,
 }: Readonly<Props>) {
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
@@ -45,7 +47,7 @@ export function AtemPanel({
   const programInput = atemState?.programInput ?? null;
   const switcherIp = atemState?.switcherIp ?? '';
   const recordingFilename = atemState?.recording.filename ?? '';
-  const output4IsProgram = false; // persisted in parent when we have real Output4 state
+  const output4IsProgram = output4Mode === 'program';
 
   return (
     <div className="sl-atem-panel">

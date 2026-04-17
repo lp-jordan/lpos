@@ -40,7 +40,7 @@ function useCurrentDate() {
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
+export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdmin: boolean }) {
   const timecode = useTimecode();
   const currentDate = useCurrentDate();
 
@@ -55,6 +55,10 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
   const [noteInput, setNoteInput] = useState('');
   const [atemSettingsOpen, setAtemSettingsOpen] = useState(false);
   const [output4Mode, setOutput4Mode] = useState<'multiview' | 'program'>('multiview');
+  const atemOutput4Mode = slate.atemState?.output4Mode;
+  useEffect(() => {
+    if (atemOutput4Mode != null) setOutput4Mode(atemOutput4Mode);
+  }, [atemOutput4Mode]);
   const [devConsoleOpen, setDevConsoleOpen] = useState(false);
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
   const [modal, setModal] = useState<{ type: ModalType; message?: string }>({ type: null });
@@ -192,8 +196,19 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
 
             {projectDropdownOpen && (
               <div className="sl-dropdown">
+                <button
+                  className="sl-dropdown-new"
+                  type="button"
+                  onClick={() => {
+                    setNewProjectClient(undefined);
+                    setProjectDropdownOpen(false);
+                    setShowNewProjectModal(true);
+                  }}
+                >
+                  + New Project
+                </button>
                 {slate.projects.length === 0 && (
-                  <span className="sl-dropdown-empty">No projects — create one below</span>
+                  <span className="sl-dropdown-empty">No projects yet</span>
                 )}
                 {sortedClients.map((client) => (
                   <div key={client} className="sl-dropdown-group">
@@ -210,17 +225,6 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
                     ))}
                   </div>
                 ))}
-                <button
-                  className="sl-dropdown-new"
-                  type="button"
-                  onClick={() => {
-                    setNewProjectClient(undefined);
-                    setProjectDropdownOpen(false);
-                    setShowNewProjectModal(true);
-                  }}
-                >
-                  + New Project
-                </button>
               </div>
             )}
           </div>
@@ -502,6 +506,7 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
               onStartRecording={slate.atemStartRecording}
               onStopRecording={slate.atemStopRecording}
               onOutput4Toggle={handleOutput4Toggle}
+              output4Mode={output4Mode}
             />
           )}
 
@@ -510,7 +515,7 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
             <PlaybackPanel connection={slate.playbackConnection} />
           )}
 
-          {studioTab === 'lighting' && <LightingPanel />}
+          {studioTab === 'lighting' && <LightingPanel isAdmin={isAdmin} />}
 
           {/* ── Camera / Audio soon ── */}
           {studioTab === 'audio' && (
@@ -615,6 +620,7 @@ export function SlatePageContent({ isGuest }: { isGuest: boolean }) {
       {showNewProjectModal && (
         <NewProjectModal
           defaultClientName={newProjectClient}
+          existingClients={sortedClients}
           onClose={() => setShowNewProjectModal(false)}
           onCreated={(project) => {
             setShowNewProjectModal(false);

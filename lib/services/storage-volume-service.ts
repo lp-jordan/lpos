@@ -87,30 +87,55 @@ function detectWindowsVolumes(): DetectedVolume[] {
   return volumes;
 }
 
+function probeVolume(rootPath: string, label: string): DetectedVolume | null {
+  try {
+    const stat = fs.statSync(rootPath);
+    if (!stat.isDirectory()) return null;
+    let writable = false;
+    try {
+      fs.accessSync(rootPath, fs.constants.W_OK);
+      writable = true;
+    } catch {
+      writable = false;
+    }
+    const capacity = getPathCapacity(rootPath);
+    return { rootPath, label, totalBytes: capacity.totalBytes, freeBytes: capacity.freeBytes, available: true, writable };
+  } catch {
+    return null;
+  }
+}
+
+function detectMacOSVolumes(): DetectedVolume[] {
+  const volumes: DetectedVolume[] = [];
+  try {
+    for (const entry of fs.readdirSync('/Volumes')) {
+      const vol = probeVolume(`/Volumes/${entry}`, entry);
+      if (vol) volumes.push(vol);
+    }
+  } catch {
+    // /Volumes not accessible — fall back to cwd root
+    const root = path.parse(process.cwd()).root;
+    const vol = probeVolume(root, root);
+    if (vol) volumes.push(vol);
+  }
+  return volumes;
+}
+
 function detectFallbackVolumes(): DetectedVolume[] {
   const rootPath = path.parse(process.cwd()).root;
-  let writable = false;
-  let available = false;
-  try {
-    available = fs.existsSync(rootPath);
-    if (available) fs.accessSync(rootPath, fs.constants.W_OK);
-    writable = available;
-  } catch {
-    writable = false;
-  }
-
-  return [{
-    rootPath,
-    label: rootPath,
-    totalBytes: null,
-    freeBytes: null,
-    available,
-    writable,
-  }];
+  const vol = probeVolume(rootPath, rootPath);
+  return vol ? [vol] : [];
 }
 
 export function detectHostVolumes(): DetectedVolume[] {
-  const volumes = process.platform === 'win32' ? detectWindowsVolumes() : detectFallbackVolumes();
+  let volumes: DetectedVolume[];
+  if (process.platform === 'win32') {
+    volumes = detectWindowsVolumes();
+  } else if (process.platform === 'darwin') {
+    volumes = detectMacOSVolumes();
+  } else {
+    volumes = detectFallbackVolumes();
+  }
   return volumes.sort((a, b) => a.rootPath.localeCompare(b.rootPath));
 }
 

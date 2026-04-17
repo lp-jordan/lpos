@@ -1,0 +1,9 @@
+{
+  "name": "atem-bridge",
+  "version": "1.0.0",
+  "description": "ATEM hardware bridge for LPOS",
+  "main": "atem-bridge.js",
+  "dependencies": {
+    "atem-connection": "^3.9.0"
+  }
+}

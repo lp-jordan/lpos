@@ -7,13 +7,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const CONFIG_PATH = path.join(process.cwd(), 'data', 'studio-config.json');
-const DEFAULT_SDK_BRIDGE_EXECUTABLE = path.join(
-  process.cwd(),
-  'vendor',
-  'sony-camera-bridge',
-  'win-x64',
-  'sony-camera-bridge.exe',
-);
+
+function defaultSdkBridgeExecutable(): string {
+  if (process.platform === 'darwin') {
+    return path.join(process.cwd(), 'vendor', 'sony-camera-bridge', 'mac-arm64', 'sony-camera-bridge');
+  }
+  return path.join(process.cwd(), 'vendor', 'sony-camera-bridge', 'win-x64', 'sony-camera-bridge.exe');
+}
+
+const DEFAULT_SDK_BRIDGE_EXECUTABLE = defaultSdkBridgeExecutable();
 
 export type CameraProviderKind = 'sony-sdk' | 'sony-camera-api';
 export type SonyCameraModel = 'fx6' | 'fx3';
@@ -26,9 +28,16 @@ export interface SonySdkBridgeConfig {
   args: string[];
 }
 
+export type { AmaranFixtureGroup } from '@/lib/lighting-constants';
+export { AMARAN_GROUPS } from '@/lib/lighting-constants';
+import type { AmaranFixtureGroup } from '@/lib/lighting-constants';
+
 export interface AmaranConfig {
   port: number;        // Amaran Desktop WebSocket port (default 33782)
   autoConnect: boolean;
+  fixtureLabels: Record<string, string>;                  // nodeId → display name override
+  fixtureGroups: Record<string, AmaranFixtureGroup>;      // nodeId → section assignment
+  fixtureOrder:  Record<AmaranFixtureGroup, string[]>;    // group → ordered nodeIds
 }
 
 export interface WledConfig {
@@ -85,6 +94,9 @@ const DEFAULTS: StudioConfig = {
   amaran: {
     port: 33782,
     autoConnect: true,
+    fixtureLabels: {},
+    fixtureGroups: {},
+    fixtureOrder:  { bookshelves: [], void: [], mobile: [] },
   },
   wled: { ...WLED_DEFAULTS },
 };
@@ -101,6 +113,16 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
   const fingerprint = (camera?.fingerprint ?? '').replace(/\s+/g, '');
   const port = Number.isFinite(camera?.port) ? Number(camera?.port) : DEFAULTS.camera.port;
 
+  // If the stored executable path is for the wrong platform (e.g. a Windows .exe
+  // path loaded on macOS after a machine migration), fall back to the platform default.
+  const storedExe = (mergedBridge.executablePath ?? '').trim();
+  const wrongPlatformExe =
+    (process.platform === 'darwin' && storedExe.endsWith('.exe')) ||
+    (process.platform === 'win32' && !storedExe.endsWith('.exe') && storedExe !== '');
+  const executablePath = wrongPlatformExe || !storedExe
+    ? DEFAULTS.camera.sdkBridge.executablePath
+    : storedExe;
+
   return {
     ...DEFAULTS.camera,
     ...camera,
@@ -113,7 +135,7 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
     sdkBridge: {
       ...mergedBridge,
       baseUrl: (mergedBridge.baseUrl ?? DEFAULTS.camera.sdkBridge.baseUrl).trim(),
-      executablePath: (mergedBridge.executablePath ?? DEFAULTS.camera.sdkBridge.executablePath).trim(),
+      executablePath,
       args: Array.isArray(mergedBridge.args) ? mergedBridge.args : [],
     },
   };
@@ -125,6 +147,17 @@ function normalizeStudioConfig(raw?: Partial<StudioConfig>): StudioConfig {
     amaran: {
       port: typeof raw?.amaran?.port === 'number' && raw.amaran.port > 0 ? raw.amaran.port : DEFAULTS.amaran.port,
       autoConnect: raw?.amaran?.autoConnect ?? DEFAULTS.amaran.autoConnect,
+      fixtureLabels: (typeof raw?.amaran?.fixtureLabels === 'object' && raw.amaran.fixtureLabels !== null)
+        ? raw.amaran.fixtureLabels as Record<string, string>
+        : {},
+      fixtureGroups: (typeof raw?.amaran?.fixtureGroups === 'object' && raw.amaran.fixtureGroups !== null)
+        ? raw.amaran.fixtureGroups as Record<string, AmaranFixtureGroup>
+        : {},
+      fixtureOrder: {
+        bookshelves: Array.isArray(raw?.amaran?.fixtureOrder?.bookshelves) ? raw.amaran.fixtureOrder.bookshelves : [],
+        void:        Array.isArray(raw?.amaran?.fixtureOrder?.void)        ? raw.amaran.fixtureOrder.void        : [],
+        mobile:      Array.isArray(raw?.amaran?.fixtureOrder?.mobile)      ? raw.amaran.fixtureOrder.mobile      : [],
+      },
     },
     wled: {
       ip: typeof raw?.wled?.ip === 'string' ? raw.wled.ip.trim() : WLED_DEFAULTS.ip,

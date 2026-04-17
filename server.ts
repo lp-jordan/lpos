@@ -92,6 +92,12 @@ async function main() {
       await stopServices();
       httpServer.close(() => {
         process.stdout.write('[lpos] goodbye\n');
+        // Always exit 0 so launchd's KeepAlive (SuccessfulExit: false) stays
+        // hands-off. When a restart is initiated the detached child runs
+        // `npm run build && launchctl kickstart -k` — the kickstart handles
+        // bringing the server back up once the build is complete. Exiting 1
+        // here would cause launchd to restart mid-build against a partially
+        // written .next/ directory, which breaks startup.
         process.exit(0);
       });
     });

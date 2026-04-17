@@ -139,6 +139,7 @@ export class SlateService {
   private audioMonitor: SlateAudioMonitorService;
   private atemInterval: NodeJS.Timeout | null = null;
   private playbackInterval: NodeJS.Timeout | null = null;
+  private logBuffer: string[] = [];
 
   constructor(
     private io: SocketIOServer,
@@ -215,6 +216,11 @@ export class SlateService {
 
   private onConnect(socket: Socket) {
     this.log('Slate client connected', socket.id);
+
+    // Replay buffered logs so the dev console shows history from before this connection
+    for (const line of this.logBuffer) {
+      socket.emit('log', line);
+    }
 
     // Send initial state
     if (this.currentProjectId) {
@@ -329,7 +335,13 @@ export class SlateService {
           this.config.atem.switcherIp = ip;
           saveConfig(this.config);
           await this.atemBridge.connect(ip);
-        }, { successMessage: `Connected to ATEM at ${ip}` });
+        });
+        // State was refreshed inside executeAtemCommand; report actual connection status
+        if (this.atemState.connected) {
+          this.emitAtemToast(socket, 'success', `Connected to ATEM at ${ip}`);
+        } else {
+          this.emitAtemToast(socket, 'info', `Connecting to ${ip}\u2026 auto-reconnect is active`);
+        }
         await this.refreshPlaybackConnectionState();
       } catch (err) { this.log('ATEM connect failed', (err as Error).message); }
     });
@@ -591,7 +603,9 @@ export class SlateService {
   private log(...args: unknown[]) {
     console.log('[slate]', ...args);
     const msg = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-    this.io.of('/slate').emit('log', `[slate] ${msg}`);
+    const line = `[slate] ${msg}`;
+    this.logBuffer = [...this.logBuffer.slice(-199), line];
+    this.io.of('/slate').emit('log', line);
   }
 
   // ── Public API (for API routes) ────────────────────────────────────────

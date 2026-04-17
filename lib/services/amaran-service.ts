@@ -28,10 +28,17 @@ import type { Server as SocketIOServer } from 'socket.io';
 
 export type AmaranColorMode = 'cct' | 'hsi';
 
+export interface AmaranFixtureCapabilities {
+  hasHSI: boolean;
+  cctMin: number;   // Kelvin
+  cctMax: number;   // Kelvin
+}
+
 export interface AmaranFixture {
-  id:     string;
-  name:   string;
-  nodeId: string;
+  id:           string;
+  name:         string;
+  nodeId:       string;
+  capabilities: AmaranFixtureCapabilities;
 }
 
 export interface AmaranFixtureState {
@@ -49,6 +56,50 @@ export interface AmaranStatus {
   fixtures:  AmaranFixture[];
   /** Per-fixture state keyed by nodeId. */
   states:    Record<string, AmaranFixtureState>;
+}
+
+// ── Capability detection ──────────────────────────────────────────────────────
+//
+// Amaran Desktop's fixture_list response contains only id/name/node_id.
+// We infer capabilities from the model substring in the hardware name.
+//
+// Naming conventions observed in the wild:
+//   "amaran 200x #1"  → 200x  bi-color panel  (CCT only, 2500–7500K)
+//   "amaran T2c #1"   → T2c   full-color tube  (CCT 2800–6500K + HSI)
+//
+// Suffix rules:
+//   x  → bi-color, CCT only
+//   c  → full color, CCT + HSI
+//   d  → daylight, CCT only (single-CCT panels — still useful to clamp range)
+//
+// Entries are checked in order; first match wins.
+
+interface ModelEntry {
+  pattern: RegExp;
+  caps:    AmaranFixtureCapabilities;
+}
+
+const MODEL_TABLE: ModelEntry[] = [
+  // T-series color tubes (T2c, T4c, etc.) — 2800–6500K per spec
+  { pattern: /\bt\d+c\b/i,      caps: { hasHSI: true,  cctMin: 2800, cctMax: 6500 } },
+  // P-series color panels (P60c, P60x, etc.)
+  { pattern: /\bp\d+c\b/i,      caps: { hasHSI: true,  cctMin: 2500, cctMax: 7500 } },
+  { pattern: /\bp\d+x\b/i,      caps: { hasHSI: false, cctMin: 2500, cctMax: 7500 } },
+  // Numeric-series bi-color (60x, 100x, 200x, 300x)
+  { pattern: /\b\d+x\b/i,       caps: { hasHSI: false, cctMin: 2500, cctMax: 7500 } },
+  // Numeric-series full-color (60c, 100c, 200c, 300c)
+  { pattern: /\b\d+c\b/i,       caps: { hasHSI: true,  cctMin: 2500, cctMax: 7500 } },
+  // Daylight / single-CCT panels
+  { pattern: /\b\d+d\b/i,       caps: { hasHSI: false, cctMin: 5600, cctMax: 5600 } },
+];
+
+const DEFAULT_CAPS: AmaranFixtureCapabilities = { hasHSI: true, cctMin: 2500, cctMax: 7500 };
+
+export function detectFixtureCapabilities(name: string): AmaranFixtureCapabilities {
+  for (const { pattern, caps } of MODEL_TABLE) {
+    if (pattern.test(name)) return caps;
+  }
+  return DEFAULT_CAPS;
 }
 
 // ── Internal request type ─────────────────────────────────────────────────────
@@ -199,7 +250,12 @@ export class AmaranService {
       const fixtureRes = await this.sendRequest('get_fixture_list', undefined, {});
       if (fixtureRes.code === 0 && Array.isArray(fixtureRes.data)) {
         this._fixtures = (fixtureRes.data as Array<{ id: string; name: string; node_id: string }>)
-          .map(f => ({ id: f.id, name: f.name, nodeId: f.node_id }));
+          .map(f => ({
+            id:           f.id,
+            name:         f.name,
+            nodeId:       f.node_id,
+            capabilities: detectFixtureCapabilities(f.name),
+          }));
       }
 
       // Pull state for ALL discovered fixtures in parallel
@@ -373,10 +429,13 @@ export class AmaranService {
     this.emitStatus();
   }
 
-  /** kelvin: typically 2500–7500; gm: 0–200 (100 = neutral) */
+  /** kelvin: clamped to the fixture's actual CCT range; gm: 0–200 (100 = neutral) */
   async setCCT(kelvin: number, gm = 100, nodeId?: string): Promise<void> {
-    const id  = this.resolveNodeId(nodeId);
-    const cct = Math.max(2500, Math.min(7500, Math.round(kelvin)));
+    const id      = this.resolveNodeId(nodeId);
+    const fixture = this._fixtures.find(f => f.nodeId === id);
+    const cctMin  = fixture?.capabilities.cctMin ?? 2500;
+    const cctMax  = fixture?.capabilities.cctMax ?? 7500;
+    const cct = Math.max(cctMin, Math.min(cctMax, Math.round(kelvin)));
     await this.sendRequest('set_cct', id, { cct, gm });
     const state = this._states[id] ?? defaultFixtureState();
     state.cct  = cct;
@@ -409,6 +468,11 @@ export class AmaranService {
     } else {
       await this.discoverAndRefresh();
     }
+  }
+
+  /** Re-runs fixture discovery (get_fixture_list) then pulls state for all found fixtures. */
+  async rediscover(): Promise<void> {
+    await this.discoverAndRefresh();
   }
 
   // ── Socket.io broadcast ─────────────────────────────────────────────────────
