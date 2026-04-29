@@ -14,7 +14,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { getProjectStore } from '@/lib/services/container';
+import { getProjectStore, getIo } from '@/lib/services/container';
 import { readRegistry, getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getActivityMonitorService } from '@/lib/services/activity-monitor-service';
 
@@ -105,8 +105,19 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
+// Comment events that should trigger a comment-list refresh in the UI.
+// All five are registered via POST /api/admin/frameio/webhooks.
+const COMMENT_REFRESH_EVENTS = new Set([
+  'comment.created',
+  'comment.updated',
+  'comment.completed',
+  'comment.uncompleted',
+  'comment.deleted',
+]);
+
 function handleEvent(payload: FrameIoWebhookPayload): void {
-  if (payload.type !== 'comment.created') return;
+  const isCommentEvent = COMMENT_REFRESH_EVENTS.has(payload.type);
+  if (!isCommentEvent) return;
 
   const { data } = payload;
   const fileId   = data.file_id;
@@ -121,13 +132,25 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
     return;
   }
 
-  // Increment comment count for both top-level comments and replies.
-  const currentAsset = getAsset(tracked.project_id, tracked.asset_id);
-  if (currentAsset) {
-    patchAsset(tracked.project_id, tracked.asset_id, {
-      frameio: { commentCount: (currentAsset.frameio.commentCount ?? 0) + 1 },
-    });
+  // Push a real-time refresh signal to any browser viewing this asset so
+  // theater mode and the detail panel update without polling.
+  getIo()?.emit('frameio:comments:refresh', {
+    projectId: tracked.project_id,
+    assetId:   tracked.asset_id,
+  });
+
+  // Only comment.created affects the count; the others don't add new comments.
+  if (payload.type === 'comment.created') {
+    const currentAsset = getAsset(tracked.project_id, tracked.asset_id);
+    if (currentAsset) {
+      patchAsset(tracked.project_id, tracked.asset_id, {
+        frameio: { commentCount: (currentAsset.frameio.commentCount ?? 0) + 1 },
+      });
+    }
   }
+
+  // Only record activity for comment.created events (not edits/completions/deletions).
+  if (payload.type !== 'comment.created') return;
 
   const svc = getActivityMonitorService();
   if (!svc) {

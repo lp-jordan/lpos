@@ -43,22 +43,20 @@ export function VideoTheaterMode({
   const commentInputRef = useRef<HTMLInputElement>(null);
   const hideTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [playing,          setPlaying]         = useState(false);
-  const [currentTime,      setCurrentTime]     = useState(0);
-  const [duration,         setDuration]        = useState(0);
-  const [muted,            setMuted]           = useState(false);
-  const [controlsVisible,  setControlsVisible] = useState(true);
-  const [commentMode,      setCommentMode]     = useState(false);
-  const [commentTime,      setCommentTime]     = useState(0);
-  const [commentDuration,  setCommentDuration] = useState<number | null>(null);
-  const [commentText,      setCommentText]     = useState('');
-  const [commentPosting,   setCommentPosting]  = useState(false);
-  const [commentError,     setCommentError]    = useState<string | null>(null);
-  const [panelOpen,        setPanelOpen]       = useState(comments.length > 0);
-  const [togglingId,       setTogglingId]      = useState<string | null>(null);
-  const [replyingToId,     setReplyingToId]    = useState<string | null>(null);
-  const [replyText,        setReplyText]       = useState('');
-  const [replyPosting,     setReplyPosting]    = useState(false);
+  const [playing,         setPlaying]        = useState(false);
+  const [currentTime,     setCurrentTime]    = useState(0);
+  const [duration,        setDuration]       = useState(0);
+  const [muted,           setMuted]          = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [commentTime,     setCommentTime]    = useState(0);
+  const [commentText,     setCommentText]    = useState('');
+  const [commentPosting,  setCommentPosting] = useState(false);
+  const [commentError,    setCommentError]   = useState<string | null>(null);
+  const [panelOpen,       setPanelOpen]      = useState(!!frameioAssetId || comments.length > 0);
+  const [togglingId,      setTogglingId]     = useState<string | null>(null);
+  const [replyingToId,    setReplyingToId]   = useState<string | null>(null);
+  const [replyText,       setReplyText]      = useState('');
+  const [replyPosting,    setReplyPosting]   = useState(false);
 
   const scheduleHide = useCallback(() => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -67,33 +65,23 @@ export function VideoTheaterMode({
 
   const showControls = useCallback(() => {
     setControlsVisible(true);
-    if (!commentMode) scheduleHide();
-  }, [commentMode, scheduleHide]);
+    scheduleHide();
+  }, [scheduleHide]);
 
   useEffect(() => {
     scheduleHide();
     return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
   }, [scheduleHide]);
 
-  useEffect(() => {
-    if (commentMode) {
-      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-      setControlsVisible(true);
-      setTimeout(() => commentInputRef.current?.focus(), 50);
-    } else {
-      scheduleHide();
-    }
-  }, [commentMode, scheduleHide]);
-
   // Keyboard shortcuts
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        if (commentMode) { setCommentMode(false); setCommentText(''); setCommentDuration(null); }
-        else onClose();
+        onClose();
         return;
       }
-      if (e.key === ' ' && !commentMode && document.activeElement?.tagName !== 'INPUT') {
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (e.key === ' ' && tag !== 'INPUT' && tag !== 'TEXTAREA') {
         e.preventDefault();
         togglePlay();
       }
@@ -101,7 +89,7 @@ export function VideoTheaterMode({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commentMode, onClose]);
+  }, [onClose]);
 
   // External seek — fired from MediaDetailPanel when a comment is clicked
   useEffect(() => {
@@ -110,7 +98,6 @@ export function VideoTheaterMode({
     if (!v) return;
     v.currentTime = seekTarget;
     void v.play();
-    setCommentMode(false);
     onSeekHandled?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekTarget]);
@@ -122,19 +109,10 @@ export function VideoTheaterMode({
   }
 
   function handleVideoClick() {
-    if (!frameioAssetId) { togglePlay(); return; }
-    const v = videoRef.current;
-    if (!v) return;
-    v.pause();
-    setCommentTime(v.currentTime);
-    setCommentDuration(null);
-    setCommentText('');
-    setCommentError(null);
-    setCommentMode(true);
+    togglePlay();
   }
 
   function handleScrubClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (commentMode) return;
     const el = scrubRef.current;
     const v  = videoRef.current;
     if (!el || !v || !duration) return;
@@ -143,31 +121,11 @@ export function VideoTheaterMode({
     v.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * duration;
   }
 
-  function handleDurationDragStart(e: React.MouseEvent) {
-    e.stopPropagation();
-    e.preventDefault();
-    function onMove(ev: MouseEvent) {
-      const el = scrubRef.current;
-      if (!el || !duration) return;
-      const rect    = el.getBoundingClientRect();
-      const frac    = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-      const raw     = frac * duration - commentTime;
-      setCommentDuration(raw >= 0.5 ? raw : null);
-    }
-    function onUp() {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }
-
   function seekTo(ts: number) {
     const v = videoRef.current;
     if (!v) return;
     v.currentTime = ts;
     void v.play();
-    setCommentMode(false);
   }
 
   async function handlePostComment() {
@@ -183,7 +141,6 @@ export function VideoTheaterMode({
           body:    JSON.stringify({
             text:      commentText.trim(),
             timestamp: commentTime,
-            ...(commentDuration !== null ? { duration: Math.round(commentDuration) } : {}),
           }),
         },
       );
@@ -191,9 +148,8 @@ export function VideoTheaterMode({
       if (!res.ok) { setCommentError(data.error ?? 'Failed to post'); return; }
       if (data.comment) {
         onCommentPosted(data.comment);
-        setCommentMode(false);
         setCommentText('');
-        setCommentDuration(null);
+        setCommentError(null);
       }
     } catch {
       setCommentError('Network error');
@@ -250,11 +206,6 @@ export function VideoTheaterMode({
     return 0;
   });
 
-  const pendingLeft  = duration > 0 ? (commentTime / duration) * 100 : 0;
-  const pendingWidth = duration > 0 && commentDuration !== null
-    ? (commentDuration / duration) * 100
-    : 0;
-
   return (
     <div
       className="vt-backdrop"
@@ -266,10 +217,7 @@ export function VideoTheaterMode({
 
         {/* ── Left: video + controls ── */}
         <div className="vt-container">
-          <div
-            className={`vt-video-area${frameioAssetId ? ' vt-video-area--commentable' : ''}`}
-            onClick={handleVideoClick}
-          >
+          <div className="vt-video-area" onClick={handleVideoClick}>
             <video
               ref={videoRef}
               className="vt-video"
@@ -283,9 +231,6 @@ export function VideoTheaterMode({
                 void videoRef.current?.play();
               }}
             />
-            {frameioAssetId && !commentMode && (
-              <div className="vt-click-hint">Click anywhere to leave a timed comment</div>
-            )}
           </div>
 
           <div className={`vt-bottom${controlsVisible ? ' vt-bottom--visible' : ''}`}>
@@ -326,74 +271,41 @@ export function VideoTheaterMode({
                     />
                   );
                 })}
-                {commentMode && duration > 0 && (
-                  <div
-                    className="vt-scrub-pending"
-                    style={{ left: `${pendingLeft}%`, width: pendingWidth > 0 ? `${pendingWidth}%` : undefined }}
-                  >
-                    <div className="vt-scrub-drag-handle" onMouseDown={handleDurationDragStart} title="Drag to set range end" />
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* Controls / comment bar */}
-            {commentMode ? (
-              <div className="vt-comment-bar">
-                <span className="vt-comment-ts">
-                  @ {formatTimecode(commentTime)}
-                  {commentDuration !== null && <> → {formatTimecode(commentTime + commentDuration)}</>}
-                </span>
-                <input
-                  ref={commentInputRef}
-                  className="vt-comment-input"
-                  placeholder="Add a timed comment…"
-                  value={commentText}
-                  onChange={e => setCommentText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handlePostComment(); }
-                    if (e.key === 'Escape') { setCommentMode(false); setCommentText(''); setCommentDuration(null); }
-                  }}
-                />
-                {commentError && <span className="vt-comment-err">{commentError}</span>}
-                <button type="button" className="vt-ctrl-btn" onClick={() => { setCommentMode(false); setCommentText(''); setCommentDuration(null); }}>Cancel</button>
-                <button type="button" className="vt-ctrl-btn vt-ctrl-btn--post" onClick={() => void handlePostComment()} disabled={commentPosting || !commentText.trim()}>
-                  {commentPosting ? '…' : 'Post to Frame.io'}
-                </button>
-              </div>
-            ) : (
-              <div className="vt-controls">
-                <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); togglePlay(); }} aria-label={playing ? 'Pause' : 'Play'}>
-                  {playing ? (
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                  ) : (
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  )}
-                </button>
-                <span className="vt-time">{fmt(currentTime)} / {fmt(duration)}</span>
-                <div className="vt-spacer" />
-                {timedComments.length > 0 && (
-                  <button
-                    type="button"
-                    className={`vt-ctrl-btn vt-notes-btn${panelOpen ? ' vt-notes-btn--active' : ''}`}
-                    onClick={e => { e.stopPropagation(); setPanelOpen(o => !o); }}
-                    title={panelOpen ? 'Hide comments' : 'Show comments'}
-                  >
-                    {timedComments.length} comment{timedComments.length !== 1 ? 's' : ''}
-                  </button>
+            {/* Controls */}
+            <div className="vt-controls">
+              <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); togglePlay(); }} aria-label={playing ? 'Pause' : 'Play'}>
+                {playing ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 )}
-                <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); if (videoRef.current) { videoRef.current.muted = !muted; setMuted(m => !m); } }} aria-label={muted ? 'Unmute' : 'Mute'}>
-                  {muted ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
-                  )}
+              </button>
+              <span className="vt-time">{fmt(currentTime)} / {fmt(duration)}</span>
+              <div className="vt-spacer" />
+              {frameioAssetId && (
+                <button
+                  type="button"
+                  className={`vt-ctrl-btn vt-notes-btn${panelOpen ? ' vt-notes-btn--active' : ''}`}
+                  onClick={e => { e.stopPropagation(); setPanelOpen(o => !o); }}
+                  title={panelOpen ? 'Hide comments' : 'Show comments'}
+                >
+                  {comments.length > 0 ? `${comments.length} comment${comments.length !== 1 ? 's' : ''}` : 'Comments'}
                 </button>
-                <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); onClose(); }} aria-label="Exit theater" title="Exit theater (Esc)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16v3a2 2 0 002 2h3"/></svg>
-                </button>
-              </div>
-            )}
+              )}
+              <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); if (videoRef.current) { videoRef.current.muted = !muted; setMuted(m => !m); } }} aria-label={muted ? 'Unmute' : 'Mute'}>
+                {muted ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+                )}
+              </button>
+              <button type="button" className="vt-ctrl-btn" onClick={e => { e.stopPropagation(); onClose(); }} aria-label="Exit theater" title="Exit theater (Esc)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16v3a2 2 0 002 2h3"/></svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -432,9 +344,9 @@ export function VideoTheaterMode({
                 {fmtCreatedAt(c.createdAt) && <span className="vt-cp-date">{fmtCreatedAt(c.createdAt)}</span>}
 
                 {/* Replies */}
-                {c.replies.length > 0 && (
+                {(c.replies ?? []).length > 0 && (
                   <div className="vt-cp-replies">
-                    {c.replies.map(r => (
+                    {(c.replies ?? []).map(r => (
                       <div key={r.id} className="vt-cp-reply">
                         <span className="vt-cp-reply-author">{r.authorName || 'Frame.io'}</span>
                         <p className="vt-cp-text">{r.text}</p>
@@ -472,6 +384,47 @@ export function VideoTheaterMode({
               </div>
             ))}
           </div>
+
+          {/* ── Compose footer ── */}
+          {frameioAssetId && (
+            <div className="vt-cp-compose">
+              <div className="vt-cp-compose-ts">
+                @ {formatTimecode(commentTime)}
+              </div>
+              <div className="vt-cp-compose-row">
+                <input
+                  ref={commentInputRef}
+                  className="vt-cp-compose-input"
+                  placeholder="Add a timed comment…"
+                  value={commentText}
+                  onFocus={() => {
+                    const v = videoRef.current;
+                    if (!v) return;
+                    // Round to nearest NDF frame boundary (real seconds → frame → NDF seconds)
+                    setCommentTime(Math.round(v.currentTime * 24000 / 1001) / 24);
+                    if (!v.paused) v.pause();
+                  }}
+                  onChange={e => setCommentText(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handlePostComment(); }
+                    if (e.key === 'Escape') { setCommentText(''); setCommentError(null); (e.target as HTMLInputElement).blur(); }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="vt-cp-compose-send"
+                  onClick={() => void handlePostComment()}
+                  disabled={commentPosting || !commentText.trim()}
+                  aria-label="Post comment"
+                >
+                  {commentPosting ? '…' : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  )}
+                </button>
+              </div>
+              {commentError && <span className="vt-comment-err">{commentError}</span>}
+            </div>
+          )}
         </aside>
 
       </div>

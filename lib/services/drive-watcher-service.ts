@@ -35,6 +35,7 @@ import {
   getCachedProjectFolders,
   getCachedRootFolderId,
   getClientFolderIdMap,
+  resolveAssetsFolder,
 } from './drive-folder-service';
 import {
   upsertChannel,
@@ -79,6 +80,14 @@ export class DriveWatcherService {
   private driveId:      string;
   private webhookUrl:   string;
   private webhookToken: string;
+  // Serialises scan + webhook writes so they never overlap on the DB
+  private _writeQueue:  Promise<void> = Promise.resolve();
+
+  private withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this._writeQueue.then(fn);
+    this._writeQueue = result.then(() => {}, () => {});
+    return result;
+  }
 
   constructor(private io: SocketIOServer) {
     const driveId = process.env.GOOGLE_DRIVE_SHARED_DRIVE_ID?.trim();
@@ -144,38 +153,40 @@ export class DriveWatcherService {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
-  async processIncomingChanges(): Promise<void> {
-    const channel = getActiveChannel(this.driveId);
-    if (!channel?.pageToken) {
-      console.warn('[drive-watcher] no active channel or page token');
-      return;
-    }
-
-    try {
-      const { changes, newPageToken } = await getChanges(channel.pageToken, this.driveId);
-      updateChannelPageToken(channel.channelId, newPageToken);
-
-      for (const change of changes) {
-        if (change.removed || change.file?.trashed) continue;
-        if (!change.fileId || !change.file) continue;
-
-        if (change.file.mimeType === FOLDER_MIME) {
-          await this.processFolder(change.fileId, change.file.name ?? '');
-        } else {
-          await this.processFile(
-            change.fileId,
-            change.file.name ?? '',
-            change.file.mimeType ?? '',
-            change.file.size ? Number(change.file.size) : null,
-            change.file.modifiedTime ?? null,
-            change.file.webViewLink ?? null,
-            change.file.parents ?? [],
-          );
-        }
+  processIncomingChanges(): Promise<void> {
+    return this.withWriteLock(async () => {
+      const channel = getActiveChannel(this.driveId);
+      if (!channel?.pageToken) {
+        console.warn('[drive-watcher] no active channel or page token');
+        return;
       }
-    } catch (err) {
-      console.error('[drive-watcher] error processing changes:', err);
-    }
+
+      try {
+        const { changes, newPageToken } = await getChanges(channel.pageToken, this.driveId);
+        updateChannelPageToken(channel.channelId, newPageToken);
+
+        for (const change of changes) {
+          if (change.removed || change.file?.trashed) continue;
+          if (!change.fileId || !change.file) continue;
+
+          if (change.file.mimeType === FOLDER_MIME) {
+            await this.processFolder(change.fileId, change.file.name ?? '');
+          } else {
+            await this.processFile(
+              change.fileId,
+              change.file.name ?? '',
+              change.file.mimeType ?? '',
+              change.file.size ? Number(change.file.size) : null,
+              change.file.modifiedTime ?? null,
+              change.file.webViewLink ?? null,
+              change.file.parents ?? [],
+            );
+          }
+        }
+      } catch (err) {
+        console.error('[drive-watcher] error processing changes:', err);
+      }
+    });
   }
 
   // ── Asset scan ──────────────────────────────────────────────────────────────
@@ -190,16 +201,16 @@ export class DriveWatcherService {
   async scanProjectAssets(projectId: string): Promise<void> {
     const project = getProjectStore().getAll().find(p => p.projectId === projectId);
     if (!project) return;
-    const folders = getCachedProjectFolders(project.name, project.clientName);
-    if (!folders?.assets) return;
+    const assetsId = resolveAssetsFolder(project.name, project.clientName);
+    if (!assetsId) return;
 
     try {
       // Pass 1 — collect every Drive ID currently in the assets tree
       const liveIds = new Set<string>();
-      await this.collectIds(folders.assets, liveIds);
+      await this.collectIds(assetsId, liveIds);
 
       // Pass 2 — process additions/updates (existing logic handles recursion + DB upserts)
-      const children = await listChildren(folders.assets, this.driveId);
+      const children = await listChildren(assetsId, this.driveId);
       for (const child of children) {
         if (!child.id || !child.name) continue;
         if (child.mimeType === FOLDER_MIME) {
@@ -210,7 +221,7 @@ export class DriveWatcherService {
             child.size ? Number(child.size) : null,
             child.modifiedTime ?? null,
             child.webViewLink ?? null,
-            [folders.assets],
+            [assetsId],
           );
         }
       }
@@ -245,40 +256,42 @@ export class DriveWatcherService {
     }
   }
 
-  async scanAllProjectAssets(): Promise<number> {
-    const projects = getProjectStore().getAll();
-    let total = 0;
+  scanAllProjectAssets(): Promise<number> {
+    return this.withWriteLock(async () => {
+      const projects = getProjectStore().getAll();
+      let total = 0;
 
-    for (const project of projects) {
-      const folders = getCachedProjectFolders(project.name, project.clientName);
-      if (!folders?.assets) continue;
+      for (const project of projects) {
+        const assetsId = resolveAssetsFolder(project.name, project.clientName);
+        if (!assetsId) continue;
 
-      try {
-        const children = await listChildren(folders.assets, this.driveId);
-        for (const child of children) {
-          if (!child.id || !child.name) continue;
-          if (child.mimeType === FOLDER_MIME) {
-            await this.processFolder(child.id, child.name);
-          } else {
-            await this.processFile(
-              child.id,
-              child.name,
-              child.mimeType ?? '',
-              child.size ? Number(child.size) : null,
-              child.modifiedTime ?? null,
-              child.webViewLink ?? null,
-              [folders.assets],
-            );
+        try {
+          const children = await listChildren(assetsId, this.driveId);
+          for (const child of children) {
+            if (!child.id || !child.name) continue;
+            if (child.mimeType === FOLDER_MIME) {
+              await this.processFolder(child.id, child.name);
+            } else {
+              await this.processFile(
+                child.id,
+                child.name,
+                child.mimeType ?? '',
+                child.size ? Number(child.size) : null,
+                child.modifiedTime ?? null,
+                child.webViewLink ?? null,
+                [assetsId],
+              );
+            }
+            total++;
           }
-          total++;
+        } catch (err) {
+          console.warn(`[drive-watcher] scan failed for "${project.name}":`, err);
         }
-      } catch (err) {
-        console.warn(`[drive-watcher] scan failed for "${project.name}":`, err);
       }
-    }
 
-    console.log(`[drive-watcher] scan complete — ${total} items processed`);
-    return total;
+      console.log(`[drive-watcher] scan complete — ${total} items processed`);
+      return total;
+    });
   }
 
   // ── Channel management ──────────────────────────────────────────────────────
@@ -602,9 +615,10 @@ export class DriveWatcherService {
       const typeMap: Record<string, FolderType> = {
         [cached.scripts]:     'scripts',
         [cached.transcripts]: 'transcripts',
-        [cached.assets]:      'assets',
         [cached.workbooks]:   'workbooks',
       };
+      const assetsId = resolveAssetsFolder(project.name, project.clientName);
+      if (assetsId) typeMap[assetsId] = 'assets';
 
       const folderType = typeMap[folderId];
       if (folderType) {

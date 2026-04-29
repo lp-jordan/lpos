@@ -180,8 +180,14 @@ function FixtureRow({
   const recentlyTouched = () => Date.now() - lastTouchedAt.current < 2000;
 
   useEffect(() => {
+    // Mode is set by hardware commands (presets, CCT/HSI switching) — always sync
+    // it so the color wheel activates/deactivates immediately even if the user was
+    // recently dragging a slider.
+    if (state?.mode != null) setActiveMode(state.mode);
+
+    // Slider values are guarded: suppress server-push blips for 2 s after any
+    // user interaction so mid-drag updates don't snap the slider back.
     if (recentlyTouched()) return;
-    if (state?.mode       != null) setActiveMode(state.mode);
     if (state?.brightness != null) setIntensity(state.brightness);
     if (state?.cct        != null) setCct(Math.max(cctMin, Math.min(cctMax, state.cct)));
     if (state?.hue        != null) setHue(state.hue);
@@ -437,7 +443,7 @@ function FixtureSection({
 export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const {
     status, loading, error, arrangement,
-    sendCommand, connect, disconnect, rediscover,
+    sendCommand, syncStatus, connect, disconnect, rediscover,
     renameFixture, moveFixtureToGroup, reorderGroup,
   } = useLighting();
 
@@ -513,6 +519,11 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const connected = status?.connected ?? false;
   const fixtures  = status?.fixtures  ?? [];
 
+  // Keep fixture sections mounted while we have data, even during a brief
+  // reconnect gap. Hiding them resets scroll position; the service preserves
+  // fixture state across disconnects so we can safely keep them visible.
+  const showSections = connected || fixtures.length > 0;
+
   // Fixtures not yet assigned to any group
   const ungrouped = fixtures.filter((f) => !arrangement.fixtureGroups[f.nodeId]);
 
@@ -533,7 +544,13 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         <PresetsModal
           presets={presets}
           applying={applying}
-          onApply={(id) => void applyPreset(id)}
+          onApply={(id) => {
+            void applyPreset(id).then(() => {
+              // Pull true hardware state after the sequential apply finishes.
+              // Give the last fixture's wake delay time to settle before syncing.
+              setTimeout(() => void syncStatus(), 1500);
+            });
+          }}
           onAdd={() => setNameDialog(true)}
           onEdit={(p) => { setEditingPreset({ id: p.id, name: p.name }); setPresetsOpen(false); }}
           onDelete={(p) => void deletePreset(p.id)}
@@ -549,6 +566,11 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
           onCancel={() => setNameDialog(false)}
         />
       )}
+
+      {/* ═══ Panel header ═══ */}
+      <div className="sl-atem-header">
+        <span className="sl-atem-title">Lighting Control</span>
+      </div>
 
       {/* ═══ Amaran — connection header ═══ */}
       <div className="lp-lighting-section">
@@ -636,12 +658,12 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       {/* ═══ Presets trigger ═══ */}
-      {connected && (
+      {showSections && (
         <PresetsTrigger onClick={() => setPresetsOpen(true)} />
       )}
 
       {/* ═══ Ungrouped (unassigned) fixtures ═══ */}
-      {connected && ungrouped.length > 0 && (
+      {showSections && ungrouped.length > 0 && (
         <div className="lp-lighting-section">
           <div className="lp-lighting-section-header">
             <div className="lp-lighting-section-header-left">Unassigned</div>
@@ -675,7 +697,7 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       {/* ═══ Named sections ═══ */}
-      {connected && AMARAN_GROUPS.map((group) => (
+      {showSections && AMARAN_GROUPS.map((group) => (
         <FixtureSection
           key={group}
           group={group}

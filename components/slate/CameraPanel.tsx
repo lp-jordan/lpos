@@ -1,457 +1,239 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { CameraStatus, DiscoveredCamera } from '@/lib/services/camera-control-service';
-import type { CameraConfig } from '@/lib/store/studio-config-store';
+import type { ClientAudioMonitorState } from '@/hooks/useSlate';
+import { SonyCameraPanel } from './SonyCameraPanel';
 
-const POLL_INTERVAL_MS = 2_500;
+type AtemDevice = { index: string; label: string };
+type CameraSource = 'atem' | 'sony';
 
-function formatRemaining(seconds: number | null): string {
-  if (seconds === null) return '—';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+interface Props {
+  audioMonitor: ClientAudioMonitorState;
+  onSetAudioMuted: (muted: boolean) => void;
 }
 
-function friendlyWb(mode: string | null): string {
-  if (!mode) return '—';
-  const map: Record<string, string> = {
-    Auto: 'Auto',
-    Daylight: 'Daylight',
-    Shade: 'Shade',
-    Cloudy: 'Cloudy',
-    Incandescent: 'Tungsten',
-    Fluorescent: 'Fluorescent',
-    Flash: 'Flash',
-    Manual1: 'Custom 1',
-    Manual2: 'Custom 2',
-    Manual3: 'Custom 3',
-    Color_Temperature: 'Color Temp',
-  };
-  return map[mode] ?? mode;
-}
+export function CameraPanel({ audioMonitor, onSetAudioMuted }: Props) {
+  const [source, setSource] = useState<CameraSource>('atem');
 
-function formatConnectionError(message: string): string {
-  return message
-    .replace('fetch failed', 'Could not reach camera')
-    .replace('Camera host not configured', 'Scan and select a camera first');
-}
-
-function cameraLabel(camera: DiscoveredCamera): string {
-  const name = camera.name?.trim() || camera.model.toUpperCase();
-  return `${name} (${camera.host})`;
-}
-
-export function CameraPanel() {
-  const [availableCameras, setAvailableCameras] = useState<DiscoveredCamera[]>([]);
-  const [selectedHost, setSelectedHost] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [fingerprint, setFingerprint] = useState('');
-  const [scanning, setScanning] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [connError, setConnError] = useState<string | null>(null);
-
-  const [status, setStatus] = useState<CameraStatus | null>(null);
-  const [wbOptions, setWbOptions] = useState<string[]>([]);
-  const [isoOptions, setIsoOptions] = useState<string[]>([]);
-  const [actionErr, setActionErr] = useState<string | null>(null);
-
-  const [liveviewSrc, setLiveviewSrc] = useState<string | null>(null);
+  // ── ATEM feed state ────────────────────────────────────────────────────────
+  const [showSettings, setShowSettings] = useState(false);
+  const [devices, setDevices] = useState<AtemDevice[]>([]);
+  const [deviceIndex, setDeviceIndex] = useState('0');
+  const [savedIndex, setSavedIndex] = useState('0');
+  const [loadingDevices, setLoadingDevices] = useState(false);
   const [feedError, setFeedError] = useState(false);
+  const [feedKey, setFeedKey] = useState(0);
 
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ── Fullscreen ─────────────────────────────────────────────────────────────
+  // iOS Safari doesn't support the Fullscreen API on arbitrary elements.
+  // We detect support and fall back to a CSS fixed overlay so iPad works too.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const nativeFs = typeof document !== 'undefined' && !!document.fullscreenEnabled;
 
-  const selectedCamera = availableCameras.find((camera) => camera.host === selectedHost) ?? null;
+  useEffect(() => {
+    if (!nativeFs) return;
+    function onFsChange() { setIsFullscreen(!!document.fullscreenElement); }
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, [nativeFs]);
 
-  const scanCameras = useCallback(async (preferredHost?: string) => {
-    setScanning(true);
-    setConnError(null);
+  function toggleFullscreen() {
+    if (nativeFs) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        panelRef.current?.requestFullscreen();
+      }
+    } else {
+      setIsFullscreen((v) => !v);
+    }
+  }
+
+  // ── Device config ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/api/studio/camera/config')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { camera?: { atemVideoDeviceIndex?: string } } | null) => {
+        const idx = (data?.camera?.atemVideoDeviceIndex ?? '').trim() || '0';
+        setDeviceIndex(idx);
+        setSavedIndex(idx);
+      })
+      .catch(() => {});
+  }, []);
+
+  const loadDevices = useCallback(async () => {
+    setLoadingDevices(true);
     try {
-      const res = await fetch('/api/studio/camera/discover');
-      const body = await res.json() as { cameras?: DiscoveredCamera[]; error?: string };
-      if (!res.ok) throw new Error(body.error ?? 'Camera scan failed');
-      const cameras = body.cameras ?? [];
-      setAvailableCameras(cameras);
-      setSelectedHost((current) => {
-        if (preferredHost && cameras.some((camera) => camera.host === preferredHost)) return preferredHost;
-        if (current && cameras.some((camera) => camera.host === current)) return current;
-        return cameras[0]?.host ?? '';
-      });
-    } catch (err) {
-      setConnError(formatConnectionError((err as Error).message));
-      setAvailableCameras([]);
+      const res = await fetch('/api/studio/camera/atem-devices');
+      const data = await res.json() as { devices?: AtemDevice[] };
+      setDevices(data.devices ?? []);
+    } catch {
+      setDevices([]);
     } finally {
-      setScanning(false);
+      setLoadingDevices(false);
     }
   }, []);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/studio/camera/config');
-        if (!res.ok) return;
-        const data = await res.json() as { camera?: Partial<CameraConfig> };
-        const camera = data.camera;
-        if (!camera) return;
-        if (camera.host ?? camera.ip) setSelectedHost((camera.host ?? camera.ip ?? '') as string);
-        if (camera.username) setUsername(camera.username);
-        if (camera.password) setPassword(camera.password);
-        if (camera.fingerprint) setFingerprint(camera.fingerprint);
-        await scanCameras((camera.host ?? camera.ip ?? '') as string | undefined);
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, [scanCameras]);
-
-  const rpc = useCallback(async (method: string, params?: unknown[]) => {
-    const res = await fetch('/api/studio/camera/rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        method,
-        params,
-        host: selectedHost,
-      }),
-    });
-    return res.json() as Promise<Record<string, unknown>>;
-  }, [selectedHost]);
-
-  const persistConfig = useCallback(async () => {
+  async function handleApply() {
     await fetch('/api/studio/camera/config', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        camera: {
-          provider: 'sony-sdk',
-          model: selectedCamera?.model ?? 'fx6',
-          host: selectedHost,
-          ip: selectedHost,
-          port: 10000,
-          username,
-          password,
-          fingerprint,
-        },
-      }),
+      body: JSON.stringify({ camera: { atemVideoDeviceIndex: deviceIndex } }),
     });
-  }, [selectedCamera?.model, selectedHost, username, password, fingerprint]);
-
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await rpc('getEvent');
-      if (res.result) setStatus(res.result as CameraStatus);
-    } catch {
-      /* ignore poll failures */
-    }
-  }, [rpc]);
-
-  function startPolling() {
-    stopPolling();
-    void pollStatus();
-    pollTimer.current = setInterval(() => void pollStatus(), POLL_INTERVAL_MS);
+    setSavedIndex(deviceIndex);
+    setFeedError(false);
+    setFeedKey((k) => k + 1);
+    setShowSettings(false);
   }
-
-  function stopPolling() {
-    if (pollTimer.current) {
-      clearInterval(pollTimer.current);
-      pollTimer.current = null;
-    }
-  }
-
-  useEffect(() => () => stopPolling(), []);
-
-  async function handleConnect() {
-    setConnecting(true);
-    setConnError(null);
-    setActionErr(null);
-
-    try {
-      await persistConfig();
-
-      const apiRes = await rpc('getAvailableApiList');
-      if (apiRes.error) throw new Error(String(apiRes.error));
-
-      const apis = (apiRes.result as string[] | undefined) ?? [];
-      const [wbRes, isoRes, statusRes] = await Promise.all([
-        apis.includes('getAvailableWhiteBalance') ? rpc('getAvailableWhiteBalance') : Promise.resolve(null),
-        apis.includes('getAvailableIsoSpeedRate') ? rpc('getAvailableIsoSpeedRate') : Promise.resolve(null),
-        rpc('getEvent'),
-      ]);
-
-      if (wbRes?.result) setWbOptions(wbRes.result as string[]);
-      if (isoRes?.result) setIsoOptions(isoRes.result as string[]);
-      if (statusRes.result) setStatus(statusRes.result as CameraStatus);
-
-      setConnected(true);
-      setFeedError(false);
-      setLiveviewSrc(`/api/studio/camera/liveview?host=${encodeURIComponent(selectedHost)}&t=${Date.now()}`);
-      startPolling();
-    } catch (err) {
-      setConnError(formatConnectionError((err as Error).message));
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  function handleDisconnect() {
-    stopPolling();
-    setConnected(false);
-    setLiveviewSrc(null);
-    setStatus(null);
-    setWbOptions([]);
-    setIsoOptions([]);
-  }
-
-  async function handleRecord(start: boolean) {
-    setActionErr(null);
-    try {
-      const res = await rpc(start ? 'startMovieRec' : 'stopMovieRec');
-      if (res.error) throw new Error(String(res.error));
-      await pollStatus();
-    } catch (err) {
-      setActionErr((err as Error).message);
-    }
-  }
-
-  async function handleSetWb(modeValue: string) {
-    try {
-      const res = await rpc('setWhiteBalance', [modeValue]);
-      if (res.error) throw new Error(String(res.error));
-      await pollStatus();
-    } catch (err) {
-      setActionErr((err as Error).message);
-    }
-  }
-
-  async function handleSetIso(isoValue: string) {
-    try {
-      const res = await rpc('setIsoSpeedRate', [isoValue]);
-      if (res.error) throw new Error(String(res.error));
-      await pollStatus();
-    } catch (err) {
-      setActionErr((err as Error).message);
-    }
-  }
-
-  const isRecording = status?.recording ?? false;
 
   return (
-    <div className="cam-panel">
-      <div className="cam-connect-bar">
-        <button
-          type="button"
-          className="cam-btn cam-btn--connect"
-          onClick={() => void scanCameras(selectedHost || undefined)}
-          disabled={scanning || connecting}
-        >
-          {scanning ? 'Scanning…' : 'Scan Cameras'}
-        </button>
-        <select
-          className="cam-ip-input"
-          value={selectedHost}
-          onChange={(e) => setSelectedHost(e.target.value)}
-          disabled={connected || connecting || scanning || availableCameras.length === 0}
-          aria-label="Detected Sony camera"
-        >
-          <option value="">
-            {availableCameras.length > 0 ? 'Select camera' : 'No cameras found yet'}
-          </option>
-          {availableCameras.map((camera) => (
-            <option key={`${camera.host}-${camera.id}`} value={camera.host}>
-              {cameraLabel(camera)}
-            </option>
-          ))}
-        </select>
-        {connected ? (
-          <button type="button" className="cam-btn cam-btn--disconnect" onClick={handleDisconnect}>
-            Disconnect
-          </button>
-        ) : (
+    <div className={`cam-panel${isFullscreen && !nativeFs ? ' cam-panel--overlay-fs' : ''}`} ref={panelRef}>
+      {/* ── Header ── */}
+      <div className="sl-atem-header">
+        <span className="sl-atem-title">Camera Monitoring</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+
+          {/* Audio monitor button (ATEM mode only) */}
+          {source === 'atem' && (
+            <button
+              type="button"
+              className={`cam-monitor-btn${!audioMonitor.locallyMuted && audioMonitor.phase !== 'blocked' ? ' cam-monitor-btn--live' : ''}`}
+              onClick={() => onSetAudioMuted(!audioMonitor.locallyMuted)}
+              disabled={audioMonitor.phase === 'no_source'}
+              title={audioMonitor.locallyMuted ? 'Unmute audio monitor' : 'Mute audio monitor'}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {audioMonitor.locallyMuted ? (
+                  <>
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" />
+                  </>
+                ) : (
+                  <>
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                  </>
+                )}
+              </svg>
+              Monitor
+            </button>
+          )}
+
+          {/* Fullscreen toggle */}
           <button
             type="button"
-            className="cam-btn cam-btn--connect"
-            onClick={() => void handleConnect()}
-            disabled={connecting || !selectedHost}
+            className="sl-gear-btn"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           >
-            {connecting ? 'Connecting…' : 'Connect'}
+            {isFullscreen ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+              </svg>
+            )}
           </button>
-        )}
-        <span className={`cam-status-dot${connected ? ' cam-status-dot--on' : ''}`} title={connected ? 'Connected' : 'Disconnected'} />
+
+          {/* Source toggle pill */}
+          <div className="cam-source-toggle">
+            <button
+              type="button"
+              className={`cam-source-toggle-btn${source === 'atem' ? ' cam-source-toggle-btn--active' : ''}`}
+              onClick={() => setSource('atem')}
+            >
+              ATEM
+            </button>
+            <button
+              type="button"
+              className={`cam-source-toggle-btn${source === 'sony' ? ' cam-source-toggle-btn--active' : ''}`}
+              onClick={() => setSource('sony')}
+            >
+              Sony
+            </button>
+          </div>
+
+          {/* Gear (ATEM mode only) */}
+          {source === 'atem' && (
+            <button
+              type="button"
+              className={`sl-gear-btn${showSettings ? ' sl-gear-btn--open' : ''}`}
+              title="Video source settings"
+              onClick={() => {
+                const next = !showSettings;
+                setShowSettings(next);
+                if (next) void loadDevices();
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
-      {selectedCamera && (
+      {/* ── ATEM content ── */}
+      {source === 'atem' && (
         <>
-          <div className="cam-settings-row cam-settings-row--auth">
-            <div className="cam-setting">
-              <span className="cam-setting-label">User</span>
-              <input
-                className="cam-select"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
-                disabled={connected || connecting}
-              />
+          {showSettings && (
+            <div className="cam-settings-row">
+              <div className="cam-setting" style={{ flex: 1 }}>
+                <span className="cam-setting-label">Source</span>
+                <select
+                  className="cam-select"
+                  value={deviceIndex}
+                  onChange={(e) => setDeviceIndex(e.target.value)}
+                  disabled={loadingDevices}
+                >
+                  {loadingDevices
+                    ? <option value="">Loading…</option>
+                    : devices.length === 0
+                      ? <option value="0">Device 0 (default)</option>
+                      : devices.map((d) => (
+                          <option key={d.index} value={d.index}>[{d.index}] {d.label}</option>
+                        ))
+                  }
+                </select>
+              </div>
+              <button type="button" className="cam-btn cam-btn--connect" onClick={() => void handleApply()}>
+                Apply
+              </button>
             </div>
-            <div className="cam-setting">
-              <span className="cam-setting-label">Pass</span>
-              <input
-                className="cam-select"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Camera password"
-                type="password"
-                disabled={connected || connecting}
+          )}
+
+          <div className="cam-monitor-wrap">
+            {!feedError ? (
+              <img
+                key={feedKey}
+                className="cam-monitor"
+                src={`/api/studio/camera/atem-liveview?t=${feedKey}`}
+                alt="ATEM liveview"
+                onError={() => setFeedError(true)}
               />
-            </div>
-          </div>
-
-          <div className="cam-setting cam-setting--stack">
-            <span className="cam-setting-label">Fingerprint</span>
-            <input
-              className="cam-select"
-              value={fingerprint}
-              onChange={(e) => setFingerprint(e.target.value)}
-              placeholder="Paste the camera fingerprint shown in Access Authentication"
-              disabled={connected || connecting}
-            />
-          </div>
-        </>
-      )}
-
-      <p className="cam-stat cam-stat--status">
-        {selectedCamera
-          ? `Selected ${selectedCamera.model.toUpperCase()} at ${selectedCamera.host}${selectedCamera.sshSupported ? ' with secure auth available.' : '.'}`
-          : 'Scan for Sony cameras on the network, then select one to connect.'}
-      </p>
-
-      {connError && <p className="cam-error">{connError}</p>}
-
-      <div className="cam-monitor-wrap">
-        {liveviewSrc && !feedError ? (
-          <img
-            className="cam-monitor"
-            src={liveviewSrc}
-            alt="Camera liveview"
-            onError={() => setFeedError(true)}
-          />
-        ) : (
-          <div className="cam-monitor-placeholder">
-            {connected && feedError ? (
-              <>
+            ) : (
+              <div className="cam-monitor-placeholder">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity=".4" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" />
                   <line x1="1" y1="1" x2="23" y2="23" />
                 </svg>
-                <span>Feed unavailable</span>
-                <button
-                  type="button"
-                  className="cam-btn cam-btn--sm"
-                  onClick={() => {
-                    setFeedError(false);
-                    setLiveviewSrc(`/api/studio/camera/liveview?host=${encodeURIComponent(selectedHost)}&t=${Date.now()}`);
-                  }}
-                >
+                <span>Feed unavailable — check the Cam Link is connected and device index is correct</span>
+                <button type="button" className="cam-btn cam-btn--sm"
+                  onClick={() => { setFeedError(false); setFeedKey((k) => k + 1); }}>
                   Retry
                 </button>
-              </>
-            ) : (
-              <>
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity=".3" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" />
-                </svg>
-                <span>{connected ? 'Starting feed…' : 'Scan and connect to a camera'}</span>
-              </>
+              </div>
             )}
           </div>
-        )}
-      </div>
-
-      <div className="cam-status-bar">
-        <span className={`cam-rec-indicator${isRecording ? ' cam-rec-indicator--on' : ''}`}>
-          ● {isRecording ? 'REC' : 'IDLE'}
-        </span>
-        {status?.batteryPercent !== null && (
-          <span className="cam-stat">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="7" width="18" height="11" rx="2" /><path d="M22 11v3" />
-            </svg>
-            {status?.batteryPercent ?? '—'}%
-          </span>
-        )}
-        {status?.remainingSeconds !== null && (
-          <span className="cam-stat">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-            </svg>
-            {formatRemaining(status?.remainingSeconds ?? null)}
-          </span>
-        )}
-        {status?.cameraStatus && status.cameraStatus !== 'IDLE' && (
-          <span className="cam-stat cam-stat--status">{status.cameraStatus}</span>
-        )}
-      </div>
-
-      <div className="cam-controls">
-        <button
-          type="button"
-          className={`cam-rec-btn${isRecording ? '' : ' cam-rec-btn--start'}`}
-          onClick={() => void handleRecord(!isRecording)}
-          disabled={!connected}
-        >
-          {isRecording ? (
-            <>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>
-              Stop Recording
-            </>
-          ) : (
-            <>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg>
-              Start Recording
-            </>
-          )}
-        </button>
-
-        {actionErr && <p className="cam-error cam-error--inline">{actionErr}</p>}
-      </div>
-
-      {connected && (wbOptions.length > 0 || isoOptions.length > 0) && (
-        <div className="cam-settings-row">
-          {wbOptions.length > 0 && (
-            <div className="cam-setting">
-              <span className="cam-setting-label">WB</span>
-              <select
-                className="cam-select"
-                value={status?.whiteBalance ?? ''}
-                onChange={(e) => void handleSetWb(e.target.value)}
-              >
-                <option value="" disabled>—</option>
-                {wbOptions.map((wb) => (
-                  <option key={wb} value={wb}>{friendlyWb(wb)}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {isoOptions.length > 0 && (
-            <div className="cam-setting">
-              <span className="cam-setting-label">ISO</span>
-              <select
-                className="cam-select"
-                value={status?.isoSpeedRate ?? ''}
-                onChange={(e) => void handleSetIso(e.target.value)}
-              >
-                <option value="" disabled>—</option>
-                {isoOptions.map((iso) => (
-                  <option key={iso} value={iso}>{iso}</option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
+        </>
       )}
+
+      {/* ── Sony content ── */}
+      {source === 'sony' && <SonyCameraPanel />}
     </div>
   );
 }

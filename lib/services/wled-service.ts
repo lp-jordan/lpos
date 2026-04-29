@@ -63,12 +63,13 @@ interface WledJsonResponse {
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 30_000; // client-side WledPanel polls at 15 s; server poll just keeps the status fresh
 
 export class WledService {
   private io:          SocketIOServer | null | undefined;
   private ip:          string = '';
   private pollTimer:   ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
   private effectCache: WledEffect[] = [];
   private presetCache: WledPreset[] = [];
 
@@ -138,7 +139,8 @@ export class WledService {
   }
 
   private async poll(): Promise<void> {
-    if (!this.ip) return;
+    if (!this.ip || this.pollInFlight) return;
+    this.pollInFlight = true;
     try {
       const res = await fetch(`http://${this.ip}/json`, { signal: AbortSignal.timeout(4_000) });
       if (!res.ok) { this.setUnreachable(); return; }
@@ -173,6 +175,8 @@ export class WledService {
       this.emitStatus();
     } catch {
       this.setUnreachable();
+    } finally {
+      this.pollInFlight = false;
     }
   }
 

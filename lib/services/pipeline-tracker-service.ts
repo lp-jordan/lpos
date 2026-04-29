@@ -35,6 +35,8 @@ const STALL_THRESHOLDS: Record<PipelineStageType, number> = {
   'transcript':         5 * 60_000,
   'upload:frameio':     2 * 60_000,
   'upload:leaderpass':  2 * 60_000,
+  'upload:sardius':    15 * 60_000, // FTP uploads of large files are slow — 15 min stall threshold
+  'upload:delivery':   30 * 60_000, // large video files uploaded to R2 — generous threshold
   'promotion':          5 * 60_000,
 };
 const PROCESSING_STALL_MS    = 10 * 60_000;
@@ -56,7 +58,7 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
   const active = stages.filter((s) => !isStageTerminal(s.status));
   if (active.length > 0) {
     // Return the highest-priority active stage label
-    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:leaderpass', 'promotion'] as PipelineStageType[]) {
+    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion'] as PipelineStageType[]) {
       const match = active.find((s) => s.type === type);
       if (match) {
         if (type === 'ingest') return 'ingesting';
@@ -66,6 +68,12 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
         }
         if (type === 'upload:leaderpass') {
           return match.status === 'processing' ? 'processing' : 'uploading_leaderpass';
+        }
+        if (type === 'upload:sardius') {
+          return match.status === 'processing' ? 'processing' : 'uploading_sardius';
+        }
+        if (type === 'upload:delivery') {
+          return match.status === 'processing' ? 'processing' : 'uploading_delivery';
         }
         if (type === 'promotion') return 'processing';
       }
@@ -239,7 +247,7 @@ export class PipelineTrackerService {
       if (pipelineId) {
         const entry = this.pipelines.get(pipelineId);
         if (entry) {
-          const stageType: PipelineStageType = job.provider === 'leaderpass' ? 'upload:leaderpass' : 'upload:frameio';
+          const stageType: PipelineStageType = job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio';
           // Don't add duplicate stage type for same job
           if (!entry.stages.some((s) => s.jobId === job.jobId)) {
             entry.stages.push(this.uploadToStage(job));
@@ -268,7 +276,7 @@ export class PipelineTrackerService {
         projectId: job.projectId,
         projectName,
         filename: job.filename,
-        overallStatus: 'uploading_frameio',
+        overallStatus: job.provider === 'delivery' ? 'uploading_delivery' : 'uploading_frameio',
         stages: [this.uploadToStage(job)],
         createdAt: job.queuedAt,
         updatedAt: job.updatedAt,
@@ -402,7 +410,7 @@ export class PipelineTrackerService {
 
   private uploadToStage(job: UploadJob): PipelineStage {
     return {
-      type: job.provider === 'leaderpass' ? 'upload:leaderpass' : 'upload:frameio',
+      type: job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio',
       jobId: job.jobId,
       status: job.status,
       progress: job.progress,
@@ -492,6 +500,8 @@ export class PipelineTrackerService {
               break;
             case 'upload:frameio':
             case 'upload:leaderpass':
+            case 'upload:sardius':
+            case 'upload:delivery':
               this.uploadService?.fail(stage.jobId, reason);
               break;
             case 'transcript':
@@ -690,7 +700,7 @@ export class PipelineTrackerService {
             projectId: job.projectId,
             projectName,
             filename: job.filename,
-            overallStatus: type === 'upload' ? 'uploading_frameio' : 'transcribing',
+            overallStatus: type === 'upload' ? ((job as UploadJob).provider === 'delivery' ? 'uploading_delivery' : 'uploading_frameio') : 'transcribing',
             stages: [stage],
             createdAt: job.queuedAt,
             updatedAt: job.updatedAt,

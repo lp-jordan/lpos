@@ -18,7 +18,7 @@ import { registerAsset, patchAsset, getAsset } from '@/lib/store/media-registry'
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
-import { probeDuration } from '@/lib/services/media-probe';
+import { probeDuration, extractThumbnail } from '@/lib/services/media-probe';
 import { getTranscripterService, getIngestQueueService } from '@/lib/services/container';
 
 function getIngestQueue() {
@@ -127,6 +127,9 @@ export async function finalizeUploadedAsset(input: FinalizeInput): Promise<Final
   probeDuration(stableDest).then((dur) => {
     if (dur != null) patchAsset(projectId, asset.assetId, { duration: dur });
   }).catch(() => {});
+
+  const thumbPath = path.join(mediaDir, `${asset.assetId}.thumb.jpg`);
+  extractThumbnail(stableDest, thumbPath).catch(() => {});
 
   if (jobId) ingestQueue?.complete(jobId);
 

@@ -190,6 +190,17 @@ export function getRuntimeDependencyReport(): RuntimeReport {
           : 'Cloudflare credentials are external. Configure them explicitly before stream publish flows.',
         paths: [],
       },
+      {
+        id: 'sardius',
+        label: 'Sardius FTP Credentials',
+        configured: Boolean(process.env.SARDIUS_FTP_HOST && process.env.SARDIUS_FTP_USER && process.env.SARDIUS_FTP_PASS),
+        available: Boolean(process.env.SARDIUS_FTP_HOST && process.env.SARDIUS_FTP_USER && process.env.SARDIUS_FTP_PASS),
+        required: false,
+        details: (process.env.SARDIUS_FTP_HOST && process.env.SARDIUS_FTP_USER && process.env.SARDIUS_FTP_PASS)
+          ? `Sardius FTP configured for ${process.env.SARDIUS_FTP_HOST}.`
+          : 'Sardius FTP credentials not set. Add SARDIUS_FTP_HOST, SARDIUS_FTP_USER, SARDIUS_FTP_PASS to your environment.',
+        paths: [],
+      },
     ],
   };
 }

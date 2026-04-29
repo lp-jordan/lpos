@@ -16,6 +16,8 @@ export function stageLabel(type: PipelineStageType): string {
     case 'transcript':        return 'Transcript';
     case 'upload:frameio':    return 'Frame.io';
     case 'upload:leaderpass': return 'LeaderPass';
+    case 'upload:sardius':    return 'Sardius';
+    case 'upload:delivery':   return 'Delivery';
     case 'promotion':         return 'Transfer';
   }
 }
@@ -55,6 +57,22 @@ export function phaseLabel(stage: PipelineStage): string {
       if (status === 'failed')      return 'Failed';
       if (status === 'cancelled')   return 'Cancelled';
       return status;
+    case 'upload:sardius':
+      if (status === 'queued')      return 'Queued';
+      if (status === 'uploading')   return progress > 0 ? `Uploading ${progress}%` : 'Uploading via FTP';
+      if (status === 'processing')  return 'In Sardius watch folder';
+      if (status === 'done')        return 'Done';
+      if (status === 'failed')      return 'Failed';
+      if (status === 'cancelled')   return 'Cancelled';
+      return status;
+    case 'upload:delivery':
+      if (status === 'queued')      return 'Queued';
+      if (status === 'uploading')   return stage.detail ?? (progress > 0 ? `Uploading ${progress}%` : 'Uploading');
+      if (status === 'processing')  return stage.detail ?? 'Finalising';
+      if (status === 'done')        return 'Ready';
+      if (status === 'failed')      return 'Failed';
+      if (status === 'cancelled')   return 'Cancelled';
+      return status;
     case 'promotion':
       if (status === 'queued')        return 'Queued';
       if (status === 'downloading')   return progress > 0 ? `Downloading ${progress}%` : 'Downloading';
@@ -70,8 +88,10 @@ export function overallLabel(status: PipelineEntry['overallStatus']): string {
   switch (status) {
     case 'ingesting':           return 'Ingesting';
     case 'transcribing':        return 'Transcribing';
-    case 'uploading_frameio':   return 'Uploading';
+    case 'uploading_frameio':    return 'Uploading';
     case 'uploading_leaderpass': return 'Publishing';
+    case 'uploading_sardius':    return 'Uploading to Sardius';
+    case 'uploading_delivery':   return 'Creating Delivery';
     case 'processing':          return 'Processing';
     case 'complete':            return 'Complete';
     case 'partial_failure':     return 'Partial Failure';
@@ -87,6 +107,7 @@ export function overallBadgeClass(status: PipelineEntry['overallStatus']): strin
 }
 
 export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript', 'promotion']);
+// upload:sardius is intentionally excluded — retry via the sidebar Reset button
 
 export function isActive(entry: PipelineEntry): boolean {
   return !PIPELINE_TERMINAL_STATUSES.has(entry.overallStatus);

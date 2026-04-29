@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type {
+  AtemProfile,
   AtemState,
   AudioMonitorInputOption,
   AudioMonitorState,
@@ -10,6 +11,7 @@ import type {
   PlaybackConnectionState,
   SlateNote,
 } from '@/lib/services/atem-utils';
+import type { CqMixerState } from '@/lib/services/cq-mixer-client';
 
 export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation';
 
@@ -32,14 +34,22 @@ export interface ClientAudioMonitorState extends AudioMonitorState {
   statusLabel: string;
 }
 
+export interface TravelModeState {
+  active: boolean;
+  bridgeUrl: string;
+}
+
 export interface SlateState {
   socketConnected: boolean;
   currentProjectId: string | null;
   notes: SlateNote[];
   codeText: string;
   atemState: AtemState | null;
+  atemProfiles: AtemProfile[];
+  travelMode: TravelModeState;
   audioMonitor: ClientAudioMonitorState;
   playbackConnection: PlaybackConnectionState | null;
+  cqMixerState: CqMixerState | null;
   atemToast: AtemToast | null;
   logs: string[];
   projects: SlateProject[];
@@ -62,12 +72,20 @@ export interface SlateActions {
   atemStopRecording: () => void;
   atemSetFilename: (filename: string) => void;
   atemSetOutput4Mode: (mode: 'program' | 'multiview') => void;
+  atemSaveProfile: (name: string, ip: string) => void;
+  atemDeleteProfile: (name: string) => void;
+  atemEnableTravelMode: (bridgeUrl: string, atemIp: string) => void;
+  atemDisableTravelMode: (atemIp: string) => void;
   setStudioTab: (tab: StudioTab) => void;
   joinAudioMonitor: () => void;
   leaveAudioMonitor: () => void;
   setAudioMonitorMuted: (muted: boolean) => void;
   setAudioMonitorInput: (input: AudioMonitorInputOption | null) => void;
+  refreshAudioInputs: () => void;
   dismissToast: () => void;
+  cqSetTrackMute: (track: number, muted: boolean) => void;
+  cqSetTrackArm: (track: number, armed: boolean) => void;
+  cqSetTrackGain: (track: number, db: number) => void;
 }
 
 const DEFAULT_ATEM_STATE: AtemState = {
@@ -78,7 +96,7 @@ const DEFAULT_ATEM_STATE: AtemState = {
   inputs: [],
   previewInput: null,
   programInput: null,
-  recording: { isRecording: false, filename: '', status: 'disconnected' },
+  recording: { isRecording: false, filename: '', status: 'disconnected', hasDrive: false },
   output4Mode: null,
   lastError: '',
   lastCommandAt: null,
@@ -189,6 +207,8 @@ export function useSlate(): SlateState & SlateActions {
   const [notes, setNotes] = useState<SlateNote[]>([]);
   const [codeText, setCodeText] = useState('');
   const [atemState, setAtemState] = useState<AtemState | null>(DEFAULT_ATEM_STATE);
+  const [atemProfiles, setAtemProfiles] = useState<AtemProfile[]>([]);
+  const [travelMode, setTravelMode] = useState<TravelModeState>({ active: false, bridgeUrl: '' });
   const [remoteAudioMonitor, setRemoteAudioMonitor] = useState<AudioMonitorState>(DEFAULT_AUDIO_MONITOR_STATE);
   const [audioJoined, setAudioJoined] = useState(false);
   const [audioLocallyMuted, setAudioLocallyMuted] = useState(true);
@@ -196,6 +216,7 @@ export function useSlate(): SlateState & SlateActions {
   const [audioPeerState, setAudioPeerState] = useState<RTCPeerConnectionState | 'idle' | 'joining'>('idle');
   const [audioLocalError, setAudioLocalError] = useState('');
   const [playbackConnection, setPlaybackConnection] = useState<PlaybackConnectionState | null>(DEFAULT_PLAYBACK_CONNECTION_STATE);
+  const [cqMixerState, setCqMixerState] = useState<CqMixerState | null>(null);
   const [atemToast, setAtemToast] = useState<AtemToast | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [projects, setProjects] = useState<SlateProject[]>([]);
@@ -278,7 +299,10 @@ export function useSlate(): SlateState & SlateActions {
     peer.ontrack = (event) => {
       const target = streamRef.current ?? stream;
       target.addTrack(event.track);
-      void attemptPlayback(false);
+      // Start muted so autoplay policy is never triggered on join.
+      // The Monitor button unmutes with a real user gesture, which satisfies
+      // the browser's autoplay policy for unmuted media on all devices.
+      void attemptPlayback(true);
     };
     peer.onicecandidate = (event) => {
       if (!event.candidate) return;
@@ -398,15 +422,21 @@ export function useSlate(): SlateState & SlateActions {
       pushLog(`[audio] ${message}`);
     });
     socket.on('playbackConnectionState', (state: PlaybackConnectionState) => setPlaybackConnection(state));
+    socket.on('cqMixerState', (state: CqMixerState) => setCqMixerState(state));
 
+    socket.on('atemProfiles', (profiles: AtemProfile[]) => setAtemProfiles(profiles));
+    socket.on('travelMode', (state: TravelModeState) => setTravelMode(state));
+    let toastTimer: ReturnType<typeof setTimeout> | null = null;
     socket.on('atemCommandResult', (result: AtemToast) => {
+      if (toastTimer) clearTimeout(toastTimer);
       setAtemToast(result);
-      setTimeout(() => setAtemToast(null), 3500);
+      toastTimer = setTimeout(() => setAtemToast(null), 3500);
     });
 
     socket.on('log', (line: string) => pushLog(line));
 
     return () => {
+      if (toastTimer) clearTimeout(toastTimer);
       teardownAudioMonitor();
       socket.disconnect();
     };
@@ -426,8 +456,11 @@ export function useSlate(): SlateState & SlateActions {
     notes,
     codeText,
     atemState,
+    atemProfiles,
+    travelMode,
     audioMonitor,
     playbackConnection,
+    cqMixerState,
     atemToast,
     logs,
     projects,
@@ -459,9 +492,13 @@ export function useSlate(): SlateState & SlateActions {
     atemStopRecording: () => emit('atemStopRecording'),
     atemSetFilename: (filename) => emit('atemSetFilename', { filename }),
     atemSetOutput4Mode: (mode) => emit('atemSetOutput4Mode', { mode }),
+    atemSaveProfile: (name, ip) => emit('atemSaveProfile', { name, ip }),
+    atemDeleteProfile: (name) => emit('atemDeleteProfile', { name }),
+    atemEnableTravelMode: (bridgeUrl, atemIp) => emit('atemEnableTravelMode', { bridgeUrl, atemIp }),
+    atemDisableTravelMode: (atemIp) => emit('atemDisableTravelMode', { atemIp }),
     setStudioTab: (tab) => {
       activeTabRef.current = tab;
-      if (tab === 'audio') {
+      if (tab === 'audio' || tab === 'camera') {
         void joinAudioMonitor();
       } else if (audioJoined) {
         leaveAudioMonitor();
@@ -473,6 +510,10 @@ export function useSlate(): SlateState & SlateActions {
     setAudioMonitorInput: (input) => emit('audioMonitorSetInput', input
       ? { deviceKey: input.deviceKey, label: input.label }
       : { deviceKey: '', label: '' }),
+    refreshAudioInputs: () => emit('audioMonitorRefreshInputs'),
     dismissToast: () => setAtemToast(null),
+    cqSetTrackMute: (track, muted) => emit('cqSetTrackMute', { track, muted }),
+    cqSetTrackArm: (track, armed) => emit('cqSetTrackArm', { track, armed }),
+    cqSetTrackGain: (track, db) => emit('cqSetTrackGain', { track, db }),
   };
 }

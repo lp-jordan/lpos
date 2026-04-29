@@ -54,13 +54,18 @@ async function fioFetch(url: string, init?: RequestInit): Promise<Response> {
   const method = init?.method ?? 'GET';
   return withRetry(
     async () => {
+      // Hard cap each individual attempt at 15 s so a stalled connection can't
+      // hold up the server indefinitely (requestTimeout is disabled globally).
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), 15_000);
       const res = await fetch(url, {
         ...init,
+        signal: abort.signal,
         headers: {
           ...(await authHeaders()),
           ...((init?.headers as Record<string, string>) ?? {}),
         },
-      });
+      }).finally(() => clearTimeout(timer));
 
       if (!res.ok) {
         const body = await res.text().catch(() => '');
@@ -71,11 +76,14 @@ async function fioFetch(url: string, init?: RequestInit): Promise<Response> {
     },
     4,
     (err) => {
-      if (err instanceof TypeError) return true; // network error
+      const safe = method === 'GET' || method === 'HEAD';
+      // Network errors: only retry safe methods — retrying POST/PATCH/DELETE
+      // risks duplicate mutations and extends the hang indefinitely.
+      if (err instanceof TypeError) return safe;
       const msg = err instanceof Error ? err.message : String(err);
-      if (/→ 429\b/.test(msg)) return true;
-      // Only retry 5xx on safe (read-only) methods to avoid duplicate creates
-      if (/→ (500|502|503|504)\b/.test(msg)) return method === 'GET' || method === 'HEAD';
+      if (/→ 429\b/.test(msg)) return true;        // rate-limit: always retry
+      // 5xx from Frame.io: only retry safe methods (already the case for status codes)
+      if (/→ (500|502|503|504)\b/.test(msg)) return safe;
       return false;
     },
   );
@@ -90,7 +98,8 @@ interface DiscoveryResult {
   rootFolderId: string;   // for uploads
 }
 
-let _cached: DiscoveryResult | null = null;
+let _cached:   DiscoveryResult | null = null;
+let _inflight: Promise<DiscoveryResult> | null = null;
 
 interface V4Workspace {
   id:   string;
@@ -224,6 +233,15 @@ async function resolveAccountId(): Promise<string> {
 async function discover(): Promise<DiscoveryResult> {
   if (_cached) return _cached;
 
+  // Deduplicate concurrent discover() calls — all waiters share one in-flight
+  // promise so a polling storm doesn't spawn N independent retry chains.
+  if (_inflight) return _inflight;
+
+  _inflight = _doDiscover().finally(() => { _inflight = null; });
+  return _inflight;
+}
+
+async function _doDiscover(): Promise<DiscoveryResult> {
   const projectName = process.env.FRAMEIO_PROJECT_NAME?.trim();
   if (!projectName) throw new Error('FRAMEIO_PROJECT_NAME is not set in .env.local');
 
@@ -698,6 +716,18 @@ export async function addFilesToShare(shareId: string, fileIds: string[]): Promi
 }
 
 /**
+ * Rename a file/asset in Frame.io.
+ * PATCH /v4/accounts/{id}/files/{fileId}
+ */
+export async function renameFrameioFile(fileId: string, name: string): Promise<void> {
+  const { accountId } = await discover();
+  await fioFetch(`${BASE_V4}/accounts/${accountId}/files/${fileId}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ data: { name } }),
+  });
+}
+
+/**
  * Permanently delete a file/asset from Frame.io.
  * DELETE /v4/accounts/{id}/files/{fileId}
  */
@@ -811,9 +841,9 @@ export async function getComments(fileId: string): Promise<FrameIOComment[]> {
     return {
       id:           c.id,
       text:         c.text,
-      // Frame.io stores timestamps in 1/60-second units; convert to seconds for display
-      timestamp:    c.timestamp != null ? c.timestamp / 60 : null,
-      duration:     c.duration  != null ? c.duration  / 60 : null,
+      // Frame.io stores timestamps as NDF frame counts; divide by 24 → NDF seconds
+      timestamp:    c.timestamp != null ? c.timestamp / 24 : null,
+      duration:     c.duration  != null ? c.duration  / 24 : null,
       authorName:   author?.name ?? '',
       authorAvatar: author?.avatar_url ?? null,
       createdAt:    c.inserted_at ?? c.created_at ?? '',
@@ -848,9 +878,9 @@ export async function postComment(
 
   const body: Record<string, unknown> = { text };
   if (timestamp !== null) {
-    // Convert seconds → Frame.io 1/60-second units
-    body.timestamp = Math.round(timestamp * 60);
-    if (duration !== null && duration > 0) body.duration = Math.round(duration * 60);
+    // Convert NDF seconds → Frame.io frame count
+    body.timestamp = Math.round(timestamp * 24);
+    if (duration !== null && duration > 0) body.duration = Math.round(duration * 24);
   }
 
   const res    = await fioFetch(
@@ -878,8 +908,8 @@ export async function postComment(
   return {
     id:           c.id,
     text:         c.text,
-    timestamp:    c.timestamp != null ? c.timestamp / 60 : null,
-    duration:     c.duration  != null ? c.duration  / 60 : null,
+    timestamp:    c.timestamp != null ? c.timestamp / 24 : null,
+    duration:     c.duration  != null ? c.duration  / 24 : null,
     authorName:   author?.name ?? '',
     authorAvatar: author?.avatar_url ?? null,
     createdAt:    c.inserted_at ?? c.created_at ?? '',

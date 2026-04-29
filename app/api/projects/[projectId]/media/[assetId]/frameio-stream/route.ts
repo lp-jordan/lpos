@@ -7,13 +7,20 @@ type Params = { params: Promise<{ projectId: string; assetId: string }> };
 /**
  * GET /api/projects/[projectId]/media/[assetId]/frameio-stream
  *
- * Proxies the Frame.io CDN video stream through LPOS so the browser never
- * makes a cross-origin request to Frame.io directly. This avoids CORS /
- * CloudFront referrer restrictions and works from any machine on the LAN.
+ * Resolves the Frame.io CDN URL for this asset and issues a 302 redirect
+ * so the browser fetches video bytes directly from Frame.io's CDN.
  *
- * - Forwards Range headers so video seeking works natively.
- * - Caches the CDN URL in-process for 5 minutes to avoid hammering the
- *   Frame.io API on every range request the browser makes while scrubbing.
+ * Previously this route proxied the video stream through the LPOS Node.js
+ * server. That approach saturated the server's I/O pipeline and exhausted
+ * its memory budget for large files, making LPOS unreachable for all users
+ * while theater mode was open (server process alive, no connections accepted).
+ *
+ * Direct redirect is safe because Frame.io CDN URLs are pre-signed
+ * CloudFront/S3 URLs — authentication is in the URL signature, not the
+ * request origin. The <video> element loads them without CORS enforcement.
+ *
+ * Caches the CDN URL for 5 minutes to avoid hammering the Frame.io API on
+ * every Range request the browser makes while scrubbing.
  */
 
 // ── CDN URL cache (per assetId) ───────────────────────────────────────────────
@@ -53,26 +60,12 @@ export async function GET(req: NextRequest, { params }: Params) {
       );
     }
 
-    // Forward Range header so the browser can seek / load metadata efficiently
-    const fetchHeaders: Record<string, string> = {};
-    const range = req.headers.get('range');
-    if (range) fetchHeaders['Range'] = range;
-
-    // Fetch the video bytes from Frame.io CDN on the server side
-    const cdn = await fetch(streamUrl, { headers: fetchHeaders });
-
-    // Build response headers — forward Content-Type, Length, Range info
-    const resHeaders = new Headers();
-    resHeaders.set('Content-Type',  cdn.headers.get('content-type')  ?? 'video/mp4');
-    resHeaders.set('Accept-Ranges', 'bytes');
-    resHeaders.set('Cache-Control', 'no-store');
-
-    const contentLength = cdn.headers.get('content-length');
-    const contentRange  = cdn.headers.get('content-range');
-    if (contentLength) resHeaders.set('Content-Length', contentLength);
-    if (contentRange)  resHeaders.set('Content-Range',  contentRange);
-
-    return new NextResponse(cdn.body, { status: cdn.status, headers: resHeaders });
+    // 302 so the browser re-checks on each new session — CDN pre-signed URLs
+    // rotate and must not be cached by the browser past their expiry.
+    return NextResponse.redirect(streamUrl, {
+      status: 302,
+      headers: { 'Cache-Control': 'no-store' },
+    });
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

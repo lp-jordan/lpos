@@ -139,7 +139,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
         />
       )}
 
-      {tab === 'assets' && <AssetsTab projectId={project.projectId} sentScriptIds={sentScriptAssetIds} onSendToScripts={handleSendToScripts} />}
+      {tab === 'assets' && <AssetsTab projectId={project.projectId} projectName={project.name} sentScriptIds={sentScriptAssetIds} onSendToScripts={handleSendToScripts} />}
 
       {tab === 'passPrep' && (
         <PassPrepTab

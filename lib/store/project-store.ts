@@ -31,26 +31,30 @@ interface ActivityContext {
 }
 
 interface ProjectRow {
-  project_id: string;
-  name: string;
-  client_name: string;
-  phase: string;
-  sub_phase: string;
-  created_at: string;
-  updated_at: string;
-  archived: number;
+  project_id:           string;
+  name:                 string;
+  client_name:          string;
+  phase:                string;
+  sub_phase:            string;
+  created_at:           string;
+  updated_at:           string;
+  archived:             number;
+  asset_link_group_id?: string | null;
+  lock_reason?:         string | null;
 }
 
 function rowToProject(row: ProjectRow): Project {
   return {
-    projectId: row.project_id,
-    name: row.name,
-    clientName: row.client_name,
-    phase: row.phase as Project['phase'],
-    subPhase: row.sub_phase as Project['subPhase'],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    archived: row.archived === 1 ? true : undefined,
+    projectId:        row.project_id,
+    name:             row.name,
+    clientName:       row.client_name,
+    phase:            row.phase as Project['phase'],
+    subPhase:         row.sub_phase as Project['subPhase'],
+    createdAt:        row.created_at,
+    updatedAt:        row.updated_at,
+    archived:         row.archived === 1 ? true : undefined,
+    assetLinkGroupId: row.asset_link_group_id ?? undefined,
+    assetMergeLocked: row.lock_reason ? true : undefined,
   };
 }
 
@@ -72,14 +76,29 @@ export class ProjectStore {
     this.io?.emit('projects:changed', this.getAll());
   }
 
+  /** Call this from outside the store (e.g. merge-worker) after lock changes. */
+  broadcastAll() {
+    this.broadcast();
+  }
+
   // ── Read ───────────────────────────────────────────────────────────────
 
   getAll(): Project[] {
-    return (getCoreDb().prepare('SELECT * FROM projects ORDER BY created_at DESC').all() as ProjectRow[]).map(rowToProject);
+    return (getCoreDb().prepare(`
+      SELECT p.*, l.reason AS lock_reason
+      FROM projects p
+      LEFT JOIN asset_link_locks l ON l.project_id = p.project_id
+      ORDER BY p.created_at DESC
+    `).all() as ProjectRow[]).map(rowToProject);
   }
 
   getById(projectId: string): Project | null {
-    const row = getCoreDb().prepare('SELECT * FROM projects WHERE project_id = ?').get(projectId) as ProjectRow | undefined;
+    const row = getCoreDb().prepare(`
+      SELECT p.*, l.reason AS lock_reason
+      FROM projects p
+      LEFT JOIN asset_link_locks l ON l.project_id = p.project_id
+      WHERE p.project_id = ?
+    `).get(projectId) as ProjectRow | undefined;
     return row ? rowToProject(row) : null;
   }
 

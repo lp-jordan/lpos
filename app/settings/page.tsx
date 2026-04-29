@@ -6,7 +6,9 @@ import { GuestPinCard } from '@/components/settings/GuestPinCard';
 import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
 import { SlackTestCard } from '@/components/settings/SlackTestCard';
 import { SlackUsersCard } from '@/components/settings/SlackUsersCard';
+import { ConsoleAlertsCard } from '@/components/settings/ConsoleAlertsCard';
 import { LpReleasesCard } from '@/components/settings/LpReleasesCard';
+import { WhatsNewTestCard } from '@/components/settings/WhatsNewTestCard';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -55,9 +57,11 @@ export default async function SettingsPage() {
         </div>
       )}
 
+      {role === 'admin' && <WhatsNewTestCard />}
       {role === 'admin' && <LpReleasesCard />}
       {role === 'admin' && <ActiveClientsCard />}
       {role === 'admin' && <SlackTestCard />}
+      {role === 'admin' && <ConsoleAlertsCard />}
       {role === 'admin' && <SlackUsersCard />}
       {role === 'admin' && <GuestPinCard />}
       {role === 'admin' && <AdminsPanel />}

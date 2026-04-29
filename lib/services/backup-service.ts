@@ -57,7 +57,7 @@ export interface BackupResult {
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const RETAIN_DAYS = parseInt(process.env.LPOS_BACKUP_RETAIN_DAYS ?? '7', 10);
 const INTERVAL_MS = 24 * 60 * 60 * 1_000; // 24 h
-const FIRST_RUN_DELAY_MS = 30_000;         // 30 s after start()
+const FIRST_RUN_DELAY_MS = 90_000;         // 90 s after start() — lets Drive scan finish first
 
 function getR2Client(): S3Client | null {
   const accountId  = process.env.CLOUDFLARE_ACCOUNT_ID;

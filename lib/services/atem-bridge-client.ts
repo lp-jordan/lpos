@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import type { AtemState } from './atem-utils';
 import { resolveAtemBridgeCommand } from './runtime-dependencies';
 
@@ -16,8 +16,11 @@ export class AtemBridgeClient {
   private log: LogFn;
   private helperProcess: ChildProcess | null = null;
   private helperReady = false;
-  private helperStartingPromise: Promise<boolean> | null = null;
   private nextStartAttemptAt = 0;
+  // Serialises the entire ensureHelper() body so concurrent refreshAtemState()
+  // ticks never race — only one spawn attempt can run at a time.
+  private ensureHelperLock: Promise<boolean> | null = null;
+  private remoteUrl: string | null = null;
 
   constructor(options: { port?: number; host?: string; log?: LogFn } = {}) {
     this.port = options.port ?? Number(process.env.ATEM_BRIDGE_PORT ?? 4011);
@@ -25,22 +28,46 @@ export class AtemBridgeClient {
     this.log = options.log ?? (() => {});
   }
 
+  get isRemote(): boolean { return this.remoteUrl !== null; }
+
   private get baseUrl(): string {
-    return `http://${this.host}:${this.port}`;
+    return this.remoteUrl ?? `http://${this.host}:${this.port}`;
   }
 
   async ensureHelper(): Promise<boolean> {
-    if (await this.isHealthy()) {
-      if (!this.helperProcess) {
-        // Orphaned bridge from a previous session — shut it down and start fresh.
-        await this.shutdownOrphan();
-      } else {
-        this.helperReady = true;
-        return true;
-      }
+    if (this.ensureHelperLock) return this.ensureHelperLock;
+    const work = this._ensureHelper();
+    this.ensureHelperLock = work;
+    try {
+      return await work;
+    } finally {
+      if (this.ensureHelperLock === work) this.ensureHelperLock = null;
     }
-    if (this.helperStartingPromise) return this.helperStartingPromise;
+  }
+
+  private async _ensureHelper(): Promise<boolean> {
+    // Remote mode: don't spawn anything locally, just check remote health.
+    if (this.remoteUrl !== null) {
+      const healthy = await this.isHealthy();
+      this.helperReady = healthy;
+      return healthy;
+    }
+
+    // Fast path: process we own is still running — trust it without an HTTP round-trip.
+    // isHealthy() is only used during startHelper warmup and remote-mode checks.
+    if (this.helperProcess !== null && this.helperProcess.exitCode === null && !this.helperProcess.killed) {
+      this.helperReady = true;
+      return true;
+    }
+
+    // Cooldown: don't retry too soon after a failed spawn attempt.
     if (Date.now() < this.nextStartAttemptAt) return false;
+
+    // OS-level sweep: kill every atem-bridge.js process (ours or any orphan)
+    // before spawning a fresh one. This replaces the old HTTP-based orphan
+    // detection which had timing races (shutdown request landing on the new
+    // bridge instead of the old one).
+    await this.killAllBridgeProcesses();
 
     const command = this.resolveHelperCommand();
     if (!command) {
@@ -48,11 +75,62 @@ export class AtemBridgeClient {
       return false;
     }
 
-    this.helperStartingPromise = this.startHelper(command);
-    try {
-      return await this.helperStartingPromise;
-    } finally {
-      this.helperStartingPromise = null;
+    return this.startHelper(command);
+  }
+
+  // Kill every process that could block a fresh bridge from starting.
+  // Uses two sources so nothing slips through:
+  //   • pgrep -f 'atem-bridge.js'  — catches the bridge and any threadedclass
+  //                                   workers whose argv includes the script path
+  //   • lsof -iTCP:<port> LISTEN   — catches whatever is currently holding the
+  //                                   port, regardless of process name
+  // Escalates from SIGTERM → SIGKILL after 1.2 s (threadedclass workers often
+  // ignore SIGTERM; no point waiting 6 s for something that never responds).
+  private async killAllBridgeProcesses(): Promise<void> {
+    const getPids = (): Promise<number[]> => new Promise(resolve => {
+      execFile('pgrep', ['-f', 'atem-bridge.js'], (_err, pgrepOut) => {
+        const byName = (pgrepOut?.trim() ?? '').split('\n')
+          .map(s => parseInt(s.trim(), 10))
+          .filter(n => Number.isFinite(n) && n > 0 && n !== process.pid);
+
+        execFile('lsof', ['-n', `-iTCP:${this.port}`, '-sTCP:LISTEN', '-t'], (_err2, lsofOut) => {
+          const byPort = (lsofOut?.trim() ?? '').split('\n')
+            .map(s => parseInt(s.trim(), 10))
+            .filter(n => Number.isFinite(n) && n > 0 && n !== process.pid);
+
+          resolve([...new Set([...byName, ...byPort])]);
+        });
+      });
+    });
+
+    const initial = await getPids();
+    if (!initial.length) return;
+
+    this.log(`[atem-bridge] sweeping ${initial.length} bridge process(es): ${initial.join(', ')}`);
+    initial.forEach(pid => { try { process.kill(pid, 'SIGTERM'); } catch {} });
+
+    // Poll until confirmed clear. Escalate to SIGKILL at 1.2 s.
+    // Throw if something survives SIGKILL — don't spawn a new bridge into an
+    // occupied port.
+    let elapsed = 0;
+    let sigkilled = false;
+
+    while (true) {
+      await new Promise(r => setTimeout(r, 300));
+      const alive = await getPids();
+      if (!alive.length) return;
+
+      elapsed += 300;
+
+      if (elapsed >= 1200 && !sigkilled) {
+        sigkilled = true;
+        this.log('[atem-bridge] process(es) did not exit after SIGTERM — sending SIGKILL');
+        alive.forEach(pid => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+      }
+
+      if (sigkilled && elapsed >= 10_000) {
+        throw new Error(`[atem-bridge] port ${this.port} not cleared after ${elapsed}ms — cannot spawn bridge`);
+      }
     }
   }
 
@@ -106,17 +184,9 @@ export class AtemBridgeClient {
     return resolveAtemBridgeCommand();
   }
 
-  private async shutdownOrphan(): Promise<void> {
-    this.log('Found orphaned ATEM bridge — shutting it down');
-    try {
-      await fetch(`${this.baseUrl}/v1/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) });
-      await new Promise((r) => setTimeout(r, 400));
-    } catch { /* already gone, that's fine */ }
-  }
-
   private async isHealthy(): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/health`);
+      const res = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(2000) });
       return res.ok;
     } catch {
       return false;
@@ -124,7 +194,7 @@ export class AtemBridgeClient {
   }
 
   private async request<T = unknown>(pathname: string, options: RequestInit = {}): Promise<T> {
-    const timeoutMs = pathname === '/v1/connect' ? 15000 : 5000;
+    const timeoutMs = pathname === '/v1/connect' ? 35000 : 5000;
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${pathname}`, {
@@ -158,9 +228,34 @@ export class AtemBridgeClient {
   stopRecording(): Promise<void>             { return this.request('/v1/record/stop', { method: 'POST' }); }
   setOutput4Mode(mode: string): Promise<void>{ return this.request('/v1/output4/mode', { method: 'POST', body: JSON.stringify({ mode }) }); }
 
-  dispose(): void {
+  async enableRemote(url: string): Promise<void> {
+    // Wait for any in-progress ensureHelper to settle before tearing down.
+    if (this.ensureHelperLock) await this.ensureHelperLock.catch(() => {});
+    await this.dispose();
+    this.remoteUrl = url;
+    this.helperReady = false;
+  }
+
+  disableRemote(): void {
+    this.remoteUrl = null;
+    this.helperReady = false;
+    this.helperProcess = null;
+    this.nextStartAttemptAt = 0; // allow immediate local respawn
+  }
+
+  async dispose(): Promise<void> {
+    // SIGTERM the process we own so the ATEM session is released cleanly.
     if (this.helperProcess && !this.helperProcess.killed) {
-      this.helperProcess.kill();
+      const proc = this.helperProcess;
+      const exited = new Promise<void>((resolve) => {
+        proc.once('exit', () => resolve());
+        setTimeout(resolve, 5000); // safety timeout
+      });
+      proc.kill('SIGTERM');
+      await exited;
     }
+    // Belt-and-suspenders: sweep any survivors (threadedclass workers or bridges
+    // that died before helperProcess was set — i.e. the process we didn't own).
+    await this.killAllBridgeProcesses();
   }
 }

@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-23 — Sardius filename collision handling
+
+**User prompt:** "Yeah, I'd rather confirm overwrite or append a (1) to it, sardius can be weird with matching filenames and overwrites."
+
+**Summary:** Added filename collision detection to the Sardius push flow. Before starting an FTP upload, the API now calls `checkSardiusFileExists` to check if the filename already exists in the target folder. If a conflict is found and the caller hasn't acknowledged it, the API returns a 409 with `{ conflict: true, suggestedName: 'filename(1).mp4' }`. The modal handles this response by pausing the upload loop and presenting two inline buttons: "Overwrite" (re-sends with `overwrite: true`) and "Rename to X(1).mp4" (re-sends with `filenameOverride`). Batch uploads pause on each conflicted asset in sequence and resume after the user resolves each one.
+
+**Files changed:**
+- `app/api/projects/[projectId]/media/[assetId]/sardius/route.ts` — added `buildSuggestedName`, collision check before queue creation, `overwrite`/`filenameOverride` body fields, `filename` derived from override or base
+- `components/media/SardiusPushModal.tsx` — added `conflict` state, `pushAssets` helper loop (handles 409 conflict mid-batch), `handleResolveConflict`, conflict banner UI, updated `canPush` to block while conflict is pending
+- `app/globals.css` — added `.sardius-conflict-banner`, `.sardius-conflict-msg`, `.sardius-conflict-actions`, `.mad-action-btn--danger` classes
+
+**Implementation rationale:** The FTP STOR command silently overwrites existing files; Sardius can behave unexpectedly with duplicate filenames. Checking before upload and surfacing an explicit choice is safer than silent overwrites. The `(1)` suffix mirrors the convention most users expect from OS file dialogs. For batch uploads, the conflict is resolved per-asset without cancelling the rest of the queue.
+
+**Alternatives considered:** Checking all conflicts upfront before starting any uploads — rejected because it requires an extra FTP list call per asset before the loop, adding latency. Per-asset resolution during the loop is already natural given the fire-and-forget pattern.
+
+**Commands/tests:** None run.
+
+---
+
+## 2026-04-23 — Sardius FTP push feature
+
+**User prompt:** "Per-media asset, have an option in the 'more info' sidebar area to push to Sardius. This would open a modal that would read the existing folder structure in the Akamai server Sardius uses and then upload that asset (using the source file) into Sardius along with whatever metadata we tag it with. … Also, this would be a relatively temporary feature because we're moving away from Cyberduck to Cloudflare… Also, I'd want the share URL info BACK from Sardius and available to copy in LPOS."
+
+**Summary:** Added a complete Sardius FTP push workflow. A "Push to Sardius" button appears in the More Info sidebar for any asset that has a local file. Clicking it opens a modal that browses the Akamai FTP watch-folder tree, lets the user select or type a destination path, fill in speakers/categories/publish-profile metadata, preview the JSON sidecar, and trigger an upload. The FTP upload runs in the background; the asset's status cycles none → uploading → queued. Once Sardius has processed the file, the user pastes the assigned URL back into a sidebar field, which stores it as status=ready with a one-click copy button.
+
+**Files changed:**
+- `lib/models/media-asset.ts` — added `SardiusInfo`, `SardiusStatus`, `SARDIUS_STATUS_LABEL`, `defaultSardius()`, and `sardius` field on `MediaAsset`
+- `lib/models/canonical-asset.ts` — added `'sardius'` to `CanonicalDistributionProvider`
+- `lib/store/canonical-asset-store.ts` — wired Sardius into `bundleToProjection`, `CanonicalAssetPatch`, and `patchCanonicalMediaAsset`
+- `lib/store/media-registry.ts` — added `sardius` to `AssetPatch`
+- `lib/services/sardius-ftp.ts` — new; FTP client using `basic-ftp` with `listSardiusFolders()` and `uploadToSardius()`
+- `lib/services/runtime-dependencies.ts` — added Sardius FTP config entry
+- `app/api/sardius/folders/route.ts` — new; GET returns Akamai FTP directory tree
+- `app/api/projects/[projectId]/media/[assetId]/sardius/route.ts` — new; GET status, POST push, PATCH save URL, DELETE reset
+- `components/media/SardiusPushModal.tsx` — new; modal with folder browser, metadata form, JSON preview
+- `components/media/MediaDetailPanel.tsx` — added Sardius section, polling, modal trigger, URL paste/copy UI
+- `.env.local` — created with `SARDIUS_FTP_HOST`, `SARDIUS_FTP_USER`, `SARDIUS_FTP_PASS`, `SARDIUS_ACCOUNT_ID`
+- `package.json` / `package-lock.json` — added `basic-ftp` dependency
+
+**Implementation rationale:** Sardius has no public REST API for uploads — they use an Akamai FTP watch-folder with per-asset JSON sidecars. The upload runs fire-and-forget in the background (matching the existing LeaderPass/Cloudflare pattern) to avoid holding an HTTP connection open during large file transfers. Because Sardius assigns the asset ID internally after watch-folder processing, the share URL cannot be auto-retrieved; the feature stores a "queued" state and provides a paste field for the user to record the URL once Sardius has processed the file. The implementation is intentionally minimal (no new DB tables — uses the existing `distribution_records` table with `provider='sardius'`) to reflect the temporary nature of this feature while a full Cloudflare migration is planned.
+
+**Alternatives considered:** Polling a Sardius API for the asset ID was considered but ruled out because no documented endpoint exists for asset lookup by filename. Auto-constructing the URL was ruled out because the Sardius asset ID is an opaque hash assigned internally, not derivable from the filename.
+
+**Commands/tests run:** `npx tsc --noEmit` — passed with no errors.
+
+**Assumptions / follow-ups:**
+- Sardius processes FTP watch-folder uploads every 15 minutes at :00, :15, :30, :45.
+- Files must be valid MP4/MOV/MP3/MXF; Sardius retains watch-folder files for 7 days before deleting.
+- The `.env.local` contains real FTP credentials and must not be committed to version control. Ensure `.env.local` is in `.gitignore`.
+- When ready to fully migrate to Cloudflare, the Sardius section in `MediaDetailPanel` and all associated files can be removed with minimal impact on the rest of the system.
+
+---
+
 ## 2026-04-16 — Capture whisper stderr for better transcription failure diagnostics
 
 **Prompt:** Whisper has never worked on this mac since we migrated lpos over from windows — add stderr capture so the actual crash reason surfaces.

@@ -19,6 +19,12 @@ export interface AtemRecordingState {
   isRecording: boolean;
   filename: string;
   status: string;
+  hasDrive: boolean;
+}
+
+export interface AtemProfile {
+  name: string;
+  ip: string;
 }
 
 export interface AtemState {
@@ -156,7 +162,7 @@ export function createDefaultAtemState(overrides: Partial<AtemState> = {}): Atem
     inputs: [],
     previewInput: null,
     programInput: null,
-    recording: { isRecording: false, filename: '', status: 'disconnected' },
+    recording: { isRecording: false, filename: '', status: 'disconnected', hasDrive: false },
     output4Mode: null,
     lastError: '',
     lastCommandAt: null,

@@ -84,8 +84,8 @@ function ShareRow({ share, projectId }: { share: GlobalShareProject['shares'][nu
           className="sh-card-action-btn sh-card-action-btn--danger"
           onClick={() => void handleDelete()}
           disabled={deleting}
-          title="Delete share"
-          aria-label="Delete share"
+          title="Delete review"
+          aria-label="Delete review"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="3 6 5 6 21 6"/>
@@ -122,7 +122,7 @@ function ProjectGroup({ group }: { group: GlobalShareProject }) {
           <span className="gsm-project-client">{group.clientName}</span>
         )}
         <span className="gsm-project-count">
-          {group.shares.length} share{group.shares.length !== 1 ? 's' : ''}
+          {group.shares.length} review{group.shares.length !== 1 ? 's' : ''}
         </span>
       </button>
 
@@ -185,7 +185,7 @@ export function GlobalSharesManager({ projects }: { projects?: ProjectFilterOpti
     <div className="gsm-root">
       <div className="gsm-toolbar">
         <span className="gsm-title">
-          {loading ? 'Loading…' : `${totalShares} share link${totalShares !== 1 ? 's' : ''} across ${filteredGroups.length} project${filteredGroups.length !== 1 ? 's' : ''}`}
+          {loading ? 'Loading…' : `${totalShares} review link${totalShares !== 1 ? 's' : ''} across ${filteredGroups.length} project${filteredGroups.length !== 1 ? 's' : ''}`}
         </span>
 
         {projectOptions.length > 0 && (
@@ -223,7 +223,7 @@ export function GlobalSharesManager({ projects }: { projects?: ProjectFilterOpti
 
       {!loading && !error && filteredGroups.length === 0 && (
         <p className="m-empty">
-          {projectFilter ? 'No share links for this project.' : 'No share links found. Create them from a project\'s Shares panel.'}
+          {projectFilter ? 'No review links for this project.' : 'No review links found. Create them from a project\'s Reviews panel.'}
         </p>
       )}
 

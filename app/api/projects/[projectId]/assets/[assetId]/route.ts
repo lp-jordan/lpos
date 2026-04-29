@@ -12,6 +12,8 @@ import {
   deleteDriveAssetByEntityId,
 } from '@/lib/store/drive-sync-db';
 import { getDriveClient } from '@/lib/services/drive-client';
+import { getCanonicalMediaAsset } from '@/lib/store/canonical-asset-store';
+import { renameFrameioFile } from '@/lib/services/frameio';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -48,9 +50,22 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       fields:       'id, name',
     });
 
+    // Rename in Frame.io (best-effort)
+    let frameioWarning: string | undefined;
+    const canonical = getCanonicalMediaAsset(projectId, assetId);
+    const fioFileId = canonical?.frameio?.assetId ?? null;
+    if (fioFileId) {
+      try {
+        await renameFrameioFile(fioFileId, newName);
+      } catch (fioErr) {
+        console.error('[assets/rename] Frame.io rename failed:', fioErr);
+        frameioWarning = 'Renamed in Drive but Frame.io rename failed: ' + (fioErr as Error).message;
+      }
+    }
+
     // Update local index
     const updated = renameDriveAsset(assetId, newName);
-    return NextResponse.json({ asset: updated });
+    return NextResponse.json({ asset: updated, ...(frameioWarning ? { warning: frameioWarning } : {}) });
   } catch (err) {
     console.error('[assets/rename] error:', err);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

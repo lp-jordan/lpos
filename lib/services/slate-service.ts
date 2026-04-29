@@ -6,6 +6,7 @@ import type { ServiceRegistry } from './registry';
 import { AtemBridgeClient } from './atem-bridge-client';
 import { SerialTaskQueue } from './serial-task-queue';
 import {
+  type AtemProfile,
   type AtemState,
   type AudioMonitorPreferredInput,
   type AudioMonitorState,
@@ -22,6 +23,7 @@ import {
   generateRecordingBaseName,
   labelForInput,
 } from './atem-utils';
+import { CqMixerClient, type CqMixerState, createDefaultCqMixerState } from './cq-mixer-client';
 import type { ProjectStore } from '@/lib/store/project-store';
 import { SlateAudioMonitorService } from './slate-audio-monitor';
 
@@ -37,7 +39,7 @@ function ensureDir(dir: string) {
 // ── Config ─────────────────────────────────────────────────────────────────
 
 interface SlateConfig {
-  atem: { switcherIp: string; bridgePort: number };
+  atem: { switcherIp: string; bridgePort: number; profiles: AtemProfile[]; travelBridgeUrl: string };
   audio: {
     preferredInput: AudioMonitorPreferredInput;
     expectedFormat: {
@@ -47,12 +49,13 @@ interface SlateConfig {
       frameDurationMs: number;
     };
   };
+  mixer: { ip: string };
   lastProjectId: string | null;
 }
 
 function defaultConfig(): SlateConfig {
   return {
-    atem: { switcherIp: '', bridgePort: Number(process.env.ATEM_BRIDGE_PORT ?? 4011) },
+    atem: { switcherIp: '', bridgePort: Number(process.env.ATEM_BRIDGE_PORT ?? 4011), profiles: [], travelBridgeUrl: '' },
     audio: {
       preferredInput: {
         deviceKey: process.env.LPOS_AUDIO_DEVICE_KEY ?? '',
@@ -65,6 +68,7 @@ function defaultConfig(): SlateConfig {
         frameDurationMs: 10,
       },
     },
+    mixer: { ip: '' },
     lastProjectId: null,
   };
 }
@@ -77,7 +81,12 @@ function loadConfig(): SlateConfig {
     return {
       ...defaultConfig(),
       ...parsed,
-      atem: { ...defaultConfig().atem, ...(parsed.atem ?? {}) },
+      atem: {
+        ...defaultConfig().atem,
+        ...(parsed.atem ?? {}),
+        profiles: parsed.atem?.profiles ?? [],
+        travelBridgeUrl: parsed.atem?.travelBridgeUrl ?? '',
+      },
       audio: {
         ...defaultConfig().audio,
         ...(parsed.audio ?? {}),
@@ -90,6 +99,7 @@ function loadConfig(): SlateConfig {
           ...(parsed.audio?.expectedFormat ?? {}),
         },
       },
+      mixer: { ...defaultConfig().mixer, ...(parsed.mixer ?? {}) },
     };
   } catch {
     return defaultConfig();
@@ -133,10 +143,13 @@ export class SlateService {
     expectedFormat: this.config.audio.expectedFormat,
   });
   private playbackConnection: PlaybackConnectionState = createDefaultPlaybackConnectionState({ host: this.config.atem.switcherIp });
+  private cqMixerState: CqMixerState = createDefaultCqMixerState(this.config.mixer.ip);
   private atemFilenameBase = '';
   private atemQueue = new SerialTaskQueue();
   private atemBridge: AtemBridgeClient;
+  private travelModeActive = false;
   private audioMonitor: SlateAudioMonitorService;
+  private cqMixer: CqMixerClient;
   private atemInterval: NodeJS.Timeout | null = null;
   private playbackInterval: NodeJS.Timeout | null = null;
   private logBuffer: string[] = [];
@@ -158,6 +171,14 @@ export class SlateService {
           expectedFormat: this.config.audio.expectedFormat,
         };
         this.emitAudioMonitorState();
+      },
+      (...args) => this.log(...args),
+    );
+    this.cqMixer = new CqMixerClient(
+      this.config.mixer.ip,
+      (state) => {
+        this.cqMixerState = state;
+        this.emitCqMixerState();
       },
       (...args) => this.log(...args),
     );
@@ -194,11 +215,16 @@ export class SlateService {
         this.log('ATEM state refresh failed', (err as Error).message)
       );
     }, 2000);
-    this.playbackInterval = setInterval(() => {
-      this.refreshPlaybackConnectionState().catch((err) =>
-        this.log('Playback FTP refresh failed', (err as Error).message)
-      );
+    let playbackPollInFlight = false;
+    this.playbackInterval = setInterval(async () => {
+      if (playbackPollInFlight) return;
+      playbackPollInFlight = true;
+      try { await this.refreshPlaybackConnectionState(); }
+      catch (err) { this.log('Playback FTP refresh failed', (err as Error).message); }
+      finally { playbackPollInFlight = false; }
     }, 5000);
+
+    if (this.config.mixer.ip) this.cqMixer.start();
 
     this.registry.update('slate', 'running');
     this.log('LeaderSlate service running');
@@ -208,7 +234,8 @@ export class SlateService {
     if (this.atemInterval) clearInterval(this.atemInterval);
     if (this.playbackInterval) clearInterval(this.playbackInterval);
     await this.audioMonitor.stop();
-    this.atemBridge.dispose();
+    await this.atemBridge.dispose(); // awaited so ATEM session is released before process exits
+    this.cqMixer.dispose();
     this.registry.update('slate', 'stopped');
   }
 
@@ -230,8 +257,11 @@ export class SlateService {
     }
     if (this.codeText) socket.emit('codeUpdate', this.codeText);
     this.emitAtemState(socket);
+    this.emitAtemProfiles(socket);
+    this.emitTravelMode(socket);
     this.emitAudioMonitorState(socket);
     this.emitPlaybackConnectionState(socket);
+    this.emitCqMixerState(socket);
 
     // ── Note events ──
     socket.on('addNote', (data: { code: string; note: string }) => {
@@ -308,6 +338,14 @@ export class SlateService {
       this.audioMonitor.handleSetMuted(socket.id, Boolean(payload?.muted), Boolean(payload?.autoplayBlocked));
     });
 
+    socket.on('audioMonitorRefreshInputs', async () => {
+      try {
+        await this.audioMonitor.refreshSourceAvailability();
+      } catch (err) {
+        socket.emit('audioMonitorError', { message: (err as Error).message });
+      }
+    });
+
     socket.on('audioMonitorSetInput', async (payload: { deviceKey?: string; label?: string }) => {
       const deviceKey = (payload?.deviceKey ?? '').trim();
       const label = (payload?.label ?? '').trim();
@@ -344,6 +382,65 @@ export class SlateService {
         }
         await this.refreshPlaybackConnectionState();
       } catch (err) { this.log('ATEM connect failed', (err as Error).message); }
+    });
+
+    socket.on('atemEnableTravelMode', async (payload: { bridgeUrl?: string; atemIp?: string }) => {
+      const url = (payload?.bridgeUrl ?? '').trim();
+      const ip = (payload?.atemIp ?? '').trim();
+      if (!url) { this.emitAtemToast(socket, 'error', 'Enter the remote bridge URL first'); return; }
+      try {
+        await this.atemBridge.enableRemote(url);
+        this.travelModeActive = true;
+        this.config.atem.travelBridgeUrl = url;
+        saveConfig(this.config);
+        this.emitTravelMode();
+        this.emitAtemToast(socket, 'success', 'Travel mode enabled — connecting…');
+        if (ip) {
+          void this.executeAtemCommand(socket, 'Connect', async () => {
+            this.config.atem.switcherIp = ip;
+            saveConfig(this.config);
+            await this.atemBridge.connect(ip);
+          }).catch(() => {});
+        }
+      } catch (err) { this.emitAtemToast(socket, 'error', `Travel mode failed: ${(err as Error).message}`); }
+    });
+
+    socket.on('atemDisableTravelMode', async (payload: { atemIp?: string }) => {
+      const ip = (payload?.atemIp ?? '').trim();
+      this.atemBridge.disableRemote();
+      this.travelModeActive = false;
+      this.emitTravelMode();
+      this.emitAtemToast(socket, 'info', 'Travel mode disabled — reconnecting…');
+      if (ip) {
+        void (async () => {
+          await this.atemBridge.ensureHelper();
+          await this.executeAtemCommand(socket, 'Connect', async () => {
+            this.config.atem.switcherIp = ip;
+            saveConfig(this.config);
+            await this.atemBridge.connect(ip);
+          }).catch(() => {});
+        })();
+      }
+    });
+
+    socket.on('atemSaveProfile', (payload: { name?: string; ip?: string }) => {
+      const name = (payload?.name ?? '').trim();
+      const ip = (payload?.ip ?? '').trim();
+      if (!name || !ip) return;
+      this.config.atem.profiles = [
+        ...this.config.atem.profiles.filter((p) => p.name !== name),
+        { name, ip },
+      ];
+      saveConfig(this.config);
+      this.emitAtemProfiles();
+    });
+
+    socket.on('atemDeleteProfile', (payload: { name?: string }) => {
+      const name = (payload?.name ?? '').trim();
+      if (!name) return;
+      this.config.atem.profiles = this.config.atem.profiles.filter((p) => p.name !== name);
+      saveConfig(this.config);
+      this.emitAtemProfiles();
     });
 
     socket.on('atemDisconnect', async () => {
@@ -401,6 +498,10 @@ export class SlateService {
     socket.on('atemStartRecording', async (payload?: { filename?: string }) => {
       const filename = ((payload?.filename ?? '') || this.atemFilenameBase).trim();
       if (!filename) { this.emitAtemToast(socket, 'error', 'Recording filename is required'); return; }
+      if (this.atemState.connected && !this.atemState.recording.hasDrive) {
+        this.emitAtemToast(socket, 'error', 'No drive connected to ATEM — attach a USB drive before recording');
+        return;
+      }
       try {
         this.ensureProjectSelected();
         this.atemFilenameBase = filename;
@@ -409,6 +510,7 @@ export class SlateService {
           await this.atemBridge.startRecording();
         }, { successMessage: `Recording started: ${filename}` });
         this.addAutomaticAtemNote(`Recording started (${filename})`);
+        this.cqMixer.startRecording();
       } catch (err) { this.log('ATEM start recording failed', (err as Error).message); }
     });
 
@@ -419,7 +521,24 @@ export class SlateService {
           { successMessage: 'Recording stopped' });
         this.addAutomaticAtemNote(`Recording stopped (${this.atemFilenameBase || this.atemState.recording.filename || 'unnamed'})`);
         this.emitAtemState();
+        this.cqMixer.stopRecording();
       } catch (err) { this.log('ATEM stop recording failed', (err as Error).message); }
+    });
+
+    // ── CQ mixer track control ──
+    socket.on('cqSetTrackMute', (payload: { track?: number; muted?: boolean }) => {
+      if (typeof payload?.track !== 'number' || typeof payload?.muted !== 'boolean') return;
+      this.cqMixer.setTrackMute(payload.track, payload.muted);
+    });
+
+    socket.on('cqSetTrackArm', (payload: { track?: number; armed?: boolean }) => {
+      if (typeof payload?.track !== 'number' || typeof payload?.armed !== 'boolean') return;
+      this.cqMixer.setTrackArm(payload.track, payload.armed);
+    });
+
+    socket.on('cqSetTrackGain', (payload: { track?: number; db?: number }) => {
+      if (typeof payload?.track !== 'number' || typeof payload?.db !== 'number') return;
+      this.cqMixer.setTrackGain(payload.track, payload.db);
     });
 
     socket.on('atemSetOutput4Mode', async (payload: { mode?: string }) => {
@@ -443,7 +562,12 @@ export class SlateService {
     this.notes = readNotes(projectId);
     this.currentProjectId = projectId;
     const project = this.projectStore.getById(projectId);
-    if (project) this.atemFilenameBase = generateRecordingBaseName(project.name, new Date(), project.clientName);
+    if (project) {
+      this.atemFilenameBase = generateRecordingBaseName(project.name, new Date(), project.clientName);
+      this.atemBridge.setRecordingFilename(this.atemFilenameBase).catch((err) =>
+        this.log('ATEM auto-filename skipped', (err as Error).message)
+      );
+    }
     this.config.lastProjectId = projectId;
     saveConfig(this.config);
     this.emitAtemState();
@@ -477,6 +601,14 @@ export class SlateService {
     }
   }
 
+  private emitAtemProfiles(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
+    target.emit('atemProfiles', this.config.atem.profiles);
+  }
+
+  private emitTravelMode(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
+    target.emit('travelMode', { active: this.travelModeActive, bridgeUrl: this.config.atem.travelBridgeUrl });
+  }
+
   private emitAtemState(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
     target.emit('atemState', {
       ...this.atemState,
@@ -497,6 +629,12 @@ export class SlateService {
     target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
   ) {
     target.emit('playbackConnectionState', this.playbackConnection);
+  }
+
+  private emitCqMixerState(
+    target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
+  ) {
+    target.emit('cqMixerState', this.cqMixerState);
   }
 
   private emitAtemToast(target: { emit: (ev: string, data: unknown) => void }, type: string, message: string) {
@@ -825,6 +963,10 @@ class MinimalFtpClient {
         finish();
       });
     });
+
+    // Prevent unhandledRejection if the timeout fires while sendCommand/readExpected are
+    // still awaiting — the rejection is caught for real when we reach `await dataPromise`.
+    dataPromise.catch(() => {});
 
     const normalizedPath = normalizeFtpPath(path);
     const command = normalizedPath ? `LIST ${normalizedPath}` : 'LIST';

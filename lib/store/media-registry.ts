@@ -6,6 +6,7 @@ import type {
   FrameIOInfo,
   LeaderPassInfo,
   MediaAsset,
+  SardiusInfo,
   TranscriptionInfo,
 } from '@/lib/models/media-asset';
 import {
@@ -66,6 +67,7 @@ export interface AssetPatch {
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;
   leaderpass?: Partial<LeaderPassInfo>;
+  sardius?: Partial<SardiusInfo>;
 }
 
 export function patchAsset(projectId: string, assetId: string, patch: AssetPatch): MediaAsset | null {

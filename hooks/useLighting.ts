@@ -164,12 +164,22 @@ export function useLighting() {
     await patchConfig({ fixtureOrder: { [group]: newOrder } as Record<AmaranFixtureGroup, string[]> });
   }, [patchConfig]);
 
+  /** Pull the current Amaran status from the server and sync React state. */
+  const syncStatus = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/studio/lighting');
+      const data = await res.json() as { status?: AmaranStatus };
+      if (data.status) setStatus(data.status);
+    } catch { /* non-critical */ }
+  }, []);
+
   return {
     status,
     loading,
     error,
     arrangement,
     sendCommand,
+    syncStatus,
     connect,
     disconnect,
     rediscover,

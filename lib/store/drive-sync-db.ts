@@ -26,6 +26,7 @@ function initSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
 
     CREATE TABLE IF NOT EXISTS drive_assets (
       id             TEXT PRIMARY KEY,
@@ -219,6 +220,16 @@ export function getDriveAssetsByProject(projectId: string): DriveAsset[] {
   const rows = db.prepare(
     'SELECT * FROM drive_assets WHERE project_id = ? ORDER BY synced_at DESC'
   ).all(projectId) as Record<string, unknown>[];
+  return rows.map(rowToAsset);
+}
+
+export function getDriveAssetsByProjects(projectIds: string[]): DriveAsset[] {
+  if (projectIds.length === 0) return [];
+  const db          = getDriveSyncDb();
+  const placeholders = projectIds.map(() => '?').join(', ');
+  const rows = db.prepare(
+    `SELECT * FROM drive_assets WHERE project_id IN (${placeholders}) ORDER BY synced_at DESC`
+  ).all(...projectIds) as Record<string, unknown>[];
   return rows.map(rowToAsset);
 }
 

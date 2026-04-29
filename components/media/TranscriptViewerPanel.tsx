@@ -1,5 +1,6 @@
 'use client';
 
+import ReactMarkdown from 'react-markdown';
 import React, { CSSProperties, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
@@ -84,29 +85,28 @@ function buildScopeLabel(searchScopeMode: 'selected' | 'all', entries: SearchSco
 }
 
 function renderMessageContent(content: string) {
-  const lines = content.split('\n').map((line) => line.trimEnd());
-  const paragraphs: string[] = [];
-  const bullets: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith('- ')) bullets.push(trimmed.slice(2).trim());
-    else paragraphs.push(trimmed);
-  }
-
   return (
-    <div className="txv-message-copy">
-      {paragraphs.map((paragraph, index) => (
-        <p key={`p-${index}`} className="txv-message-paragraph">{paragraph}</p>
-      ))}
-      {bullets.length > 0 && (
-        <ul className="txv-message-bullets">
-          {bullets.map((bullet, index) => (
-            <li key={`b-${index}`}>{bullet}</li>
-          ))}
-        </ul>
-      )}
+    <div
+      className="txv-message-copy txv-message-markdown"
+      onCopy={(e) => {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed) return;
+        e.preventDefault();
+        e.clipboardData.setData('text/plain', selection.toString());
+      }}
+    >
+      <ReactMarkdown
+        components={{
+          table: ({ children }) => <>{children}</>,
+          thead: () => null,
+          tbody: () => null,
+          tr: () => null,
+          td: () => null,
+          th: () => null,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

@@ -46,7 +46,9 @@ async function setupProjectDriveFolders(project: Project): Promise<void> {
   const orphaned = getOrphanedFolderByClientProject(project.clientName, project.name);
   if (!orphaned) return;
 
-  await adoptOrphanedFolderContents(orphaned.driveFileId, folders.assets, driveId);
+  if (folders.assets) {
+    await adoptOrphanedFolderContents(orphaned.driveFileId, folders.assets, driveId);
+  }
   markOrphanedFolderResolved(orphaned.driveFileId);
   console.log(`[drive] adopted orphaned folder for: ${project.clientName} / ${project.name}`);
 }

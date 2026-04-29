@@ -12,8 +12,10 @@ import type { TaskNotifType } from '@/lib/models/task-notification';
 
 const TOKEN = process.env.SLACK_BOT_TOKEN;
 
-// In-memory cache: email → Slack user ID
+// In-memory cache: email → Slack user ID. Capped at 500 entries — evicts the
+// oldest entry when full so the map never grows without bound.
 const emailToSlackId = new Map<string, string>();
+const EMAIL_CACHE_MAX = 500;
 
 async function lookupSlackUserId(email: string): Promise<string | null> {
   const cached = emailToSlackId.get(email);
@@ -30,6 +32,9 @@ async function lookupSlackUserId(email: string): Promise<string | null> {
     return null;
   }
 
+  if (emailToSlackId.size >= EMAIL_CACHE_MAX) {
+    emailToSlackId.delete(emailToSlackId.keys().next().value!);
+  }
   emailToSlackId.set(email, data.user.id);
   return data.user.id;
 }

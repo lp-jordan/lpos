@@ -35,9 +35,10 @@ import type { AmaranFixtureGroup } from '@/lib/lighting-constants';
 export interface AmaranConfig {
   port: number;        // Amaran Desktop WebSocket port (default 33782)
   autoConnect: boolean;
-  fixtureLabels: Record<string, string>;                  // nodeId → display name override
-  fixtureGroups: Record<string, AmaranFixtureGroup>;      // nodeId → section assignment
-  fixtureOrder:  Record<AmaranFixtureGroup, string[]>;    // group → ordered nodeIds
+  fixtureLabels:  Record<string, string>;                  // nodeId → display name override
+  fixtureGroups:  Record<string, AmaranFixtureGroup>;      // nodeId → section assignment
+  fixtureOrder:   Record<AmaranFixtureGroup, string[]>;    // group → ordered nodeIds
+  fixtureModes:   Record<string, 'cct' | 'hsi'>;          // nodeId → last-known color mode
 }
 
 export interface WledConfig {
@@ -55,6 +56,7 @@ export interface CameraConfig {
   ip: string;
   port: number;
   sdkBridge: SonySdkBridgeConfig;
+  atemVideoDeviceIndex: string;
 }
 
 export interface StudioConfig {
@@ -83,6 +85,7 @@ const DEFAULTS: StudioConfig = {
     fingerprint: '',
     ip: '',
     port: 10000,
+    atemVideoDeviceIndex: '0',
     sdkBridge: {
       baseUrl: 'http://127.0.0.1:6107',
       executablePath: DEFAULT_SDK_BRIDGE_EXECUTABLE,
@@ -97,6 +100,7 @@ const DEFAULTS: StudioConfig = {
     fixtureLabels: {},
     fixtureGroups: {},
     fixtureOrder:  { bookshelves: [], void: [], mobile: [] },
+    fixtureModes:  {},
   },
   wled: { ...WLED_DEFAULTS },
 };
@@ -158,6 +162,9 @@ function normalizeStudioConfig(raw?: Partial<StudioConfig>): StudioConfig {
         void:        Array.isArray(raw?.amaran?.fixtureOrder?.void)        ? raw.amaran.fixtureOrder.void        : [],
         mobile:      Array.isArray(raw?.amaran?.fixtureOrder?.mobile)      ? raw.amaran.fixtureOrder.mobile      : [],
       },
+      fixtureModes: (typeof raw?.amaran?.fixtureModes === 'object' && raw.amaran.fixtureModes !== null)
+        ? raw.amaran.fixtureModes as Record<string, 'cct' | 'hsi'>
+        : {},
     },
     wled: {
       ip: typeof raw?.wled?.ip === 'string' ? raw.wled.ip.trim() : WLED_DEFAULTS.ip,
@@ -177,6 +184,13 @@ export function readStudioConfig(): StudioConfig {
 export function writeStudioConfig(config: StudioConfig): void {
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(normalizeStudioConfig(config), null, 2), 'utf-8');
+}
+
+/** Write a single fixture's color mode to the persisted config. */
+export function setFixtureMode(nodeId: string, mode: 'cct' | 'hsi'): void {
+  const current = readStudioConfig();
+  current.amaran.fixtureModes[nodeId] = mode;
+  writeStudioConfig(current);
 }
 
 export function patchStudioConfig(patch: StudioConfigPatch): StudioConfig {

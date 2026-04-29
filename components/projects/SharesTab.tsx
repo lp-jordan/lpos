@@ -69,10 +69,10 @@ function NewShareModal({
         }),
       });
       const data = await res.json() as { share?: FrameIOShare; error?: string };
-      if (!res.ok) { setError(data.error ?? 'Failed to create share'); return; }
+      if (!res.ok) { setError(data.error ?? 'Failed to create review'); return; }
       if (data.share) onCreated(data.share);
     } catch {
-      setError('Network error — could not create share');
+      setError('Network error — could not create review');
     } finally {
       setCreating(false);
     }
@@ -80,9 +80,9 @@ function NewShareModal({
 
   return (
     <div className="sh-modal-backdrop" onClick={onClose} aria-hidden="true">
-      <div className="sh-modal" role="dialog" aria-label="New share" onClick={(e) => e.stopPropagation()}>
+      <div className="sh-modal" role="dialog" aria-label="New review" onClick={(e) => e.stopPropagation()}>
         <div className="sh-modal-header">
-          <span>New Frame.io Share</span>
+          <span>New Frame.io Review</span>
           <button type="button" className="sh-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -92,7 +92,7 @@ function NewShareModal({
 
         <div className="sh-modal-body">
           <div className="sh-modal-field">
-            <label className="sh-modal-label">Share name (optional)</label>
+            <label className="sh-modal-label">Review name (optional)</label>
             <input
               className="sh-modal-input"
               type="text"
@@ -146,7 +146,7 @@ function NewShareModal({
             onClick={() => void handleCreate()}
             disabled={creating || uploadedAssets.length === 0}
           >
-            {creating ? 'Creating…' : 'Create share'}
+            {creating ? 'Creating…' : 'Create review'}
           </button>
         </div>
       </div>
@@ -210,9 +210,9 @@ function AddAssetsModal({
 
   return (
     <div className="sh-modal-backdrop" onClick={onClose} aria-hidden="true">
-      <div className="sh-modal" role="dialog" aria-label="Add assets to share" onClick={(e) => e.stopPropagation()}>
+      <div className="sh-modal" role="dialog" aria-label="Add assets to review" onClick={(e) => e.stopPropagation()}>
         <div className="sh-modal-header">
-          <span>Add assets to share</span>
+          <span>Add assets to review</span>
           <button type="button" className="sh-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -221,7 +221,7 @@ function AddAssetsModal({
         </div>
         <div className="sh-modal-body">
           {available.length === 0 ? (
-            <p className="sh-empty">All uploaded assets are already in this share.</p>
+            <p className="sh-empty">All uploaded assets are already in this review.</p>
           ) : (
             <div className="sh-modal-asset-list">
               {available.map((a) => (
@@ -329,7 +329,7 @@ function ShareCard({
   }
 
   async function handleDelete() {
-    if (!confirm(`Delete share "${share.name}"? The link will stop working.`)) return;
+    if (!confirm(`Delete review "${share.name}"? The link will stop working.`)) return;
     setDeleting(true);
     try {
       await fetch(`/api/projects/${projectId}/shares/${share.id}`, { method: 'DELETE' });
@@ -425,7 +425,7 @@ function ShareCard({
               type="button"
               className="sh-card-action-btn sh-card-action-btn--accent"
               onClick={handleCopy}
-              title="Copy share link"
+              title="Copy review link"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -438,8 +438,8 @@ function ShareCard({
               className="sh-card-action-btn sh-card-action-btn--danger"
               onClick={() => void handleDelete()}
               disabled={deleting}
-              title="Delete share"
-              aria-label="Delete share"
+              title="Delete review"
+              aria-label="Delete review"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6"/>
@@ -478,7 +478,7 @@ function ShareCard({
             {share.filesLoading && <p className="sh-empty">Loading files…</p>}
 
             {!share.filesLoading && share.files !== null && share.files.length === 0 && (
-              <p className="sh-empty">No files in this share yet.</p>
+              <p className="sh-empty">No files in this review yet.</p>
             )}
 
             {share.files && share.files.length > 0 && (
@@ -499,8 +499,8 @@ function ShareCard({
                       className="sh-file-remove-btn"
                       onClick={() => void handleRemoveFile(f.id)}
                       disabled={removingId === f.id}
-                      title="Remove from share"
-                      aria-label="Remove from share"
+                      title="Remove from review"
+                      aria-label="Remove from review"
                     >
                       {removingId === f.id ? '…' : '✕'}
                     </button>
@@ -551,7 +551,7 @@ export function SharesTab({ projectId }: { projectId: string }) {
     try {
       const res  = await fetch(`/api/projects/${projectId}/shares`);
       const data = await res.json() as { shares?: FrameIOShare[]; error?: string };
-      if (!res.ok) { setError(data.error ?? 'Failed to load shares'); return; }
+      if (!res.ok) { setError(data.error ?? 'Failed to load reviews'); return; }
       setShares((data.shares ?? []).map((s) => ({
         ...s,
         files:        null,
@@ -559,7 +559,7 @@ export function SharesTab({ projectId }: { projectId: string }) {
         expanded:     false,
       })));
     } catch {
-      setError('Network error — could not load shares');
+      setError('Network error — could not load reviews');
     } finally {
       setLoading(false);
     }
@@ -630,14 +630,14 @@ export function SharesTab({ projectId }: { projectId: string }) {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
-          New share
+          New review
         </button>
         <button
           type="button"
           className="sh-icon-btn"
           onClick={() => void fetchShares()}
           title="Refresh"
-          aria-label="Refresh shares"
+          aria-label="Refresh reviews"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
@@ -647,12 +647,12 @@ export function SharesTab({ projectId }: { projectId: string }) {
       </div>
 
       {/* States */}
-      {loading && <p className="m-empty">Loading shares…</p>}
+      {loading && <p className="m-empty">Loading reviews…</p>}
       {error   && <p className="sh-error">{error}</p>}
 
       {!loading && !error && shares.length === 0 && (
         <p className="m-empty">
-          No shares yet. Create one to send a review link to your client.
+          No reviews yet. Create one to send a review link to your client.
         </p>
       )}
 

@@ -16,6 +16,7 @@ import type {
   FrameIOInfo,
   LeaderPassInfo,
   MediaAsset,
+  SardiusInfo,
   StorageType,
   TranscriptionInfo,
 } from '@/lib/models/media-asset';
@@ -23,6 +24,7 @@ import {
   defaultCloudflareStream,
   defaultFrameIO,
   defaultLeaderPass,
+  defaultSardius,
   defaultTranscription,
 } from '@/lib/models/media-asset';
 
@@ -56,6 +58,7 @@ export interface CanonicalAssetPatch {
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;
   leaderpass?: Partial<LeaderPassInfo>;
+  sardius?: Partial<SardiusInfo>;
 }
 
 type AssetRow = Row & CanonicalAsset;
@@ -273,6 +276,7 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
   const frameio = pickLatestDistribution(bundle, currentVersionId, 'frameio');
   const cloudflare = pickLatestDistribution(bundle, currentVersionId, 'cloudflare');
   const leaderpass = pickLatestDistribution(bundle, currentVersionId, 'leaderpass');
+  const sardius = pickLatestDistribution(bundle, currentVersionId, 'sardius');
   const transcription = pickLatestTranscription(bundle, currentVersionId);
   const transcriptionFromPriorVersion = transcription !== null && transcription.asset_version_id !== currentVersionId;
   const transcriptionSourceVersion = transcriptionFromPriorVersion
@@ -281,6 +285,7 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
   const frameioMeta = parseMetadataJson<FrameIOInfo>(frameio?.metadata_json);
   const cloudflareMeta = parseMetadataJson<CloudflareStreamInfo>(cloudflare?.metadata_json);
   const leaderpassMeta = parseMetadataJson<LeaderPassInfo>(leaderpass?.metadata_json);
+  const sardiusMeta = parseMetadataJson<SardiusInfo>(sardius?.metadata_json);
   const transcriptionMeta = parseMetadataJson<TranscriptionInfo>(transcription?.metadata_json);
 
   return {
@@ -339,6 +344,14 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
       thumbnailUrl: leaderpass?.thumbnail_url ?? leaderpassMeta.thumbnailUrl ?? null,
       publishedAt: leaderpass?.published_at ?? leaderpassMeta.publishedAt ?? null,
       lastError: leaderpass?.last_error ?? leaderpassMeta.lastError ?? null,
+    },
+    sardius: {
+      ...defaultSardius(),
+      ...sardiusMeta,
+      status: (sardius?.provider_status as SardiusInfo['status']) ?? sardiusMeta.status ?? 'none',
+      shareUrl: sardius?.playback_url ?? sardiusMeta.shareUrl ?? null,
+      uploadedAt: sardius?.published_at ?? sardiusMeta.uploadedAt ?? null,
+      lastError: sardius?.last_error ?? sardiusMeta.lastError ?? null,
     },
   };
 }
@@ -980,6 +993,16 @@ export function patchCanonicalMediaAsset(projectId: string, assetId: string, pat
       thumbnail_url: patch.leaderpass.thumbnailUrl,
       last_error: patch.leaderpass.lastError,
       ...patch.leaderpass,
+    });
+  }
+
+  if (patch.sardius) {
+    createOrUpdateDistributionRecord(assetId, 'sardius', {
+      provider_status: patch.sardius.status,
+      playback_url: patch.sardius.shareUrl,
+      published_at: patch.sardius.uploadedAt,
+      last_error: patch.sardius.lastError,
+      ...patch.sardius,
     });
   }
 

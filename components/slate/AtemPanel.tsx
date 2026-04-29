@@ -1,14 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { AtemState } from '@/lib/services/atem-utils';
+import type { TravelModeState } from '@/hooks/useSlate';
+
+const TRAVEL_ATEM_IP = '10.10.10.241';
+const HOME_ATEM_IP = '172.20.10.241';
+const TRAVEL_BRIDGE_URL = 'http://100.110.17.100:4011';
 
 interface Props {
   atemState: AtemState | null;
+  travelMode: TravelModeState;
   settingsOpen: boolean;
   onSettingsToggle: () => void;
   onConnect: (ip: string) => void;
   onDisconnect: () => void;
+  onEnableTravelMode: (bridgeUrl: string, atemIp: string) => void;
+  onDisableTravelMode: (atemIp: string) => void;
   onSetFilename: (filename: string) => void;
   onSetPreview: (inputId: number) => void;
   onSetProgram: (inputId: number) => void;
@@ -24,10 +32,13 @@ const CAMERAS = [1, 2, 3, 4, 5, 6];
 
 export function AtemPanel({
   atemState,
+  travelMode,
   settingsOpen,
   onSettingsToggle,
   onConnect,
   onDisconnect,
+  onEnableTravelMode,
+  onDisableTravelMode,
   onSetFilename,
   onSetPreview,
   onSetProgram,
@@ -40,6 +51,11 @@ export function AtemPanel({
 }: Readonly<Props>) {
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
+  const [showChecklist, setShowChecklist] = useState(false);
+
+  useEffect(() => {
+    setFilenameInput(atemState?.recording.filename ?? '');
+  }, [atemState?.recording.filename]);
 
   const connected = atemState?.connected ?? false;
   const isRecording = atemState?.recording.isRecording ?? false;
@@ -48,6 +64,15 @@ export function AtemPanel({
   const switcherIp = atemState?.switcherIp ?? '';
   const recordingFilename = atemState?.recording.filename ?? '';
   const output4IsProgram = output4Mode === 'program';
+
+  const handleTravelToggle = () => {
+    if (travelMode.active) {
+      onDisableTravelMode(HOME_ATEM_IP);
+      setShowChecklist(false);
+    } else {
+      onEnableTravelMode(TRAVEL_BRIDGE_URL, TRAVEL_ATEM_IP);
+    }
+  };
 
   return (
     <div className="sl-atem-panel">
@@ -68,6 +93,43 @@ export function AtemPanel({
 
       {settingsOpen && (
         <div className="sl-atem-settings">
+
+          {/* Travel Mode */}
+          <div className="sl-settings-block">
+            <div className="sl-travel-row">
+              <span className="sl-settings-label">Travel Mode</span>
+              <button
+                className={`sl-pill-toggle${travelMode.active ? ' sl-pill-toggle--on' : ''}`}
+                type="button"
+                onClick={handleTravelToggle}
+                aria-pressed={travelMode.active}
+              >
+                <span className="sl-pill-knob" />
+              </button>
+              <button
+                className={`sl-checklist-btn${showChecklist ? ' sl-checklist-btn--active' : ''}`}
+                type="button"
+                onClick={() => setShowChecklist((v) => !v)}
+                aria-label="Show setup checklist"
+              >
+                ?
+              </button>
+            </div>
+
+            {showChecklist && (
+              <ol className="sl-travel-checklist">
+                <li>Ethernet cable from ATEM → Mac USB adapter</li>
+                <li>Mac Network → USB LAN → Manual IP <code>10.10.10.1</code>, mask <code>255.255.255.0</code></li>
+                <li>ATEM Network → Static <code>10.10.10.241</code>, gateway <code>10.10.10.1</code></li>
+                <li>Double-click <strong>Start ATEM Bridge</strong> on Mac desktop</li>
+                <li>Mac connected to venue WiFi — Tailscale icon is green</li>
+                <li>Flip the toggle</li>
+              </ol>
+            )}
+
+          </div>
+
+          {/* Connection */}
           <div className="sl-settings-block">
             <span className="sl-settings-label">Connection</span>
             <div className="sl-settings-row">
@@ -82,6 +144,8 @@ export function AtemPanel({
               <button className="sl-btn-sm" type="button" onClick={onDisconnect} disabled={!connected}>Disconnect</button>
             </div>
           </div>
+
+          {/* Record Filename */}
           <div className="sl-settings-block">
             <span className="sl-settings-label">Record Filename</span>
             <div className="sl-settings-row">
@@ -95,6 +159,7 @@ export function AtemPanel({
               <button className="sl-btn-sm" type="button" onClick={() => onSetFilename(filenameInput)}>Apply</button>
             </div>
           </div>
+
           {atemState?.lastError && (
             <p className="sl-atem-error">{atemState.lastError}</p>
           )}
@@ -145,7 +210,9 @@ export function AtemPanel({
       </div>
 
       <div className={`sl-atem-status-line${isRecording ? ' sl-atem-status-line--recording' : ''}`}>
-        {connected ? `${switcherIp}  ·  ${recordingFilename || '—'}` : (atemState?.bridgeAvailable ? 'Bridge ready · Not connected' : 'Bridge unavailable')}
+        {connected
+          ? `${travelMode.active ? '✈ ' : ''}${switcherIp}  ·  ${recordingFilename || '—'}`
+          : (atemState?.bridgeAvailable ? 'Bridge ready · Not connected' : 'Bridge unavailable')}
       </div>
     </div>
   );

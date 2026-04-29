@@ -22,8 +22,10 @@ import { Readable } from 'node:stream';
 import { withRetry } from '@/lib/utils/retry';
 
 // Wraps a googleapis call with exponential back-off (429 / 5xx / network errors).
+// 6 attempts: delays of 1 s, 2 s, 4 s, 8 s, 16 s — handles sustained rate limits
+// during large merge operations.
 function driveCall<T>(fn: () => Promise<T>): Promise<T> {
-  return withRetry(fn);
+  return withRetry(fn, 6);
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────
@@ -169,6 +171,15 @@ export async function downloadFile(fileId: string): Promise<Buffer> {
   return Buffer.from(res.data as ArrayBuffer);
 }
 
+export async function downloadFileStream(fileId: string): Promise<NodeJS.ReadableStream> {
+  const drive = getDriveClient();
+  const res = await driveCall(() => drive.files.get(
+    { ...SHARED_DRIVE_PARAMS, fileId, alt: 'media' },
+    { responseType: 'stream' },
+  ));
+  return res.data as NodeJS.ReadableStream;
+}
+
 /**
  * Export a Google Workspace file (Docs, Sheets, Slides, etc.) to a given MIME
  * type and return the result as a Buffer. Use this instead of downloadFile for
@@ -241,6 +252,97 @@ export async function listChildren(
   } while (pageToken);
 
   return files;
+}
+
+/**
+ * Copy a file to a destination folder. Returns the new file ID.
+ * Note: Drive's files.copy only supports files, not folders.
+ */
+export async function copyFile(
+  fileId:      string,
+  destFolderId: string,
+  newName?:    string,
+): Promise<string> {
+  const drive = getDriveClient();
+  const requestBody: drive_v3.Schema$File = { parents: [destFolderId] };
+  if (newName) requestBody.name = newName;
+  const res = await driveCall(() => drive.files.copy({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+    requestBody,
+    fields: 'id',
+  }));
+  const id = res.data.id;
+  if (!id) throw new Error(`[drive-client] Failed to copy file: ${fileId}`);
+  return id;
+}
+
+/**
+ * Delete a file or folder by ID. Deleting a folder also removes all its contents.
+ */
+export async function deleteFile(fileId: string): Promise<void> {
+  const drive = getDriveClient();
+  await driveCall(() => drive.files.delete({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+  }));
+}
+
+/**
+ * Rename a file or folder in place.
+ */
+export async function renameFile(fileId: string, newName: string): Promise<void> {
+  const drive = getDriveClient();
+  await driveCall(() => drive.files.update({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+    requestBody: { name: newName },
+    fields: 'id',
+  }));
+}
+
+export interface DriveFileInfo {
+  id:           string;
+  name:         string;
+  mimeType:     string;
+  size:         number | null;
+  modifiedTime: string | null;
+  parentId:     string;
+}
+
+/**
+ * Recursively list all files and folders inside a folder (depth-first).
+ * Returns a flat array — each entry includes its direct parentId.
+ */
+export async function listChildrenRecursive(
+  folderId: string,
+  driveId:  string,
+): Promise<DriveFileInfo[]> {
+  const results: DriveFileInfo[] = [];
+  await collectRecursive(folderId, driveId, results);
+  return results;
+}
+
+async function collectRecursive(
+  folderId: string,
+  driveId:  string,
+  results:  DriveFileInfo[],
+): Promise<void> {
+  const children = await listChildren(folderId, driveId);
+  for (const child of children) {
+    if (!child.id || !child.name) continue;
+    results.push({
+      id:           child.id,
+      name:         child.name,
+      mimeType:     child.mimeType ?? '',
+      size:         child.size ? Number(child.size) : null,
+      modifiedTime: child.modifiedTime ?? null,
+      parentId:     folderId,
+    });
+    if (child.mimeType === 'application/vnd.google-apps.folder') {
+      await collectRecursive(child.id, driveId, results);
+    }
+  }
 }
 
 // ── Changes / webhook ─────────────────────────────────────────────────────────

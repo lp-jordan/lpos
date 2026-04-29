@@ -169,6 +169,36 @@ export function defaultTranscription(): TranscriptionInfo {
   return { status: 'none', jobId: null, completedAt: null, fromPriorVersion: false, sourceVersionNumber: null };
 }
 
+export type SardiusStatus = 'none' | 'uploading' | 'queued' | 'ready' | 'failed';
+
+export const SARDIUS_STATUS_LABEL: Record<SardiusStatus, string> = {
+  none:      'Not Pushed',
+  uploading: 'Uploading…',
+  queued:    'Processing in Sardius',
+  ready:     'Ready',
+  failed:    'Failed',
+};
+
+export interface SardiusInfo {
+  status: SardiusStatus;
+  remotePath: string | null;
+  remoteFilename: string | null;
+  shareUrl: string | null;
+  uploadedAt: string | null;
+  lastError: string | null;
+}
+
+export function defaultSardius(): SardiusInfo {
+  return {
+    status:         'none',
+    remotePath:     null,
+    remoteFilename: null,
+    shareUrl:       null,
+    uploadedAt:     null,
+    lastError:      null,
+  };
+}
+
 export type StorageType = 'uploaded' | 'registered';
 
 export interface MediaAsset {
@@ -189,4 +219,5 @@ export interface MediaAsset {
   frameio: FrameIOInfo;
   cloudflare: CloudflareStreamInfo;
   leaderpass: LeaderPassInfo;
+  sardius: SardiusInfo;
 }

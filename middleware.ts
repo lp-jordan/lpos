@@ -26,13 +26,15 @@ function isPublicPath(pathname: string): boolean {
 
 // ── Guest allow-list — the only paths a guest session may access ──────────────
 // Pages: /guest, /guest/scripts, /slate, /projects/[id]/scripts
-// API:   /api/presentation/*, /api/projects/[id]/scripts (GET + POST only)
+// API:   /api/presentation/*, /api/studio/lighting/*, /api/studio/wled/*, /api/projects/[id]/scripts (GET + POST only)
 
 function isGuestAllowed(pathname: string, method: string): boolean {
   if (pathname === '/guest') return true;
   if (pathname === '/guest/scripts') return true;
   if (pathname === '/slate') return true;
   if (pathname.startsWith('/api/presentation/')) return true;
+  if (pathname.startsWith('/api/studio/lighting')) return true;
+  if (pathname.startsWith('/api/studio/wled')) return true;
   if (/^\/projects\/[^/]+\/scripts$/.test(pathname)) return true;
   // Script upload: allow GET (list) and POST (upload) but not DELETE
   if (/^\/api\/projects\/[^/]+\/scripts$/.test(pathname) && (method === 'GET' || method === 'POST')) return true;

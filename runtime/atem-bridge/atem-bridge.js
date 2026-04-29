@@ -2,6 +2,7 @@ const http = require('http');
 const { Atem } = require('atem-connection');
 
 const PORT = Number(process.env.ATEM_BRIDGE_PORT || 4011);
+const HOST = process.env.ATEM_BRIDGE_HOST || '127.0.0.1';
 
 // --- Live state ---
 let atem = null;
@@ -17,6 +18,7 @@ function buildState() {
   let programInput = null;
   let isRecording = false;
   let recordingStatus = isConnected ? 'idle' : 'disconnected';
+  let hasDrive = false;
   let output4Mode = null;
 
   if (atem && atem.state && isConnected) {
@@ -47,6 +49,14 @@ function buildState() {
       isRecording = s === 1;
       recordingStatus = s === 1 ? 'recording' : s === 128 ? 'stopping' : 'idle';
     }
+
+    // RecordingDiskStatus: Idle = 1, Unformatted = 2, Active = 4, Recording = 8, Removed = 32.
+    // A drive is usable when at least one disk slot is Idle, Active, or Recording.
+    if (atem.state.recording && atem.state.recording.disks) {
+      hasDrive = Object.values(atem.state.recording.disks).some(
+        disk => disk && (disk.status === 1 || disk.status === 4 || disk.status === 8)
+      );
+    }
   }
 
   return {
@@ -57,7 +67,7 @@ function buildState() {
     inputs,
     previewInput,
     programInput,
-    recording: { isRecording, filename: recordingFilename, status: recordingStatus },
+    recording: { isRecording, filename: recordingFilename, status: recordingStatus, hasDrive },
     output4Mode,
     lastError,
     lastCommandAt,
@@ -161,19 +171,21 @@ const server = http.createServer(async (req, res) => {
 
       console.log(`[atem-bridge] Attempting connection to ${switcherIp} ...`);
 
-      // Wait up to 12s for the connected event.
-      // If it doesn't arrive in time, leave the instance running — atem-connection
-      // will keep retrying via its built-in reconnect loop and the state poll will
-      // pick up the connection once it lands.
+      // Wait up to 30s for the connected event.
+      // atem-connection sometimes needs an internal reconnect cycle (especially when
+      // the ATEM is holding a stale session from a previous connection), which can
+      // take 15-20s. If it doesn't arrive in time, leave the instance running —
+      // atem-connection will keep retrying via its built-in reconnect loop and the
+      // state poll will pick up the connection once it lands.
       await new Promise((resolve) => {
         if (isConnected) { resolve(); return; }
         const onConnected = () => resolve();
         atem.once('connected', onConnected);
-        setTimeout(() => { atem && atem.removeListener('connected', onConnected); resolve(); }, 12000);
+        setTimeout(() => { atem && atem.removeListener('connected', onConnected); resolve(); }, 30000);
       });
 
       if (!isConnected) {
-        lastError = `No response from ${switcherIp} after 12s — auto-reconnect active. If network is reachable, check macOS firewall allows node to receive incoming connections.`;
+        lastError = `No response from ${switcherIp} after 30s — auto-reconnect active. If network is reachable, check macOS firewall allows node to receive incoming connections.`;
         console.warn(`[atem-bridge] ${lastError}`);
       }
 
@@ -274,11 +286,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/v1/shutdown') {
-      sendJson(res, 200, { ok: true });
-      server.close(() => process.exit(0));
-      return;
-    }
+    // /v1/shutdown endpoint removed — bridge lifecycle is managed via SIGTERM
+    // from the parent process, not HTTP. Dropping it prevents any stale or
+    // external HTTP request from killing a freshly spawned bridge.
 
     sendJson(res, 404, { error: 'Not found' });
   } catch (err) {
@@ -288,6 +298,30 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[atem-bridge] Listening on http://127.0.0.1:${PORT}`);
+// Node's HTTP server adds a 'close' listener per active connection; the default
+// limit of 10 is too low for the combination of 2s state polling + concurrent
+// requests. This is not a leak — raise the limit to silence the false positive.
+server.setMaxListeners(50);
+
+// Catch unhandled errors so they appear in the log rather than causing a silent exit.
+process.on('uncaughtException', (err) => {
+  console.error('[atem-bridge] uncaughtException:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[atem-bridge] unhandledRejection:', reason);
+});
+
+// Graceful shutdown on SIGTERM — tear down the ATEM connection cleanly before
+// exiting so the ATEM releases its session immediately. Without this, the ATEM
+// holds the stale session and rejects the next connection attempt for 15-30s.
+process.on('SIGTERM', () => {
+  console.log('[atem-bridge] SIGTERM — disconnecting from ATEM and exiting');
+  teardownAtem().finally(() => {
+    if (server.closeAllConnections) server.closeAllConnections();
+    server.close(() => process.exit(0));
+  });
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`[atem-bridge] Listening on http://${HOST}:${PORT}`);
 });

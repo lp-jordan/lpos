@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
-import { renameProjectFolder } from '@/lib/services/drive-folder-service';
+import {
+  cleanupGroupIfEmpty,
+  detachProjectFromGroup,
+  renameProjectFolder,
+  unlockProject,
+} from '@/lib/services/drive-folder-service';
+import { getCoreDb } from '@/lib/store/core-db';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ projectId: string }> }) {
   try {
@@ -43,7 +49,29 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ pr
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ projectId: string }> }) {
   try {
     const { projectId } = await params;
-    const ok = getProjectStore().delete(projectId, {
+    const store   = getProjectStore();
+    const project = store.getById(projectId);
+
+    if (project?.assetLinkGroupId) {
+      const db = getCoreDb();
+      // Fail any in-flight merge jobs so they don't resume against a deleted project
+      db.prepare(`
+        UPDATE asset_merge_jobs
+        SET status = 'failed', error_message = 'Project deleted', updated_at = datetime('now')
+        WHERE source_project_id = ? AND status NOT IN ('completed', 'failed')
+      `).run(projectId);
+
+      // Release lock (safe no-op if none exists)
+      unlockProject(projectId);
+
+      // Detach from group in DB + cache
+      detachProjectFromGroup(projectId, project.name, project.clientName);
+
+      // If no other projects reference the group, clean up the group record
+      cleanupGroupIfEmpty(project.assetLinkGroupId);
+    }
+
+    const ok = store.delete(projectId, {
       actor: resolveRequestActor(_req),
       source_kind: 'api',
     });

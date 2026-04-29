@@ -40,7 +40,7 @@ function useCurrentDate() {
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdmin: boolean }) {
+export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: boolean; isAdmin: boolean; guestAccess?: 'lighting' }) {
   const timecode = useTimecode();
   const currentDate = useCurrentDate();
 
@@ -69,8 +69,10 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
   const [newProjectClient, setNewProjectClient] = useState<string | undefined>();
   const VALID_TABS = ['notes', 'atem', 'lighting', 'camera', 'audio', 'playback', 'presentation'] as const;
   type StudioTab = typeof VALID_TABS[number];
-  // Guests always land on presentation
-  const [studioTab, setStudioTab] = useState<StudioTab>(isGuest ? 'presentation' : 'notes');
+  const isLightingGuest = isGuest && guestAccess === 'lighting';
+  const [studioTab, setStudioTab] = useState<StudioTab>(
+    isLightingGuest ? 'lighting' : isGuest ? 'presentation' : 'notes'
+  );
 
   const projectRef = useRef<HTMLDivElement>(null);
   const noteInputRef = useRef<HTMLTextAreaElement>(null);
@@ -87,7 +89,7 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
   }, []);
 
   // Open the correct tab when navigating via a hash deep-link (e.g. /slate#presentation)
-  // Guests are locked to presentation regardless of hash
+  // Regular guests are locked to presentation; lighting guests are locked to lighting.
   useEffect(() => {
     if (isGuest) return;
     const hash = window.location.hash.slice(1) as StudioTab;
@@ -108,6 +110,9 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
   // ── Derived values ──
   const currentProject = slate.projects.find((p) => p.projectId === slate.currentProjectId);
   const isRecording = slate.atemState?.recording.isRecording ?? false;
+  const atemConnected = slate.atemState?.connected ?? false;
+  const hasDrive = slate.atemState?.recording.hasDrive ?? false;
+  const noDriveWarning = atemConnected && !hasDrive && !isRecording;
 
   // Group projects by client for the dropdown
   const clientGroups = slate.projects.reduce<Record<string, typeof slate.projects>>((acc, p) => {
@@ -151,7 +156,8 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
   }
 
   function handleStudioTabChange(tab: StudioTab) {
-    if (isGuest && tab !== 'presentation') return;
+    if (isLightingGuest && tab !== 'lighting') return;
+    if (isGuest && !isLightingGuest && tab !== 'presentation') return;
     setStudioTab(tab);
     slate.setStudioTab(tab);
   }
@@ -236,7 +242,8 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
             className={`sl-rec-btn${isRecording ? ' sl-rec-btn--active' : ''}`}
             type="button"
             onClick={() => isRecording ? slate.atemStopRecording() : slate.atemStartRecording()}
-            disabled={!slate.currentProjectId}
+            disabled={!slate.currentProjectId || slate.cqMixerState?.busy === true || noDriveWarning}
+            title={noDriveWarning ? 'No drive connected to ATEM' : undefined}
           >
             REC
           </button>
@@ -244,7 +251,15 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
           <span className={`sl-rec-value${isRecording ? ' sl-rec-value--on' : ''}`}>
             {isRecording ? 'On' : 'Off'}
           </span>
+          {noDriveWarning && (
+            <span className="sl-rec-no-drive" title="Attach a USB drive to the ATEM before recording">No drive</span>
+          )}
           <span className="sl-rec-spacer" />
+          {slate.cqMixerState && (
+            <span className={`sl-mixer-rec-pip${slate.cqMixerState.recording ? ' sl-mixer-rec-pip--on' : ''}`}>
+              MXR
+            </span>
+          )}
           <span className={`sl-connected-badge${slate.atemState?.connected ? '' : ' sl-connected-badge--off'}`}>
             {slate.atemState?.connected ? 'Connected' : 'Disconnected'}
           </span>
@@ -301,7 +316,9 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
               </svg>
             )},
           ] as { id: StudioTab; label: string; icon: React.ReactNode; soon?: boolean }[]).map((tab) => {
-            const guestLocked = isGuest && tab.id !== 'presentation';
+            const guestLocked = isLightingGuest
+              ? tab.id !== 'lighting'
+              : isGuest && tab.id !== 'presentation';
             return (
               <button
                 key={tab.id}
@@ -494,10 +511,13 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
           {studioTab === 'atem' && (
             <AtemPanel
               atemState={slate.atemState}
+              travelMode={slate.travelMode}
               settingsOpen={atemSettingsOpen}
               onSettingsToggle={() => setAtemSettingsOpen((v) => !v)}
               onConnect={slate.atemConnect}
               onDisconnect={slate.atemDisconnect}
+              onEnableTravelMode={slate.atemEnableTravelMode}
+              onDisableTravelMode={slate.atemDisableTravelMode}
               onSetFilename={slate.atemSetFilename}
               onSetPreview={slate.atemSetPreview}
               onSetProgram={slate.atemSetProgram}
@@ -523,6 +543,12 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
               <div className="sl-audio-header">
                 <span className="sl-playback-title">Studio Audio</span>
                 <div className="sl-audio-header-actions">
+                  {slate.cqMixerState && (
+                    <span className={`sl-mixer-chip${slate.cqMixerState.connected ? ' sl-mixer-chip--connected' : ''}`}>
+                      <span className="sl-mixer-chip-dot" />
+                      {slate.cqMixerState.connected ? slate.cqMixerState.name || 'Mixer' : 'Mixer offline'}
+                    </span>
+                  )}
                   <span
                     className={`sl-audio-status-badge${slate.audioMonitor.phase === 'monitoring'
                       ? ' sl-audio-status-badge--live'
@@ -547,7 +573,21 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
                     </button>
                     {audioSettingsOpen && (
                       <div className="sl-audio-settings-menu">
-                        <span className="sl-manage-label">Host Input</span>
+                        <div className="sl-audio-settings-header">
+                          <span className="sl-manage-label">Host Input</span>
+                          <button
+                            type="button"
+                            className="sl-audio-settings-refresh"
+                            onClick={() => slate.refreshAudioInputs()}
+                            title="Rescan audio devices"
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                            </svg>
+                            Refresh
+                          </button>
+                        </div>
                         {slate.audioMonitor.availableInputs.length === 0 && (
                           <div className="sl-audio-settings-empty">No host audio inputs found.</div>
                         )}
@@ -590,10 +630,97 @@ export function SlatePageContent({ isGuest, isAdmin }: { isGuest: boolean; isAdm
                     : slate.audioMonitor.preferredInput.label || slate.audioMonitor.preferredInput.deviceKey || 'No preferred input configured'}
                 </p>
               </div>
+
+              {slate.cqMixerState && (
+                <div className="sl-mixer-status">
+                  <div className="sl-mixer-status-row">
+                    <span className={`sl-mixer-status-dot${slate.cqMixerState.connected ? ' sl-mixer-status-dot--on' : ''}`} />
+                    <span className="sl-mixer-status-name">
+                      {slate.cqMixerState.connected
+                        ? slate.cqMixerState.name || slate.cqMixerState.ip
+                        : `Offline — ${slate.cqMixerState.ip}`}
+                    </span>
+                    {slate.cqMixerState.recording && (
+                      <span className="sl-mixer-status-rec">REC</span>
+                    )}
+                  </div>
+                  {!slate.cqMixerState.connected && slate.cqMixerState.lastError && (
+                    <p className="sl-mixer-status-error">{slate.cqMixerState.lastError}</p>
+                  )}
+                </div>
+              )}
+
+              {/* ── Track mixer ── */}
+              <div className="sl-mix-section">
+                <div className="sl-atem-header" style={{ marginBottom: '10px' }}>
+                  <span className="sl-atem-title">Track Control</span>
+                  <span className="sl-mix-coming-soon">CQ-20B</span>
+                </div>
+                {(() => {
+                  const mx = slate.cqMixerState;
+                  const canControl = mx?.connected ?? false;
+                  return (
+                    <>
+                      <div className="sl-mix-tracks">
+                        {Array.from({ length: 8 }, (_, i) => {
+                          const armed = mx?.trackArmed[i] ?? false;
+                          const muted = mx?.trackMutes[i] ?? false;
+                          const gain  = mx?.trackGains[i] ?? 0;
+                          return (
+                            <div key={i} className="sl-mix-track">
+                              <span className="sl-mix-track-label">Ch {i + 1}</span>
+                              <button
+                                type="button"
+                                className={`sl-mix-arm-btn${armed ? ' sl-mix-arm-btn--armed' : ''}`}
+                                title={armed ? 'Disarm track' : 'Arm track'}
+                                disabled={!canControl}
+                                onClick={() => slate.cqSetTrackArm(i, !armed)}
+                              >
+                                REC
+                              </button>
+                              <div className="sl-mix-fader-wrap">
+                                <input
+                                  type="range"
+                                  className="sl-mix-fader"
+                                  min={0} max={60} value={gain}
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  {...({ orient: 'vertical' } as any)}
+                                  disabled={!canControl}
+                                  title={`Ch ${i + 1} gain: ${gain}dB`}
+                                  onChange={(e) => slate.cqSetTrackGain(i, Number(e.target.value))}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={`sl-mix-mute-btn${muted ? ' sl-mix-mute-btn--muted' : ''}`}
+                                title={muted ? 'Unmute track' : 'Mute track'}
+                                disabled={!canControl}
+                                onClick={() => slate.cqSetTrackMute(i, !muted)}
+                              >
+                                M
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {!canControl && (
+                        <p className="sl-mix-hint">
+                          {mx ? 'Mixer offline — track control unavailable.' : 'No mixer configured.'}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           )}
 
-          {studioTab === 'camera' && <CameraPanel />}
+          {studioTab === 'camera' && (
+            <CameraPanel
+              audioMonitor={slate.audioMonitor}
+              onSetAudioMuted={slate.setAudioMonitorMuted}
+            />
+          )}
 
           {studioTab === 'presentation' && <PresentationPanel />}
 

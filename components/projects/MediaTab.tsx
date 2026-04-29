@@ -5,7 +5,9 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { io } from 'socket.io-client';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
+import { SardiusPushModal } from '@/components/media/SardiusPushModal';
 import { SharesPanel } from '@/components/projects/SharesPanel';
+import { DeliveryPanel } from '@/components/projects/DeliveryPanel';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
@@ -163,35 +165,92 @@ const IconUpload = () => (
     <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
   </svg>
 );
+const IconDownload = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+    <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+const IconDelivery = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+    <line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+
+// ── Asset row ─────────────────────────────────────────────────────────────────
+
+// ── Rename input ─────────────────────────────────────────────────────────────
+
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial:  string;
+  onCommit: (v: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+
+  return (
+    <input
+      ref={ref}
+      className="ma-rename-input"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => { if (value.trim() && value !== initial) onCommit(value.trim()); else onCancel(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); if (value.trim()) onCommit(value.trim()); }
+        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
 
 // ── Asset row ─────────────────────────────────────────────────────────────────
 
 function AssetRow({
+  projectId,
   asset,
   isOpen,
   isSelected,
+  isRenaming,
   onSelect,
   onClick,
   onDoubleClick,
   onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
 }: {
-  asset:         MediaAsset;
-  isOpen:        boolean;
-  isSelected:    boolean;
-  onSelect:      () => void;
-  onClick:       (e: React.MouseEvent) => void;
-  onDoubleClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  projectId:      string;
+  asset:          MediaAsset;
+  isOpen:         boolean;
+  isSelected:     boolean;
+  isRenaming:     boolean;
+  onSelect:       () => void;
+  onClick:        (e: React.MouseEvent) => void;
+  onDoubleClick:  () => void;
+  onContextMenu:  (e: React.MouseEvent) => void;
+  onRenameCommit: (v: string) => void;
+  onRenameCancel: () => void;
 }) {
+  const [thumbError, setThumbError] = useState(false);
+
   return (
     <div
       className={`ma-row${isOpen ? ' ma-row--open' : ''}${isSelected ? ' ma-row--selected' : ''}`}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      onClick={isRenaming ? undefined : onClick}
+      onDoubleClick={isRenaming ? undefined : onDoubleClick}
       onContextMenu={onContextMenu}
       role="row"
       tabIndex={0}
       onKeyDown={(e) => {
+        if (isRenaming) return;
         if (e.key === 'Enter') { e.preventDefault(); onDoubleClick(); }
         if (e.key === ' ')     { e.preventDefault(); onSelect(); }
       }}
@@ -206,13 +265,28 @@ function AssetRow({
           aria-label={`Select ${asset.name}`}
         />
       </div>
-      <div className="ma-row-icon"><IconFileVideo /></div>
+      <div className="ma-row-icon">
+        {!thumbError ? (
+          <img
+            src={`/api/projects/${projectId}/media/${asset.assetId}/thumbnail`}
+            alt=""
+            className="ma-row-thumb"
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <IconFileVideo />
+        )}
+      </div>
       <div className="ma-row-main">
-        <span className="ma-name">{asset.name}</span>
-        {asset.name !== asset.originalFilename && (
+        {isRenaming ? (
+          <RenameInput initial={asset.name} onCommit={onRenameCommit} onCancel={onRenameCancel} />
+        ) : (
+          <span className="ma-name">{asset.name}</span>
+        )}
+        {!isRenaming && asset.name !== asset.originalFilename && (
           <span className="ma-filename">{asset.originalFilename}</span>
         )}
-        {asset.description && <span className="ma-description">{asset.description}</span>}
+        {!isRenaming && asset.description && <span className="ma-description">{asset.description}</span>}
       </div>
       <div className="ma-row-meta">
         <span className="ma-filesize">{formatBytes(asset.fileSize)}</span>
@@ -241,31 +315,42 @@ function AssetRow({
 // ── Asset card ────────────────────────────────────────────────────────────────
 
 function AssetCard({
+  projectId,
   asset,
   isOpen,
   isSelected,
+  isRenaming,
   onSelect,
   onClick,
   onDoubleClick,
   onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
 }: {
-  asset:         MediaAsset;
-  isOpen:        boolean;
-  isSelected:    boolean;
-  onSelect:      () => void;
-  onClick:       (e: React.MouseEvent) => void;
-  onDoubleClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  projectId:      string;
+  asset:          MediaAsset;
+  isOpen:         boolean;
+  isSelected:     boolean;
+  isRenaming:     boolean;
+  onSelect:       () => void;
+  onClick:        (e: React.MouseEvent) => void;
+  onDoubleClick:  () => void;
+  onContextMenu:  (e: React.MouseEvent) => void;
+  onRenameCommit: (v: string) => void;
+  onRenameCancel: () => void;
 }) {
+  const [thumbError, setThumbError] = useState(false);
+
   return (
     <div
       className={`ma-card${isOpen ? ' ma-card--open' : ''}${isSelected ? ' ma-card--selected' : ''}`}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
+      onClick={isRenaming ? undefined : onClick}
+      onDoubleClick={isRenaming ? undefined : onDoubleClick}
       onContextMenu={onContextMenu}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
+        if (isRenaming) return;
         if (e.key === 'Enter') { e.preventDefault(); onDoubleClick(); }
         if (e.key === ' ')     { e.preventDefault(); onSelect(); }
       }}
@@ -281,11 +366,24 @@ function AssetCard({
         />
       </div>
       <div className="ma-card-thumb">
-        <IconFileVideo />
+        {!thumbError ? (
+          <img
+            src={`/api/projects/${projectId}/media/${asset.assetId}/thumbnail`}
+            alt=""
+            className="ma-card-thumb-img"
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <IconFileVideo />
+        )}
         {asset.frameio.playerUrl && <span className="ma-card-thumb-badge">Frame.io</span>}
       </div>
       <div className="ma-card-body">
-        <div className="ma-card-name">{asset.name}</div>
+        {isRenaming ? (
+          <RenameInput initial={asset.name} onCommit={onRenameCommit} onCancel={onRenameCancel} />
+        ) : (
+          <div className="ma-card-name">{asset.name}</div>
+        )}
         {asset.description && <div className="ma-card-desc">{asset.description}</div>}
         <div className="ma-card-meta">{formatBytes(asset.fileSize)} · {formatDuration(asset.duration)} · {formatDate(asset.registeredAt)}</div>
         <div className="ma-card-badges">
@@ -335,7 +433,10 @@ export function MediaTab({
   const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
-  const [showSharesPanel, setShowSharesPanel] = useState(false);
+  const [renamingId,      setRenamingId]      = useState<string | null>(null);
+  const [showSharesPanel,   setShowSharesPanel]   = useState(false);
+  const [showDeliveryPanel, setShowDeliveryPanel] = useState(false);
+  const [deliveryPending,   setDeliveryPending]   = useState<MediaAsset[] | null>(null);
   const [shareResult,     setShareResult]     = useState<{ url: string; count: number; skipped: number } | null>(null);
   const [shareWorking,    setShareWorking]    = useState(false);
   const [shareError,      setShareError]      = useState<string | null>(null);
@@ -344,6 +445,7 @@ export function MediaTab({
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
+  const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -892,9 +994,29 @@ const { openMenu } = useContextMenu();
 
   // ── Context menu ──────────────────────────────────────────────────────────
 
+  async function commitRename(assetId: string, newName: string) {
+    setRenamingId(null);
+    const res = await fetch(`/api/projects/${projectId}/media/${assetId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.warning) {
+      toast({ id: `rename-warn:${assetId}`, kind: 'publish', tone: 'error', title: 'Rename partially failed', body: data.warning });
+    }
+    void fetchAssets();
+  }
+
   function openAssetMenu(e: React.MouseEvent, asset: MediaAsset) {
     e.preventDefault();
     openMenu(e.clientX, e.clientY, [
+      {
+        type: 'item' as const,
+        label: 'Rename',
+        onClick: () => setRenamingId(asset.assetId),
+      },
+      { type: 'separator' as const },
       {
         type: 'item' as const,
         label: 'Open Details',
@@ -909,6 +1031,26 @@ const { openMenu } = useContextMenu();
         disabled: !asset.filePath,
         onClick: async () => {
           await fetch(`/api/projects/${projectId}/media/${asset.assetId}/open-location`, { method: 'POST' });
+        },
+      },
+      {
+        type: 'item' as const,
+        label: 'Download',
+        icon: <IconDownload />,
+        disabled: !asset.filePath,
+        onClick: () => {
+          window.location.href = `/api/projects/${projectId}/media/${asset.assetId}/download`;
+        },
+      },
+      {
+        type: 'item' as const,
+        label: 'Create Delivery',
+        icon: <IconDelivery />,
+        disabled: !asset.filePath,
+        onClick: () => {
+          setDeliveryPending([asset]);
+          setShowDeliveryPanel(true);
+          setSelectedAsset(null);
         },
       },
       { type: 'separator' as const },
@@ -1091,6 +1233,20 @@ const { openMenu } = useContextMenu();
     setTimeout(() => setShareCopied(false), 2000);
   }
 
+  function handleBulkDownload() {
+    const selected = assets.filter((a) => selectedIds.has(a.assetId) && a.filePath);
+    selected.forEach((a, i) => {
+      setTimeout(() => {
+        const link = document.createElement('a');
+        link.href = `/api/projects/${projectId}/media/${a.assetId}/download`;
+        link.download = '';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }, i * 300);
+    });
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -1204,13 +1360,25 @@ const { openMenu } = useContextMenu();
                 type="button"
                 className={`ma-shares-btn${showSharesPanel ? ' ma-shares-btn--active' : ''}`}
                 onClick={() => { setShowSharesPanel((v) => !v); if (!showSharesPanel) setSelectedAsset(null); }}
-                title="Share links"
+                title="Review links"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                   <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                 </svg>
-                Shares
+                Reviews
+              </button>
+              <button
+                type="button"
+                className={`ma-shares-btn${showDeliveryPanel ? ' ma-shares-btn--active' : ''}`}
+                onClick={() => { setShowDeliveryPanel((v) => !v); if (!showDeliveryPanel) setSelectedAsset(null); }}
+                title="Delivery links"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Delivery
               </button>
               <div className="m-view-toggle">
                 <button className={`m-view-btn${viewMode === 'list' ? ' active' : ''}`} type="button"
@@ -1253,6 +1421,20 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
+              onClick={() => {
+                const selected = assets.filter((a) => selectedIds.has(a.assetId));
+                setSardiusBatchAssets(selected);
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              Push to Sardius
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
               onClick={() => void handleBulkShare()}
               disabled={shareWorking}
             >
@@ -1265,6 +1447,22 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
+              onClick={() => {
+                const selected = assets.filter((a) => selectedIds.has(a.assetId));
+                setDeliveryPending(selected);
+                setShowDeliveryPanel(true);
+                setSelectedAsset(null);
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Create Delivery
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
               onClick={() => void handleBulkRetranscribe()}
               disabled={retranscribeWorking}
             >
@@ -1272,6 +1470,18 @@ const { openMenu } = useContextMenu();
                 <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
               </svg>
               {retranscribeWorking ? 'Queueing…' : 'Re-transcribe'}
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
+              onClick={handleBulkDownload}
+              disabled={assets.filter((a) => selectedIds.has(a.assetId) && a.filePath).length === 0}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download
             </button>
             {publishError && <span className="ma-selection-error">{publishError}</span>}
             {shareError && <span className="ma-selection-error">{shareError}</span>}
@@ -1323,13 +1533,17 @@ const { openMenu } = useContextMenu();
             {sorted.map((a, idx) => (
               <AssetRow
                 key={a.assetId}
+                projectId={projectId}
                 asset={a}
                 isOpen={selectedAsset?.assetId === a.assetId}
                 isSelected={selectedIds.has(a.assetId)}
+                isRenaming={renamingId === a.assetId}
                 onSelect={() => toggleSelect(a.assetId)}
                 onClick={(e) => handleAssetClick(a, idx, e)}
                 onDoubleClick={() => openAssetDetail(a)}
                 onContextMenu={(e) => openAssetMenu(e, a)}
+                onRenameCommit={(v) => void commitRename(a.assetId, v)}
+                onRenameCancel={() => setRenamingId(null)}
               />
             ))}
           </div>
@@ -1338,19 +1552,33 @@ const { openMenu } = useContextMenu();
             {sorted.map((a, idx) => (
               <AssetCard
                 key={a.assetId}
+                projectId={projectId}
                 asset={a}
                 isOpen={selectedAsset?.assetId === a.assetId}
                 isSelected={selectedIds.has(a.assetId)}
+                isRenaming={renamingId === a.assetId}
                 onSelect={() => toggleSelect(a.assetId)}
                 onClick={(e) => handleAssetClick(a, idx, e)}
                 onDoubleClick={() => openAssetDetail(a)}
                 onContextMenu={(e) => openAssetMenu(e, a)}
+                onRenameCommit={(v) => void commitRename(a.assetId, v)}
+                onRenameCancel={() => setRenamingId(null)}
               />
             ))}
           </div>
         )}
 
       </div>
+
+      {/* Sardius batch push modal */}
+      {sardiusBatchAssets && (
+        <SardiusPushModal
+          assets={sardiusBatchAssets}
+          projectId={projectId}
+          onClose={() => setSardiusBatchAssets(null)}
+          onPushed={() => { setSardiusBatchAssets(null); void fetchAssets(); }}
+        />
+      )}
 
       {/* Detail panel */}
       <MediaDetailPanel
@@ -1367,6 +1595,17 @@ const { openMenu } = useContextMenu();
         assets={assets}
         open={showSharesPanel}
         onClose={() => setShowSharesPanel(false)}
+      />
+
+      {/* Delivery panel */}
+      <DeliveryPanel
+        projectId={projectId}
+        projectName={projectName}
+        assets={assets}
+        open={showDeliveryPanel}
+        onClose={() => setShowDeliveryPanel(false)}
+        pendingCreate={deliveryPending}
+        onPendingConsumed={() => setDeliveryPending(null)}
       />
 
       {/* Share result modal */}

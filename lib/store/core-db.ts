@@ -13,6 +13,7 @@ declare global {
 function initSchema(db: DatabaseSync): void {
   db.exec(`PRAGMA foreign_keys = ON`);
   db.exec(`PRAGMA journal_mode = WAL`);
+  db.exec(`PRAGMA busy_timeout = 5000`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -143,6 +144,37 @@ function initSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS admins (
       email TEXT PRIMARY KEY
     );
+
+    CREATE TABLE IF NOT EXISTS asset_link_groups (
+      group_id           TEXT PRIMARY KEY,
+      client_name        TEXT NOT NULL,
+      shared_folder_name TEXT NOT NULL,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_asset_link_groups_client ON asset_link_groups(client_name);
+
+    CREATE TABLE IF NOT EXISTS asset_merge_jobs (
+      job_id             TEXT PRIMARY KEY,
+      group_id           TEXT NOT NULL REFERENCES asset_link_groups(group_id),
+      source_project_id  TEXT NOT NULL,
+      status             TEXT NOT NULL DEFAULT 'pending',
+      conflict_payload   TEXT,
+      resolution_payload TEXT,
+      error_message      TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_jobs_group  ON asset_merge_jobs(group_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_jobs_status ON asset_merge_jobs(status);
+
+    CREATE TABLE IF NOT EXISTS asset_link_locks (
+      project_id TEXT PRIMARY KEY,
+      reason     TEXT NOT NULL,
+      job_id     TEXT,
+      locked_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -159,6 +191,13 @@ function runMigrations(db: DatabaseSync): void {
   // v3: slack_email override on users
   try {
     db.exec(`ALTER TABLE users ADD COLUMN slack_email TEXT`);
+  } catch {
+    // Column already exists — migration already ran
+  }
+
+  // v4: asset link group membership on projects
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN asset_link_group_id TEXT REFERENCES asset_link_groups(group_id)`);
   } catch {
     // Column already exists — migration already ran
   }

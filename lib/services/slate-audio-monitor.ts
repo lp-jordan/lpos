@@ -15,7 +15,7 @@ type WrtcModule = typeof import('@roamhq/wrtc');
 
 const require = createRequire(import.meta.url);
 
-const FRAME_DURATION_MS = 10;
+const FRAME_DURATION_MS = 10; // RTCAudioSource.onData requires 480 frames (10ms at 48kHz); 960 is rejected
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BYTES_PER_SAMPLE = 2;
@@ -43,6 +43,7 @@ type AudioInputDescriptor = {
 export class SlateAudioMonitorService {
   private state: AudioMonitorState;
   private listeners = new Map<string, ListenerSession>();
+  private pendingJoins = new Map<string, Promise<void>>();
   private captureProcess: ChildProcessByStdio<null, Readable, Readable> | null = null;
   private captureBuffer = Buffer.alloc(0);
   private captureStopTimer: NodeJS.Timeout | null = null;
@@ -76,38 +77,10 @@ export class SlateAudioMonitorService {
 
   async refreshSourceAvailability(): Promise<AudioMonitorState> {
     const preferred = this.state.preferredInput;
-    if (!preferred.deviceKey.trim()) {
-      this.patchState({
-        sourceAvailable: false,
-        webrtcState: 'no_source',
-        lastError: 'No preferred audio input configured',
-        lastCheckedAt: new Date().toISOString(),
-      });
-      return this.state;
-    }
 
+    let devices: AudioInputDescriptor[] = [];
     try {
-      const devices = await this.listAudioInputs();
-      const availableInputs: AudioMonitorInputOption[] = devices.map((device) => ({
-        deviceKey: device.deviceKey,
-        label: device.label,
-      }));
-      const wanted = preferred.deviceKey.trim().toLowerCase();
-      const found = devices.find((device) => {
-        const deviceKey = device.deviceKey.trim().toLowerCase();
-        const label = device.label.trim().toLowerCase();
-        return deviceKey === wanted || label === wanted || deviceKey.includes(wanted) || label.includes(wanted);
-      });
-
-      this.patchState({
-        availableInputs,
-        sourceAvailable: Boolean(found),
-        webrtcState: found
-          ? (this.listeners.size > 0 ? this.state.webrtcState : 'idle')
-          : 'no_source',
-        lastError: found ? '' : `Preferred audio input "${preferred.label || preferred.deviceKey}" is unavailable`,
-        lastCheckedAt: new Date().toISOString(),
-      });
+      devices = await this.listAudioInputs();
     } catch (error) {
       this.patchState({
         availableInputs: [],
@@ -116,12 +89,56 @@ export class SlateAudioMonitorService {
         lastError: `Audio device discovery failed: ${(error as Error).message}`,
         lastCheckedAt: new Date().toISOString(),
       });
+      return this.state;
     }
+
+    const availableInputs: AudioMonitorInputOption[] = devices.map((device) => ({
+      deviceKey: device.deviceKey,
+      label: device.label,
+    }));
+
+    if (!preferred.deviceKey.trim()) {
+      this.patchState({
+        availableInputs,
+        sourceAvailable: false,
+        webrtcState: 'no_source',
+        lastError: 'No preferred audio input configured',
+        lastCheckedAt: new Date().toISOString(),
+      });
+      return this.state;
+    }
+
+    const wanted = preferred.deviceKey.trim().toLowerCase();
+    const found = devices.find((device) => {
+      const deviceKey = device.deviceKey.trim().toLowerCase();
+      const label = device.label.trim().toLowerCase();
+      return deviceKey === wanted || label === wanted || deviceKey.includes(wanted) || label.includes(wanted);
+    });
+
+    this.patchState({
+      availableInputs,
+      sourceAvailable: Boolean(found),
+      webrtcState: found
+        ? (this.listeners.size > 0 ? this.state.webrtcState : 'idle')
+        : 'no_source',
+      lastError: found ? '' : `Preferred audio input "${preferred.label || preferred.deviceKey}" is unavailable`,
+      lastCheckedAt: new Date().toISOString(),
+    });
 
     return this.state;
   }
 
   async handleJoin(socket: Socket) {
+    const promise = this.doJoin(socket);
+    this.pendingJoins.set(socket.id, promise);
+    try {
+      await promise;
+    } finally {
+      this.pendingJoins.delete(socket.id);
+    }
+  }
+
+  private async doJoin(socket: Socket) {
     this.clearCaptureStopTimer();
     await this.ensureCaptureRunning();
 
@@ -140,6 +157,9 @@ export class SlateAudioMonitorService {
   }
 
   async handleSignal(socketId: string, payload: AudioMonitorSignalPayload) {
+    const pending = this.pendingJoins.get(socketId);
+    if (pending) await pending;
+
     const session = this.listeners.get(socketId);
     if (!session) throw new Error('Audio monitor session has not joined yet');
 
@@ -274,28 +294,41 @@ export class SlateAudioMonitorService {
       throw new Error('ffmpeg-static binary not found');
     }
 
+    const args = this.buildCaptureArgs(this.state.preferredInput.deviceKey);
+    const proc = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    // Allocate WebRTC resources only after spawn() succeeds so that any
+    // exception before this point leaves nothing to clean up.
     const wrtc = this.loadWrtc();
     this.audioSource = new wrtc.nonstandard.RTCAudioSource();
     this.audioTrack = this.audioSource.createTrack();
     this.captureBuffer = Buffer.alloc(0);
-
-    const args = this.buildCaptureArgs(this.state.preferredInput.deviceKey);
-    const proc = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     this.captureProcess = proc;
 
     proc.stdout.on('data', (chunk: Buffer) => {
       if (!this.audioSource) return;
       this.captureBuffer = Buffer.concat([this.captureBuffer, chunk]);
       while (this.captureBuffer.length >= FRAME_BYTES) {
-        const frame = this.captureBuffer.subarray(0, FRAME_BYTES);
+        // allocUnsafeSlow bypasses Node's 8KB buffer pool so that
+        // frame.buffer is a dedicated ArrayBuffer with byteLength === FRAME_BYTES.
+        // Buffer.from() and subarray() both share the pool's backing ArrayBuffer
+        // (byteLength 8192), which causes RTCAudioSource.onData to throw
+        // "Expected a .byteLength of 1920, not <N>".
+        const frame = Buffer.allocUnsafeSlow(FRAME_BYTES);
+        this.captureBuffer.copy(frame, 0, 0, FRAME_BYTES);
         this.captureBuffer = this.captureBuffer.subarray(FRAME_BYTES);
-        this.audioSource.onData({
-          samples: new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / BYTES_PER_SAMPLE),
-          sampleRate: SAMPLE_RATE,
-          channelCount: CHANNELS,
-          bitsPerSample: 16,
-          numberOfFrames: SAMPLE_RATE * FRAME_DURATION_MS / 1000,
-        });
+        try {
+          this.audioSource.onData({
+            samples: new Int16Array(frame.buffer, frame.byteOffset, frame.byteLength / BYTES_PER_SAMPLE),
+            sampleRate: SAMPLE_RATE,
+            channelCount: CHANNELS,
+            bitsPerSample: 16,
+            numberOfFrames: SAMPLE_RATE * FRAME_DURATION_MS / 1000,
+          });
+        } catch (err) {
+          // Log and skip this frame rather than crashing the audio pipeline.
+          this.log(`[audio] onData error (frame skipped): ${(err as Error).message}`);
+        }
       }
     });
 
@@ -432,6 +465,10 @@ export class SlateAudioMonitorService {
     return [
       '-hide_banner',
       '-loglevel', 'warning',
+      // Disable ffmpeg's internal buffering so frames are delivered immediately
+      // rather than held until a buffer is full — reduces capture-side latency.
+      '-fflags', '+nobuffer',
+      '-flags', 'low_delay',
       ...inputArgs,
       '-vn',
       '-ac', String(CHANNELS),
@@ -450,7 +487,11 @@ export class SlateAudioMonitorService {
     }
 
     if (currentPlatform === 'macos') {
-      return [...stderr.matchAll(/\[(\d+)\]\s+(.+)$/gm)].map((match) => ({
+      // avfoundation lists video devices first then audio devices. Scoping the
+      // match to lines after "AVFoundation audio devices:" prevents video-capable
+      // devices (e.g. Cam Link) from appearing twice in the input list.
+      const audioSection = stderr.split(/AVFoundation audio devices:/i)[1] ?? stderr;
+      return [...audioSection.matchAll(/\[(\d+)\]\s+(.+)$/gm)].map((match) => ({
         deviceKey: match[1],
         label: match[2].trim(),
       }));

@@ -14,6 +14,7 @@ function initSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
 
     CREATE TABLE IF NOT EXISTS activity_events (
       event_id TEXT PRIMARY KEY,

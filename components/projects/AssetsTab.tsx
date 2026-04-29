@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { io } from 'socket.io-client';
 import { AssetPreviewPanel, isPreviewable } from '@/components/projects/AssetPreviewPanel';
+import { LinkGroupManagementModal } from '@/components/projects/LinkGroupManagementModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -331,7 +332,7 @@ function isSendableToScripts(asset: DriveAsset): boolean {
   return SENDABLE_EXTS.has(ext);
 }
 
-export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScripts }: { projectId: string; sentScriptIds?: Set<string>; onSendToScripts?: (asset: DriveAsset) => void }) {
+export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set(), onSendToScripts }: { projectId: string; projectName?: string; sentScriptIds?: Set<string>; onSendToScripts?: (asset: DriveAsset) => void }) {
   const [items,      setItems]      = useState<DriveAsset[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState<string | null>(null);
@@ -346,14 +347,37 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
   const [presentedId,      setPresentedId]      = useState<string | null>(null);
   const [sendingScriptId,  setSendingScriptId]  = useState<string | null>(null);
 
+  const [uploading,    setUploading]    = useState(false);
+  const [uploadError,  setUploadError]  = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadInputId = useId();
+
+  const [lock, setLock] = useState<{ locked: boolean; reason?: string; jobId?: string; jobFailed?: boolean } | null>(null);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [linkGroup, setLinkGroup] = useState<{
+    groupId: string;
+    sharedFolderName: string | undefined;
+    linkedProjects: { projectId: string; name: string }[];
+  } | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const res  = await fetch(`/api/projects/${projectId}/assets`);
-      const data = await res.json() as { assets?: DriveAsset[]; error?: string };
+      const data = await res.json() as {
+        assets?: DriveAsset[];
+        error?: string;
+        assetLinkGroupId?: string;
+        sharedFolderName?: string;
+        linkedProjects?: { projectId: string; name: string }[];
+      };
       if (data.error) throw new Error(data.error);
       setItems(data.assets ?? []);
+      setLinkGroup(data.assetLinkGroupId
+        ? { groupId: data.assetLinkGroupId, sharedFolderName: data.sharedFolderName, linkedProjects: data.linkedProjects ?? [] }
+        : null,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -383,6 +407,23 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
       }
     });
     return () => { socket.disconnect(); };
+  }, [projectId, load]);
+
+  // Lock polling — every 3 s; reloads assets when lock clears
+  useEffect(() => {
+    let wasLocked = false;
+    const poll = async () => {
+      try {
+        const res  = await fetch(`/api/projects/${projectId}/asset-lock`);
+        const data = await res.json() as { locked: boolean; reason?: string; jobId?: string; jobFailed?: boolean };
+        setLock(data);
+        if (wasLocked && !data.locked) void load();
+        wasLocked = data.locked;
+      } catch { /* silent */ }
+    };
+    void poll();
+    const id = setInterval(() => void poll(), 3000);
+    return () => clearInterval(id);
   }, [projectId, load]);
 
   // ── Tree + filter ───────────────────────────────────────────────────────────
@@ -485,6 +526,32 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
     }
   }
 
+  // ── Upload ──────────────────────────────────────────────────────────────────
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const body = new FormData();
+      for (const f of files) body.append('file', f);
+      const res  = await fetch(`/api/projects/${projectId}/assets/upload`, { method: 'POST', body });
+      const data = await res.json() as { ok?: boolean; error?: string; errors?: { name: string; error: string }[] };
+      if (!res.ok) throw new Error(data.error ?? 'Upload failed');
+      if (data.errors && data.errors.length > 0) {
+        setUploadError(`${data.errors.length} file(s) failed to upload`);
+      }
+      await load();
+    } catch (err) {
+      setUploadError((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   // ── Depth for indentation ───────────────────────────────────────────────────
 
   function getDepth(node: DriveAsset): number {
@@ -500,6 +567,32 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
+
+  if (lock?.locked) {
+    const failed = lock.jobFailed;
+    const label = lock.reason === 'unlinking'
+      ? 'Setting up a new folder…'
+      : failed
+        ? 'Merge failed — needs attention'
+        : 'Assets are being merged…';
+    const sub = lock.reason === 'unlinking'
+      ? 'This tab will unlock automatically when the new folder is ready.'
+      : failed
+        ? 'A merge job encountered an error. An admin can retry or release the lock from the admin panel.'
+        : 'This tab will unlock automatically when the merge completes.';
+    return (
+      <div className="assets-tab">
+        <div className={`assets-lock-overlay${failed ? ' assets-lock-overlay--error' : ''}`}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <p className="assets-lock-label">{label}</p>
+          <p className="assets-lock-sub">{sub}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return <div className="assets-tab"><p className="assets-empty">Loading assets…</p></div>;
@@ -520,6 +613,38 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
 
   return (
     <div className="assets-tab">
+      {/* Shared-group banner */}
+      {linkGroup && (
+        <div className="assets-group-banner">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          <span className="assets-group-banner-text">
+            Shared with{' '}
+            {linkGroup.linkedProjects.length === 0
+              ? 'no other projects'
+              : linkGroup.linkedProjects.map((p, i) => (
+                  <span key={p.projectId}>
+                    {i > 0 && ', '}
+                    <strong>{p.name}</strong>
+                  </span>
+                ))
+            }
+            {linkGroup.sharedFolderName && (
+              <span className="assets-group-banner-folder"> · {linkGroup.sharedFolderName}</span>
+            )}
+          </span>
+          <button
+            type="button"
+            className="assets-group-manage-btn"
+            onClick={() => setShowManageModal(true)}
+          >
+            Manage
+          </button>
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="assets-filter-bar">
         <select
@@ -545,6 +670,31 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
           onChange={(e) => setFilterText(e.target.value)}
         />
         <span className="assets-count">{fileCount} file{fileCount !== 1 ? 's' : ''}</span>
+        <input
+          ref={fileInputRef}
+          id={uploadInputId}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => void handleUpload(e)}
+        />
+        <label
+          htmlFor={uploadInputId}
+          className={`assets-upload-btn${uploading ? ' assets-upload-btn--busy' : ''}`}
+          title="Upload files to Drive"
+          aria-disabled={uploading}
+        >
+          {uploading ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          )}
+          {uploading ? 'Uploading…' : 'Upload'}
+        </label>
         <button
           type="button"
           className="assets-refresh-btn"
@@ -564,6 +714,10 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
           {syncing ? 'Syncing…' : 'Sync'}
         </button>
       </div>
+
+      {uploadError && (
+        <p className="assets-upload-error">{uploadError}</p>
+      )}
 
       {/* Empty state */}
       {items.length === 0 && (
@@ -727,6 +881,17 @@ export function AssetsTab({ projectId, sentScriptIds = new Set(), onSendToScript
         projectId={projectId}
         onClose={() => setPreviewAsset(null)}
       />
+
+      {showManageModal && linkGroup && (
+        <LinkGroupManagementModal
+          projectId={projectId}
+          projectName={projectName}
+          sharedFolderName={linkGroup.sharedFolderName}
+          linkedProjects={linkGroup.linkedProjects}
+          onClose={() => setShowManageModal(false)}
+          onUnlinked={() => { setShowManageModal(false); setLinkGroup(null); void load(); }}
+        />
+      )}
     </div>
   );
 }

@@ -128,20 +128,25 @@ function defaultFixtureState(): AmaranFixtureState {
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
-const RECONNECT_DELAY_MS = 5_000;
+const RECONNECT_BASE_MS  = 5_000;
+const RECONNECT_MAX_MS   = 120_000;
+const POLL_INTERVAL_MS   = 30_000;
 const DEFAULT_PORT       = 33782;
 let   _reqId             = 0;
 
 export class AmaranService {
   private io:             SocketIOServer | null | undefined;
-  private ws:             WebSocket | null = null;
-  private port:           number           = DEFAULT_PORT;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopping:       boolean          = false;
+  private ws:               WebSocket | null = null;
+  private port:             number           = DEFAULT_PORT;
+  private reconnectTimer:   ReturnType<typeof setTimeout> | null = null;
+  private pollTimer:        ReturnType<typeof setInterval> | null = null;
+  private stopping:         boolean          = false;
+  private reconnectAttempt: number          = 0;
 
-  private _connected: boolean           = false;
-  private _fixtures:  AmaranFixture[]   = [];
-  private _states:    Record<string, AmaranFixtureState> = {};
+  private _connected:     boolean                        = false;
+  private _fixtures:      AmaranFixture[]                = [];
+  private _states:        Record<string, AmaranFixtureState> = {};
+  private _fixtureModes:  Record<string, 'cct' | 'hsi'> = {};
 
   constructor(io?: SocketIOServer | null) {
     this.io = io;
@@ -161,6 +166,7 @@ export class AmaranService {
     const { readStudioConfig } = await import('@/lib/store/studio-config-store');
     const cfg = readStudioConfig();
     this.port = cfg.amaran.port;
+    this._fixtureModes = { ...cfg.amaran.fixtureModes };
     if (cfg.amaran.autoConnect) {
       this.connect(this.port);
     }
@@ -169,6 +175,7 @@ export class AmaranService {
   async stop(): Promise<void> {
     this.stopping = true;
     this.clearReconnect();
+    this.stopPolling();
     this.closeWs();
   }
 
@@ -178,6 +185,7 @@ export class AmaranService {
     this.stopping = false;
     if (port) this.port = port;
     this.clearReconnect();
+    this.reconnectAttempt = 0;
     this.closeWs();
 
     const url = `ws://127.0.0.1:${this.port}`;
@@ -188,19 +196,29 @@ export class AmaranService {
       this.ws = ws;
 
       ws.addEventListener('open', () => {
+        if (this.ws !== ws) return; // stale — a newer connection replaced this one
         console.log('[amaran] connected');
         this._connected = true;
+        this.reconnectAttempt = 0;
         this.emitStatus();
         this.discoverAndRefresh().catch(() => {});
+        this.startPolling();
       });
 
       ws.addEventListener('message', (event) => {
+        if (this.ws !== ws) return; // stale
         this.handleMessage(String(event.data));
       });
 
       ws.addEventListener('close', () => {
+        // Guard: closeWs() replaces this.ws before the old socket's close event
+        // fires asynchronously. Without this check the stale handler would call
+        // scheduleReconnect(), tear down the new working connection 5 s later,
+        // and repeat — causing the rapid connect/disconnect cycling seen in logs.
+        if (this.ws !== ws) return;
         console.log('[amaran] disconnected');
         this._connected = false;
+        this.stopPolling();
         this.emitStatus();
         if (!this.stopping) this.scheduleReconnect();
       });
@@ -217,6 +235,7 @@ export class AmaranService {
   disconnect(): void {
     this.stopping = true;
     this.clearReconnect();
+    this.stopPolling();
     this.closeWs();
     this._connected = false;
     this.emitStatus();
@@ -231,15 +250,33 @@ export class AmaranService {
 
   private scheduleReconnect(): void {
     this.clearReconnect();
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt, RECONNECT_MAX_MS);
+    this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       if (!this.stopping) this.connect();
-    }, RECONNECT_DELAY_MS);
+    }, delay);
   }
 
   private clearReconnect(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private startPolling(): void {
+    this.stopPolling();
+    this.pollTimer = setInterval(() => {
+      if (this._connected && this._fixtures.length > 0) {
+        this.refreshStatus().catch(() => {});
+      }
+    }, POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
   }
 
@@ -258,10 +295,11 @@ export class AmaranService {
           }));
       }
 
-      // Pull state for ALL discovered fixtures in parallel
-      await Promise.allSettled(
-        this._fixtures.map((f) => this.pullNodeState(f.nodeId)),
-      );
+      // Pull state sequentially — action-only pending keys mean concurrent
+      // same-action requests across fixtures would overwrite each other's resolver.
+      for (const f of this._fixtures) {
+        await this.pullNodeState(f.nodeId).catch(() => {});
+      }
 
       this.emitStatus();
     } catch (err) {
@@ -277,6 +315,11 @@ export class AmaranService {
     ]);
 
     const state: AmaranFixtureState = this._states[nodeId] ?? defaultFixtureState();
+
+    // Use LPOS's persisted mode record as the authority — Amaran Desktop returns
+    // values for both get_hsi and get_cct regardless of which mode is active,
+    // so we can't infer mode from the poll responses alone.
+    if (this._fixtureModes[nodeId]) state.mode = this._fixtureModes[nodeId];
 
     if (sleepRes.status === 'fulfilled' && sleepRes.value.code === 0) {
       state.power = !sleepRes.value.data;
@@ -348,6 +391,7 @@ export class AmaranService {
         state.gm         = d.gm;
         state.brightness = Math.round((d.intensity / 1000) * 100);
         state.mode       = 'cct';
+        this.persistMode(targetId, 'cct');
         break;
       }
 
@@ -357,6 +401,7 @@ export class AmaranService {
         state.saturation = d.sat;
         state.brightness = Math.round((d.intensity / 1000) * 100);
         state.mode       = 'hsi';
+        this.persistMode(targetId, 'hsi');
         break;
       }
     }
@@ -382,6 +427,10 @@ export class AmaranService {
       const req: AmaranRequest = { version: 2, token: '', action, args };
       if (nodeId) req.node_id = nodeId;
 
+      // Keyed by action only — Amaran Desktop responses don't reliably echo
+      // node_id, so we can't key by action+nodeId. Collision is avoided by
+      // ensuring no two concurrent requests use the same action (discovery and
+      // refresh process fixtures sequentially; preset apply is already sequential).
       this.pending.set(action, resolve);
 
       const timer = setTimeout(() => {
@@ -442,6 +491,7 @@ export class AmaranService {
     state.gm   = gm;
     state.mode = 'cct';
     this._states[id] = state;
+    this.persistMode(id, 'cct');
     this.emitStatus();
   }
 
@@ -458,12 +508,15 @@ export class AmaranService {
     state.brightness = Math.round(brightness);
     state.mode       = 'hsi';
     this._states[id] = state;
+    this.persistMode(id, 'hsi');
     this.emitStatus();
   }
 
   async refreshStatus(): Promise<void> {
     if (this._fixtures.length > 0) {
-      await Promise.allSettled(this._fixtures.map((f) => this.pullNodeState(f.nodeId)));
+      for (const f of this._fixtures) {
+        await this.pullNodeState(f.nodeId).catch(() => {});
+      }
       this.emitStatus();
     } else {
       await this.discoverAndRefresh();
@@ -479,5 +532,14 @@ export class AmaranService {
 
   private emitStatus(): void {
     this.io?.emit('amaran:status', this.status);
+  }
+
+  // ── Mode persistence ────────────────────────────────────────────────────────
+
+  private persistMode(nodeId: string, mode: 'cct' | 'hsi'): void {
+    this._fixtureModes[nodeId] = mode;
+    void import('@/lib/store/studio-config-store')
+      .then(s => s.setFixtureMode(nodeId, mode))
+      .catch(() => {});
   }
 }

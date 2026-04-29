@@ -29,12 +29,14 @@ export const SUBPHASE_ORDER: ProjectSubPhase[] = [
 ];
 
 export interface Project {
-  projectId: string;
-  name: string;
-  clientName: string;
-  phase: ProjectPhase;
-  subPhase: ProjectSubPhase;
-  createdAt: string;
-  updatedAt: string;
-  archived?: boolean;
+  projectId:         string;
+  name:              string;
+  clientName:        string;
+  phase:             ProjectPhase;
+  subPhase:          ProjectSubPhase;
+  createdAt:         string;
+  updatedAt:         string;
+  archived?:         boolean;
+  assetLinkGroupId?: string;
+  assetMergeLocked?: boolean;
 }

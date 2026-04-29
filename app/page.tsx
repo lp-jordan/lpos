@@ -1,10 +1,14 @@
 import Link from 'next/link';
+import { WhatsNewWidget } from '@/components/home/WhatsNewWidget';
 
 export default function HomePage() {
   return (
     <div className="home-hero">
-<div className="home-brand">
-        <h1 className="home-title">LPOS</h1>
+      <div className="home-brand">
+        <span className="home-title-wrap">
+          <h1 className="home-title">LPOS</h1>
+          <WhatsNewWidget />
+        </span>
         <p className="home-subtitle">LeaderPass Operating System</p>
       </div>
 

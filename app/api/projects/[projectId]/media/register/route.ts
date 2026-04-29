@@ -7,8 +7,9 @@ import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
-import { probeDuration } from '@/lib/services/media-probe';
+import { probeDuration, extractThumbnail } from '@/lib/services/media-probe';
 import { patchAsset } from '@/lib/store/media-registry';
+import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -99,11 +100,17 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
     triggerFrameIOUpload(projectId, asset.assetId, { actor, clientId: project.clientName || null });
 
-    // Probe duration in background
+    // Probe duration and extract thumbnail in background
     if (normalised && fs.existsSync(normalised)) {
       probeDuration(normalised).then((dur) => {
         if (dur != null) patchAsset(projectId, asset.assetId, { duration: dur });
       }).catch(() => {});
+
+      try {
+        const mediaDir = resolveProjectMediaStorageDir(projectId);
+        const thumbPath = path.join(mediaDir, `${asset.assetId}.thumb.jpg`);
+        extractThumbnail(normalised, thumbPath).catch(() => {});
+      } catch { /* no storage volume configured — skip thumbnail */ }
     }
 
     return NextResponse.json({ asset }, { status: 201 });

@@ -18,7 +18,7 @@ import type { PromotionQueueService, PromotionJob } from './promotion-queue-serv
 import { upsertDriveAsset } from '@/lib/store/drive-sync-db';
 import { uploadFile } from '@/lib/services/drive-client';
 import { getStorageAllocationDecision } from '@/lib/services/storage-volume-service';
-import { getCachedProjectFolders } from '@/lib/services/drive-folder-service';
+import { getCachedProjectFolders, resolveAssetsFolder } from '@/lib/services/drive-folder-service';
 import { getIngestDb } from '@/lib/ingest-db';
 
 const INGEST_APP_URL  = process.env.INGEST_APP_URL ?? '';
@@ -137,7 +137,10 @@ export class PromotionProcessor {
     const folders = getCachedProjectFolders(project.name, project.clientName);
     if (!folders) throw new Error('Drive folders not set up for this project — open the Assets tab first to initialise them');
 
-    const folderId = job.destination === 'scripts' ? folders.scripts : folders.assets;
+    const folderId = job.destination === 'scripts'
+      ? folders.scripts
+      : resolveAssetsFolder(project.name, project.clientName);
+    if (!folderId) throw new Error('Assets folder not available for this project');
 
     this.queue.setPromoting(job.jobId, 60);
     const { fileId, webViewLink } = await uploadFile(job.filename, job.mimeType, buffer, folderId);

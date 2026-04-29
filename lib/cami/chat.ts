@@ -79,7 +79,7 @@ function buildSystemPrompt(projectId: string, scopedJobIds: string[]): string {
     '- Use search_transcripts to find specific facts, quotes, statements, or context.',
     '- Answer directly from your own knowledge for general questions that do not require transcript content.',
     '',
-    'Communication: Be direct and practical. Use bullet points for lists. Avoid unnecessary preamble.',
+    'Communication: Be direct and practical. Markdown is fully rendered — use headers, bold, italics, and bullet lists where they add clarity. Avoid tables. Avoid unnecessary preamble.',
     `Today's date: ${new Date().toISOString().split('T')[0]}`,
   ].join('\n');
 }

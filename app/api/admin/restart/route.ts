@@ -1,12 +1,13 @@
 /**
  * POST /api/admin/restart
  *
- * Initiates a 60-second broadcast countdown then restarts the server process.
- * Only accessible to jordan@leaderpass.com.
+ * Initiates a 60-second broadcast countdown then exits with code 75, signalling
+ * the Electron server console to rebuild and restart the process.
+ *
+ * Only accessible to admin role.
  * Blocked when any ingest, transcription, or upload job is active.
  */
 
-import { spawn } from 'node:child_process';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
 import {
@@ -17,40 +18,17 @@ import {
 
 const COUNTDOWN_SECONDS = 60;
 
-const INGEST_ACTIVE = new Set(['queued', 'ingesting', 'awaiting_confirmation']);
+// Must match EXIT_CODE_RESTART in lpos-server-app/main.js.
+// The Electron console detects this exit code and triggers a rebuild + restart.
+const EXIT_CODE_RESTART = 75;
+
+const INGEST_ACTIVE     = new Set(['queued', 'ingesting', 'awaiting_confirmation']);
 const TRANSCRIPT_ACTIVE = new Set(['queued', 'extracting_audio', 'transcribing', 'writing_outputs']);
-const UPLOAD_ACTIVE = new Set(['queued', 'compressing', 'uploading', 'processing']);
-
-/**
- * Spawn a detached child that builds the app and then restarts via launchctl.
- * The child is unref'd so it outlives this process.
- *
- * We do NOT kill the current process here — launchctl kickstart -k handles
- * that after the build completes, giving the new build a clean start.
- * launchd's KeepAlive.SuccessfulExit=false means it won't auto-restart on
- * the SIGTERM that kickstart sends, so there's no race with a stale restart.
- */
-function scheduleRestart(): void {
-  const cwd = process.cwd();
-  const uid = process.getuid?.() ?? 501;
-
-  // Clear the crash-loop guard file before restarting so that an intentional
-  // restart doesn't count toward the guard's failure window.
-  const child = spawn(
-    'sh',
-    ['-c', `rm -f /tmp/lpos-crash-guard && sleep 4 && npm run build && launchctl kickstart -k "gui/${uid}/com.lpos.dashboard"`],
-    { cwd, detached: true, stdio: 'ignore' },
-  );
-
-  child.unref();
-}
+const UPLOAD_ACTIVE     = new Set(['queued', 'compressing', 'uploading', 'processing']);
 
 export async function POST(req: NextRequest) {
   const deny = await requireRole(req, 'admin');
   if (deny) return deny;
-
-  const body = await req.json().catch(() => ({})) as { autoRestart?: boolean };
-  const autoRestart = body.autoRestart !== false; // default true
 
   // ── Duplicate-trigger guard ─────────────────────────────────────────────────
   if (globalThis.__lpos_restartPending) {
@@ -86,7 +64,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'server_not_ready' }, { status: 503 });
   }
 
-  // ── Countdown ───────────────────────────────────────────────────────────────
+  // ── Countdown → exit 75 ─────────────────────────────────────────────────────
+  // The SIGTERM handler in server.ts reads __lpos_exitCode and passes it to
+  // process.exit(), so the Electron console sees code 75 and triggers a rebuild.
   globalThis.__lpos_restartPending = true;
   let secondsLeft = COUNTDOWN_SECONDS;
 
@@ -98,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     if (secondsLeft <= 0) {
       clearInterval(tick);
-      if (autoRestart) scheduleRestart();
+      (globalThis as Record<string, unknown>).__lpos_exitCode = EXIT_CODE_RESTART;
       process.kill(process.pid, 'SIGTERM');
     }
   }, 1_000);

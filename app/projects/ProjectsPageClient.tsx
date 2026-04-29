@@ -13,12 +13,31 @@ import type { MenuEntry } from '@/components/shared/ContextMenu';
 import { useContextMenu } from '@/hooks/useContextMenu';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { OwnerPicker } from '@/components/projects/OwnerPicker';
+import { MergeProgressModal } from '@/components/projects/MergeProgressModal';
+import { LinkGroupManagementModal } from '@/components/projects/LinkGroupManagementModal';
 import type { Project } from '@/lib/models/project';
 import type { UserSummary } from '@/lib/models/user';
 import type { ClientOwners } from '@/lib/models/client-owner';
 import type { ClientStats } from '@/lib/services/client-stats';
 
 type ViewMode = 'card' | 'list';
+
+// ── Link-group color helper ───────────────────────────────────────────────────
+
+const GROUP_COLORS = [
+  { bg: 'rgba(77,184,176,0.18)',  border: '#4db8b0', text: '#4db8b0' }, // teal
+  { bg: 'rgba(91,141,217,0.18)', border: '#5b8dd9', text: '#5b8dd9' }, // blue
+  { bg: 'rgba(155,127,212,0.18)',border: '#9b7fd4', text: '#9b7fd4' }, // purple
+  { bg: 'rgba(212,127,166,0.18)',border: '#d47fa6', text: '#d47fa6' }, // pink
+  { bg: 'rgba(90,185,90,0.18)',  border: '#5ab95a', text: '#5ab95a' }, // green
+  { bg: 'rgba(212,152,64,0.18)', border: '#d49840', text: '#d49840' }, // amber
+];
+
+function groupColor(groupId: string) {
+  let hash = 0;
+  for (let i = 0; i < groupId.length; i++) hash = (hash * 31 + groupId.charCodeAt(i)) >>> 0;
+  return GROUP_COLORS[hash % GROUP_COLORS.length];
+}
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -55,6 +74,8 @@ function IconTrash()   { return <svg width="13" height="13" viewBox="0 0 24 24" 
 function IconUnarchive() { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><polyline points="10 12 12 10 14 12"/><line x1="12" y1="10" x2="12" y2="16"/></svg>; }
 function IconUser()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>; }
 function IconTask()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><polyline points="9 11 11 13 15 9"/><line x1="3" y1="19" x2="21" y2="19"/><line x1="3" y1="15" x2="21" y2="15"/></svg>; }
+function IconLink()      { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>; }
+function IconUnlink()    { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="4" y1="4" x2="20" y2="20"/></svg>; }
 
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 
@@ -154,6 +175,11 @@ export function ProjectsPageClient({
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
   const [confirmArchive, setConfirmArchive] = useState<{ ids: string[]; label: string; unarchive?: boolean } | null>(null);
   const [taskProject, setTaskProject] = useState<Project | null>(null);
+  const [mergeJobIds, setMergeJobIds] = useState<string[] | null>(null);
+  const [managingGroup, setManagingGroup] = useState<{
+    projectId: string; projectName: string; groupId: string;
+    sharedFolderName?: string; linkedProjects: { projectId: string; name: string }[];
+  } | null>(null);
 
   // Context menus
   const projectMenu = useContextMenu<Project>();
@@ -237,6 +263,36 @@ export function ProjectsPageClient({
     clearSelection();
   }
 
+  // ── Link assets ─────────────────────────────────────────────────────────────
+
+  async function linkAssets(ids: string[]) {
+    const res = await fetch('/api/projects/link-assets', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ projectIds: ids }),
+    });
+    const data = await res.json() as { jobIds?: string[]; error?: string };
+    if (!res.ok || !data.jobIds) throw new Error(data.error ?? 'Link failed');
+    clearSelection();
+    setMergeJobIds(data.jobIds);
+  }
+
+  async function openManageGroup(project: Project) {
+    if (!project.assetLinkGroupId) return;
+    const res  = await fetch(`/api/projects/${project.projectId}/assets`);
+    const data = await res.json() as {
+      assetLinkGroupId?: string; sharedFolderName?: string;
+      linkedProjects?: { projectId: string; name: string }[];
+    };
+    setManagingGroup({
+      projectId:        project.projectId,
+      projectName:      project.name,
+      groupId:          project.assetLinkGroupId,
+      sharedFolderName: data.sharedFolderName,
+      linkedProjects:   data.linkedProjects ?? [],
+    });
+  }
+
   // ── Rename helpers ──────────────────────────────────────────────────────────
 
   async function saveRename(value: string) {
@@ -275,6 +331,17 @@ export function ProjectsPageClient({
       icon: <IconTask />,
       onClick: () => setTaskProject(project),
     },
+    ...(project.assetLinkGroupId
+      ? [
+          { type: 'separator' as const },
+          {
+            type: 'item' as const,
+            label: 'Manage Shared Assets',
+            icon: <IconUnlink />,
+            onClick: () => void openManageGroup(project),
+          },
+        ]
+      : []),
     { type: 'separator' },
     project.archived
       ? {
@@ -371,6 +438,16 @@ export function ProjectsPageClient({
           <div className="proj-bulk-bar">
             <span className="proj-bulk-count">{selected.size} selected</span>
             <div className="proj-bulk-actions">
+              {selected.size >= 2 &&
+                filteredClientProjects.filter((p) => selected.has(p.projectId)).every((p) => !p.assetLinkGroupId) && (
+                <button
+                  type="button"
+                  className="proj-bulk-btn proj-bulk-btn--link"
+                  onClick={() => void linkAssets(Array.from(selected))}
+                >
+                  <IconLink /> Link Assets
+                </button>
+              )}
               <button
                 type="button"
                 className="proj-bulk-btn"
@@ -503,6 +580,19 @@ export function ProjectsPageClient({
           onCloseArchive={() => setConfirmArchive(null)}
           onConfirmArchive={() => bulkArchive(confirmArchive!.ids, confirmArchive?.unarchive)}
         />
+        {mergeJobIds && (
+          <MergeProgressModal jobIds={mergeJobIds} onClose={() => setMergeJobIds(null)} />
+        )}
+        {managingGroup && (
+          <LinkGroupManagementModal
+            projectId={managingGroup.projectId}
+            projectName={managingGroup.projectName}
+            sharedFolderName={managingGroup.sharedFolderName}
+            linkedProjects={managingGroup.linkedProjects}
+            onClose={() => setManagingGroup(null)}
+            onUnlinked={() => setManagingGroup(null)}
+          />
+        )}
       </div>
     );
   }
@@ -725,6 +815,16 @@ function ProjectCard({ project: p, selected, selectionActive, onClick, onToggle,
       </button>
 
       {p.archived && <span className="proj-archived-badge">Archived</span>}
+      {p.assetMergeLocked && <span className="proj-merging-chip">Merging…</span>}
+      {p.assetLinkGroupId && !p.assetMergeLocked && (() => {
+        const c = groupColor(p.assetLinkGroupId!);
+        return (
+          <span
+            className="proj-linked-chip"
+            style={{ background: c.bg, borderColor: c.border, color: c.text }}
+          >Linked</span>
+        );
+      })()}
 
       {/* Thumbnail — loads lazily from Frame.io, hidden on error */}
       <div className="proj-card-thumb">
@@ -779,6 +879,16 @@ function ProjectRow({ project: p, selected, selectionActive, onClick, onToggle, 
         <Checkbox checked={selected} />
       </button>
       <span className="proj-row-name">{p.name}</span>
+      {p.assetMergeLocked && <span className="proj-merging-chip">Merging…</span>}
+      {p.assetLinkGroupId && !p.assetMergeLocked && (() => {
+        const c = groupColor(p.assetLinkGroupId!);
+        return (
+          <span
+            className="proj-linked-chip"
+            style={{ background: c.bg, borderColor: c.border, color: c.text }}
+          >Linked</span>
+        );
+      })()}
       <div className="proj-indicators proj-indicators--inline" />
       <span className="proj-row-date">{p.createdAt}</span>
       {p.archived && <span className="proj-archived-badge proj-archived-badge--inline">Archived</span>}

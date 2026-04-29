@@ -14,7 +14,10 @@
  *   • File info — size, path, dates
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Component, useState, useEffect, useCallback, useRef } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
+import { io as ioClient }                           from 'socket.io-client';
+import { useToast } from '@/contexts/ToastContext';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import {
   CLOUDFLARE_STREAM_STATUS_LABEL,
@@ -26,7 +29,42 @@ import { formatTimecode } from '@/lib/utils/time';
 
 type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
+
+// ── Theater mode error boundary ────────────────────────────────────────────
+// VideoTheaterMode renders untrusted comment text and does live DOM mutations
+// (video seek, play/pause) that can throw. Without a boundary, any render
+// error here unmounts the entire LPOS page silently. This boundary catches the
+// error, logs it, and shows a recoverable prompt instead of a blank screen.
+class TheaterErrorBoundary extends Component<
+  { children: ReactNode; onReset: () => void },
+  { error: Error | null }
+> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[theater-mode] render error:', error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.85)', zIndex: 9999, flexDirection: 'column', gap: 12, color: '#fff', fontFamily: 'sans-serif' }}>
+          <p style={{ margin: 0, fontSize: 14 }}>Theater mode encountered an error.</p>
+          <button
+            type="button"
+            style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: '#4a5568', color: '#fff', cursor: 'pointer', fontSize: 13 }}
+            onClick={() => { this.setState({ error: null }); this.props.onReset(); }}
+          >
+            Close
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { VideoTheaterMode } from './VideoTheaterMode';
+import { SardiusPushModal } from './SardiusPushModal';
+import { SARDIUS_STATUS_LABEL } from '@/lib/models/media-asset';
 
 interface Props {
   asset:              MediaAsset | null;
@@ -89,14 +127,37 @@ function isAudioFile(filename: string): boolean {
   return AUDIO_EXTS.has(ext);
 }
 
+function TitleRenameInput({ initial, onCommit, onCancel }: { initial: string; onCommit: (v: string) => void; onCancel: () => void }) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+  return (
+    <input
+      ref={ref}
+      className="mad-title-rename-input"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => { if (value.trim() && value !== initial) onCommit(value.trim()); else onCancel(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); if (value.trim()) onCommit(value.trim()); }
+        if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
   const sidebarVideoRef = useRef<HTMLVideoElement>(null);
+  const { toast } = useToast();
+  const [renamingTitle,               setRenamingTitle]               = useState(false);
   const [showLeaderPassErrorDetails, setShowLeaderPassErrorDetails] = useState(false);
   const [theaterSrc,                 setTheaterSrc]                 = useState<string | null>(null);
   const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
   const [moreInfoOpen,               setMoreInfoOpen]               = useState(false);
   const [fioDropdownOpen,            setFioDropdownOpen]            = useState(false);
+  const [sardiusModalOpen, setSardiusModalOpen] = useState(false);
 
   function openTheater(src: string) {
     const t = sidebarVideoRef.current?.currentTime ?? 0;
@@ -119,12 +180,28 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setMetaDirty(false);
     setShareError(null);
     setShowLeaderPassErrorDetails(false);
+    setRenamingTitle(false);
   }, [asset]);
 
   // Reset per-asset state only when the selected asset changes (not on re-renders of the same asset)
   useEffect(() => {
     setExistingShareLinks([]);
   }, [asset?.assetId]);
+
+  async function commitRenameTitle(newName: string) {
+    setRenamingTitle(false);
+    if (!asset || !newName.trim() || newName.trim() === asset.name) return;
+    const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.warning) {
+      toast({ id: `rename-warn:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Rename partially failed', body: data.warning });
+    }
+    if (res.ok) onUpdated();
+  }
 
   async function handleSaveMeta() {
     if (!asset || !metaDirty) return;
@@ -167,6 +244,21 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     const id = setInterval(() => { void pollFio(); }, 3000);
     return () => clearInterval(id);
   }, [asset, pollFio]);
+
+  const pollSardius = useCallback(async () => {
+    if (!asset || asset.sardius.status !== 'uploading') return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/sardius`);
+      const data = await res.json() as { sardius?: { status?: string } };
+      if (data.sardius?.status !== 'uploading') onUpdated();
+    } catch { /* ignore */ }
+  }, [asset, projectId, onUpdated]);
+
+  useEffect(() => {
+    if (!asset || asset.sardius.status !== 'uploading') return;
+    const id = setInterval(() => { void pollSardius(); }, 4000);
+    return () => clearInterval(id);
+  }, [asset, pollSardius]);
 
   const pollLeaderPass = useCallback(async () => {
     if (!asset) return;
@@ -329,6 +421,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [replyingToId,      setReplyingToId]      = useState<string | null>(null);
   const [replyText,         setReplyText]         = useState('');
   const [replyPosting,      setReplyPosting]      = useState(false);
+  // Tracks optimistic toggle state during in-flight PATCHes so the 30s poll
+  // cannot overwrite a check/uncheck that hasn't been confirmed yet.
+  const pendingTogglesRef = useRef<Map<string, boolean>>(new Map());
 
   const fetchComments = useCallback(async () => {
     if (!asset?.frameio.assetId) return;
@@ -336,7 +431,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     try {
       const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`);
       const data = await res.json() as { comments?: CommentRow[]; error?: string };
-      if (data.comments) setComments(data.comments);
+      if (data.comments) {
+        setComments(data.comments.map(c => {
+          const pending = pendingTogglesRef.current.get(c.id);
+          return pending !== undefined ? { ...c, completed: pending } : c;
+        }));
+      }
     } catch { /* ignore */ } finally {
       setCommentsLoading(false);
     }
@@ -352,10 +452,30 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }, [asset?.frameio.assetId, fetchComments]);
 
-  // Poll for new comments every 30s while panel is open
+  // Real-time comment refresh via Frame.io webhook → Socket.io push.
+  // The server emits 'frameio:comments:refresh' whenever Frame.io fires any
+  // comment event (created/updated/completed/deleted). We re-fetch only when
+  // the event is for the asset currently open in this panel.
   useEffect(() => {
     if (!asset?.frameio.assetId) return;
-    const id = setInterval(() => { void fetchComments(); }, 30_000);
+    const { assetId, projectId: pid } = { assetId: asset.assetId, projectId };
+    const socket = ioClient('/', { transports: ['websocket'] });
+    socket.on(
+      'frameio:comments:refresh',
+      (data: { projectId: string; assetId: string }) => {
+        if (data.projectId === pid && data.assetId === assetId) {
+          void fetchComments();
+        }
+      },
+    );
+    return () => { socket.disconnect(); };
+  }, [asset?.assetId, asset?.frameio.assetId, projectId, fetchComments]);
+
+  // 5-minute fallback poll — catches any webhook gaps (delivery failures,
+  // comments posted while the panel was closed, etc.).
+  useEffect(() => {
+    if (!asset?.frameio.assetId) return;
+    const id = setInterval(() => { void fetchComments(); }, 5 * 60_000);
     return () => clearInterval(id);
   }, [asset?.frameio.assetId, fetchComments]);
 
@@ -423,10 +543,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
 
   async function handleToggleComplete(commentId: string, completed: boolean) {
     if (!asset) return;
-    // Optimistic update
+    pendingTogglesRef.current.set(commentId, completed);
     setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed } : c));
     try {
-      await fetch(
+      const res = await fetch(
         `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
         {
           method:  'PATCH',
@@ -434,10 +554,19 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           body:    JSON.stringify({ commentId, completed }),
         },
       );
+      if (!res.ok) throw new Error('server error');
     } catch {
-      // Revert on failure
       setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed: !completed } : c));
+    } finally {
+      pendingTogglesRef.current.delete(commentId);
     }
+  }
+
+  // ── Sardius ────────────────────────────────────────────────────────────────
+  async function handleResetSardius() {
+    if (!asset) return;
+    await fetch(`/api/projects/${projectId}/media/${asset.assetId}/sardius`, { method: 'DELETE' });
+    onUpdated();
   }
 
   // ── Re-transcribe ──────────────────────────────────────────────────────────
@@ -454,24 +583,35 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   return (
     <>
       {theaterSrc && asset && (
-        <VideoTheaterMode
-          src={theaterSrc}
-          assetId={asset.assetId}
+        <TheaterErrorBoundary onReset={() => setTheaterSrc(null)}>
+          <VideoTheaterMode
+            src={theaterSrc}
+            assetId={asset.assetId}
+            projectId={projectId}
+            frameioAssetId={asset.frameio.assetId}
+            comments={comments}
+            seekTarget={theaterSeekTarget}
+            onClose={() => setTheaterSrc(null)}
+            onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
+            onCommentCompleted={(id, completed) =>
+              setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c))
+            }
+            onReplyPosted={(reply, parentId) =>
+              setComments(prev => prev.map(c =>
+                c.id === parentId ? { ...c, replies: [...(c.replies ?? []), reply] } : c,
+              ))
+            }
+            onSeekHandled={() => setTheaterSeekTarget(null)}
+          />
+        </TheaterErrorBoundary>
+      )}
+
+      {sardiusModalOpen && asset && (
+        <SardiusPushModal
+          assets={[asset]}
           projectId={projectId}
-          frameioAssetId={asset.frameio.assetId}
-          comments={comments}
-          seekTarget={theaterSeekTarget}
-          onClose={() => setTheaterSrc(null)}
-          onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
-          onCommentCompleted={(id, completed) =>
-            setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c))
-          }
-          onReplyPosted={(reply, parentId) =>
-            setComments(prev => prev.map(c =>
-              c.id === parentId ? { ...c, replies: [...c.replies, reply] } : c,
-            ))
-          }
-          onSeekHandled={() => setTheaterSeekTarget(null)}
+          onClose={() => setSardiusModalOpen(false)}
+          onPushed={() => { setSardiusModalOpen(false); onUpdated(); }}
         />
       )}
 
@@ -485,7 +625,19 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
             <div className="mad-header">
               <div className="mad-header-info">
                 <div className="mad-header-title-row">
-                  <span className="mad-header-title">{asset.name}</span>
+                  {renamingTitle ? (
+                    <TitleRenameInput
+                      initial={asset.name}
+                      onCommit={(v) => void commitRenameTitle(v)}
+                      onCancel={() => setRenamingTitle(false)}
+                    />
+                  ) : (
+                    <span
+                      className="mad-header-title"
+                      onDoubleClick={() => setRenamingTitle(true)}
+                      title="Double-click to rename"
+                    >{asset.name}</span>
+                  )}
                   {(() => {
                     const slot = VERSION_COLORS[(asset.frameio.version - 1) % VERSION_COLORS.length];
                     return (
@@ -638,7 +790,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                     <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                                     <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                                   </svg>
-                                  {shareGenerating ? 'Generating…' : 'New share link'}
+                                  {shareGenerating ? 'Generating…' : 'New review link'}
                                 </button>
                                 {existingShareLinks.length > 0 && <div className="mad-fio-menu-divider" />}
                                 {existingShareLinks.map((link) => (
@@ -662,8 +814,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                       className="mad-fio-menu-share-btn mad-fio-menu-share-btn--danger"
                                       onClick={() => void handleDeleteShareLink(link.shareId)}
                                       disabled={deletingShareId === link.shareId}
-                                      title="Delete share link"
-                                      aria-label="Delete share link"
+                                      title="Delete review link"
+                                      aria-label="Delete review link"
                                     >
                                       {deletingShareId === link.shareId ? '…' : (
                                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -877,9 +1029,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           ) : (
                             <p className="mad-comment-text">{c.text}</p>
                           )}
-                          {(c.replies.length > 0 || replyingToId === c.id) && (
+                          {((c.replies ?? []).length > 0 || replyingToId === c.id) && (
                             <div className="mad-comment-replies">
-                              {c.replies.map((r) => (
+                              {(c.replies ?? []).map((r) => (
                                 <div key={r.id} className="mad-comment-reply">
                                   <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
                                   <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
@@ -998,6 +1150,72 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       )}
                       {asset.transcription.completedAt && (
                         <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
+                      )}
+                    </div>
+
+                    {/* Sardius */}
+                    <div className="mad-more-info-sub">
+                      <div className="mad-section-head">
+                        <span className="mad-section-title">Sardius</span>
+                        {asset.sardius.status !== 'none' && (
+                          <span className={`mad-tx-badge mad-tx-badge--${asset.sardius.status === 'ready' ? 'done' : asset.sardius.status === 'failed' ? 'failed' : 'processing'}`}>
+                            {SARDIUS_STATUS_LABEL[asset.sardius.status]}
+                          </span>
+                        )}
+                      </div>
+
+                      {asset.sardius.status === 'none' && (
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => setSardiusModalOpen(true)}
+                          disabled={!asset.filePath}
+                          title={!asset.filePath ? 'No local file path — cannot push to Sardius' : undefined}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                          </svg>
+                          Push to Sardius
+                        </button>
+                      )}
+
+                      {asset.sardius.status === 'uploading' && (
+                        <div className="mad-uploading-row">
+                          <span className="mad-spinner" aria-hidden="true" />
+                          <span className="mad-uploading-label">
+                            Uploading {asset.sardius.remoteFilename ?? 'file'} via FTP…
+                          </span>
+                        </div>
+                      )}
+
+                      {asset.sardius.status === 'queued' && (
+                        <>
+                          <p className="sardius-queued-hint">
+                            In the Sardius watch folder — processed within 15 minutes.
+                          </p>
+                          {asset.sardius.remotePath && (
+                            <div className="mad-info-grid">
+                              <span className="mad-info-label">Remote path</span>
+                              <span className="mad-info-value mad-info-value--mono">{asset.sardius.remotePath}/{asset.sardius.remoteFilename}</span>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {asset.sardius.status === 'failed' && asset.sardius.lastError && (
+                        <p className="mad-error">{asset.sardius.lastError}</p>
+                      )}
+
+                      {asset.sardius.status !== 'none' && (
+                        <button
+                          type="button"
+                          className="mad-action-btn"
+                          onClick={() => void handleResetSardius()}
+                          style={{ marginTop: 6 }}
+                        >
+                          Reset Sardius
+                        </button>
                       )}
                     </div>
 

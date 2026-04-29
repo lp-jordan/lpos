@@ -11,7 +11,7 @@ export type CanonicalVersionStatus =
 export type CanonicalIngestMode = 'announced' | 'observed' | 'manual';
 export type CanonicalWritebackStatus = 'not_attempted' | 'pending' | 'written' | 'failed';
 export type CanonicalDisplacementStatus = 'normal' | 'source_missing' | 'managed_missing' | 'both_missing' | 'relinked';
-export type CanonicalDistributionProvider = 'frameio' | 'cloudflare' | 'leaderpass';
+export type CanonicalDistributionProvider = 'frameio' | 'cloudflare' | 'leaderpass' | 'sardius';
 export type CanonicalStorageClass = 'nas' | 'local_upload' | 'managed_copy' | 'frameio_fallback';
 export type CanonicalMediaRole = 'primary' | 'proxy' | 'derived';
 

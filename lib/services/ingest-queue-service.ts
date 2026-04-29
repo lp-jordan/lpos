@@ -534,21 +534,31 @@ export class IngestQueueService {
   private purgeOldJobs(): void {
     const db = getIngestQueueDb();
     const cutoff = new Date(Date.now() - PURGE_AGE_MS).toISOString();
-    // Delete child upload_sessions rows first to satisfy the FK constraint.
-    db.prepare(
-      `DELETE FROM upload_sessions WHERE job_id IN (
-         SELECT job_id FROM ingest_jobs
-         WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?
-       )`,
-    ).run(cutoff);
-    const result = db.prepare(
-      "DELETE FROM ingest_jobs WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?",
-    ).run(cutoff);
-    if (typeof result === 'object' && result !== null && 'changes' in result) {
-      const changes = (result as { changes: number }).changes;
-      if (changes > 0) {
-        console.log(`[ingest-queue] purged ${changes} old job(s)`);
+    try {
+      // Wrap in a transaction so the two-step delete is atomic.
+      // Delete child upload_sessions rows first to satisfy the FK constraint,
+      // then delete the parent ingest_jobs rows.
+      db.exec('BEGIN');
+      db.prepare(
+        `DELETE FROM upload_sessions WHERE job_id IN (
+           SELECT job_id FROM ingest_jobs
+           WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?
+         )`,
+      ).run(cutoff);
+      const result = db.prepare(
+        "DELETE FROM ingest_jobs WHERE status IN ('done', 'failed', 'cancelled') AND completed_at < ?",
+      ).run(cutoff);
+      db.exec('COMMIT');
+      if (typeof result === 'object' && result !== null && 'changes' in result) {
+        const changes = (result as { changes: number }).changes;
+        if (changes > 0) {
+          console.log(`[ingest-queue] purged ${changes} old job(s)`);
+        }
       }
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+      // Non-fatal — stale jobs will be cleaned up on the next boot.
+      console.warn('[ingest-queue] purgeOldJobs failed (non-fatal):', err);
     }
   }
 }
