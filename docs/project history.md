@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-29 — Git push to remote
+
+**User prompt:** "Can you push the current version of this project to git? Or, lpos-dashboard specifically"
+
+**Summary:** Staged and pushed 111 changed/new files from lpos-dashboard to the remote repository at github.com/lp-jordan/lpos (main branch). Excluded `.DS_Store` files and `runtime/atem-bridge.zip` (binary). Committed as `4-29-26` following the project's date-based commit style.
+
+**Files changed:** 111 files (10,153 insertions, 1,273 deletions) — see git commit `6584493`.
+
+**Implementation summary:** Ran `git add -A` then reset DS_Store and zip files before committing and pushing to origin/main.
+
+**Decision rationale:** Used date-based commit message to match existing project convention. Excluded `.DS_Store` and the binary zip as they are not source files.
+
+**Commands run:** `git add -A`, `git reset HEAD .DS_Store runtime/.DS_Store runtime/atem-bridge.zip`, `git commit`, `git push origin main`
+
+---
+
 ## 2026-04-23 — Sardius filename collision handling
 
 **User prompt:** "Yeah, I'd rather confirm overwrite or append a (1) to it, sardius can be weird with matching filenames and overwrites."

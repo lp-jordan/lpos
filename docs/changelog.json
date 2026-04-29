@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-04-29T00:00:00Z",
+    "title": "Git push to remote",
+    "summary": "Staged and pushed 111 changed/new files from lpos-dashboard to github.com/lp-jordan/lpos main branch (commit 6584493). Excluded .DS_Store and atem-bridge.zip. Covers all accumulated changes since the 4-17-26 commit."
+  },
+  {
     "timestamp": "2026-04-23T01:00:00Z",
     "title": "Sardius filename collision handling",
     "summary": "Added filename conflict detection to the Sardius push flow. The POST API now calls checkSardiusFileExists before starting an upload and returns HTTP 409 with a suggestedName ('filename(1).mp4') if the file already exists and the caller has not acknowledged. The SardiusPushModal handles the 409 by pausing the upload loop and presenting Overwrite / Rename options inline; for batch pushes, each conflicting asset is resolved in sequence before the loop continues."
