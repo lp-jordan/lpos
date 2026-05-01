@@ -4871,6 +4871,131 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .mad-info-value { font-size: 0.8rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mad-info-value--mono { font-family: "Cascadia Code", "Fira Code", monospace; font-size: 0.72rem; color: var(--muted); }
 
+/* Cloudflare project defaults modal */
+.ma-cf-settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ma-cf-settings-modal {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.ma-cf-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ma-cf-settings-title { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.ma-cf-settings-close {
+  background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px; display: flex; align-items: center;
+}
+.ma-cf-settings-close:hover { color: var(--text); }
+.ma-cf-settings-body { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.ma-cf-settings-label { font-size: 0.8rem; color: var(--text); display: flex; flex-direction: column; gap: 3px; }
+.ma-cf-settings-hint { font-size: 0.72rem; color: var(--muted-soft); font-weight: 400; }
+.ma-cf-settings-input {
+  width: 100px; font-size: 0.85rem; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text);
+}
+.ma-cf-settings-error { font-size: 0.73rem; color: var(--error, #e05); margin: 0; }
+.ma-cf-settings-footer {
+  display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line);
+}
+.ma-cf-settings-cancel {
+  font-size: 0.8rem; padding: 5px 12px; border-radius: 4px;
+  border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer;
+}
+.ma-cf-settings-cancel:hover { color: var(--text); }
+.ma-cf-settings-save {
+  font-size: 0.8rem; padding: 5px 14px; border-radius: 4px;
+  border: none; background: var(--accent); color: #fff; cursor: pointer; font-weight: 500;
+}
+.ma-cf-settings-save:disabled { opacity: 0.5; cursor: default; }
+
+/* Cloudflare embed URL block */
+.mad-cf-embed-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+}
+.mad-cf-embed-label {
+  font-size: 0.73rem;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+.mad-cf-embed-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mad-cf-embed-input {
+  flex: 1;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.72rem;
+  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mad-cf-embed-copy {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mad-cf-embed-copy:hover { background: var(--surface-2, var(--surface)); }
+
+/* Cloudflare thumbnail frame override row */
+.mad-cf-thumb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.mad-cf-thumb-label {
+  font-size: 0.73rem;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+.mad-cf-thumb-input {
+  width: 64px;
+  font-size: 0.8rem;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+.mad-cf-thumb-error {
+  font-size: 0.73rem;
+  color: var(--error, #e05);
+  width: 100%;
+}
+
 /* Modal extras */
 .modal-section-header {
   border-top: 1px solid var(--line);
@@ -15347,6 +15472,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 .dlp-asset-size { color: var(--muted-soft); font-size: 0.73rem; flex-shrink: 0; }
 .dlp-asset-warn { color: var(--warning); font-size: 0.73rem; flex-shrink: 0; }
+.dlp-asset-warn--soft { color: var(--muted-soft); }
 
 /* Fields */
 .dlp-fields { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
@@ -15435,6 +15561,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 .dlp-result-title { color: var(--text-strong); font-size: 0.95rem; font-weight: 600; margin: 0; }
 .dlp-result-warn  { color: var(--warning); font-size: 0.82rem; margin: 0; }
+.dlp-result-info  { color: var(--muted); font-size: 0.82rem; margin: 0; }
 
 .dlp-result-url-row { width: 100%; }
 .dlp-done-btn { margin-top: 4px; }

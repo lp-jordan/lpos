@@ -67,6 +67,10 @@ function CreateDeliveryModal({
   const eligible   = assets.filter((a) => a.filePath);
   const noFilePath = assets.filter((a) => !a.filePath);
 
+  function hasThumb(a: MediaAsset) {
+    return !!(a.cloudflare?.uid || a.filePath);
+  }
+
   function toggleAsset(id: string) {
     setCheckedIds((prev) => {
       const next = new Set(prev);
@@ -156,6 +160,9 @@ function CreateDeliveryModal({
                   {a.fileSize !== null && (
                     <span className="dlp-asset-size">{formatBytes(a.fileSize)}</span>
                   )}
+                  {!hasThumb(a) && (
+                    <span className="dlp-asset-warn dlp-asset-warn--soft" title="No thumbnail available — will show a generic icon on the delivery page">no preview</span>
+                  )}
                 </label>
               ))}
               {noFilePath.map((a) => (
@@ -240,6 +247,14 @@ function CreateDeliveryModal({
                 {ineligible.length} file{ineligible.length !== 1 ? 's' : ''} skipped (no local copy).
               </p>
             )}
+            {(() => {
+              const noThumbCount = eligible.filter((a) => checkedIds.has(a.assetId) && !hasThumb(a)).length;
+              return noThumbCount > 0 ? (
+                <p className="dlp-result-info">
+                  {noThumbCount} file{noThumbCount !== 1 ? 's' : ''} will show a generic icon — no thumbnail was available.
+                </p>
+              ) : null;
+            })()}
             <button type="button" className="sh-btn dlp-done-btn" onClick={onClose}>Got it</button>
           </div>
         )}
