@@ -429,3 +429,78 @@ export async function waitForCloudflareVideoReady(
 export function getCloudflareFileSize(filePath: string): number {
   return fs.statSync(path.resolve(filePath)).size;
 }
+
+interface VideoSettings {
+  allowedOrigins?: string[];
+  thumbnailTimestampPct?: number;
+}
+
+/**
+ * Updates metadata on an existing Cloudflare Stream video.
+ * Only sends fields that are explicitly provided.
+ */
+export async function applyVideoSettings(uid: string, settings: VideoSettings): Promise<void> {
+  const config = getConfig();
+  const body: Record<string, unknown> = {};
+  if (settings.allowedOrigins !== undefined) body.allowedOrigins = settings.allowedOrigins;
+  if (settings.thumbnailTimestampPct !== undefined) body.thumbnailTimestampPct = settings.thumbnailTimestampPct;
+
+  const response = await withRetry(() =>
+    fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(config),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+
+  await parseCloudflareResponse(response);
+}
+
+/**
+ * Uploads a WebVTT file as captions for an existing Cloudflare Stream video.
+ * Uses PUT /accounts/{id}/stream/{uid}/captions/{language} with multipart/form-data.
+ * Errors are thrown so callers can decide whether to swallow them.
+ */
+export async function uploadCaptionsVtt(uid: string, vttPath: string, language = 'en'): Promise<void> {
+  const config = getConfig();
+  const vttBuffer = fs.readFileSync(vttPath);
+  const form = new FormData();
+  form.append('file', new Blob([vttBuffer], { type: 'text/vtt' }), path.basename(vttPath));
+
+  const response = await withRetry(() =>
+    fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}/captions/${language}`,
+      {
+        method: 'PUT',
+        headers: authHeaders(config),
+        body: form,
+      },
+    ),
+  );
+
+  await parseCloudflareResponse(response);
+}
+
+/**
+ * Permanently deletes a video from Cloudflare Stream by UID.
+ * Errors are thrown so callers can decide whether to swallow them.
+ */
+export async function deleteCloudflareVideo(uid: string): Promise<void> {
+  const config = getConfig();
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`,
+    {
+      method: 'DELETE',
+      headers: authHeaders(config),
+    },
+  );
+
+  if (!response.ok) {
+    let body = '';
+    try { body = await response.text(); } catch { /* ignore */ }
+    throw new Error(body || `Cloudflare Stream delete failed (${response.status})`);
+  }
+}

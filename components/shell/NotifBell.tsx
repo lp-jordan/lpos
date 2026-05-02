@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/contexts/ToastContext';
 import { useTaskNotifications } from '@/hooks/useTaskNotifications';
+import { useProspectNotifications } from '@/hooks/useProspectNotifications';
 import type { NotificationRecord } from '@/contexts/ToastContext';
 import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notification';
+import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
 
 function buildNotifHref(notif: Pick<NotificationRecord, 'projectId' | 'assetId'>): string | null {
   if (!notif.projectId) return null;
@@ -31,6 +33,32 @@ const TASK_NOTIF_LABEL: Record<TaskNotifType, string> = {
   commented: 'New comment',
 };
 
+const PROSPECT_NOTIF_LABEL: Record<ProspectNotifType, string> = {
+  assigned:       'Assigned to prospect',
+  update_posted:  'New prospect update',
+  mentioned:      'Mentioned in prospect',
+  status_changed: 'Prospect status changed',
+  promoted:       'Prospect promoted',
+};
+
+function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      onClick={onClick}
+      role="menuitem"
+    >
+      <div className="notif-task-type">{PROSPECT_NOTIF_LABEL[notif.type]}</div>
+      <div className="notif-task-title">{notif.company}</div>
+      {notif.fromName && (
+        <div className="notif-task-from">by {notif.fromName}</div>
+      )}
+      <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+    </button>
+  );
+}
+
 function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: () => void }) {
   return (
     <button
@@ -54,9 +82,10 @@ export function NotifBell() {
   const rootRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { notifications: pipelineNotifs, unreadCount: pipelineUnread, markAllRead: markPipelineRead } = useToast();
-  const { notifications: taskNotifs, unreadCount: taskUnread, markAllRead: markTasksRead } = useTaskNotifications();
+  const { notifications: taskNotifs,     unreadCount: taskUnread,     markAllRead: markTasksRead     } = useTaskNotifications();
+  const { notifications: prospectNotifs, unreadCount: prospectUnread, markAllRead: markProspectsRead } = useProspectNotifications();
 
-  const totalUnread = pipelineUnread + taskUnread;
+  const totalUnread = pipelineUnread + taskUnread + prospectUnread;
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -81,10 +110,11 @@ export function NotifBell() {
     if (opening) {
       markPipelineRead();
       markTasksRead();
+      markProspectsRead();
     }
   }
 
-  const hasAny = pipelineNotifs.length > 0 || taskNotifs.length > 0;
+  const hasAny = pipelineNotifs.length > 0 || taskNotifs.length > 0 || prospectNotifs.length > 0;
 
   return (
     <div className="notif-bell" ref={rootRef}>
@@ -125,6 +155,22 @@ export function NotifBell() {
                     notif={notif}
                     onClick={() => {
                       router.push(`/dashboard?task=${notif.taskId}`);
+                      setOpen(false);
+                    }}
+                  />
+                ))}
+              </>
+            )}
+
+            {prospectNotifs.length > 0 && (
+              <>
+                <div className="notif-section-label">Prospects</div>
+                {prospectNotifs.slice(0, 10).map((notif) => (
+                  <ProspectNotifItem
+                    key={notif.notifId}
+                    notif={notif}
+                    onClick={() => {
+                      router.push(`/prospects/${notif.prospectId}`);
                       setOpen(false);
                     }}
                   />

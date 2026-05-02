@@ -38,7 +38,10 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<str
   if (!frameioFileId) return null;
 
   const links = await getFileMediaLinks(frameioFileId);
-  const url   = links.highQualityUrl ?? links.efficientUrl ?? links.originalUrl;
+  // highQualityUrl and efficientUrl are HLS manifest URLs — they require hls.js
+  // to play in Chrome/Firefox and cannot be used as a bare <video src>.
+  // TODO: use links.highQualityUrl once hls.js is integrated.
+  const url   = links.originalUrl;
   if (!url) return null;
 
   urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });

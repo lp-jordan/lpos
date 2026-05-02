@@ -23,7 +23,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pro
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ projectId: string }> }) {
   try {
     const { projectId } = await params;
-    const body = await req.json() as { name?: string; clientName?: string; archived?: boolean };
+    const body = await req.json() as { name?: string; clientName?: string; archived?: boolean; cloudflareDefaults?: { thumbnailFrameNumber: number } };
 
     // Capture old values before update for Drive rename
     const existing = getProjectStore().getById(projectId);

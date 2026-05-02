@@ -52,7 +52,8 @@ function StorageGear({ home = false }: { home?: boolean }) {
 export function AppShell({
   children,
   currentUser,
-}: Readonly<{ children: React.ReactNode; currentUser: UserSummary | null }>) {
+  hasProspects = false,
+}: Readonly<{ children: React.ReactNode; currentUser: UserSummary | null; hasProspects?: boolean }>) {
   const pathname = usePathname();
   const isHome = pathname === '/';
   const isStudio = pathname.startsWith('/slate');
@@ -92,7 +93,7 @@ export function AppShell({
               {currentUser && !isSignIn && !isGuest && <NotifBell />}
               {currentUser && !isSignIn && !isGuest && <UserMenu user={currentUser} />}
               {isGuest && <GuestSignOutButton />}
-              <NavBar />
+              <NavBar hasProspects={hasProspects} />
               <Breadcrumb />
             <main className={`app-content${pathname === '/dashboard' ? ' app-content--wide' : ''}`}>
               {children}

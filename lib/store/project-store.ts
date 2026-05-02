@@ -41,20 +41,31 @@ interface ProjectRow {
   archived:             number;
   asset_link_group_id?: string | null;
   lock_reason?:         string | null;
+  cloudflare_defaults?: string | null;
 }
 
 function rowToProject(row: ProjectRow): Project {
+  let cloudflareDefaults: Project['cloudflareDefaults'];
+  if (row.cloudflare_defaults) {
+    try {
+      cloudflareDefaults = JSON.parse(row.cloudflare_defaults) as Project['cloudflareDefaults'];
+    } catch {
+      cloudflareDefaults = undefined;
+    }
+  }
+
   return {
-    projectId:        row.project_id,
-    name:             row.name,
-    clientName:       row.client_name,
-    phase:            row.phase as Project['phase'],
-    subPhase:         row.sub_phase as Project['subPhase'],
-    createdAt:        row.created_at,
-    updatedAt:        row.updated_at,
-    archived:         row.archived === 1 ? true : undefined,
-    assetLinkGroupId: row.asset_link_group_id ?? undefined,
-    assetMergeLocked: row.lock_reason ? true : undefined,
+    projectId:          row.project_id,
+    name:               row.name,
+    clientName:         row.client_name,
+    phase:              row.phase as Project['phase'],
+    subPhase:           row.sub_phase as Project['subPhase'],
+    createdAt:          row.created_at,
+    updatedAt:          row.updated_at,
+    archived:           row.archived === 1 ? true : undefined,
+    assetLinkGroupId:   row.asset_link_group_id ?? undefined,
+    assetMergeLocked:   row.lock_reason ? true : undefined,
+    cloudflareDefaults,
   };
 }
 
@@ -144,7 +155,7 @@ export class ProjectStore {
 
   update(
     projectId: string,
-    patch: Partial<Pick<Project, 'name' | 'clientName' | 'updatedAt' | 'archived' | 'phase' | 'subPhase'>>,
+    patch: Partial<Pick<Project, 'name' | 'clientName' | 'updatedAt' | 'archived' | 'phase' | 'subPhase' | 'cloudflareDefaults'>>,
     context?: ActivityContext,
   ): Project | null {
     const db = getCoreDb();
@@ -157,10 +168,14 @@ export class ProjectStore {
       updatedAt: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     };
 
+    const cloudflareDefaultsJson = next.cloudflareDefaults
+      ? JSON.stringify(next.cloudflareDefaults)
+      : null;
+
     db.prepare(
-      `UPDATE projects SET name = ?, client_name = ?, phase = ?, sub_phase = ?, updated_at = ?, archived = ?
+      `UPDATE projects SET name = ?, client_name = ?, phase = ?, sub_phase = ?, updated_at = ?, archived = ?, cloudflare_defaults = ?
        WHERE project_id = ?`,
-    ).run(next.name, next.clientName, next.phase, next.subPhase, next.updatedAt, next.archived === true ? 1 : 0, projectId);
+    ).run(next.name, next.clientName, next.phase, next.subPhase, next.updatedAt, next.archived === true ? 1 : 0, cloudflareDefaultsJson, projectId);
 
     this.broadcast();
     const archivedNow = previous.archived !== true && next.archived === true;

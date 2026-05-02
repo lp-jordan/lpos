@@ -4,6 +4,9 @@ node_modules/
 out/
 dist/
 
+# macOS
+.DS_Store
+
 # Env
 .env
 .env.local
@@ -16,6 +19,7 @@ runtime/atem-bridge/*.exe
 runtime/*.log
 runtime/*-out.log
 runtime/*-err.log
+runtime/*.zip
 
 # External vendor SDKs and binaries
 vendor/

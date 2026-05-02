@@ -1,16 +1,25 @@
+import fs from 'node:fs';
 import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
-import { getUploadQueueService } from '@/lib/services/container';
+import { getUploadQueueService, getProjectStore } from '@/lib/services/container';
 import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
+import { probeMediaInfo } from '@/lib/services/media-probe';
+import { getTranscriptPaths } from '@/lib/transcripts/store';
 import {
+  applyVideoSettings,
   createCloudflareTusUpload,
+  deleteCloudflareVideo,
   getCloudflareStreamConfigDiagnostic,
   getCloudflareFileSize,
   isCloudflareStreamConfigured,
+  uploadCaptionsVtt,
   uploadFileToCloudflareTus,
   waitForCloudflareVideoReady,
 } from '@/lib/services/cloudflare-stream';
+
+const CLOUDFLARE_ALLOWED_ORIGINS = ['app.leaderpass.com'];
+const CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME = 24;
 
 type PublishQueueProvider = 'frameio' | 'leaderpass';
 
@@ -152,6 +161,14 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
       },
     });
 
+    // Lock allowed origins immediately — before any bytes are transferred.
+    try {
+      await applyVideoSettings(prepared.uid, { allowedOrigins: CLOUDFLARE_ALLOWED_ORIGINS });
+      console.log(`[leaderpass] allowedOrigins set for uid=${prepared.uid}`);
+    } catch (err) {
+      console.warn(`[leaderpass] failed to set allowedOrigins for uid=${prepared.uid}:`, err);
+    }
+
     queue?.setProgress(jobId!, 0);
     console.log(`[leaderpass] uploading asset ${assetId} to Cloudflare via tus`);
 
@@ -180,6 +197,43 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
       isCancelled: jobId ? () => queue?.isCancelled(jobId) ?? false : undefined,
     });
     console.log(`[leaderpass] Cloudflare asset ready for ${assetId}; uid=${ready.uid}`);
+
+    // Set thumbnail frame — probe fps fresh since it may not have been stored at ingest.
+    // Use per-project configured frame number as the target, falling back to the global default.
+    if (asset.filePath) {
+      try {
+        const project = getProjectStore().getById(projectId);
+        const targetFrame = project?.cloudflareDefaults?.thumbnailFrameNumber ?? CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME;
+        const { fps, duration } = await probeMediaInfo(asset.filePath);
+        const effectiveDuration = asset.duration ?? duration;
+        const pct = (fps != null && fps > 0 && effectiveDuration != null && effectiveDuration > 0)
+          ? Math.max(0.001, Math.min(0.999, targetFrame / (fps * effectiveDuration)))
+          : null;
+        if (pct !== null) {
+          await applyVideoSettings(prepared.uid, { thumbnailTimestampPct: pct });
+          console.log(`[leaderpass] thumbnailTimestampPct=${pct.toFixed(4)} (frame ${targetFrame}) set for uid=${prepared.uid}`);
+        } else {
+          console.warn(`[leaderpass] could not compute thumbnailTimestampPct for uid=${prepared.uid} (fps=${fps}, duration=${effectiveDuration})`);
+        }
+      } catch (err) {
+        console.warn(`[leaderpass] failed to set thumbnailTimestampPct for uid=${prepared.uid}:`, err);
+      }
+    }
+
+    // Upload VTT captions if a completed transcript exists for this asset.
+    if (asset.transcription.status === 'done' && asset.transcription.jobId) {
+      try {
+        const { vttPath } = getTranscriptPaths(projectId, asset.transcription.jobId);
+        if (fs.existsSync(vttPath)) {
+          await uploadCaptionsVtt(ready.uid, vttPath);
+          console.log(`[leaderpass] captions uploaded for uid=${ready.uid} (jobId=${asset.transcription.jobId})`);
+        } else {
+          console.warn(`[leaderpass] VTT not found at ${vttPath}; skipping captions for uid=${ready.uid}`);
+        }
+      } catch (err) {
+        console.warn(`[leaderpass] failed to upload captions for uid=${ready.uid}:`, err);
+      }
+    }
 
     const preparedAt = new Date().toISOString();
     patchAsset(projectId, assetId, {
@@ -219,6 +273,17 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
       },
     },
   });
+
+    // Delete the prior Cloudflare video now that the new one is confirmed ready.
+    const oldCloudflareUid = priorCloudflare?.provider_asset_id ?? null;
+    if (oldCloudflareUid && oldCloudflareUid !== ready.uid) {
+      try {
+        await deleteCloudflareVideo(oldCloudflareUid);
+        console.log(`[leaderpass] deleted prior Cloudflare video uid=${oldCloudflareUid} for asset ${assetId}`);
+      } catch (err) {
+        console.warn(`[leaderpass] failed to delete prior Cloudflare video uid=${oldCloudflareUid}:`, err);
+      }
+    }
 
     queue?.complete(jobId!);
     recordActivity({

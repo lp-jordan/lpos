@@ -28,15 +28,21 @@ export const SUBPHASE_ORDER: ProjectSubPhase[] = [
   'workbooks',
 ];
 
+export interface CloudflareProjectDefaults {
+  /** Frame number to use as the Cloudflare Stream thumbnail (default: 24). */
+  thumbnailFrameNumber: number;
+}
+
 export interface Project {
-  projectId:         string;
-  name:              string;
-  clientName:        string;
-  phase:             ProjectPhase;
-  subPhase:          ProjectSubPhase;
-  createdAt:         string;
-  updatedAt:         string;
-  archived?:         boolean;
-  assetLinkGroupId?: string;
-  assetMergeLocked?: boolean;
+  projectId:           string;
+  name:                string;
+  clientName:          string;
+  phase:               ProjectPhase;
+  subPhase:            ProjectSubPhase;
+  createdAt:           string;
+  updatedAt:           string;
+  archived?:           boolean;
+  assetLinkGroupId?:   string;
+  assetMergeLocked?:   boolean;
+  cloudflareDefaults?: CloudflareProjectDefaults;
 }

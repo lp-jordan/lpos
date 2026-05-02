@@ -8,6 +8,7 @@ import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { deleteFrameioFile } from '@/lib/services/frameio';
 import { getTranscripterService } from '@/lib/services/container';
 import { deleteTranscriptsByAsset } from '@/lib/transcripts/store';
+import { deleteCloudflareVideo, isCloudflareStreamConfigured } from '@/lib/services/cloudflare-stream';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -66,6 +67,15 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
 
     const asset = getAsset(projectId, assetId);
     if (!asset) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+    // ── Cloudflare Stream deletion ─────────────────────────────────────────
+    const cfUid = asset.cloudflare?.uid;
+    if (cfUid && isCloudflareStreamConfigured()) {
+      // Best-effort: don't let a Cloudflare error block local cleanup
+      try { await deleteCloudflareVideo(cfUid); } catch (err) {
+        console.warn(`[asset-delete] failed to delete Cloudflare video uid=${cfUid}:`, err);
+      }
+    }
 
     // ── Frame.io deletion ──────────────────────────────────────────────────
     const fioFileId = asset.frameio?.assetId;

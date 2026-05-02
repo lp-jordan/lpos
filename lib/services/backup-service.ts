@@ -1,10 +1,13 @@
 /**
  * BackupService
  *
- * Nightly backup of all SQLite databases to Cloudflare R2.
+ * Nightly backup of LPOS state to Cloudflare R2:
+ *   - All *.sqlite files in DATA_DIR (consistent snapshot via VACUUM INTO)
+ *   - All top-level *.json files in DATA_DIR (config + credentials + ad-hoc state)
+ *
  * Falls back to a local data/backups/ directory when R2 env vars are absent.
  *
- * Safe copy strategy: VACUUM INTO '/tmp/…' produces a defragmented,
+ * Safe copy strategy for SQLite: VACUUM INTO '/tmp/…' produces a defragmented,
  * fully consistent snapshot while the source DB is live. The snapshot is
  * then gzip-compressed in memory and uploaded (or written locally).
  *
@@ -180,6 +183,48 @@ export class BackupService {
         console.error(`[BackupService] failed to back up ${dbName}: ${(err as Error).message}`);
       } finally {
         try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      }
+    }
+
+    // ── JSON state files ──────────────────────────────────────────────────────
+    // Top-level *.json siblings in DATA_DIR (config, credentials, ad-hoc state).
+    // Each uploaded under backups/<date>/state/<filename>.gz so they sort apart
+    // from the SQLite snapshots and a partial restore can pick one out cleanly.
+    let jsonPaths: string[] = [];
+    try {
+      jsonPaths = fs.readdirSync(DATA_DIR)
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => path.join(DATA_DIR, f));
+    } catch {
+      /* DATA_DIR already known-readable above */
+    }
+
+    for (const jsonPath of jsonPaths) {
+      const fileName = path.basename(jsonPath);
+      try {
+        const raw = await fsp.readFile(jsonPath);
+        const gz  = await gzipBuffer(raw);
+
+        const objectName = `backups/${dateKey}/state/${fileName}.gz`;
+
+        if (r2) {
+          await r2.send(new PutObjectCommand({
+            Bucket:      getR2Bucket(),
+            Key:         objectName,
+            Body:        gz,
+            ContentType: 'application/gzip',
+          }));
+        } else {
+          const localDir = path.join(DATA_DIR, 'backups', dateKey, 'state');
+          fs.mkdirSync(localDir, { recursive: true });
+          await fsp.writeFile(path.join(localDir, `${fileName}.gz`), gz);
+        }
+
+        files.push({ db: `state/${fileName}`, ok: true, bytes: gz.length });
+        console.log(`[BackupService] backed up state/${fileName} (${gz.length} bytes compressed)`);
+      } catch (err) {
+        files.push({ db: `state/${fileName}`, ok: false, error: (err as Error).message });
+        console.error(`[BackupService] failed to back up state/${fileName}: ${(err as Error).message}`);
       }
     }
 

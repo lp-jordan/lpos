@@ -175,6 +175,93 @@ function initSchema(db: DatabaseSync): void {
       job_id     TEXT,
       locked_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS prospect_access (
+      user_id    TEXT PRIMARY KEY,
+      granted_by TEXT NOT NULL,
+      granted_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS prospects (
+      prospect_id TEXT PRIMARY KEY,
+      company     TEXT NOT NULL,
+      website     TEXT,
+      industry    TEXT,
+      source      TEXT,
+      status      TEXT NOT NULL DEFAULT 'discovery',
+      archived    INTEGER NOT NULL DEFAULT 0,
+      created_by  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      promoted_at TEXT,
+      client_name TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospects_status     ON prospects(status);
+    CREATE INDEX IF NOT EXISTS idx_prospects_archived   ON prospects(archived);
+    CREATE INDEX IF NOT EXISTS idx_prospects_created_by ON prospects(created_by);
+    CREATE INDEX IF NOT EXISTS idx_prospects_updated_at ON prospects(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS prospect_users (
+      prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,
+      user_id     TEXT NOT NULL,
+      assigned_at TEXT NOT NULL,
+      PRIMARY KEY (prospect_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_users_user ON prospect_users(user_id);
+
+    CREATE TABLE IF NOT EXISTS prospect_contacts (
+      contact_id  TEXT PRIMARY KEY,
+      prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      role        TEXT,
+      email       TEXT,
+      phone       TEXT,
+      linkedin    TEXT,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_contacts_prospect ON prospect_contacts(prospect_id);
+
+    CREATE TABLE IF NOT EXISTS prospect_updates (
+      update_id   TEXT PRIMARY KEY,
+      prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,
+      author_id   TEXT NOT NULL,
+      body        TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      edited_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_updates_prospect ON prospect_updates(prospect_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS prospect_status_history (
+      history_id  TEXT PRIMARY KEY,
+      prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,
+      from_status TEXT,
+      to_status   TEXT NOT NULL,
+      changed_by  TEXT NOT NULL,
+      changed_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_status_history_prospect ON prospect_status_history(prospect_id, changed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS clients (
+      client_id   TEXT PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      prospect_id TEXT,
+      created_by  TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_clients_prospect_id ON clients(prospect_id);
+
+    CREATE TABLE IF NOT EXISTS prospect_notifications (
+      notif_id     TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      type         TEXT NOT NULL,
+      prospect_id  TEXT NOT NULL,
+      company      TEXT NOT NULL,
+      from_user_id TEXT,
+      from_name    TEXT,
+      read         INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_notifs_user_read ON prospect_notifications(user_id, read);
   `);
 }
 
@@ -200,6 +287,46 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`ALTER TABLE projects ADD COLUMN asset_link_group_id TEXT REFERENCES asset_link_groups(group_id)`);
   } catch {
     // Column already exists — migration already ran
+  }
+
+  // v5: per-project Cloudflare defaults (JSON blob)
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN cloudflare_defaults TEXT`);
+  } catch {
+    // Column already exists — migration already ran
+  }
+
+  // v6: People CRM — pre-close and post-close fields, simplified status
+  const peopleCols = [
+    'account_model TEXT',
+    'revenue_type TEXT',
+    'one_time_lp_revenue REAL',
+    'monthly_lp_revenue REAL',
+    'monthly_lp_tech_revenue REAL',
+    'estimated_first_year_value REAL',
+    'expected_start_month TEXT',
+    'expansion_potential TEXT',
+    'owner TEXT',
+    'start_month TEXT',
+    'recurring_billing_status TEXT',
+    'renewal_date TEXT',
+    'first_recurring_bill_date TEXT',
+    'active_services TEXT',
+    'next_film_date TEXT',
+  ];
+  for (const col of peopleCols) {
+    try {
+      db.exec(`ALTER TABLE prospects ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists
+    }
+  }
+  // Migrate sub-phase statuses → 'prospect', and 'promoted' → 'active'
+  try {
+    db.exec(`UPDATE prospects SET status = 'active' WHERE status = 'promoted'`);
+    db.exec(`UPDATE prospects SET status = 'prospect' WHERE status IN ('discovery','proposal','contract_signed','blueprint')`);
+  } catch {
+    // Ignore
   }
 }
 

@@ -1053,11 +1053,21 @@ export async function deleteWebhook(webhookId: string): Promise<void> {
 // ── Media stream URLs ─────────────────────────────────────────────────────────
 
 export interface FrameIOMediaLinks {
-  /** Streamable high-quality transcode (no Content-Disposition). Best for <video> playback. */
+  /**
+   * High-quality transcode HLS manifest URL (H.264 1080p).
+   * This is an HLS stream — requires hls.js for Chrome/Firefox.
+   * Safari plays it natively. Cannot be used as a plain <video src> cross-browser.
+   */
   highQualityUrl:  string | null;
-  /** Streamable efficient transcode — smaller file, still good quality. */
+  /**
+   * Efficient transcode HLS manifest URL (H.264 360p).
+   * Same HLS caveat as highQualityUrl.
+   */
   efficientUrl:    string | null;
-  /** Original file inline URL — plays in browser without forcing download. */
+  /**
+   * Original file inline URL — direct S3/CloudFront MP4.
+   * Works as a plain <video src> in all browsers but may be very large.
+   */
   originalUrl:     string | null;
   /** Thumbnail image URL. */
   thumbnailUrl:    string | null;
@@ -1066,35 +1076,42 @@ export interface FrameIOMediaLinks {
 /**
  * Fetches the media_links for a Frame.io file — CDN URLs for streaming/playback.
  * These URLs are presigned and expire, so fetch fresh on each request.
+ *
+ * Include format: dot-notation sub-keys joined with literal commas. Do NOT wrap
+ * the full string in encodeURIComponent — that encodes commas as %2C, which
+ * caused high_quality and efficient to silently return null previously.
+ *
+ * NOTE: high_quality and efficient are HLS manifest URLs
+ * (stream-download.frame.io/manifest/hls?token=JWT), not direct MP4 files.
+ * They require hls.js to play in Chrome/Firefox. Only originalUrl is a plain
+ * MP4 that works as a bare <video src> cross-browser.
+ *
+ * TODO: integrate hls.js to use the smaller transcoded HLS streams instead of
+ * the raw original file. Until then, frameio-stream/route.ts uses originalUrl.
  */
 export async function getFileMediaLinks(fileId: string): Promise<FrameIOMediaLinks> {
   const { accountId } = await discover();
-  const include = [
-    'media_links.high_quality',
-    'media_links.efficient',
-    'media_links.original',
-    'media_links.thumbnail_high_quality',
-  ].join(',');
+  const include = 'media_links.high_quality,media_links.efficient,media_links.original,media_links.thumbnail_high_quality';
   const res  = await fioFetch(
-    `${BASE_V4}/accounts/${accountId}/files/${fileId}?include=${encodeURIComponent(include)}`,
+    `${BASE_V4}/accounts/${accountId}/files/${fileId}?include=${include}`,
   );
   const body = await res.json() as {
     data?: {
       media_links?: {
-        high_quality?:           { url?: string | null; download_url?: string | null };
-        efficient?:              { url?: string | null };
-        original?:               { inline_url?: string | null };
+        high_quality?:           { download_url?: string | null };
+        efficient?:              { download_url?: string | null };
+        original?:               { inline_url?: string | null; download_url?: string | null };
         thumbnail?:              { url?: string | null };
-        thumbnail_high_quality?: { url?: string | null };
+        thumbnail_high_quality?: { url?: string | null; download_url?: string | null };
       };
     };
   };
 
   const ml = body.data?.media_links ?? {};
   return {
-    highQualityUrl: ml.high_quality?.url          ?? null,
-    efficientUrl:   ml.efficient?.url             ?? null,
-    originalUrl:    ml.original?.inline_url        ?? null,
-    thumbnailUrl:   ml.thumbnail_high_quality?.url ?? ml.thumbnail?.url ?? null,
+    highQualityUrl: ml.high_quality?.download_url  ?? null,
+    efficientUrl:   ml.efficient?.download_url     ?? null,
+    originalUrl:    ml.original?.inline_url         ?? null,
+    thumbnailUrl:   ml.thumbnail_high_quality?.url  ?? ml.thumbnail?.url ?? null,
   };
 }

@@ -30,7 +30,7 @@ export default function GuestScriptsPage() {
               {project.name}
             </span>
             {project.clientName && (
-              <span style={{ fontSize: '0.65rem', opacity: 0.5, marginTop: '0.1rem', textAlign: 'center', wordBreak: 'break-word', width: '100%', padding: '0 10px' }}>
+              <span className="guest-script-tile-client" style={{ opacity: 0.5, marginTop: '0.1rem', textAlign: 'center', wordBreak: 'break-word', width: '100%', padding: '0 10px' }}>
                 {project.clientName}
               </span>
             )}

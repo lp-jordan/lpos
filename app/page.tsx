@@ -1,7 +1,16 @@
 import Link from 'next/link';
+import { cookies } from 'next/headers';
+import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
+import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
 import { WhatsNewWidget } from '@/components/home/WhatsNewWidget';
 
-export default function HomePage() {
+export default async function HomePage() {
+  const cookieStore = await cookies();
+  const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
+  const showProspects = session
+    ? hasProspectsAccess(session.userId, session.role === 'admin')
+    : false;
+
   return (
     <div className="home-hero">
       <div className="home-brand">
@@ -13,18 +22,31 @@ export default function HomePage() {
       </div>
 
       <div className="home-tiles">
+        {showProspects && (
+          <Link href="/people" className="home-tile">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            <span className="home-tile-label">People</span>
+          </Link>
+        )}
         <Link href="/projects" className="home-tile">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
           </svg>
           <span className="home-tile-label">Projects</span>
         </Link>
-        <Link href="/media" className="home-tile">
+        <Link href="/platform" className="home-tile">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="23 7 16 12 23 17 23 7" />
-            <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+            <line x1="2" y1="20" x2="22" y2="20" />
+            <line x1="6" y1="20" x2="6" y2="17" />
+            <line x1="18" y1="20" x2="18" y2="17" />
           </svg>
-          <span className="home-tile-label">Media</span>
+          <span className="home-tile-label">Platform</span>
         </Link>
       </div>
 

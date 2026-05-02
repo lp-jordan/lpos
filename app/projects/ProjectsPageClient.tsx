@@ -137,6 +137,7 @@ interface ProjectsPageClientProps {
   initialUsers: UserSummary[];
   initialStats: Record<string, ClientStats>;
   initialCurrentUser: UserSummary | null;
+  initialPromotedClients: string[];
 }
 
 export function ProjectsPageClient({
@@ -145,6 +146,7 @@ export function ProjectsPageClient({
   initialUsers,
   initialStats,
   initialCurrentUser,
+  initialPromotedClients,
 }: ProjectsPageClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -152,6 +154,8 @@ export function ProjectsPageClient({
   const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners(initialOwners, initialUsers);
   const currentUser = initialCurrentUser;
   const clientStats = initialStats;
+
+  const [promotedClients, setPromotedClients] = useState(initialPromotedClients);
 
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
@@ -173,6 +177,7 @@ export function ProjectsPageClient({
   const [renaming, setRenaming] = useState<{ id: string; currentName: string; isClient?: boolean } | null>(null);
   const [ownerPicker, setOwnerPicker] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
+  const [confirmDeleteClient, setConfirmDeleteClient] = useState<string | null>(null);
   const [confirmArchive, setConfirmArchive] = useState<{ ids: string[]; label: string; unarchive?: boolean } | null>(null);
   const [taskProject, setTaskProject] = useState<Project | null>(null);
   const [mergeJobIds, setMergeJobIds] = useState<string[] | null>(null);
@@ -192,7 +197,10 @@ export function ProjectsPageClient({
 
   const visibleProjects = showArchived ? archivedProjects : activeProjects;
 
-  const clients = Array.from(new Set(activeProjects.map((p) => p.clientName))).sort((a, b) => (a ?? '').localeCompare(b ?? '', undefined, { numeric: true }));
+  const clients = Array.from(new Set([
+    ...activeProjects.map((p) => p.clientName),
+    ...promotedClients,
+  ])).sort((a, b) => (a ?? '').localeCompare(b ?? '', undefined, { numeric: true }));
 
   const clientProjects = activeClient
     ? visibleProjects.filter((p) => p.clientName === activeClient)
@@ -383,19 +391,28 @@ export function ProjectsPageClient({
           { type: 'separator' },
         ];
 
+    const deleteEntry: MenuEntry = clientProjs.length === 0
+      ? {
+          type: 'item',
+          label: 'Delete Client',
+          icon: <IconTrash />,
+          danger: true,
+          onClick: () => setConfirmDeleteClient(clientName),
+        }
+      : {
+          type: 'item',
+          label: `Delete All ${clientProjs.length} Project${clientProjs.length !== 1 ? 's' : ''}`,
+          icon: <IconTrash />,
+          danger: true,
+          onClick: () => setConfirmDelete({ ids: clientProjs.map((p) => p.projectId), label: `all projects in "${clientName}"` }),
+        };
+
     return [
       { type: 'item', label: 'Open',          icon: <IconOpen />,   onClick: () => { setActiveClient(clientName); setSearch(''); } },
       { type: 'item', label: 'Rename Client', icon: <IconPencil />, onClick: () => setRenaming({ id: '', currentName: clientName, isClient: true }) },
       { type: 'separator' },
       ...ownerEntries,
-      {
-        type: 'item',
-        label: `Delete All ${clientProjs.length} Project${clientProjs.length !== 1 ? 's' : ''}`,
-        icon: <IconTrash />,
-        danger: true,
-        disabled: clientProjs.length === 0,
-        onClick: () => setConfirmDelete({ ids: clientProjs.map((p) => p.projectId), label: `all projects in "${clientName}"` }),
-      },
+      deleteEntry,
     ];
   }, [projects, owners, removeOwner]);
 
@@ -723,6 +740,20 @@ export function ProjectsPageClient({
         onCloseArchive={() => setConfirmArchive(null)}
         onConfirmArchive={() => bulkArchive(confirmArchive!.ids, confirmArchive?.unarchive)}
       />
+      {confirmDeleteClient && (
+        <ConfirmModal
+          title="Delete Client"
+          body={`Remove "${confirmDeleteClient}" from the client list? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={async () => {
+            await fetch(`/api/clients/${encodeURIComponent(confirmDeleteClient)}`, { method: 'DELETE' });
+            setPromotedClients((prev) => prev.filter((n) => n !== confirmDeleteClient));
+            setConfirmDeleteClient(null);
+          }}
+          onClose={() => setConfirmDeleteClient(null)}
+        />
+      )}
     </div>
   );
 }

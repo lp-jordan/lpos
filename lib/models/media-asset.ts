@@ -70,6 +70,8 @@ export interface CloudflareStreamInfo {
   readyAt: string | null;
   creator: string | null;
   lastError: string | null;
+  /** Cloudflare Images URL for the custom poster, set via Platform page when available. */
+  posterUrl: string | null;
 }
 
 export function defaultCloudflareStream(): CloudflareStreamInfo {
@@ -86,6 +88,7 @@ export function defaultCloudflareStream(): CloudflareStreamInfo {
     readyAt: null,
     creator: null,
     lastError: null,
+    posterUrl: null,
   };
 }
 

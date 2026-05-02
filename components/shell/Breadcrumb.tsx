@@ -4,22 +4,30 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { Project } from '@/lib/models/project';
+import type { Prospect } from '@/lib/models/prospect';
 
 const ROOT_LABELS: Record<string, string> = {
-  projects: 'Projects',
-  media: 'Media',
-  slate: 'Studio',
+  projects:  'Projects',
+  prospects: 'People',
+  people:    'People',
+  media:     'Media',
+  slate:     'Studio',
 };
 
 export function Breadcrumb() {
   const pathname = usePathname();
   const router   = useRouter();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects,  setProjects]  = useState<Project[]>([]);
+  const [prospects, setProspects] = useState<Prospect[]>([]);
 
   useEffect(() => {
     fetch('/api/projects')
       .then((r) => r.ok ? r.json() : { projects: [] })
       .then((data: { projects?: Project[] }) => setProjects(data.projects ?? []))
+      .catch(() => {});
+    fetch('/api/prospects')
+      .then((r) => r.ok ? r.json() : { prospects: [] })
+      .then((data: { prospects?: Prospect[] }) => setProspects(data.prospects ?? []))
       .catch(() => {});
   }, []);
 
@@ -31,8 +39,9 @@ export function Breadcrumb() {
     const href = '/' + segments.slice(0, i + 1).join('/');
     let label = ROOT_LABELS[seg];
     if (!label) {
-      const project = projects.find((p) => p.projectId === seg);
-      label = project ? project.name : seg;
+      const project  = projects.find((p) => p.projectId === seg);
+      const prospect = prospects.find((p) => p.prospectId === seg);
+      label = project?.name ?? prospect?.company ?? seg;
     }
     return { label, href, isLast: i === segments.length - 1 };
   });

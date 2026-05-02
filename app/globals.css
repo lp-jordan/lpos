@@ -14059,7 +14059,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
     min-height: 56px;
     padding: 8px 4px;
     color: var(--muted-soft);
-    font-size: 0.67rem;
+    font-size: 0.72rem;
     font-weight: 500;
     letter-spacing: 0.02em;
     text-decoration: none;
@@ -15572,3 +15572,32 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 /* Expiry meta coloring */
 .dlp-meta--danger { color: #e07070; }
 .dlp-meta--warn   { color: var(--warning); }
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/* ── Mobile usability ─ all rules scoped to ≤768px or ≤480px ─────────── */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+/* Guest scripts client-name line — desktop default preserved here */
+.guest-script-tile-client { font-size: 0.65rem; }
+
+@media (max-width: 768px) {
+  /* Touch target: project list view-mode toggle */
+  .m-view-btn { width: 44px; height: 44px; }
+}
+
+@media (max-width: 480px) {
+  /* Project cards: drop forced 1:1 so text isn't crushed on phones */
+  .proj-card { aspect-ratio: auto; min-height: 180px; }
+
+  /* Modal becomes a bottom sheet on small phones */
+  .sh-modal-backdrop { align-items: flex-end; }
+  .sh-modal {
+    width: 100%;
+    max-width: none;
+    max-height: 90vh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  /* Guest scripts client-name was 0.65rem inline — bump for legibility */
+  .guest-script-tile-client { font-size: 0.78rem; }
+}

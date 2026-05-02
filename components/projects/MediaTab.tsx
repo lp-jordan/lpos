@@ -446,6 +446,10 @@ export function MediaTab({
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
+  const [cfSettingsOpen,      setCfSettingsOpen]      = useState(false);
+  const [cfSettingsFrame,     setCfSettingsFrame]     = useState(24);
+  const [cfSettingsSaving,    setCfSettingsSaving]    = useState(false);
+  const [cfSettingsError,     setCfSettingsError]     = useState<string | null>(null);
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1183,6 +1187,37 @@ const { openMenu } = useContextMenu();
     }
   }
 
+  async function handleOpenCfSettings() {
+    setCfSettingsError(null);
+    setCfSettingsOpen(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) {
+        const data = await res.json() as { project: { cloudflareDefaults?: { thumbnailFrameNumber?: number } } };
+        setCfSettingsFrame(data.project.cloudflareDefaults?.thumbnailFrameNumber ?? 24);
+      }
+    } catch { /* keep current value */ }
+  }
+
+  async function handleSaveCfSettings() {
+    setCfSettingsError(null);
+    setCfSettingsSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cloudflareDefaults: { thumbnailFrameNumber: cfSettingsFrame } }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) { setCfSettingsError(data.error ?? 'Failed to save'); return; }
+      setCfSettingsOpen(false);
+    } catch {
+      setCfSettingsError('Network error — could not save settings');
+    } finally {
+      setCfSettingsSaving(false);
+    }
+  }
+
   async function handleBulkLeaderPassPublish() {
     if (!selectedIds.size) return;
     setPublishWorking(true);
@@ -1356,6 +1391,18 @@ const { openMenu } = useContextMenu();
               ))}
             </div>
             <div className="ma-toolbar-right">
+              <button
+                type="button"
+                className="ma-shares-btn"
+                onClick={() => void handleOpenCfSettings()}
+                title="Cloudflare defaults"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+                CF
+              </button>
               <button
                 type="button"
                 className={`ma-shares-btn${showSharesPanel ? ' ma-shares-btn--active' : ''}`}
@@ -1569,6 +1616,44 @@ const { openMenu } = useContextMenu();
         )}
 
       </div>
+
+      {/* Cloudflare project defaults modal */}
+      {cfSettingsOpen && (
+        <div className="ma-cf-settings-overlay" onClick={() => setCfSettingsOpen(false)}>
+          <div className="ma-cf-settings-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ma-cf-settings-header">
+              <span className="ma-cf-settings-title">Cloudflare Defaults</span>
+              <button type="button" className="ma-cf-settings-close" onClick={() => setCfSettingsOpen(false)} aria-label="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+            <div className="ma-cf-settings-body">
+              <label className="ma-cf-settings-label" htmlFor="cf-proj-thumb-frame">
+                Default thumbnail frame
+                <span className="ma-cf-settings-hint">Frame number used when pushing to Cloudflare (e.g. 24 ≈ 0.8s at 30fps, skips fade-in)</span>
+              </label>
+              <input
+                id="cf-proj-thumb-frame"
+                type="number"
+                min={1}
+                step={1}
+                className="ma-cf-settings-input"
+                value={cfSettingsFrame}
+                onChange={(e) => setCfSettingsFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              />
+              {cfSettingsError && <p className="ma-cf-settings-error">{cfSettingsError}</p>}
+            </div>
+            <div className="ma-cf-settings-footer">
+              <button type="button" className="ma-cf-settings-cancel" onClick={() => setCfSettingsOpen(false)}>Cancel</button>
+              <button type="button" className="ma-cf-settings-save" onClick={() => void handleSaveCfSettings()} disabled={cfSettingsSaving}>
+                {cfSettingsSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Sardius batch push modal */}
       {sardiusBatchAssets && (

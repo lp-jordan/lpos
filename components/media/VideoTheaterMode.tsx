@@ -119,6 +119,9 @@ export function VideoTheaterMode({
     e.stopPropagation();
     const rect = el.getBoundingClientRect();
     v.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * duration;
+    // Resume playback after seek — without this the video shows the new frame
+    // but stays paused/stalled if it was buffering when the user clicked.
+    void v.play();
   }
 
   function seekTo(ts: number) {

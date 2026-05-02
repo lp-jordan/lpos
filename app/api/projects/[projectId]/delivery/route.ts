@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { Upload } from '@aws-sdk/lib-storage';
 import { getProjectStore, getUploadQueueService } from '@/lib/services/container';
 import { getAsset } from '@/lib/store/media-registry';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
@@ -127,13 +128,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           `Uploading file ${i + 1} of ${total}…`,
         )
 
-        await s3.send(new PutObjectCommand({
-          Bucket:        R2_BUCKET,
-          Key:           r2Key,
-          Body:          fs.createReadStream(filePath) as unknown as ReadableStream,
-          ContentType:   mimeType,
-          ContentLength: fileSize,
-        }))
+        await uploadToR2({ key: r2Key, filePath, mimeType, fileSize })
 
         // ── Thumbnail ──────────────────────────────────────────────────────────
         let thumbnailUrl: string | undefined
@@ -206,6 +201,38 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   })()
 
   return NextResponse.json({ ok: true, jobId, token, ineligible })
+}
+
+// ── S3 upload ─────────────────────────────────────────────────────────────────
+
+// R2 rejects single-part uploads > 5 GB; use multipart for large files.
+const MULTIPART_THRESHOLD = 5 * 1024 * 1024 * 1024
+
+async function uploadToR2({
+  key, filePath, mimeType, fileSize,
+}: {
+  key: string; filePath: string; mimeType: string; fileSize: number;
+}): Promise<void> {
+  if (fileSize <= MULTIPART_THRESHOLD) {
+    await s3.send(new PutObjectCommand({
+      Bucket:        R2_BUCKET,
+      Key:           key,
+      Body:          fs.createReadStream(filePath) as unknown as ReadableStream,
+      ContentType:   mimeType,
+      ContentLength: fileSize,
+    }))
+  } else {
+    const upload = new Upload({
+      client: s3,
+      params: {
+        Bucket:      R2_BUCKET,
+        Key:         key,
+        Body:        fs.createReadStream(filePath),
+        ContentType: mimeType,
+      },
+    })
+    await upload.done()
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -16,6 +16,9 @@ export default async function ProjectsPage() {
   const users = getAllUsers().map(toUserSummary).filter((u): u is UserSummary => u !== null);
   const stats = getClientStats();
 
+  const { getClientStore } = await import('@/lib/services/container');
+  const promotedClients = getClientStore().getAll().map((c) => c.name);
+
   return (
     <ProjectsPageClient
       initialProjects={projects}
@@ -23,6 +26,7 @@ export default async function ProjectsPage() {
       initialUsers={users}
       initialStats={stats}
       initialCurrentUser={currentUser}
+      initialPromotedClients={promotedClients}
     />
   );
 }

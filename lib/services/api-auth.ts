@@ -17,6 +17,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import type { UserRole } from '@/lib/models/user';
+import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
 
 const ROLE_RANK: Record<UserRole, number> = { guest: 0, user: 1, admin: 2 };
 
@@ -41,4 +42,19 @@ export async function requireRole(
 /** Convenience wrapper — resolves the session and returns it, or null. */
 export async function getSession(req: NextRequest) {
   return verifySessionToken(req.cookies.get(APP_SESSION_COOKIE)?.value);
+}
+
+/**
+ * Returns a 401/403 NextResponse if the request does not have Prospects access.
+ * Admins always pass. Returns null if access is allowed.
+ */
+export async function requireProspectsAccess(req: NextRequest): Promise<NextResponse | null> {
+  const session = await verifySessionToken(req.cookies.get(APP_SESSION_COOKIE)?.value);
+  if (!session) {
+    return NextResponse.json({ error: 'Sign in to continue.' }, { status: 401 });
+  }
+  if (!hasProspectsAccess(session.userId, session.role === 'admin')) {
+    return NextResponse.json({ error: 'You do not have access to Prospects.' }, { status: 403 });
+  }
+  return null;
 }

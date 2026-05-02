@@ -313,6 +313,11 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [lpError, setLpError] = useState<string | null>(null);
   const [lpResetting, setLpResetting] = useState(false);
 
+  const [cfEmbedCopied, setCfEmbedCopied]   = useState(false);
+  const [cfThumbFrame, setCfThumbFrame]      = useState(24);
+  const [cfThumbApplying, setCfThumbApplying] = useState(false);
+  const [cfThumbError, setCfThumbError]      = useState<string | null>(null);
+
   async function handlePushToLeaderPass() {
     if (!asset) return;
     setLpError(null);
@@ -355,6 +360,31 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     navigator.clipboard.writeText(url).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function handleCopyEmbedUrl(url: string) {
+    navigator.clipboard.writeText(url).catch(() => {});
+    setCfEmbedCopied(true);
+    setTimeout(() => setCfEmbedCopied(false), 2000);
+  }
+
+  async function handleApplyCfThumb() {
+    if (!asset) return;
+    setCfThumbError(null);
+    setCfThumbApplying(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/cloudflare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thumbnailFrameNumber: cfThumbFrame }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) setCfThumbError(data.error ?? 'Failed to apply thumbnail frame');
+    } catch {
+      setCfThumbError('Network error — could not apply thumbnail frame');
+    } finally {
+      setCfThumbApplying(false);
+    }
   }
 
   const fetchShareLinks = useCallback(async (assetId: string) => {
@@ -666,22 +696,85 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </span>
                   </div>
                 )}
-                {asset.cloudflare.status !== 'none' && (
-                  <div className="mad-info-grid">
-                    <span className="mad-info-label">Cloudflare</span>
-                    <span className="mad-info-value">{CLOUDFLARE_STREAM_STATUS_LABEL[asset.cloudflare.status]}</span>
-                    <span className="mad-info-label">Stream UID</span>
-                    <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
-                    <span className="mad-info-label">Playback</span>
-                    <span className="mad-info-value">
-                      {asset.leaderpass.playbackUrl ? (
-                        <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
-                          Open Cloudflare preview ↗
-                        </a>
-                      ) : '—'}
-                    </span>
-                  </div>
-                )}
+                {asset.cloudflare.status !== 'none' && (() => {
+                  // Derive the embed src from the HLS URL (strip manifest path, add /iframe).
+                  // posterUrl will be appended when available (Platform page sets it).
+                  const embedBase = asset.cloudflare.hlsUrl
+                    ? asset.cloudflare.hlsUrl.replace('/manifest/video.m3u8', '')
+                    : null;
+                  const embedSrc = embedBase
+                    ? `${embedBase}/iframe${asset.cloudflare.posterUrl ? `?poster=${encodeURIComponent(asset.cloudflare.posterUrl)}` : ''}`
+                    : null;
+                  const isReady = asset.cloudflare.status === 'ready';
+
+                  return (
+                    <>
+                      <div className="mad-info-grid">
+                        <span className="mad-info-label">Cloudflare</span>
+                        <span className="mad-info-value">{CLOUDFLARE_STREAM_STATUS_LABEL[asset.cloudflare.status]}</span>
+                        <span className="mad-info-label">Stream UID</span>
+                        <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
+                        {asset.leaderpass.playbackUrl && (
+                          <>
+                            <span className="mad-info-label">Preview</span>
+                            <span className="mad-info-value">
+                              <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
+                                Open Cloudflare preview ↗
+                              </a>
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      {isReady && embedSrc && (
+                        <div className="mad-cf-embed-block">
+                          <span className="mad-cf-embed-label">Stream Embed URL</span>
+                          <div className="mad-cf-embed-row">
+                            <input
+                              className="mad-cf-embed-input"
+                              readOnly
+                              value={embedSrc}
+                              onFocus={(e) => e.currentTarget.select()}
+                            />
+                            <button
+                              type="button"
+                              className="mad-cf-embed-copy"
+                              onClick={() => handleCopyEmbedUrl(embedSrc)}
+                            >
+                              {cfEmbedCopied ? '✓ Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {isReady && (
+                        <div className="mad-cf-thumb-row">
+                          <label className="mad-cf-thumb-label" htmlFor="cf-thumb-frame">
+                            Thumbnail frame
+                          </label>
+                          <input
+                            id="cf-thumb-frame"
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="mad-cf-thumb-input"
+                            value={cfThumbFrame}
+                            onChange={(e) => setCfThumbFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          />
+                          <button
+                            type="button"
+                            className="mad-action-btn"
+                            onClick={handleApplyCfThumb}
+                            disabled={cfThumbApplying}
+                          >
+                            {cfThumbApplying ? 'Applying…' : 'Apply'}
+                          </button>
+                          {cfThumbError && <span className="mad-cf-thumb-error">{cfThumbError}</span>}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 {asset.leaderpass.status === 'awaiting_platform' && (
                   <p className="mad-hint">
                     Cloudflare delivery is ready. LPOS has stored the prepared payload and is waiting for the LeaderPass platform API handoff.

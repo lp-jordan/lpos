@@ -33,6 +33,9 @@ import {
 import { ProjectStore } from '@/lib/store/project-store';
 import { ClientOwnerStore } from '@/lib/store/client-owner-store';
 import { TaskStore } from '@/lib/store/task-store';
+import { ProspectStore } from '@/lib/store/prospect-store';
+import { ClientStore } from '@/lib/store/client-store';
+import { ProspectNotificationStore } from '@/lib/store/prospect-notification-store';
 import { TaskCommentStore } from '@/lib/store/task-comment-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
@@ -43,6 +46,7 @@ import { PipelineTrackerService } from './pipeline-tracker-service';
 import { PresentationService } from './presentation-service';
 import { DriveWatcherService } from './drive-watcher-service';
 import { pushTranscriptToDrive } from './drive-transcript-sync';
+import { uploadCaptionsToCloudflare } from './cloudflare-captions-sync';
 import { PromotionQueueService } from './promotion-queue-service';
 import { PromotionProcessor } from './promotion-processor';
 import { PresenceService } from './presence-service';
@@ -97,6 +101,12 @@ declare global {
   var __lpos_backupService: BackupService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_prospectStore: ProspectStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_clientStore: ClientStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_prospectNotificationStore: ProspectNotificationStore | undefined;
 }
 
 // ── Module-local singletons (fast path when module is shared) ─────────────
@@ -123,6 +133,9 @@ let promotionQueueService: PromotionQueueService | null = null;
 let presenceService: PresenceService | null = null;
 let lpReleaseService: LpReleaseService | null = null;
 let backupService: BackupService | null = null;
+let prospectStore: ProspectStore | null = null;
+let clientStore: ClientStore | null = null;
+let prospectNotificationStore: ProspectNotificationStore | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -166,6 +179,9 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     }
     if (job.status === 'done') {
       void pushTranscriptToDrive(job.projectId, job.jobId);
+      if (job.assetId) {
+        void uploadCaptionsToCloudflare(job.projectId, job.assetId, job.jobId);
+      }
     }
   });
 
@@ -416,4 +432,28 @@ export function getLpReleaseService(): LpReleaseService | null {
 
 export function getBackupService(): BackupService | null {
   return globalThis.__lpos_backupService ?? backupService ?? null;
+}
+
+export function getProspectStore(): ProspectStore {
+  if (globalThis.__lpos_prospectStore) return globalThis.__lpos_prospectStore;
+  if (prospectStore) return prospectStore;
+  prospectStore = new ProspectStore();
+  globalThis.__lpos_prospectStore = prospectStore;
+  return prospectStore;
+}
+
+export function getClientStore(): ClientStore {
+  if (globalThis.__lpos_clientStore) return globalThis.__lpos_clientStore;
+  if (clientStore) return clientStore;
+  clientStore = new ClientStore();
+  globalThis.__lpos_clientStore = clientStore;
+  return clientStore;
+}
+
+export function getProspectNotificationStore(): ProspectNotificationStore {
+  if (globalThis.__lpos_prospectNotificationStore) return globalThis.__lpos_prospectNotificationStore;
+  if (prospectNotificationStore) return prospectNotificationStore;
+  prospectNotificationStore = new ProspectNotificationStore();
+  globalThis.__lpos_prospectNotificationStore = prospectNotificationStore;
+  return prospectNotificationStore;
 }
