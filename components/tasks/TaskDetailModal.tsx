@@ -1,12 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskPriority } from '@/lib/models/task';
-import type { TaskPhase } from '@/lib/models/task-phase';
-import { PHASE_CONFIGS, getPhaseConfig } from '@/lib/models/task-phase';
-import type { Project } from '@/lib/models/project';
+import type { TaskType } from '@/lib/models/task-phase';
+import { TASK_TYPE_CONFIGS, getTaskTypeConfig } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
-import { MentionTextarea } from '@/components/dashboard/MentionTextarea';
 import { CommentThread } from './CommentThread';
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
@@ -18,8 +16,10 @@ const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
 
 interface Props {
   task: Task;
-  allProjects: Project[];
   users: UserSummary[];
+  /** Distinct client names from active projects. "General" is added at the top
+   *  inside the modal so callers don't need to include it. */
+  clientNames: string[];
   currentUserId: string;
   onUpdated: (task: Task) => void;
   onDeleted: (taskId: string) => void;
@@ -28,27 +28,26 @@ interface Props {
 
 export function TaskDetailModal({
   task,
-  allProjects,
   users,
+  clientNames,
   currentUserId,
   onUpdated,
   onDeleted,
   onClose,
 }: Readonly<Props>) {
   const [title, setTitle] = useState(task.description);
-  const [phase, setPhase] = useState<TaskPhase>(task.phase);
+  const [taskType, setTaskType] = useState<TaskType>(task.taskType);
   const [status, setStatus] = useState(task.status);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
+  const [clientName, setClientName] = useState<string>(task.clientName || 'General');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(task.assignedTo);
-  const [projectId, setProjectId] = useState(task.projectId ?? 'general');
-  const [notes, setNotes] = useState(task.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const assigneeRef = useRef<HTMLDivElement>(null);
 
-  const phaseConfig = getPhaseConfig(phase);
+  const taskTypeConfig = getTaskTypeConfig(taskType);
 
   function handleClose() {
     setClosing(true);
@@ -58,14 +57,28 @@ export function TaskDetailModal({
   // Reset state when task changes
   useEffect(() => {
     setTitle(task.description);
-    setPhase(task.phase);
+    setTaskType(task.taskType);
     setStatus(task.status);
     setPriority(task.priority);
+    setClientName(task.clientName || 'General');
     setAssigneeIds(task.assignedTo);
-    setProjectId(task.projectId ?? 'general');
-    setNotes(task.notes ?? '');
     setConfirmDelete(false);
   }, [task.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "General" floats at the top; everything else deduped + alphabetized.
+  // Mirrors the NewTaskModal options shape so the same client list is shown
+  // in both surfaces.
+  const clientOptions = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const name of clientNames) {
+      const trimmed = name?.trim();
+      if (trimmed && trimmed !== 'General') set.add(trimmed);
+    }
+    // Include the task's current client even if it's no longer in the active
+    // projects list — so renaming a project doesn't silently strand a task.
+    if (task.clientName && task.clientName !== 'General') set.add(task.clientName);
+    return ['General', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [clientNames, task.clientName]);
 
   // Close assignee dropdown on outside click
   useEffect(() => {
@@ -111,11 +124,11 @@ export function TaskDetailModal({
     }
   }
 
-  function handlePhaseChange(p: TaskPhase) {
-    const nextDefault = getPhaseConfig(p).defaultStatus;
-    setPhase(p);
+  function handleTaskTypeChange(t: TaskType) {
+    const nextDefault = getTaskTypeConfig(t).defaultStatus;
+    setTaskType(t);
     setStatus(nextDefault);
-    void patch({ phase: p, status: nextDefault });
+    void patch({ taskType: t, status: nextDefault });
   }
 
   function handleStatusChange(s: string) {
@@ -128,15 +141,9 @@ export function TaskDetailModal({
     void patch({ priority: p });
   }
 
-  function handleProjectChange(pid: string) {
-    setProjectId(pid);
-    void patch({ projectId: pid });
-  }
-
-  function handleNotesBlur() {
-    if (notes !== (task.notes ?? '')) {
-      void patch({ notes: notes.trim() || null });
-    }
+  function handleClientChange(c: string) {
+    setClientName(c);
+    void patch({ clientName: c });
   }
 
   function toggleAssignee(uid: string) {
@@ -196,13 +203,13 @@ export function TaskDetailModal({
           {/* Meta */}
           <div className="task-detail-meta">
             <div className="task-detail-field">
-              <span className="task-detail-label">Phase</span>
+              <span className="task-detail-label">Type</span>
               <select
                 className="task-panel-select"
-                value={phase}
-                onChange={(e) => handlePhaseChange(e.target.value as TaskPhase)}
+                value={taskType}
+                onChange={(e) => handleTaskTypeChange(e.target.value as TaskType)}
               >
-                {PHASE_CONFIGS.map((c) => (
+                {TASK_TYPE_CONFIGS.map((c) => (
                   <option key={c.value} value={c.value}>{c.label}</option>
                 ))}
               </select>
@@ -215,7 +222,7 @@ export function TaskDetailModal({
                 value={status}
                 onChange={(e) => handleStatusChange(e.target.value)}
               >
-                {phaseConfig.statuses.map((s) => (
+                {taskTypeConfig.statuses.map((s) => (
                   <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
@@ -235,17 +242,14 @@ export function TaskDetailModal({
             </div>
 
             <div className="task-detail-field">
-              <span className="task-detail-label">Project</span>
+              <span className="task-detail-label">Client</span>
               <select
                 className="task-panel-select"
-                value={projectId}
-                onChange={(e) => handleProjectChange(e.target.value)}
+                value={clientName}
+                onChange={(e) => handleClientChange(e.target.value)}
               >
-                <option value="general">General</option>
-                {allProjects.map((p) => (
-                  <option key={p.projectId} value={p.projectId}>
-                    {p.clientName} — {p.name}
-                  </option>
+                {clientOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
                 ))}
               </select>
             </div>
@@ -281,20 +285,7 @@ export function TaskDetailModal({
             </div>
           </div>
 
-          {/* Notes */}
-          <div className="task-panel-notes">
-            <span className="task-detail-label">Notes</span>
-            <MentionTextarea
-              value={notes}
-              onChange={setNotes}
-              onBlur={handleNotesBlur}
-              users={users}
-              placeholder="Add context… @mention a teammate"
-              rows={3}
-            />
-          </div>
-
-          {/* Comments */}
+          {/* Updates (formerly Notes + Comments) — single chronological thread */}
           <CommentThread taskId={task.taskId} currentUserId={currentUserId} users={users} />
         </div>
       </div>

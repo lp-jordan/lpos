@@ -31,6 +31,10 @@ import {
   removeShareAsset,
 }                                                  from '@/lib/store/share-assets-store';
 import {
+  findDeliverablesContainingAsset,
+  updateDeliverableAssetFrameio,
+}                                                  from '@/lib/store/deliverable-store';
+import {
   compressForFrameIO,
   cancelCompress,
   COMPRESS_THRESHOLD_BYTES,
@@ -208,6 +212,30 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
       } catch (err) {
         console.warn('[frameio] could not create version stack (non-fatal):', (err as Error).message);
       }
+    }
+
+    // Phase E auto-promote: update every deliverable_assets row referencing
+    // this asset so they record the current Frame.io stack/file IDs. The
+    // upstream share migration (file_id swap) above already kept Frame.io's
+    // share asset_ids accurate; this just keeps OUR DB in lockstep so the
+    // panel's "v2 available" detection works and future delete/restate
+    // operations have the correct IDs.
+    try {
+      const affected = findDeliverablesContainingAsset(assetId);
+      for (const { deliverable, asset: existing } of affected) {
+        updateDeliverableAssetFrameio(deliverable.deliverableId, assetId, {
+          frameioStackId: stackId,
+          frameioFileId: result.frameioAssetId,
+        });
+        // Only emit when something actually changes; chatty logs hide real signal.
+        if (existing.frameioStackId !== stackId || existing.frameioFileId !== result.frameioAssetId) {
+          console.log(
+            `[frameio] deliverable ${deliverable.deliverableId} (${deliverable.name}) updated → stack=${stackId ?? 'none'}, file=${result.frameioAssetId}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[frameio] deliverable auto-promote update failed (non-fatal):', (err as Error).message);
     }
 
     patchAsset(projectId, assetId, {

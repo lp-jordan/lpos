@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Project } from '@/lib/models/project';
 
 interface Props {
@@ -8,6 +8,14 @@ interface Props {
   onCreated: (project: Project) => void;
   defaultClientName?: string;
   existingClients?: string[];
+}
+
+interface SimilarMatch {
+  prospectId: string;
+  company: string;
+  status: string;
+  reason: 'exact' | 'substring' | 'levenshtein';
+  distance: number | null;
 }
 
 export function NewProjectModal({ onClose, onCreated, defaultClientName, existingClients = [] }: Readonly<Props>) {
@@ -22,6 +30,38 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName, existin
   const [projectName, setProjectName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Fuzzy-match warning state: hits the People CRM with whatever's in
+  // newClientName so we can surface "did you mean X?" before the user
+  // creates a duplicate. Only runs in 'new' mode (existing-mode picks from
+  // a fixed list of clients, no fuzzy needed).
+  const [similar, setSimilar] = useState<SimilarMatch[]>([]);
+  const [similarLoading, setSimilarLoading] = useState(false);
+
+  useEffect(() => {
+    if (mode !== 'new' || hasPinnedClient) {
+      setSimilar([]);
+      return;
+    }
+    const q = newClientName.trim();
+    if (q.length < 2) {
+      setSimilar([]);
+      return;
+    }
+    setSimilarLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/prospects/similar?company=${encodeURIComponent(q)}`);
+        if (!res.ok) { setSimilar([]); return; }
+        const data = await res.json() as { matches: SimilarMatch[] };
+        setSimilar(data.matches ?? []);
+      } catch {
+        setSimilar([]);
+      } finally {
+        setSimilarLoading(false);
+      }
+    }, 350); // debounce so we don't fire on every keystroke
+    return () => { clearTimeout(t); setSimilarLoading(false); };
+  }, [newClientName, mode, hasPinnedClient]);
 
   const clientName = hasPinnedClient
     ? defaultClientName
@@ -113,16 +153,46 @@ export function NewProjectModal({ onClose, onCreated, defaultClientName, existin
                 ))}
               </select>
             ) : (
-              <input
-                id="np-client"
-                className="modal-input"
-                type="text"
-                placeholder="Acme Productions"
-                value={newClientName}
-                onChange={(e) => setNewClientName(e.target.value)}
-                autoFocus
-                autoComplete="off"
-              />
+              <>
+                <input
+                  id="np-client"
+                  className="modal-input"
+                  type="text"
+                  placeholder="Acme Productions"
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  autoFocus
+                  autoComplete="off"
+                />
+                {/* Fuzzy match warning: if a similar prospect already exists,
+                    show a suggestion so the user can avoid creating a duplicate.
+                    Exact matches are auto-OK on submit (the server reuses them),
+                    but we surface them here for visibility. */}
+                {similar.length > 0 && (
+                  <div className="modal-similar-warning">
+                    <span className="modal-similar-label">
+                      {similarLoading ? 'Checking…' : 'Possible duplicate in People:'}
+                    </span>
+                    <ul className="modal-similar-list">
+                      {similar.map((m) => (
+                        <li key={m.prospectId}>
+                          <button
+                            type="button"
+                            className="modal-similar-btn"
+                            onClick={() => setNewClientName(m.company)}
+                            title={`Use this name instead — ${m.reason === 'exact' ? 'exact match' : m.reason === 'substring' ? 'substring match' : `${m.distance} char${m.distance === 1 ? '' : 's'} different`}`}
+                          >
+                            {m.company}
+                          </button>
+                          {m.status !== 'active' && (
+                            <span className="modal-similar-status"> ({m.status})</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </div>
 

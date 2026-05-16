@@ -36,6 +36,15 @@ export function getUserByGoogleSub(googleSub: string): User | null {
   return row ? rowToUser(row) : null;
 }
 
+/** Case-insensitive lookup by email. Returns null if no user exists. */
+export function getUserByEmail(email: string): User | null {
+  if (!email) return null;
+  const row = getCoreDb()
+    .prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)')
+    .get(email) as UserRow | undefined;
+  return row ? rowToUser(row) : null;
+}
+
 export function upsertGoogleUser(input: {
   googleSub: string;
   email: string;

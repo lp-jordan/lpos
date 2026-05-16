@@ -34,7 +34,6 @@ interface Props {
   task: Task;
   users: UserSummary[];
   commentCount: number;
-  projectName: string | null;
   selected: boolean;
   isRenaming: boolean;
   onClick: () => void;
@@ -47,7 +46,6 @@ export function TaskCard({
   task,
   users,
   commentCount,
-  projectName,
   selected,
   isRenaming,
   onClick,
@@ -77,7 +75,7 @@ export function TaskCard({
     opacity: isDragging ? 0.4 : 1,
   };
 
-  const isDone = isTerminalStatus(task.phase, task.status);
+  const isDone = isTerminalStatus(task.taskType, task.status);
   const assignees = users.filter((u) => task.assignedTo.includes(u.id)).slice(0, 3);
   const showPriority = task.priority === 'urgent' || task.priority === 'high';
 
@@ -126,9 +124,9 @@ export function TaskCard({
         <div className="task-card-title">{task.description}</div>
       )}
 
-      {projectName && (
+      {task.clientName && task.clientName !== 'General' && (
         <div className="task-card-project">
-          {projectName}
+          {task.clientName}
         </div>
       )}
 

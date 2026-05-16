@@ -3,6 +3,7 @@ import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getUploadQueueService, getProjectStore } from '@/lib/services/container';
 import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
+import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
 import { probeMediaInfo } from '@/lib/services/media-probe';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
@@ -69,6 +70,20 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
   const asset = getAsset(projectId, assetId);
   if (!asset || !asset.filePath) {
     console.warn(`[leaderpass] skipped publish for asset ${assetId}: asset or file path missing`);
+    return;
+  }
+
+  // Verify the file is actually accessible before touching Cloudflare at all.
+  // A missing file almost always means an external drive isn't mounted.
+  if (!fs.existsSync(asset.filePath)) {
+    const hint = asset.filePath.startsWith('/Volumes/')
+      ? `File not found — the drive at ${asset.filePath.split('/').slice(0, 3).join('/')} may not be mounted.`
+      : `File not found at: ${asset.filePath}`;
+    console.error(`[leaderpass] aborting publish for asset ${assetId}: ${hint}`);
+    patchAsset(projectId, assetId, {
+      cloudflare: { status: 'failed', progress: 0, lastError: hint },
+      leaderpass: { status: 'failed', lastError: hint },
+    });
     return;
   }
 
@@ -193,9 +208,20 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     });
     queue?.setProcessing(jobId!, 'Waiting for Cloudflare Stream processing');
 
-    const ready = await waitForCloudflareVideoReady(prepared.uid, {
-      isCancelled: jobId ? () => queue?.isCancelled(jobId) ?? false : undefined,
-    });
+    // Heartbeat the upload-queue job during the Cloudflare ready-poll wait so the
+    // stale-job sweep doesn't auto-fail us while CF is legitimately encoding. The
+    // sweep tolerates ~25 min for 'processing'; we tick every 60s to stay well clear.
+    const heartbeatTimer = jobId
+      ? setInterval(() => queue?.heartbeat(jobId), 60_000)
+      : null;
+    let ready;
+    try {
+      ready = await waitForCloudflareVideoReady(prepared.uid, {
+        isCancelled: jobId ? () => queue?.isCancelled(jobId) ?? false : undefined,
+      });
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+    }
     console.log(`[leaderpass] Cloudflare asset ready for ${assetId}; uid=${ready.uid}`);
 
     // Set thumbnail frame — probe fps fresh since it may not have been stored at ingest.
@@ -275,13 +301,36 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
   });
 
     // Delete the prior Cloudflare video now that the new one is confirmed ready.
+    // One retry on failure, then surface the orphan to the cloudflare_orphans table
+    // so the user can purge it manually later. Never block the publish flow on this.
     const oldCloudflareUid = priorCloudflare?.provider_asset_id ?? null;
     if (oldCloudflareUid && oldCloudflareUid !== ready.uid) {
-      try {
-        await deleteCloudflareVideo(oldCloudflareUid);
-        console.log(`[leaderpass] deleted prior Cloudflare video uid=${oldCloudflareUid} for asset ${assetId}`);
-      } catch (err) {
-        console.warn(`[leaderpass] failed to delete prior Cloudflare video uid=${oldCloudflareUid}:`, err);
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          await deleteCloudflareVideo(oldCloudflareUid);
+          console.log(`[leaderpass] deleted prior Cloudflare video uid=${oldCloudflareUid} for asset ${assetId} (attempt ${attempt})`);
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          console.warn(`[leaderpass] failed to delete prior Cloudflare video uid=${oldCloudflareUid} (attempt ${attempt}):`, lastErr);
+        }
+      }
+      if (lastErr) {
+        try {
+          recordOrphan({
+            uid: oldCloudflareUid,
+            assetId,
+            projectId,
+            reason: 'delete_failed',
+            attempts: 2,
+            lastError: lastErr,
+          });
+          console.warn(`[leaderpass] recorded uid=${oldCloudflareUid} as Cloudflare orphan for manual purge`);
+        } catch (recordErr) {
+          console.error(`[leaderpass] failed to record orphan uid=${oldCloudflareUid}:`, recordErr);
+        }
       }
     }
 

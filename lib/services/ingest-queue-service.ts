@@ -318,6 +318,51 @@ export class IngestQueueService {
     }
   }
 
+  /**
+   * Returns true if the ingest worker still appears to be making progress.
+   * Used by the pipeline tracker to veto auto-fail when the underlying browser
+   * upload is still streaming bytes (even if the job row's updatedAt has gone
+   * stale because progress events stopped being emitted).
+   *
+   * Liveness signals (any within the window counts):
+   *   1. temp_path file mtime — bytes are still being written to disk
+   *   2. upload_sessions.updated_at — chunked upload handler recently bumped it
+   */
+  isJobActive(jobId: string, windowMs = 2 * 60_000): boolean {
+    const job = this.getJob(jobId);
+    if (!job) return false;
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || job.status === 'awaiting_confirmation') return false;
+
+    const cutoff = Date.now() - windowMs;
+
+    if (job.tempPath) {
+      try {
+        const stat = fs.statSync(job.tempPath);
+        if (stat.mtimeMs >= cutoff) return true;
+      } catch { /* file gone or inaccessible */ }
+    }
+
+    try {
+      const db = getIngestQueueDb();
+      const session = db.prepare(
+        `SELECT updated_at FROM upload_sessions WHERE job_id = ? AND status = 'uploading' LIMIT 1`,
+      ).get(jobId) as { updated_at: string } | undefined;
+      if (session && Date.parse(session.updated_at) >= cutoff) return true;
+    } catch { /* db error — treat as not alive */ }
+
+    return false;
+  }
+
+  /** Bump updatedAt without changing status — resets the pipeline tracker's
+   *  stall clock when the underlying upload has been confirmed alive. */
+  heartbeat(jobId: string): void {
+    const db = getIngestQueueDb();
+    db.prepare(
+      `UPDATE ingest_jobs SET updated_at = ? WHERE job_id = ? AND status NOT IN ('done', 'failed', 'cancelled', 'awaiting_confirmation')`,
+    ).run(new Date().toISOString(), jobId);
+    this.broadcast();
+  }
+
   /** Returns true if the job has been cancelled. Checks both in-memory Set and
    *  DB status so the check survives server restarts / hot reloads. */
   isCancelled(jobId: string): boolean {

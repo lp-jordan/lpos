@@ -1,35 +1,29 @@
-export type TaskPhase = 'pre_production' | 'editing' | 'platform';
+/**
+ * Task type configs.
+ *
+ * NOTE: file name still says "task-phase" for git-history continuity, but the
+ * concept is now "task type" (editing vs platform). The `TaskType` discriminator
+ * replaces what was previously called `TaskPhase`. Pre-production has been removed
+ * — that work moved to the People CRM.
+ */
 
-export interface PhaseStatus {
+export type TaskType = 'editing' | 'platform';
+
+export interface TaskTypeStatus {
   value: string;
   label: string;
   color: string;
 }
 
-export interface PhaseConfig {
-  value: TaskPhase;
+export interface TaskTypeConfig {
+  value: TaskType;
   label: string;
-  statuses: PhaseStatus[];
+  statuses: TaskTypeStatus[];
   defaultStatus: string;
   terminalStatus: string;
 }
 
-export const PHASE_CONFIGS: PhaseConfig[] = [
-  {
-    value: 'pre_production',
-    label: 'Pre-Production',
-    defaultStatus: 'onboarding',
-    terminalStatus: 'done',
-    statuses: [
-      { value: 'onboarding',           label: 'Onboarding',          color: '#c9a227' },
-      { value: 'lab_blueprint',        label: 'LAB / Blueprint',     color: '#d4943a' },
-      { value: 'collecting_assets',    label: 'Collecting Assets',   color: '#5a6478' },
-      { value: 'content_development',  label: 'Content Development', color: '#c45d7e' },
-      { value: 'content_map',          label: 'Content Map',         color: '#2db394' },
-      { value: 'set_design',           label: 'Set Design',          color: '#4a8fd4' },
-      { value: 'done',                 label: 'Done',                color: '#10b981' },
-    ],
-  },
+export const TASK_TYPE_CONFIGS: TaskTypeConfig[] = [
   {
     value: 'editing',
     label: 'Editing',
@@ -48,10 +42,14 @@ export const PHASE_CONFIGS: PhaseConfig[] = [
     value: 'platform',
     label: 'Platform',
     defaultStatus: 'not_started',
-    terminalStatus: 'ready_for_client',
+    terminalStatus: 'done',
+    // 12 statuses from the existing Monday board (NOTES pseudo-status dropped).
     statuses: [
       { value: 'not_started',              label: 'Not Started',             color: '#6b7280' },
-      { value: 'notes',                    label: 'NOTES',                   color: '#a78bfa' },
+      { value: 'working_on_it',            label: 'Working on it',           color: '#f59e0b' },
+      { value: 'stuck',                    label: 'Stuck',                   color: '#e05c6a' },
+      { value: 'in_review',                label: 'In Review',               color: '#94a3b8' },
+      { value: 'done',                     label: 'Done',                    color: '#10b981' },
       { value: 'sent_to_robert',           label: 'Sent to Robert',          color: '#94a3b8' },
       { value: 'on_going',                 label: 'On Going',                color: '#c9a227' },
       { value: 'waiting_on_client',        label: 'Waiting on Client',       color: '#f59e0b' },
@@ -63,26 +61,26 @@ export const PHASE_CONFIGS: PhaseConfig[] = [
   },
 ];
 
-export const PHASE_MAP = new Map<TaskPhase, PhaseConfig>(
-  PHASE_CONFIGS.map((c) => [c.value, c]),
+const TASK_TYPE_MAP = new Map<TaskType, TaskTypeConfig>(
+  TASK_TYPE_CONFIGS.map((c) => [c.value, c]),
 );
 
-export function getPhaseConfig(phase: TaskPhase): PhaseConfig {
-  return PHASE_MAP.get(phase)!;
+export function getTaskTypeConfig(taskType: TaskType): TaskTypeConfig {
+  return TASK_TYPE_MAP.get(taskType)!;
 }
 
-export function getStatusConfig(phase: TaskPhase, status: string): PhaseStatus | undefined {
-  return getPhaseConfig(phase).statuses.find((s) => s.value === status);
+export function getStatusConfig(taskType: TaskType, status: string): TaskTypeStatus | undefined {
+  return getTaskTypeConfig(taskType).statuses.find((s) => s.value === status);
 }
 
-export function getStatusLabel(phase: TaskPhase, status: string): string {
-  return getStatusConfig(phase, status)?.label ?? status;
+export function getStatusLabel(taskType: TaskType, status: string): string {
+  return getStatusConfig(taskType, status)?.label ?? status;
 }
 
-export function getStatusColor(phase: TaskPhase, status: string): string {
-  return getStatusConfig(phase, status)?.color ?? '#6b7280';
+export function getStatusColor(taskType: TaskType, status: string): string {
+  return getStatusConfig(taskType, status)?.color ?? '#6b7280';
 }
 
-export function isTerminalStatus(phase: TaskPhase, status: string): boolean {
-  return getPhaseConfig(phase).terminalStatus === status;
+export function isTerminalStatus(taskType: TaskType, status: string): boolean {
+  return getTaskTypeConfig(taskType).terminalStatus === status;
 }

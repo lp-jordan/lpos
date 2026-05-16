@@ -72,6 +72,10 @@ export interface CloudflareStreamInfo {
   lastError: string | null;
   /** Cloudflare Images URL for the custom poster, set via Platform page when available. */
   posterUrl: string | null;
+  /** LPOS asset version number this Cloudflare publication reflects. Null when no publication exists. */
+  versionNumber: number | null;
+  /** True when `versionNumber` is older than the asset's current version — the CF publication is stale. */
+  isStale: boolean;
 }
 
 export function defaultCloudflareStream(): CloudflareStreamInfo {
@@ -89,6 +93,8 @@ export function defaultCloudflareStream(): CloudflareStreamInfo {
     creator: null,
     lastError: null,
     posterUrl: null,
+    versionNumber: null,
+    isStale: false,
   };
 }
 

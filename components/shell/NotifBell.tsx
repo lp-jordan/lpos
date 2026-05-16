@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useToast } from '@/contexts/ToastContext';
 import { useTaskNotifications } from '@/hooks/useTaskNotifications';
 import { useProspectNotifications } from '@/hooks/useProspectNotifications';
+import { useDeliveryNotifications } from '@/hooks/useDeliveryNotifications';
 import type { NotificationRecord } from '@/contexts/ToastContext';
 import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notification';
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
+import type { DeliveryNotification } from '@/lib/models/delivery-notification';
 
 function buildNotifHref(notif: Pick<NotificationRecord, 'projectId' | 'assetId'>): string | null {
   if (!notif.projectId) return null;
@@ -59,6 +61,30 @@ function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; on
   );
 }
 
+function DeliveryNotifItem({ notif, onClick }: { notif: DeliveryNotification; onClick: () => void }) {
+  const title = notif.clientName
+    ? `${notif.projectName} — ${notif.clientName}`
+    : notif.projectName;
+  return (
+    <button
+      type="button"
+      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      onClick={onClick}
+      role="menuitem"
+    >
+      <div className="notif-task-type">Delivery trouble report</div>
+      <div className="notif-task-title">{title}</div>
+      {notif.description && (
+        <div className="notif-task-from">&ldquo;{notif.description}&rdquo;</div>
+      )}
+      {notif.queueSummary && (
+        <div className="notif-task-from">{notif.queueSummary}</div>
+      )}
+      <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+    </button>
+  );
+}
+
 function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: () => void }) {
   return (
     <button
@@ -84,8 +110,9 @@ export function NotifBell() {
   const { notifications: pipelineNotifs, unreadCount: pipelineUnread, markAllRead: markPipelineRead } = useToast();
   const { notifications: taskNotifs,     unreadCount: taskUnread,     markAllRead: markTasksRead     } = useTaskNotifications();
   const { notifications: prospectNotifs, unreadCount: prospectUnread, markAllRead: markProspectsRead } = useProspectNotifications();
+  const { notifications: deliveryNotifs, unreadCount: deliveryUnread, markAllRead: markDeliveriesRead } = useDeliveryNotifications();
 
-  const totalUnread = pipelineUnread + taskUnread + prospectUnread;
+  const totalUnread = pipelineUnread + taskUnread + prospectUnread + deliveryUnread;
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -111,10 +138,11 @@ export function NotifBell() {
       markPipelineRead();
       markTasksRead();
       markProspectsRead();
+      markDeliveriesRead();
     }
   }
 
-  const hasAny = pipelineNotifs.length > 0 || taskNotifs.length > 0 || prospectNotifs.length > 0;
+  const hasAny = pipelineNotifs.length > 0 || taskNotifs.length > 0 || prospectNotifs.length > 0 || deliveryNotifs.length > 0;
 
   return (
     <div className="notif-bell" ref={rootRef}>
@@ -144,6 +172,22 @@ export function NotifBell() {
           <div className="notif-panel-list">
             {!hasAny && (
               <div className="notif-empty">No notifications yet</div>
+            )}
+
+            {deliveryNotifs.length > 0 && (
+              <>
+                <div className="notif-section-label">Deliveries</div>
+                {deliveryNotifs.slice(0, 10).map((notif) => (
+                  <DeliveryNotifItem
+                    key={notif.notifId}
+                    notif={notif}
+                    onClick={() => {
+                      if (notif.href) router.push(notif.href);
+                      setOpen(false);
+                    }}
+                  />
+                ))}
+              </>
             )}
 
             {taskNotifs.length > 0 && (

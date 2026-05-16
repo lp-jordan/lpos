@@ -11,12 +11,15 @@ const TRAVEL_BRIDGE_URL = 'http://100.110.17.100:4011';
 interface Props {
   atemState: AtemState | null;
   travelMode: TravelModeState;
+  atemPaused: boolean;
   settingsOpen: boolean;
   onSettingsToggle: () => void;
   onConnect: (ip: string) => void;
   onDisconnect: () => void;
   onEnableTravelMode: (bridgeUrl: string, atemIp: string) => void;
   onDisableTravelMode: (atemIp: string) => void;
+  onPause: () => void;
+  onResume: () => void;
   onSetFilename: (filename: string) => void;
   onSetPreview: (inputId: number) => void;
   onSetProgram: (inputId: number) => void;
@@ -33,12 +36,15 @@ const CAMERAS = [1, 2, 3, 4, 5, 6];
 export function AtemPanel({
   atemState,
   travelMode,
+  atemPaused,
   settingsOpen,
   onSettingsToggle,
   onConnect,
   onDisconnect,
   onEnableTravelMode,
   onDisableTravelMode,
+  onPause,
+  onResume,
   onSetFilename,
   onSetPreview,
   onSetProgram,
@@ -129,6 +135,22 @@ export function AtemPanel({
 
           </div>
 
+          {/* Pause Reconnect — silences atem-connection retry loop when ATEM is off-network */}
+          <div className="sl-settings-block">
+            <div className="sl-travel-row">
+              <span className="sl-settings-label">Pause Reconnect</span>
+              <button
+                className={`sl-pill-toggle${atemPaused ? ' sl-pill-toggle--on' : ''}`}
+                type="button"
+                onClick={() => (atemPaused ? onResume() : onPause())}
+                aria-pressed={atemPaused}
+                title={atemPaused ? 'Resume ATEM reconnect attempts' : 'Pause ATEM reconnect attempts (bridge stays up)'}
+              >
+                <span className="sl-pill-knob" />
+              </button>
+            </div>
+          </div>
+
           {/* Connection */}
           <div className="sl-settings-block">
             <span className="sl-settings-label">Connection</span>
@@ -210,9 +232,11 @@ export function AtemPanel({
       </div>
 
       <div className={`sl-atem-status-line${isRecording ? ' sl-atem-status-line--recording' : ''}`}>
-        {connected
-          ? `${travelMode.active ? '✈ ' : ''}${switcherIp}  ·  ${recordingFilename || '—'}`
-          : (atemState?.bridgeAvailable ? 'Bridge ready · Not connected' : 'Bridge unavailable')}
+        {atemPaused
+          ? 'Reconnect paused'
+          : connected
+            ? `${travelMode.active ? '✈ ' : ''}${switcherIp}  ·  ${recordingFilename || '—'}`
+            : (atemState?.bridgeAvailable ? 'Bridge ready · Not connected' : 'Bridge unavailable')}
       </div>
     </div>
   );

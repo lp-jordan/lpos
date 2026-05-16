@@ -15,6 +15,14 @@ import { useContextMenu } from '@/hooks/useContextMenu';
 type ViewMode    = 'card' | 'list';
 type ScopeFilter = 'mine' | 'all';
 type TabFilter   = 'prospects' | 'active' | 'all';
+type SortMode    = 'updated' | 'name' | 'value' | 'newest';
+
+function compactCurrency(v: number): string {
+  if (v === 0) return '$0';
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1000)      return `$${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K`;
+  return `$${v.toLocaleString()}`;
+}
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -238,6 +246,7 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
   const [viewMode,     setViewMode]     = useState<ViewMode>('card');
   const [scope,        setScope]        = useState<ScopeFilter>('all');
   const [tab,          setTab]          = useState<TabFilter>('prospects');
+  const [sort,         setSort]         = useState<SortMode>('updated');
   const [showArchived, setShowArchived] = useState(false);
   const [showNew,      setShowNew]      = useState(false);
 
@@ -266,11 +275,35 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
     return true;
   });
 
-  const filteredIds   = filtered.map((p) => p.prospectId);
+  const sorted = [...filtered].sort((a, b) => {
+    switch (sort) {
+      case 'name':    return a.company.localeCompare(b.company, undefined, { sensitivity: 'base' });
+      case 'newest':  return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      case 'value': {
+        const va = a.status === 'active'
+          ? ((a.monthlyLpRevenue ?? 0) + (a.monthlyLpTechRevenue ?? 0)) * 12
+          : (a.estimatedFirstYearValue ?? 0);
+        const vb = b.status === 'active'
+          ? ((b.monthlyLpRevenue ?? 0) + (b.monthlyLpTechRevenue ?? 0)) * 12
+          : (b.estimatedFirstYearValue ?? 0);
+        return vb - va;
+      }
+      default: return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    }
+  });
+
+  const sortedIds     = sorted.map((p) => p.prospectId);
+  const filteredIds   = sortedIds; // used for range-select
   const archivedCount = tabFiltered.filter((p) => p.archived).length;
 
   const prospectCount = people.filter((p) => p.status === 'prospect' && !p.archived).length;
   const activeCount   = people.filter((p) => (p.status === 'active' || p.status === 'inactive') && !p.archived).length;
+
+  // Pipeline summary (always computed from all non-archived records, tab-independent)
+  const allProspects     = people.filter((p) => p.status === 'prospect' && !p.archived);
+  const allActiveClients = people.filter((p) => p.status === 'active'   && !p.archived);
+  const pipelineEst = allProspects.reduce((s, p) => s + (p.estimatedFirstYearValue ?? 0), 0);
+  const activeMRR   = allActiveClients.reduce((s, p) => s + (p.monthlyLpRevenue ?? 0) + (p.monthlyLpTechRevenue ?? 0), 0);
 
   // ── Selection ──────────────────────────────────────────────────────────────
 
@@ -334,33 +367,30 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
   // ── Context menu ───────────────────────────────────────────────────────────
 
   function buildMenu(p: Prospect): MenuEntry[] {
-    const items: MenuEntry[] = [
+    return [
       {
         type: 'item', label: 'Open',
         icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
         onClick: () => router.push(`/people/${p.prospectId}`),
       },
-    ];
-    if (p.status !== 'active') {
-      items.push({
+      {
         type: 'item', label: 'Rename',
         icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
         onClick: () => setRenaming({ personId: p.prospectId, company: p.company }),
-      });
-      items.push({ type: 'separator' });
-      items.push({
+      },
+      { type: 'separator' },
+      {
         type: 'item', label: p.archived ? 'Unarchive' : 'Archive',
         icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>,
         onClick: () => setConfirmArchive({ ids: [p.prospectId], label: p.company, unarchive: p.archived }),
-      });
-      items.push({ type: 'separator' });
-      items.push({
+      },
+      { type: 'separator' },
+      {
         type: 'item', label: 'Delete', danger: true,
         icon: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>,
         onClick: () => setConfirmDelete({ ids: [p.prospectId], label: p.company }),
-      });
-    }
-    return items;
+      },
+    ];
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -377,12 +407,58 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
           onChange={(e) => setSearch(e.target.value)}
         />
         <div className="proj-controls-right">
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortMode)}
+            style={{
+              padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500,
+              border: '1px solid var(--color-border,#444)', background: 'var(--color-input-bg,#1a1a1a)',
+              color: 'var(--muted)', cursor: 'pointer',
+            }}
+          >
+            <option value="updated">Last updated</option>
+            <option value="name">Name A–Z</option>
+            <option value="value">Value ↓</option>
+            <option value="newest">Newest</option>
+          </select>
           <ViewToggle mode={viewMode} onChange={setViewMode} />
           <button type="button" className="proj-new-btn" onClick={() => setShowNew(true)}>
             + New
           </button>
         </div>
       </div>
+
+      {/* Pipeline summary strip */}
+      {(allProspects.length > 0 || allActiveClients.length > 0) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '1.5rem',
+          padding: '0.55rem 0.9rem', borderRadius: 8,
+          background: 'rgba(255,255,255,0.03)', border: '1px solid var(--line)',
+          fontSize: '0.8rem', flexWrap: 'wrap',
+        }}>
+          {allProspects.length > 0 && (
+            <span style={{ color: 'var(--muted-soft)' }}>
+              <span style={{ color: '#5b8dd9', fontWeight: 600 }}>{allProspects.length}</span>
+              {' '}Prospect{allProspects.length !== 1 ? 's' : ''}
+              {pipelineEst > 0 && (
+                <span style={{ color: 'var(--muted)', marginLeft: 6 }}>· ~{compactCurrency(pipelineEst)} est.</span>
+              )}
+            </span>
+          )}
+          {allProspects.length > 0 && allActiveClients.length > 0 && (
+            <span style={{ color: 'var(--line-strong)' }}>|</span>
+          )}
+          {allActiveClients.length > 0 && (
+            <span style={{ color: 'var(--muted-soft)' }}>
+              <span style={{ color: '#5ab95a', fontWeight: 600 }}>{allActiveClients.length}</span>
+              {' '}Active
+              {activeMRR > 0 && (
+                <span style={{ color: 'var(--muted)', marginLeft: 6 }}>· {compactCurrency(activeMRR)}/mo</span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -431,17 +507,11 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
         <BulkBar
           count={selected.size}
           onArchive={() => {
-            const ids = Array.from(selected).filter((id) => {
-              const p = people.find((x) => x.prospectId === id);
-              return p && p.status !== 'active';
-            });
+            const ids = Array.from(selected);
             if (ids.length > 0) void apiArchive(ids);
           }}
           onDelete={() => {
-            const ids = Array.from(selected).filter((id) => {
-              const p = people.find((x) => x.prospectId === id);
-              return p && p.status !== 'active';
-            });
+            const ids = Array.from(selected);
             if (ids.length > 0) setConfirmDelete({ ids, label: `${ids.length} people` });
           }}
           onDeselect={() => setSelected(new Set())}
@@ -458,14 +528,14 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
         </div>
       )}
 
-      {people.length > 0 && filtered.length === 0 && (
+      {people.length > 0 && sorted.length === 0 && (
         <p className="m-empty">No results match your filters.</p>
       )}
 
       {/* Card view */}
-      {viewMode === 'card' && filtered.length > 0 && (
+      {viewMode === 'card' && sorted.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-          {filtered.map((p) => (
+          {sorted.map((p) => (
             <PersonCard
               key={p.prospectId}
               person={p}
@@ -481,9 +551,9 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
       )}
 
       {/* List view */}
-      {viewMode === 'list' && filtered.length > 0 && (
+      {viewMode === 'list' && sorted.length > 0 && (
         <div className="proj-list">
-          {filtered.map((p) => (
+          {sorted.map((p) => (
             <PersonRow
               key={p.prospectId}
               person={p}
@@ -535,7 +605,7 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
       {confirmDelete && (
         <ConfirmModal
           title="Delete?"
-          body={`Permanently delete "${confirmDelete.label}"? This cannot be undone. Active clients cannot be deleted.`}
+          body={`Permanently delete "${confirmDelete.label}"? This cannot be undone.`}
           confirmLabel="Delete"
           danger
           onConfirm={async () => { await apiDelete(confirmDelete.ids); setConfirmDelete(null); }}

@@ -161,14 +161,34 @@ function initSchema(db: DatabaseSync): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_transcription_jobs_asset_version ON transcription_jobs(asset_version_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS cloudflare_orphans (
+      uid TEXT PRIMARY KEY,
+      asset_id_when_orphaned TEXT,
+      project_id_when_orphaned TEXT,
+      name_when_orphaned TEXT,
+      reason TEXT NOT NULL,
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      purged_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cloudflare_orphans_active ON cloudflare_orphans(purged_at, last_seen_at DESC);
   `);
 }
 
 function migrateSchema(db: DatabaseSync): void {
   // Add duration_seconds to media_files if missing (for existing DBs)
-  const cols = db.prepare("PRAGMA table_info('media_files')").all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === 'duration_seconds')) {
+  const mediaFileCols = db.prepare("PRAGMA table_info('media_files')").all() as Array<{ name: string }>;
+  if (!mediaFileCols.some((c) => c.name === 'duration_seconds')) {
     db.exec('ALTER TABLE media_files ADD COLUMN duration_seconds REAL');
+  }
+  // Add name_when_orphaned to cloudflare_orphans if missing (for existing DBs)
+  const orphanCols = db.prepare("PRAGMA table_info('cloudflare_orphans')").all() as Array<{ name: string }>;
+  if (orphanCols.length > 0 && !orphanCols.some((c) => c.name === 'name_when_orphaned')) {
+    db.exec('ALTER TABLE cloudflare_orphans ADD COLUMN name_when_orphaned TEXT');
   }
 }
 

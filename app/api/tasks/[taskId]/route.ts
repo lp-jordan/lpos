@@ -4,10 +4,11 @@ import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getTaskStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
-import type { TaskPhase } from '@/lib/models/task-phase';
+import type { TaskType } from '@/lib/models/task-phase';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
-import { getAllUsers, getUserById } from '@/lib/store/user-store';
+import { getUserById } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
+import { emitTaskDeleted, emitTaskUpdated } from '@/lib/services/task-broadcasts';
 
 export async function PATCH(
   req: NextRequest,
@@ -23,18 +24,19 @@ export async function PATCH(
     description?: string;
     assignedTo?: string[];
     priority?: TaskPriority;
-    phase?: TaskPhase;
-    notes?: string | null;
-    projectId?: string;
+    taskType?: TaskType;
+    clientName?: string;
+    category?: string | null;
   };
 
   const prev = getTaskStore().getById(taskId);
   const updated = getTaskStore().update(taskId, body);
   if (!updated) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
 
+  emitTaskUpdated(updated);
+
   const actor = getUserById(session.userId);
   const actorName = actor?.name ?? undefined;
-  const projectId = updated.projectId !== 'unassigned' ? updated.projectId : null;
   const now = new Date().toISOString();
 
   const statusChanged = body.status !== undefined && prev !== null && body.status !== prev.status;
@@ -52,11 +54,10 @@ export async function PATCH(
     title: statusChanged
       ? `Task marked ${body.status?.replace(/_/g, ' ')}: ${updated.description}`
       : `Task updated: ${updated.description}`,
-    project_id: projectId,
-    client_id: updated.clientName,
+    project_id: null,
+    client_id: updated.clientName !== 'General' ? updated.clientName : null,
   });
 
-  const allUsers = getAllUsers();
   const notified = new Set<string>([session.userId]);
 
   // Notify on status change
@@ -84,17 +85,6 @@ export async function PATCH(
     );
   }
 
-  // Notify @mentioned users in notes if notes changed
-  if (body.notes !== undefined && body.notes && updated.notes) {
-    for (const [, token] of updated.notes.matchAll(/@(\w+)/g)) {
-      const u = allUsers.find((u) => u.name.split(' ')[0].toLowerCase() === token.toLowerCase());
-      if (u && !notified.has(u.id)) {
-        notified.add(u.id);
-        await notifyTaskEvent({ userId: u.id, type: 'mentioned', taskId, taskTitle: updated.description, fromUserId: session.userId, fromName: actorName });
-      }
-    }
-  }
-
   return NextResponse.json({ task: updated });
 }
 
@@ -109,6 +99,8 @@ export async function DELETE(
   const { taskId } = await params;
   const ok = getTaskStore().delete(taskId);
   if (!ok) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+
+  emitTaskDeleted(taskId);
 
   return NextResponse.json({ ok: true });
 }

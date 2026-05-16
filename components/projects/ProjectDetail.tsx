@@ -6,6 +6,7 @@ import { Project } from '@/lib/models/project';
 import { Asset } from '@/lib/models/asset';
 import { io } from 'socket.io-client';
 import { MediaTab } from '@/components/projects/MediaTab';
+import { PhotosTab } from '@/components/projects/PhotosTab';
 import { ScriptsTab } from '@/components/projects/ScriptsTab';
 import { PassPrepTab } from '@/components/projects/PassPrepTab';
 import { ClientAssetsTab } from '@/components/projects/ClientAssetsTab';
@@ -13,6 +14,7 @@ import { AssetsTab } from '@/components/projects/AssetsTab';
 import { TranscriptViewerPanel } from '@/components/media/TranscriptViewerPanel';
 import type { TranscriptEntry } from '@/app/api/projects/[projectId]/transcripts/route';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
+import { clientProjectsHref, projectHref } from '@/lib/urls/project-url';
 
 function formatDate(iso: string): string {
   try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
@@ -23,7 +25,7 @@ function formatTranscriptLabel(filename: string): string {
   return filename.replace(/\.[^.]+$/, '');
 }
 
-type Tab = 'scripts' | 'media' | 'transcripts' | 'assets' | 'passPrep' | 'clientAssets';
+type Tab = 'scripts' | 'media' | 'photos' | 'transcripts' | 'assets' | 'passPrep' | 'clientAssets';
 
 interface Props {
   project: Project;
@@ -70,6 +72,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
     { id: 'clientAssets', label: 'Client Uploads' },
     { id: 'scripts',      label: 'Scripts' },
     { id: 'media',        label: 'Media' },
+    { id: 'photos',       label: 'Photos' },
     { id: 'transcripts',  label: 'Transcripts' },
     { id: 'assets',       label: 'Assets' },
     { id: 'passPrep',     label: 'Pass Prep' },
@@ -79,8 +82,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
     if (deepLinkedAssetId) setTab('media');
   }, [deepLinkedAssetId]);
 
-  const clientParam = searchParams.get('client');
-  const backHref = clientParam ? `/projects?client=${encodeURIComponent(clientParam)}` : '/projects';
+  const backHref = project.clientName ? clientProjectsHref(project.clientName) : '/projects';
 
   return (
     <div className="page-stack">
@@ -128,9 +130,17 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
         />
       )}
 
+      {tab === 'photos' && (
+        <PhotosTab
+          projectId={project.projectId}
+          projectName={project.name}
+        />
+      )}
+
       {tab === 'transcripts' && (
         <TranscriptsTab
           projectId={project.projectId}
+          clientName={project.clientName}
           projectName={project.name}
           passPrepIds={passPrepTranscripts}
           onSendToPassPrep={sendToPassPrep}
@@ -162,6 +172,7 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
 
 function TranscriptsTab({
   projectId,
+  clientName,
   projectName,
   passPrepIds,
   onSendToPassPrep,
@@ -169,6 +180,7 @@ function TranscriptsTab({
   onClearSelectedJobId,
 }: {
   projectId: string;
+  clientName: string;
   projectName: string;
   passPrepIds: string[];
   onSendToPassPrep: (jobId: string) => void;
@@ -395,7 +407,7 @@ function TranscriptsTab({
           label: 'Open Source Media',
           icon: <TrMediaIcon />,
           disabled: !entry.assetId,
-          onClick: () => router.push(`/projects/${projectId}/media`),
+          onClick: () => router.push(projectHref(clientName, projectId, 'media')),
         },
         {
           type: 'item' as const,

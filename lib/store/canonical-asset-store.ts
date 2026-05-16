@@ -165,6 +165,15 @@ function pickLatestDistribution(
   ) ?? null;
 }
 
+/** Returns the most recent distribution record for the provider across *all* versions of the asset.
+ *  Used by Cloudflare-staleness logic so an unstaged v2 still surfaces that v1 is published. */
+function pickLatestDistributionAnyVersion(
+  bundle: AssetBundle,
+  provider: CanonicalDistributionProvider,
+): DistributionRow | null {
+  return bundle.distributions.find((distribution) => distribution.provider === provider) ?? null;
+}
+
 function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | null): TranscriptionRow | null {
   if (!assetVersionId) return null;
   // Prefer a transcription on the current version; fall back to the most recent
@@ -274,7 +283,14 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
   const currentVersionId = currentVersion?.asset_version_id ?? null;
   const mediaFile = pickPrimaryMediaFile(bundle, currentVersionId);
   const frameio = pickLatestDistribution(bundle, currentVersionId, 'frameio');
-  const cloudflare = pickLatestDistribution(bundle, currentVersionId, 'cloudflare');
+  // Cloudflare uses the cross-version latest record so a v2 upload still shows that v1 is live at CF.
+  const cloudflare = pickLatestDistributionAnyVersion(bundle, 'cloudflare');
+  const cloudflareVersion = cloudflare
+    ? bundle.versions.find((v) => v.asset_version_id === cloudflare.asset_version_id) ?? null
+    : null;
+  const cloudflareIsStale = cloudflareVersion !== null
+    && currentVersion !== null
+    && cloudflareVersion.asset_version_id !== currentVersion.asset_version_id;
   const leaderpass = pickLatestDistribution(bundle, currentVersionId, 'leaderpass');
   const sardius = pickLatestDistribution(bundle, currentVersionId, 'sardius');
   const transcription = pickLatestTranscription(bundle, currentVersionId);
@@ -300,7 +316,11 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
     mimeType: mediaFile?.mime_type ?? null,
     storageType: getStorageType(mediaFile?.storage_class ?? 'nas'),
     duration: mediaFile?.duration_seconds ?? null,
-    registeredAt: bundle.asset.created_at,
+    // Surface the latest version's ingest time so users see "when was the
+    // current version uploaded" rather than "when did this asset first enter
+    // the pipeline" — empirically more useful for the upload-date column in
+    // MediaTab. Falls back to the asset's created_at when no version exists yet.
+    registeredAt: currentVersion?.ingested_at ?? bundle.asset.created_at,
     updatedAt: bundle.asset.updated_at,
     transcription: {
       ...defaultTranscription(),
@@ -333,6 +353,8 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
       readyAt: cloudflare?.ready_at ?? cloudflareMeta.readyAt ?? null,
       uploadedAt: cloudflare?.published_at ?? cloudflareMeta.uploadedAt ?? null,
       lastError: cloudflare?.last_error ?? cloudflareMeta.lastError ?? null,
+      versionNumber: cloudflareVersion?.version_number ?? null,
+      isStale: cloudflareIsStale,
     },
     leaderpass: {
       ...defaultLeaderPass(),
@@ -1102,6 +1124,64 @@ export function getLatestDistributionInfoForAsset(
   const bundle = rowToAssetBundle(assetId);
   if (!bundle) return null;
   return bundle.distributions.find((distribution) => distribution.provider === provider) ?? null;
+}
+
+/**
+ * Returns the set of Cloudflare Stream UIDs that are currently "live" from LPOS's perspective —
+ * i.e. the latest CF distribution record's `provider_asset_id` for every active asset.
+ *
+ * Used by the orphan reconciler to compute "everything at Cloudflare minus what LPOS thinks
+ * is live" → the orphan candidate set. Stays conservative on purpose: we only treat a UID as
+ * live if it's tied to a non-archived asset and is the most-recent CF attempt for that asset.
+ */
+export function getLiveCloudflareUids(): Set<string> {
+  const db = getCanonicalAssetDb();
+  const rows = db.prepare(`
+    SELECT DISTINCT dr.provider_asset_id AS uid
+    FROM distribution_records dr
+    INNER JOIN asset_versions  av ON av.asset_version_id = dr.asset_version_id
+    INNER JOIN assets          a  ON a.asset_id          = av.asset_id
+    WHERE dr.provider           = 'cloudflare'
+      AND dr.provider_asset_id IS NOT NULL
+      AND a.status              = 'active'
+      AND dr.attempt_number = (
+        SELECT MAX(dr2.attempt_number)
+        FROM distribution_records dr2
+        INNER JOIN asset_versions av2 ON av2.asset_version_id = dr2.asset_version_id
+        WHERE av2.asset_id = av.asset_id
+          AND dr2.provider = 'cloudflare'
+      )
+  `).all() as Array<{ uid: string | null }>;
+
+  const live = new Set<string>();
+  for (const row of rows) if (row.uid) live.add(row.uid);
+  return live;
+}
+
+export interface AssetByCloudflareUidResult {
+  assetId: string;
+  projectId: string;
+  displayName: string;
+}
+
+/**
+ * Look up the asset that a Cloudflare UID belongs to via the distribution_records table.
+ * Returns context for any asset — active OR archived — that ever had a distribution_record
+ * matching this UID. Used by the orphan reconciler to attach human-readable identifiers to
+ * orphan rows. Returns null if no matching distribution_record exists.
+ */
+export function resolveAssetByCloudflareUid(uid: string): AssetByCloudflareUidResult | null {
+  const db = getCanonicalAssetDb();
+  const row = db.prepare(`
+    SELECT a.asset_id AS assetId, a.project_id AS projectId, a.current_display_name AS displayName
+    FROM distribution_records dr
+    INNER JOIN asset_versions av ON av.asset_version_id = dr.asset_version_id
+    INNER JOIN assets         a  ON a.asset_id          = av.asset_id
+    WHERE dr.provider = 'cloudflare' AND dr.provider_asset_id = ?
+    ORDER BY dr.attempt_number DESC
+    LIMIT 1
+  `).get(uid) as { assetId: string; projectId: string; displayName: string } | undefined;
+  return row ?? null;
 }
 
 export function migrateLegacyProject(projectId: string): number {

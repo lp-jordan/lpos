@@ -244,6 +244,10 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: 'filename is required', state: buildState() });
         return;
       }
+      // Push to the ATEM hardware — without this the filename only lives in
+      // this Node process and the switcher keeps whatever it had before
+      // (typically whatever was last set via ATEM Software Control).
+      await atem.setRecordingSettings({ filename: body.filename });
       recordingFilename = body.filename;
       lastCommandAt = new Date().toISOString();
       sendJson(res, 200, buildState());

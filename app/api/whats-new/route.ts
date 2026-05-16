@@ -27,8 +27,13 @@ export async function GET() {
   try {
     const raw = await fs.readFile(CHANGELOG_PATH, 'utf-8');
     entries = JSON.parse(raw);
-  } catch {
-    // No changelog yet
+  } catch (err) {
+    // ENOENT (changelog not created yet) is expected and stays quiet; anything
+    // else — malformed JSON in particular — must surface so a broken file doesn't
+    // silently disable What's New like it did between 2026-04-28 and 2026-05-12.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[whats-new] failed to read/parse changelog.json:', err);
+    }
   }
 
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;

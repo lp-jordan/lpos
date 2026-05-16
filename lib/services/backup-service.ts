@@ -105,6 +105,33 @@ function cutoffDate(days: number): Date {
   return d;
 }
 
+/** Recursively collect `*.json` files under a project directory, skipping
+ *  dot directories (cache subdirs like `.thumbs/`, `.previews/`). Returns
+ *  absolute paths. Empty array on any read error — the project is silently
+ *  skipped rather than aborting the whole backup pass. */
+function collectProjectJsonFiles(projectDir: string): string[] {
+  const result: string[] = [];
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        result.push(full);
+      }
+    }
+  }
+  walk(projectDir);
+  return result;
+}
+
 // ── BackupService ─────────────────────────────────────────────────────────────
 
 export class BackupService {
@@ -225,6 +252,52 @@ export class BackupService {
       } catch (err) {
         files.push({ db: `state/${fileName}`, ok: false, error: (err as Error).message });
         console.error(`[BackupService] failed to back up state/${fileName}: ${(err as Error).message}`);
+      }
+    }
+
+    // ── Per-project JSON state ────────────────────────────────────────────────
+    // Recursive walk of `data/projects/<projectId>/**/*.json`. Each file uploaded
+    // under `backups/<date>/projects/<projectId>/<relpath>.gz` so a partial
+    // restore can target one project cleanly. Dot directories (.thumbs/, .previews/)
+    // and `backups/` itself are skipped. Best-effort per file — one bad read
+    // doesn't abort the whole project's backup.
+    const projectsRoot = path.join(DATA_DIR, 'projects');
+    if (fs.existsSync(projectsRoot)) {
+      try {
+        const projectDirs = fs.readdirSync(projectsRoot, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+        for (const dir of projectDirs) {
+          const projectDir = path.join(projectsRoot, dir.name);
+          const projectJsons = collectProjectJsonFiles(projectDir);
+          for (const absPath of projectJsons) {
+            const relPath = path.relative(projectsRoot, absPath);
+            try {
+              const raw = await fsp.readFile(absPath);
+              const gz  = await gzipBuffer(raw);
+              const objectName = `backups/${dateKey}/projects/${relPath}.gz`;
+
+              if (r2) {
+                await r2.send(new PutObjectCommand({
+                  Bucket:      getR2Bucket(),
+                  Key:         objectName,
+                  Body:        gz,
+                  ContentType: 'application/gzip',
+                }));
+              } else {
+                const localDir = path.dirname(path.join(DATA_DIR, 'backups', dateKey, 'projects', relPath));
+                fs.mkdirSync(localDir, { recursive: true });
+                await fsp.writeFile(path.join(DATA_DIR, 'backups', dateKey, 'projects', `${relPath}.gz`), gz);
+              }
+
+              files.push({ db: `projects/${relPath}`, ok: true, bytes: gz.length });
+            } catch (err) {
+              files.push({ db: `projects/${relPath}`, ok: false, error: (err as Error).message });
+              console.warn(`[BackupService] failed to back up projects/${relPath}: ${(err as Error).message}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[BackupService] per-project JSON walk failed: ${(err as Error).message}`);
       }
     }
 

@@ -45,27 +45,33 @@ const PipelineIcon = () => (
 function StageRow({
   stage,
   now,
+  pendingRetry,
   onRetry,
   onCancel,
 }: {
   stage: PipelineStage;
   now: number;
+  pendingRetry: boolean;
   onRetry: () => void;
   onCancel: () => void;
 }) {
   const terminal = STAGE_TERMINAL_STATUSES.has(stage.status);
   const active = !terminal;
   const elapsed = Math.max(0, now - Date.parse(stage.updatedAt));
+  // While a retry click is awaiting the server's next snapshot, hide the
+  // failed/retry affordance and surface a "queuing retry…" hint so the user
+  // can see their click was received and doesn't keep clicking Retry.
+  const showRetry = stage.status === 'failed' && RETRYABLE_STAGES.has(stage.type) && !pendingRetry;
 
   return (
-    <div className={`tt-stage tt-stage--${stage.status}`}>
+    <div className={`tt-stage tt-stage--${stage.status}${pendingRetry ? ' tt-stage--retrying' : ''}`}>
       <div className="tt-stage-top">
         <span className="tt-stage-label">{stageLabel(stage.type)}</span>
-        <span className="tt-stage-phase">{phaseLabel(stage)}</span>
-        {stage.stalled && (
+        <span className="tt-stage-phase">{pendingRetry ? 'Queuing retry…' : phaseLabel(stage)}</span>
+        {stage.stalled && !pendingRetry && (
           <span className="tt-stall-warning">Stalled {formatElapsed(elapsed)}</span>
         )}
-        {stage.status === 'failed' && RETRYABLE_STAGES.has(stage.type) && (
+        {showRetry && (
           <button type="button" className="tt-retry-btn" onClick={(e) => { e.stopPropagation(); onRetry(); }}>
             <RetryIcon /> Retry
           </button>
@@ -87,7 +93,7 @@ function StageRow({
           <div className="tt-progress-fill" style={{ width: `${stage.progress}%` }} />
         </div>
       )}
-      {stage.error && <p className="tt-error">{stage.error}</p>}
+      {stage.error && !pendingRetry && <p className="tt-error">{stage.error}</p>}
     </div>
   );
 }
@@ -97,11 +103,13 @@ function StageRow({
 function PipelineRow({
   entry,
   now,
+  isRetryPending,
   onRetry,
   onCancel,
 }: {
   entry: PipelineEntry;
   now: number;
+  isRetryPending: (pipelineId: string, stageType: PipelineStageType) => boolean;
   onRetry: (stageType: PipelineStageType) => void;
   onCancel: (stageType: PipelineStageType) => void;
 }) {
@@ -120,6 +128,7 @@ function PipelineRow({
             key={stage.jobId}
             stage={stage}
             now={now}
+            pendingRetry={isRetryPending(entry.pipelineId, stage.type)}
             onRetry={() => onRetry(stage.type)}
             onCancel={() => onCancel(stage.type)}
           />
@@ -132,7 +141,7 @@ function PipelineRow({
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function PipelineTray() {
-  const { pipelines: allPipelines, retry, cancel } = usePipelineQueue();
+  const { pipelines: allPipelines, retry, cancel, isRetryPending } = usePipelineQueue();
   const [open, setOpen] = useState(false);
   const trayRef = useRef<HTMLDivElement>(null);
   const [cleared, setCleared] = useState<Set<string>>(new Set());
@@ -148,7 +157,13 @@ export function PipelineTray() {
     : pipelines.filter((p) => isActive(p));
   const queuedPipelines = collapseWaiting ? waitingPipelines : [];
   const terminalPipelines = pipelines.filter((p) => PIPELINE_TERMINAL_STATUSES.has(p.overallStatus));
-  const failedPipelines = terminalPipelines.filter((p) => hasFailed(p));
+  // Hide failed entries whose retry has already been queued — the "failed" row
+  // shouldn't linger after the user clicks Retry. The retryPending flag clears
+  // on the next server snapshot; if the retry succeeds the pipeline moves to
+  // active (different filter group), if it fails again it reappears here.
+  const failedPipelines = terminalPipelines.filter((p) =>
+    hasFailed(p) && !p.stages.some((s) => isRetryPending(p.pipelineId, s.type)),
+  );
   const completedPipelines = terminalPipelines.filter((p) => p.overallStatus === 'complete' || p.overallStatus === 'cancelled');
 
   const allActive = pipelines.filter((p) => isActive(p));
@@ -259,6 +274,7 @@ export function PipelineTray() {
                   key={p.pipelineId}
                   entry={p}
                   now={now}
+                  isRetryPending={isRetryPending}
                   onRetry={(st) => retry(p.pipelineId, st)}
                   onCancel={(st) => cancel(p.pipelineId, st)}
                 />
@@ -281,6 +297,7 @@ export function PipelineTray() {
                       key={p.pipelineId}
                       entry={p}
                       now={now}
+                      isRetryPending={isRetryPending}
                       onRetry={(st) => retry(p.pipelineId, st)}
                       onCancel={(st) => cancel(p.pipelineId, st)}
                     />
@@ -293,6 +310,7 @@ export function PipelineTray() {
                   key={p.pipelineId}
                   entry={p}
                   now={now}
+                  isRetryPending={isRetryPending}
                   onRetry={(st) => retry(p.pipelineId, st)}
                   onCancel={(st) => cancel(p.pipelineId, st)}
                 />
@@ -303,6 +321,7 @@ export function PipelineTray() {
                   key={p.pipelineId}
                   entry={p}
                   now={now}
+                  isRetryPending={isRetryPending}
                   onRetry={(st) => retry(p.pipelineId, st)}
                   onCancel={(st) => cancel(p.pipelineId, st)}
                 />

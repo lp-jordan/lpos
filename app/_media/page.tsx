@@ -9,6 +9,7 @@ import { GlobalSharesManager } from '@/components/media/GlobalSharesManager';
 import type { Project } from '@/lib/models/project';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { FRAMEIO_STATUS_LABEL, LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
+import { projectHref } from '@/lib/urls/project-url';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ function ProjectAccordion({
     if (clickTimer.current) {
       clearTimeout(clickTimer.current);
       clickTimer.current = null;
-      router.push(`/projects/${project.projectId}?from=media`);
+      router.push(`${projectHref(project.clientName, project.projectId)}?from=media`);
       return;
     }
     clickTimer.current = setTimeout(() => {

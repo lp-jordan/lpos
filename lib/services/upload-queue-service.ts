@@ -6,9 +6,10 @@ import {
   updateUploadJobStatus,
 } from '@/lib/store/job-record-store';
 
-const UPLOAD_TIMEOUT_MS = 3 * 60_000; // 3 minutes without progress → auto-fail
-const TIMEOUT_SWEEP_MS  = 30_000;     // check every 30s
-const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled']);
+const UPLOAD_TIMEOUT_MS     = 3 * 60_000;   // 3 min idle while actively uploading bytes → auto-fail
+const PROCESSING_TIMEOUT_MS = 25 * 60_000;  // 25 min ceiling for Cloudflare encode wait (poll caps at 20 min + buffer)
+const TIMEOUT_SWEEP_MS      = 30_000;       // check every 30s
+const TERMINAL_STATUSES     = new Set(['done', 'failed', 'cancelled']);
 
 export type UploadJobStatus = 'queued' | 'compressing' | 'uploading' | 'processing' | 'done' | 'failed' | 'cancelled';
 export type UploadJobProvider = 'frameio' | 'leaderpass' | 'sardius' | 'delivery';
@@ -91,6 +92,18 @@ export class UploadQueueService {
     this.patch(jobId, { status: 'processing', progress: 100, detail, error: undefined });
   }
 
+  /**
+   * Refreshes `updatedAt` without changing status. Use this from long-running
+   * external waits (e.g. the Cloudflare ready-poll loop) so the timeout sweep
+   * doesn't auto-fail a job that's actually making progress on the remote side.
+   */
+  heartbeat(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    if (TERMINAL_STATUSES.has(job.status)) return;
+    job.updatedAt = new Date().toISOString();
+  }
+
   complete(jobId: string): void {
     const completedAt = new Date().toISOString();
     this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, completedAt });
@@ -134,9 +147,15 @@ export class UploadQueueService {
     const now = Date.now();
     for (const job of this.jobs.values()) {
       if (TERMINAL_STATUSES.has(job.status)) continue;
-      if (now - Date.parse(job.updatedAt) > UPLOAD_TIMEOUT_MS) {
-        console.warn(`[upload-queue] auto-failing stale job ${job.jobId} (${job.filename})`);
-        this.fail(job.jobId, 'Timed out: no progress received');
+      // 'processing' means we're waiting on a remote provider (Cloudflare encode, etc.)
+      // — give it a much longer ceiling than active byte-pushing uploads, since by
+      // definition no progress events flow during that wait.
+      const limit = job.status === 'processing' ? PROCESSING_TIMEOUT_MS : UPLOAD_TIMEOUT_MS;
+      if (now - Date.parse(job.updatedAt) > limit) {
+        console.warn(`[upload-queue] auto-failing stale job ${job.jobId} (${job.filename}) — status=${job.status} limit=${limit / 60_000}min`);
+        this.fail(job.jobId, job.status === 'processing'
+          ? 'Timed out: provider did not finish processing in time'
+          : 'Timed out: no progress received');
       }
     }
   }

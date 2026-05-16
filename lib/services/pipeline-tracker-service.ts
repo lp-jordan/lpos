@@ -491,8 +491,39 @@ export class PipelineTrackerService {
           changed = true;
         }
 
-        // Auto-fail at 2x stall threshold — safety net for truly stuck jobs
+        // Auto-fail at 2x stall threshold — safety net for truly stuck jobs.
+        // Before failing, ask the underlying service whether the worker is
+        // actually alive (file-mtime / active processor / etc). If so, bump
+        // its heartbeat and skip the kill — the job's progress events were
+        // just lagging behind the work.
         if (elapsed >= threshold * HARD_TIMEOUT_MULT) {
+          let alive = false;
+          switch (stage.type) {
+            case 'ingest':
+              if (this.ingestService?.isJobActive(stage.jobId)) {
+                this.ingestService.heartbeat(stage.jobId);
+                alive = true;
+              }
+              break;
+            case 'transcript':
+              if (this.transcriptService?.isJobActive(stage.jobId)) {
+                this.transcriptService.heartbeat(stage.jobId);
+                alive = true;
+              }
+              break;
+            case 'promotion':
+              if (this.promotionService?.isJobActive(stage.jobId)) {
+                this.promotionService.heartbeat(stage.jobId);
+                alive = true;
+              }
+              break;
+            // upload:* services don't have liveness signals yet — fall through
+          }
+          if (alive) {
+            console.warn(`[pipeline-tracker] vetoed auto-fail for ${stage.type} ${stage.jobId} — worker still alive (heartbeat refreshed)`);
+            continue;
+          }
+
           const reason = 'Auto-failed: exceeded maximum allowed time';
           switch (stage.type) {
             case 'ingest':

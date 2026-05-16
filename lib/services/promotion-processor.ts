@@ -32,6 +32,7 @@ export class PromotionProcessor {
     private io: SocketIOServer | undefined,
   ) {
     this.queue.onQueueChange(() => this.processNext());
+    this.queue.setLivenessProvider((jobId) => this.active.has(jobId));
   }
 
   start(): void {

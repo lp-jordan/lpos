@@ -11,10 +11,10 @@ interface Props {
   label: string;
   color: string;
   isTerminal: boolean;
+  showAddButton: boolean;
   tasks: Task[];
   users: UserSummary[];
   commentCounts: Record<string, number>;
-  projectsMap: Record<string, string>;
   selectedTaskId: string | null;
   renamingTaskId: string | null;
   collapsed: boolean;
@@ -31,10 +31,10 @@ export function TaskColumn({
   label,
   color,
   isTerminal,
+  showAddButton,
   tasks,
   users,
   commentCounts,
-  projectsMap,
   selectedTaskId,
   renamingTaskId,
   collapsed,
@@ -56,7 +56,7 @@ export function TaskColumn({
           <span className="task-col-count">{tasks.length}</span>
         </div>
         <div className="task-col-header-right">
-          {isTerminal ? (
+          {isTerminal && (
             <button
               type="button"
               className="task-col-collapse-btn"
@@ -65,22 +65,24 @@ export function TaskColumn({
             >
               {collapsed ? '▸' : '▾'}
             </button>
-          ) : (
-            <button
-              type="button"
-              className="task-col-add-btn"
-              onClick={onAddTask}
-              title="Add task"
-              aria-label="Add task"
-            >
-              +
-            </button>
           )}
+          {/* Small header "+" intentionally dropped — when showAddButton is true
+              we render a full-width gold button at the top of the body instead
+              (matches the look of the prior toolbar "+ New Task" button). */}
         </div>
       </div>
 
       {(!isTerminal || !collapsed) && (
         <div className="task-col-body">
+          {showAddButton && (
+            <button
+              type="button"
+              className="task-col-add-btn-full"
+              onClick={onAddTask}
+            >
+              + New Task
+            </button>
+          )}
           <SortableContext items={tasks.map((t) => t.taskId)} strategy={verticalListSortingStrategy}>
             {tasks.map((task) => (
               <TaskCard
@@ -88,7 +90,6 @@ export function TaskColumn({
                 task={task}
                 users={users}
                 commentCount={commentCounts[task.taskId] ?? 0}
-                projectName={projectsMap[task.projectId] ?? null}
                 selected={selectedTaskId === task.taskId}
                 isRenaming={renamingTaskId === task.taskId}
                 onClick={() => onSelectTask(task.taskId)}

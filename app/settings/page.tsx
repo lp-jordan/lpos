@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { AdminsPanel } from '@/components/settings/AdminsPanel';
+import { CloudflareOrphansPanel } from '@/components/settings/CloudflareOrphansPanel';
+import { TaskCategoriesPanel } from '@/components/settings/TaskCategoriesPanel';
 import { GuestPinCard } from '@/components/settings/GuestPinCard';
 import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
 import { SlackTestCard } from '@/components/settings/SlackTestCard';
@@ -66,6 +68,8 @@ export default async function SettingsPage() {
       {role === 'admin' && <SlackUsersCard />}
       {role === 'admin' && <GuestPinCard />}
       {role === 'admin' && <ProspectsAccessPanel />}
+      {role === 'admin' && <TaskCategoriesPanel />}
+      {role === 'admin' && <CloudflareOrphansPanel />}
       {role === 'admin' && <AdminsPanel />}
     </section>
   );

@@ -37,7 +37,9 @@ import { ProspectStore } from '@/lib/store/prospect-store';
 import { ClientStore } from '@/lib/store/client-store';
 import { ProspectNotificationStore } from '@/lib/store/prospect-notification-store';
 import { TaskCommentStore } from '@/lib/store/task-comment-store';
+import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
+import { DeliveryNotificationStore } from '@/lib/store/delivery-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
@@ -47,11 +49,13 @@ import { PresentationService } from './presentation-service';
 import { DriveWatcherService } from './drive-watcher-service';
 import { pushTranscriptToDrive } from './drive-transcript-sync';
 import { uploadCaptionsToCloudflare } from './cloudflare-captions-sync';
+import { listCanonicalMediaAssets } from '@/lib/store/canonical-asset-store';
 import { PromotionQueueService } from './promotion-queue-service';
 import { PromotionProcessor } from './promotion-processor';
 import { PresenceService } from './presence-service';
 import { LpReleaseService } from './lp-release-service';
 import { BackupService } from './backup-service';
+import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -76,7 +80,11 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_taskCommentStore: TaskCommentStore | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_taskCategoryStore: TaskCategoryStore | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_taskNotificationStore: TaskNotificationStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_deliveryNotificationStore: DeliveryNotificationStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_projectNoteStore: ProjectNoteStore | undefined;
   // eslint-disable-next-line no-var
@@ -99,6 +107,8 @@ declare global {
   var __lpos_lpReleaseService: LpReleaseService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_backupService: BackupService | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_cloudflareOrphanReconciler: CloudflareOrphanReconciler | undefined;
   // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
   // eslint-disable-next-line no-var
@@ -124,7 +134,9 @@ let pipelineTracker: PipelineTrackerService | null = null;
 let clientOwnerStore: ClientOwnerStore | null = null;
 let taskStore: TaskStore | null = null;
 let taskCommentStore: TaskCommentStore | null = null;
+let taskCategoryStore: TaskCategoryStore | null = null;
 let taskNotificationStore: TaskNotificationStore | null = null;
+let deliveryNotificationStore: DeliveryNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
 let presentationService: PresentationService | null = null;
@@ -133,6 +145,7 @@ let promotionQueueService: PromotionQueueService | null = null;
 let presenceService: PresenceService | null = null;
 let lpReleaseService: LpReleaseService | null = null;
 let backupService: BackupService | null = null;
+let cloudflareOrphanReconciler: CloudflareOrphanReconciler | null = null;
 let prospectStore: ProspectStore | null = null;
 let clientStore: ClientStore | null = null;
 let prospectNotificationStore: ProspectNotificationStore | null = null;
@@ -233,6 +246,10 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   backupService.start();
   globalThis.__lpos_backupService = backupService;
 
+  cloudflareOrphanReconciler = new CloudflareOrphanReconciler();
+  cloudflareOrphanReconciler.start();
+  globalThis.__lpos_cloudflareOrphanReconciler = cloudflareOrphanReconciler;
+
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
@@ -243,6 +260,38 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     activityMonitorService.start(),
     driveWatcherService?.start() ?? Promise.resolve(),
   ]);
+
+  // Reset any assets that were left in a mid-upload state by a previous server
+  // restart. Cloudflare TUS connections are not resumable across process restarts,
+  // so any asset still showing cloudflare.status 'uploading' or 'processing' with
+  // no active queue job is definitively stale. Mark them failed so the user can
+  // re-push without having to manually clear the state.
+  setImmediate(() => {
+    try {
+      const projects = globalThis.__lpos_projectStore?.getAll() ?? [];
+      let resetCount = 0;
+      for (const project of projects) {
+        const assets = listCanonicalMediaAssets(project.projectId);
+        for (const asset of assets) {
+          const stuck =
+            asset.cloudflare.status === 'uploading' ||
+            (asset.cloudflare.status === 'processing' && asset.leaderpass.status === 'preparing');
+          if (!stuck) continue;
+          patchAsset(project.projectId, asset.assetId, {
+            cloudflare: { status: 'failed', progress: 0, lastError: 'Upload interrupted — server was restarted. Re-push to retry.' },
+            leaderpass: { status: 'failed', lastError: 'Upload interrupted — server was restarted. Re-push to retry.' },
+          });
+          resetCount += 1;
+          console.warn(`[startup] reset stale cloudflare upload for asset ${asset.assetId} (${asset.name ?? asset.originalFilename})`);
+        }
+      }
+      if (resetCount > 0) {
+        console.warn(`[startup] reset ${resetCount} stale Cloudflare upload(s) — re-push from the Media tab`);
+      }
+    } catch (err) {
+      console.warn('[startup] cloudflare stale-upload scan failed:', err);
+    }
+  });
 }
 
 export async function stopServices(): Promise<void> {
@@ -251,6 +300,7 @@ export async function stopServices(): Promise<void> {
   driveWatcherService?.stop();
   lpReleaseService?.stop();
   backupService?.stop();
+  cloudflareOrphanReconciler?.stop();
   wledService?.stop();
   await Promise.all([
     slateService?.stop(),
@@ -408,12 +458,28 @@ export function getTaskCommentStore(): TaskCommentStore {
   return taskCommentStore;
 }
 
+export function getTaskCategoryStore(): TaskCategoryStore {
+  if (globalThis.__lpos_taskCategoryStore) return globalThis.__lpos_taskCategoryStore;
+  if (taskCategoryStore) return taskCategoryStore;
+  taskCategoryStore = new TaskCategoryStore();
+  globalThis.__lpos_taskCategoryStore = taskCategoryStore;
+  return taskCategoryStore;
+}
+
 export function getTaskNotificationStore(): TaskNotificationStore {
   if (globalThis.__lpos_taskNotificationStore) return globalThis.__lpos_taskNotificationStore;
   if (taskNotificationStore) return taskNotificationStore;
   taskNotificationStore = new TaskNotificationStore();
   globalThis.__lpos_taskNotificationStore = taskNotificationStore;
   return taskNotificationStore;
+}
+
+export function getDeliveryNotificationStore(): DeliveryNotificationStore {
+  if (globalThis.__lpos_deliveryNotificationStore) return globalThis.__lpos_deliveryNotificationStore;
+  if (deliveryNotificationStore) return deliveryNotificationStore;
+  deliveryNotificationStore = new DeliveryNotificationStore();
+  globalThis.__lpos_deliveryNotificationStore = deliveryNotificationStore;
+  return deliveryNotificationStore;
 }
 
 export function getIo(): import('socket.io').Server | undefined {
@@ -432,6 +498,10 @@ export function getLpReleaseService(): LpReleaseService | null {
 
 export function getBackupService(): BackupService | null {
   return globalThis.__lpos_backupService ?? backupService ?? null;
+}
+
+export function getCloudflareOrphanReconciler(): CloudflareOrphanReconciler | null {
+  return globalThis.__lpos_cloudflareOrphanReconciler ?? cloudflareOrphanReconciler ?? null;
 }
 
 export function getProspectStore(): ProspectStore {

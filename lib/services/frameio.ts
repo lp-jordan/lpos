@@ -448,24 +448,41 @@ export async function uploadAsset(
 
     await Promise.all(batch.map(async ({ url, size, start }, batchIdx) => {
       const partNum = i + batchIdx + 1;
-      const readStream = fs.createReadStream(filePath, { start, end: start + size - 1 });
-      const webStream = Readable.toWeb(readStream) as ReadableStream<Uint8Array>;
+      const MAX_ATTEMPTS = 2;
+      let lastError: unknown;
 
-      const putRes = await fetch(url, {
-        method:  'PUT',
-        // @ts-expect-error — Node.js built-in fetch requires duplex for streaming request bodies
-        duplex:  'half',
-        body:    webStream,
-        headers: {
-          'Content-Type':   mimeType,
-          'Content-Length': String(size),
-          'x-amz-acl':      'private',
-        },
-      });
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        // Fresh stream per attempt — a consumed ReadableStream can't be replayed
+        const readStream = fs.createReadStream(filePath, { start, end: start + size - 1 });
+        const webStream = Readable.toWeb(readStream) as ReadableStream<Uint8Array>;
 
-      if (!putRes.ok) {
-        throw new Error(`S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}`);
+        try {
+          const putRes = await fetch(url, {
+            method:  'PUT',
+            // @ts-expect-error — Node.js built-in fetch requires duplex for streaming request bodies
+            duplex:  'half',
+            body:    webStream,
+            headers: {
+              'Content-Type':   mimeType,
+              'Content-Length': String(size),
+              'x-amz-acl':      'private',
+            },
+          });
+
+          if (putRes.ok) return;
+          lastError = new Error(`S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}`);
+        } catch (err) {
+          lastError = err;
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          const msg = lastError instanceof Error ? lastError.message : String(lastError);
+          console.warn(`[frameio-v4] part ${partNum}/${parts.length} attempt ${attempt} failed (${msg}) — retrying once`);
+          await new Promise(r => setTimeout(r, 1000));
+        }
       }
+
+      throw lastError;
     }));
   }
 
@@ -749,23 +766,68 @@ export async function removeFileFromShare(shareId: string, fileId: string): Prom
 }
 
 export interface ShareSettings {
-  name?:               string;
+  name?:                string;
   downloading_enabled?: boolean;
+  /** ISO 8601 timestamp; pass `null` to clear an existing expiration. */
+  expiration?:          string | null;
 }
 
 /**
  * Update one or more settings on an existing share.
  * PATCH /v4/accounts/{id}/shares/{shareId}
+ *
+ * Returns the share fields Frame.io echoes back so callers can verify the
+ * change actually landed. If Frame.io 200s the request but the returned
+ * `name` (or `downloading_enabled` / `expiration`) doesn't match what we
+ * asked for, we throw — silently-accepted-but-not-applied was the failure
+ * mode behind a stale-rename bug we had to fix.
  */
-export async function updateShareSettings(shareId: string, settings: ShareSettings): Promise<void> {
+export async function updateShareSettings(
+  shareId: string,
+  settings: ShareSettings,
+): Promise<{ id: string; name: string | null; downloading_enabled: boolean | null; expiration: string | null }> {
   const { accountId } = await discover();
   console.log('[frameio] PATCH share', shareId, 'with', JSON.stringify(settings));
   const res = await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}`, {
     method: 'PATCH',
     body:   JSON.stringify({ data: settings }),
   });
-  const body = await res.json().catch(() => null);
+  const body = await res.json().catch(() => null) as {
+    data?: {
+      id: string;
+      name?: string | null;
+      downloading_enabled?: boolean | null;
+      expiration?: string | null;
+    };
+  } | null;
   console.log('[frameio] PATCH share response:', JSON.stringify(body));
+
+  const returned = body?.data;
+  if (!returned?.id) {
+    throw new Error(`Frame.io PATCH share ${shareId} returned no data envelope: ${JSON.stringify(body)}`);
+  }
+
+  // Verify each field we asked to update is actually what Frame.io echoes back.
+  // If Frame.io silently ignored a field, we'd otherwise show the user a
+  // "saved!" UI while the share page kept its old name.
+  if (settings.name !== undefined && returned.name !== settings.name) {
+    throw new Error(
+      `Frame.io accepted PATCH but name didn't apply (sent="${settings.name}", returned="${returned.name ?? '<null>'}")`,
+    );
+  }
+  if (settings.downloading_enabled !== undefined && returned.downloading_enabled !== settings.downloading_enabled) {
+    console.warn(`[frameio] PATCH share ${shareId}: downloading_enabled drift (sent=${settings.downloading_enabled}, returned=${returned.downloading_enabled})`);
+  }
+  if (settings.expiration !== undefined && returned.expiration !== settings.expiration) {
+    console.warn(`[frameio] PATCH share ${shareId}: expiration drift (sent=${settings.expiration}, returned=${returned.expiration})`);
+  }
+
+  return {
+    id: returned.id,
+    name: returned.name ?? null,
+    downloading_enabled: returned.downloading_enabled ?? null,
+    expiration: returned.expiration ?? null,
+  };
 }
 
 /**

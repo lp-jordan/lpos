@@ -51,8 +51,30 @@ export interface PromotionJob {
 export class PromotionQueueService {
   private jobs = new Map<string, PromotionJob>();
   private changeListeners: Array<(jobs: PromotionJob[]) => void> = [];
+  private livenessProvider: ((jobId: string) => boolean) | null = null;
 
   constructor(private io: SocketIOServer | undefined) {}
+
+  /** Registered by PromotionProcessor so the pipeline tracker can ask whether a
+   *  job is still actively executing before auto-failing it. */
+  setLivenessProvider(fn: (jobId: string) => boolean): void {
+    this.livenessProvider = fn;
+  }
+
+  /** True if the processor reports an active worker for this job. */
+  isJobActive(jobId: string): boolean {
+    return this.livenessProvider?.(jobId) ?? false;
+  }
+
+  /** Bump updatedAt without changing status. Resets the pipeline tracker's
+   *  stall clock when the underlying worker has been confirmed alive. */
+  heartbeat(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return;
+    job.updatedAt = new Date().toISOString();
+    this.broadcast();
+  }
 
   start(): void {
     this.io?.of('/promotion-queue').on('connection', (socket) => {

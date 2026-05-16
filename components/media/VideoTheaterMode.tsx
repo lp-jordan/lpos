@@ -42,6 +42,13 @@ export function VideoTheaterMode({
   const scrubRef        = useRef<HTMLDivElement>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
   const hideTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Drag-scrub state: held in refs (not React state) because the pointer
+  // handlers fire dozens of times per second and we don't want a re-render
+  // per move. The visible scrub fill updates via the existing currentTime
+  // state, which we set on each move.
+  const draggingRef     = useRef(false);
+  const wasPlayingRef   = useRef(false);
+  const movedRef        = useRef(false);
 
   const [playing,         setPlaying]        = useState(false);
   const [currentTime,     setCurrentTime]    = useState(0);
@@ -112,16 +119,74 @@ export function VideoTheaterMode({
     togglePlay();
   }
 
-  function handleScrubClick(e: React.MouseEvent<HTMLDivElement>) {
+  /** Compute the timestamp the pointer's X corresponds to on the scrubber. */
+  function scrubTimeFromX(clientX: number): number | null {
     const el = scrubRef.current;
-    const v  = videoRef.current;
-    if (!el || !v || !duration) return;
-    e.stopPropagation();
+    if (!el || !duration) return null;
     const rect = el.getBoundingClientRect();
-    v.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * duration;
-    // Resume playback after seek — without this the video shows the new frame
-    // but stays paused/stalled if it was buffering when the user clicked.
-    void v.play();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * duration;
+  }
+
+  // Pointer events cover mouse + touch + pen in one handler (modern browsers).
+  // We deliberately don't pause on pointerdown so a simple tap stays smooth;
+  // pause kicks in only once we see actual movement (pointermove), then
+  // resume on pointerup if the video was playing when the drag started.
+  function handleScrubPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const v = videoRef.current;
+    if (!v || !duration) return;
+    // Skip when the pointer landed on a comment marker — those buttons have
+    // their own seek-to-timestamp handlers and shouldn't trigger a scrub-from-X
+    // first (which would flicker the playhead before the marker's onClick fires).
+    const target = e.target as HTMLElement;
+    if (target.classList.contains('vt-scrub-range') || target.classList.contains('vt-scrub-tick')) {
+      return;
+    }
+    e.stopPropagation();
+    const t = scrubTimeFromX(e.clientX);
+    if (t === null) return;
+    // Capture so the pointer keeps targeting us even if the user drags off
+    // the scrubber. Required for both mouse and touch.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    draggingRef.current = true;
+    wasPlayingRef.current = !v.paused && !v.ended;
+    movedRef.current = false;
+    v.currentTime = t;
+    setCurrentTime(t);
+  }
+
+  function handleScrubPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!draggingRef.current) return;
+    const v = videoRef.current;
+    if (!v || !duration) return;
+    const t = scrubTimeFromX(e.clientX);
+    if (t === null) return;
+    // First real movement → pause so the video doesn't fight the scrub.
+    if (!movedRef.current) {
+      movedRef.current = true;
+      if (!v.paused) v.pause();
+    }
+    v.currentTime = t;
+    setCurrentTime(t);
+  }
+
+  function endScrubDrag(e: React.PointerEvent<HTMLDivElement>) {
+    if (!draggingRef.current) return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    draggingRef.current = false;
+    const v = videoRef.current;
+    if (!v) return;
+    // If movement never happened, it's a pure tap: pointerdown already
+    // seeked, no pause occurred, so we want to start playing (mirrors the
+    // old onClick behavior that called play() after every seek).
+    // If movement did happen, the video was paused during the drag; resume
+    // only if it was playing when the drag started.
+    if (!movedRef.current) {
+      void v.play();
+    } else if (wasPlayingRef.current) {
+      void v.play();
+    }
+    movedRef.current = false;
   }
 
   function seekTo(ts: number) {
@@ -237,8 +302,18 @@ export function VideoTheaterMode({
           </div>
 
           <div className={`vt-bottom${controlsVisible ? ' vt-bottom--visible' : ''}`}>
-            {/* Scrub bar */}
-            <div className="vt-scrub-wrap" ref={scrubRef} onClick={handleScrubClick}>
+            {/* Scrub bar — pointer events handle click+drag scrubbing for mouse,
+                touch, and pen. Movement pauses video; release resumes if it was
+                playing before the drag. A simple tap (no movement) seeks + plays. */}
+            <div
+              className="vt-scrub-wrap"
+              ref={scrubRef}
+              onPointerDown={handleScrubPointerDown}
+              onPointerMove={handleScrubPointerMove}
+              onPointerUp={endScrubDrag}
+              onPointerCancel={endScrubDrag}
+              style={{ touchAction: 'none' }}
+            >
               <div className="vt-scrub-track">
                 <div
                   className="vt-scrub-fill"

@@ -118,6 +118,22 @@ export class TranscripterService {
     return Array.from(this.jobs.values());
   }
 
+  /** True if a worker is currently executing this job. Used by pipeline tracker
+   *  to veto auto-fail when the underlying worker is still alive. */
+  isJobActive(jobId: string): boolean {
+    return this.activeProcessors.has(jobId);
+  }
+
+  /** Bump updatedAt without changing status — resets stall clock when a caller
+   *  (pipeline tracker) has confirmed the underlying work is still alive. */
+  heartbeat(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'canceled') return;
+    job.updatedAt = new Date().toISOString();
+    this.broadcast();
+  }
+
   /** Externally mark a job as failed (used by pipeline tracker auto-fail). */
   failJob(jobId: string, error: string): void {
     const job = this.jobs.get(jobId);

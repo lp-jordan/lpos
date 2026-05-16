@@ -23,8 +23,16 @@ export function ContactModal({ prospectId, contact, onSaved, onDeleted, onClose,
   const [editing,  setEditing]  = useState(isNew);
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDelete,     setConfirmDelete]     = useState(false);
+  const [confirmDiscard,    setConfirmDiscard]    = useState(false);
   const [error,    setError]    = useState<string | null>(null);
+
+  const isDirty = name.trim() !== '' || role.trim() !== '' || email.trim() !== '' || phone.trim() !== '' || linkedin.trim() !== '';
+
+  function handleRequestClose() {
+    if (editing && isDirty) { setConfirmDiscard(true); return; }
+    onClose();
+  }
 
   async function handleSave() {
     if (!name.trim()) { setError('Name is required.'); return; }
@@ -123,8 +131,25 @@ export function ContactModal({ prospectId, contact, onSaved, onDeleted, onClose,
     );
   }
 
+  if (confirmDiscard) {
+    return (
+      <div className="modal-overlay" onClick={() => setConfirmDiscard(false)}>
+        <div className="modal-box modal-box--sm" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-header">
+            <h2 className="modal-title">Discard changes?</h2>
+          </div>
+          <p className="modal-body-text">You have unsaved changes. Close without saving?</p>
+          <div className="modal-actions">
+            <button type="button" className="modal-btn-ghost" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+            <button type="button" className="modal-btn-danger" onClick={onClose}>Discard</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={handleRequestClose}>
       <div className="modal-box" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" style={{ justifyContent: 'space-between' }}>
           <h2 className="modal-title">{isNew ? 'Add Contact' : (editing ? 'Edit Contact' : contact!.name)}</h2>
@@ -211,6 +236,11 @@ export function ContactModal({ prospectId, contact, onSaved, onDeleted, onClose,
         <div className="modal-actions">
           {editing && !isNew && (
             <button type="button" className="modal-btn-ghost" onClick={() => { setEditing(false); setError(null); }} disabled={saving}>
+              Cancel
+            </button>
+          )}
+          {editing && isNew && (
+            <button type="button" className="modal-btn-ghost" onClick={handleRequestClose} disabled={saving}>
               Cancel
             </button>
           )}

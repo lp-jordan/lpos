@@ -448,27 +448,24 @@ function DeliveryLinkCard({
   );
 }
 
-// ── DeliveryPanel ─────────────────────────────────────────────────────────────
+// ── DeliveryPanelBody — shell-less content for embedding in DeliverablesHub ──
 
-interface Props {
+interface BodyProps {
   projectId:     string;
-  projectName:   string;
   assets:        MediaAsset[];
-  open:          boolean;
-  onClose:       () => void;
+  /** True when this body is currently the visible tab — gates the fetch */
+  active:        boolean;
   pendingCreate: MediaAsset[] | null;
   onPendingConsumed: () => void;
 }
 
-export function DeliveryPanel({
+export function DeliveryPanelBody({
   projectId,
-  projectName,
   assets,
-  open,
-  onClose,
+  active,
   pendingCreate,
   onPendingConsumed,
-}: Readonly<Props>) {
+}: Readonly<BodyProps>) {
   const [links,       setLinks]       = useState<DeliveryLink[]>([]);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
@@ -491,17 +488,17 @@ export function DeliveryPanel({
   }, [projectId]);
 
   useEffect(() => {
-    if (open) void fetchLinks();
-  }, [open, fetchLinks]);
+    if (active) void fetchLinks();
+  }, [active, fetchLinks]);
 
   // When pendingCreate is set, open the create modal with those assets pre-selected
   useEffect(() => {
-    if (pendingCreate !== null && open) {
+    if (pendingCreate !== null && active) {
       setCreatePreselected(pendingCreate);
       setShowCreate(true);
       onPendingConsumed();
     }
-  }, [pendingCreate, open, onPendingConsumed]);
+  }, [pendingCreate, active, onPendingConsumed]);
 
   function handleRevoked(token: string) {
     setLinks((prev) => prev.filter((l) => l.token !== token));
@@ -518,79 +515,39 @@ export function DeliveryPanel({
 
   return (
     <>
-      {/* Backdrop */}
-      {open && <div className="sh-backdrop" onClick={onClose} aria-hidden="true" />}
-
-      {/* Panel */}
-      <aside className={`sh-panel${open ? ' sh-panel--open' : ''}`} role="dialog" aria-label="Delivery links">
-        {/* Header */}
-        <div className="sh-panel-header">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
+      <div className="sh-panel-body">
+        <button
+          type="button"
+          className="sh-btn sh-btn--primary sh-new-btn"
+          onClick={openCreate}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
-          <span className="sh-panel-title">Delivery</span>
-          <div className="sh-panel-header-actions">
-            <button
-              type="button"
-              className="sh-icon-btn"
-              onClick={() => void fetchLinks()}
-              title="Refresh"
-              aria-label="Refresh delivery links"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="sh-icon-btn"
-              onClick={onClose}
-              aria-label="Close delivery panel"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
+          New delivery
+        </button>
+
+        {loading && <p className="sh-empty">Loading…</p>}
+        {error   && <p className="sh-error">{error}</p>}
+
+        {!loading && !error && links.length === 0 && (
+          <p className="sh-empty">No delivery links yet. Select files and create one to send a download page to your client.</p>
+        )}
+
+        {links.length > 0 && (
+          <div className="sh-list">
+            {links.map((l) => (
+              <DeliveryLinkCard
+                key={l.token}
+                link={l}
+                projectId={projectId}
+                onRevoked={handleRevoked}
+                onUpdated={handleUpdated}
+              />
+            ))}
           </div>
-        </div>
-
-        {/* Body */}
-        <div className="sh-panel-body">
-          <button
-            type="button"
-            className="sh-btn sh-btn--primary sh-new-btn"
-            onClick={openCreate}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            New delivery
-          </button>
-
-          {loading && <p className="sh-empty">Loading…</p>}
-          {error   && <p className="sh-error">{error}</p>}
-
-          {!loading && !error && links.length === 0 && (
-            <p className="sh-empty">No delivery links yet. Select files and create one to send a download page to your client.</p>
-          )}
-
-          {links.length > 0 && (
-            <div className="sh-list">
-              {links.map((l) => (
-                <DeliveryLinkCard
-                  key={l.token}
-                  link={l}
-                  projectId={projectId}
-                  onRevoked={handleRevoked}
-                  onUpdated={handleUpdated}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </aside>
+        )}
+      </div>
 
       {/* Create modal */}
       {showCreate && (

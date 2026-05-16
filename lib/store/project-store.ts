@@ -6,6 +6,7 @@ import type { ActivityActor } from '@/lib/models/activity';
 import type { Project } from '@/lib/models/project';
 import { recordActivity, systemActor } from '@/lib/services/activity-monitor-service';
 import { getCoreDb } from './core-db';
+import { ProspectStore } from './prospect-store';
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 
@@ -149,6 +150,18 @@ export class ProjectStore {
       search_text: `${project.name} ${project.clientName}`.trim(),
     });
 
+    // Wire to People CRM: every project's client_name should have a
+    // corresponding active prospect. Best-effort — a People-side failure
+    // shouldn't block the project create.
+    if (project.clientName) {
+      try {
+        const actorId = context?.actor?.actor_id ?? 'system';
+        new ProspectStore().ensureProspectForClient(project.clientName, actorId);
+      } catch (err) {
+        console.warn('[projects] ensureProspectForClient failed (non-fatal):', (err as Error).message);
+      }
+    }
+
     console.log(`[projects] created: ${project.clientName} — ${project.name} (${project.projectId})`);
     return project;
   }
@@ -193,6 +206,20 @@ export class ProjectStore {
       details_json: { previous, updated: next },
       search_text: `${next.name} ${next.clientName}`.trim(),
     });
+
+    // Wire to People CRM: if the clientName changed to a new non-empty value,
+    // ensure the corresponding prospect exists and is active. We don't touch
+    // the OLD client's prospect — if it now has zero referencing projects we
+    // leave it 'active' rather than auto-demoting (a project might be archived
+    // briefly during a renaming workflow; demotion would race with that).
+    if (next.clientName && next.clientName !== previous.clientName) {
+      try {
+        const actorId = context?.actor?.actor_id ?? 'system';
+        new ProspectStore().ensureProspectForClient(next.clientName, actorId);
+      } catch (err) {
+        console.warn('[projects] ensureProspectForClient (update) failed (non-fatal):', (err as Error).message);
+      }
+    }
     return next;
   }
 

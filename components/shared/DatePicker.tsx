@@ -1,5 +1,6 @@
 'use client';
 
+import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -162,25 +163,28 @@ export function DatePicker({ value, onChange, placeholder = 'Select date', mode 
   const parsed = parseDate(value);
   const now    = new Date();
 
-  const [open,     setOpen]     = useState(false);
-  const [year,     setYear]     = useState(parsed?.getUTCFullYear() ?? now.getFullYear());
-  const [month,    setMonth]    = useState(parsed?.getUTCMonth()    ?? now.getMonth());
-  const [popupPos, setPopupPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [open,    setOpen]    = useState(false);
+  const [year,    setYear]    = useState(parsed?.getUTCFullYear() ?? now.getFullYear());
+  const [month,   setMonth]   = useState(parsed?.getUTCMonth()    ?? now.getMonth());
+  const [pos,     setPos]     = useState<{ top: number; left: number; width: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
 
-  const buttonRef    = useRef<HTMLButtonElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popupRef  = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    function handleMouseDown(e: MouseEvent) {
+      const insideButton = buttonRef.current?.contains(e.target as Node);
+      const insidePopup  = popupRef.current?.contains(e.target as Node);
+      if (!insideButton && !insidePopup) setOpen(false);
     }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
   }, []);
 
-  function handleOpenToggle() {
+  function handleToggle() {
     if (disabled) return;
     if (!open) {
       if (parsed) {
@@ -188,7 +192,14 @@ export function DatePicker({ value, onChange, placeholder = 'Select date', mode 
         setMonth(parsed.getUTCMonth());
       }
       const rect = buttonRef.current?.getBoundingClientRect();
-      if (rect) setPopupPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+      if (rect) {
+        const popupH   = mode === 'month' ? 196 : 300;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const top = spaceBelow >= popupH + 8
+          ? rect.bottom + 4
+          : Math.max(8, rect.top - popupH - 4);
+        setPos({ top, left: rect.left, width: rect.width });
+      }
     }
     setOpen((v) => !v);
   }
@@ -206,20 +217,48 @@ export function DatePicker({ value, onChange, placeholder = 'Select date', mode 
   function handleNavMonth(delta: number) {
     let m = month + delta;
     let y = year;
-    if (m < 0) { m = 11; y--; }
-    if (m > 11) { m = 0; y++; }
+    if (m < 0)  { m = 11; y--; }
+    if (m > 11) { m = 0;  y++; }
     setMonth(m);
     setYear(y);
   }
 
   const display = formatDisplay(value, mode);
 
+  const popup = open && pos ? (
+    <div
+      ref={popupRef}
+      style={{
+        position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
+        background: 'var(--surface-1)', border: '1px solid var(--line)',
+        borderRadius: 10, boxShadow: 'var(--shadow-md)', minWidth: Math.max(220, pos.width),
+      }}
+    >
+      {mode === 'month' ? (
+        <MonthYearPanel
+          year={year}
+          month={parsed?.getUTCMonth() ?? -1}
+          onSelect={handleMonthSelect}
+          onYearChange={(delta) => setYear((y) => y + delta)}
+        />
+      ) : (
+        <DatePanel
+          year={year}
+          month={month}
+          selectedDate={parsed}
+          onSelect={handleDateSelect}
+          onNavMonth={handleNavMonth}
+        />
+      )}
+    </div>
+  ) : null;
+
   return (
-    <div ref={containerRef} style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+    <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
       <button
         ref={buttonRef}
         type="button"
-        onClick={handleOpenToggle}
+        onClick={handleToggle}
         disabled={disabled}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -251,30 +290,7 @@ export function DatePicker({ value, onChange, placeholder = 'Select date', mode 
         </span>
       </button>
 
-      {open && popupPos && (
-        <div style={{
-          position: 'fixed', top: popupPos.top, left: popupPos.left, zIndex: 9999,
-          background: 'var(--surface-1)', border: '1px solid var(--line)',
-          borderRadius: 10, boxShadow: 'var(--shadow-md)', minWidth: Math.max(220, popupPos.width),
-        }}>
-          {mode === 'month' ? (
-            <MonthYearPanel
-              year={year}
-              month={parsed?.getUTCMonth() ?? -1}
-              onSelect={handleMonthSelect}
-              onYearChange={(delta) => setYear((y) => y + delta)}
-            />
-          ) : (
-            <DatePanel
-              year={year}
-              month={month}
-              selectedDate={parsed}
-              onSelect={handleDateSelect}
-              onNavMonth={handleNavMonth}
-            />
-          )}
-        </div>
-      )}
+      {mounted && popup && createPortal(popup, document.body)}
     </div>
   );
 }

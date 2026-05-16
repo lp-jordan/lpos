@@ -6,8 +6,11 @@ import { io } from 'socket.io-client';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
 import { SardiusPushModal } from '@/components/media/SardiusPushModal';
-import { SharesPanel } from '@/components/projects/SharesPanel';
-import { DeliveryPanel } from '@/components/projects/DeliveryPanel';
+import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
+// Cleanup pass: SharesPanel + DeliveryPanel collapsed into one DeliverablesHub
+// with tabs for Review Links / Deliveries. Single toolbar button entry.
+import { DeliverablesHub } from '@/components/projects/DeliverablesHub';
+import { DeliverableModal } from '@/components/projects/DeliverableModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
@@ -297,6 +300,13 @@ function AssetRow({
         <TranscriptionBadge status={asset.transcription.status} />
         <VersionBadge version={asset.frameio.version} />
         <LeaderPassBadge status={asset.leaderpass.status} />
+        {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
+          <span
+            className="ma-cf-stale-dot"
+            title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
+            aria-label="Cloudflare publication is stale"
+          />
+        )}
       </div>
       <button
         type="button"
@@ -390,6 +400,13 @@ function AssetCard({
           <TranscriptionBadge status={asset.transcription.status} />
           <VersionBadge version={asset.frameio.version} />
           <LeaderPassBadge status={asset.leaderpass.status} />
+          {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
+            <span
+              className="ma-cf-stale-dot"
+              title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
+              aria-label="Cloudflare publication is stale"
+            />
+          )}
         </div>
       </div>
       <button
@@ -431,25 +448,28 @@ export function MediaTab({
   const [confirmDelete,   setConfirmDelete]   = useState<{ asset: MediaAsset; deleteFile: boolean } | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<{ deleteFile: boolean } | null>(null);
   const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError]   = useState<string | null>(null);
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [renamingId,      setRenamingId]      = useState<string | null>(null);
-  const [showSharesPanel,   setShowSharesPanel]   = useState(false);
-  const [showDeliveryPanel, setShowDeliveryPanel] = useState(false);
-  const [deliveryPending,   setDeliveryPending]   = useState<MediaAsset[] | null>(null);
-  const [shareResult,     setShareResult]     = useState<{ url: string; count: number; skipped: number } | null>(null);
-  const [shareWorking,    setShareWorking]    = useState(false);
-  const [shareError,      setShareError]      = useState<string | null>(null);
-  const [shareCopied,     setShareCopied]     = useState(false);
+  // Cleanup pass: one unified hub. showHub doubles for both the prior
+  // showSharesPanel and showDeliveryPanel states. deliveryPending still
+  // exists because the bulk-bar "Send delivery" path needs to seed the
+  // delivery create modal; the hub auto-switches to the Deliveries tab when
+  // pendingDeliveryCreate is set.
+  const [showHub,          setShowHub]          = useState(false);
+  const [deliveryPending,  setDeliveryPending]  = useState<MediaAsset[] | null>(null);
+  // Phase E: replaced shareResult/shareWorking/shareError/shareCopied (the old
+  // legacy POST-and-show-modal flow) with a single boolean — DeliverableModal
+  // handles its own creation, error, and success-with-copy states.
+  const [showDeliverableModal, setShowDeliverableModal] = useState(false);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
-  const [cfSettingsOpen,      setCfSettingsOpen]      = useState(false);
-  const [cfSettingsFrame,     setCfSettingsFrame]     = useState(24);
-  const [cfSettingsSaving,    setCfSettingsSaving]    = useState(false);
-  const [cfSettingsError,     setCfSettingsError]     = useState<string | null>(null);
+  const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
+  // CF settings state removed with the gear button (cleanup pass).
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -535,7 +555,7 @@ const { openMenu } = useContextMenu();
 
     consumedDeepLinkRef.current = deepLinkedAssetId;
     setSelectedAsset(match);
-    setShowSharesPanel(false);
+    setShowHub(false);
 
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete('assetId');
@@ -560,9 +580,12 @@ const { openMenu } = useContextMenu();
   // Deselect when clicking outside the content area
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
-      if (contentRef.current && !contentRef.current.contains(e.target as Node)) {
-        setSelectedIds(new Set());
-      }
+      const el = e.target as HTMLElement | null;
+      if (!contentRef.current || contentRef.current.contains(el)) return;
+      // Don't clear selection when clicking inside a modal/dialog — otherwise
+      // bulk-action confirm modals wipe selectedIds before their own handler runs.
+      if (el?.closest('.modal-overlay, [role="dialog"]')) return;
+      setSelectedIds(new Set());
     }
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
@@ -993,7 +1016,7 @@ const { openMenu } = useContextMenu();
 
   function openAssetDetail(asset: MediaAsset) {
     setSelectedAsset(asset);
-    setShowSharesPanel(false);
+    setShowHub(false);
   }
 
   // ── Context menu ──────────────────────────────────────────────────────────
@@ -1053,7 +1076,7 @@ const { openMenu } = useContextMenu();
         disabled: !asset.filePath,
         onClick: () => {
           setDeliveryPending([asset]);
-          setShowDeliveryPanel(true);
+          setShowHub(true);
           setSelectedAsset(null);
         },
       },
@@ -1117,8 +1140,12 @@ const { openMenu } = useContextMenu();
   // Active ingest jobs keyed by filename for fast lookup
   const activeIngestByFilename = new Map(activeIngestJobs.map((j) => [j.filename, j]));
 
-  // Sort: assets with active ingest jobs float to the top (most progress first),
-  // remaining assets keep the user's chosen order.
+  // Sort: assets with active ingest jobs float to the top, ordered by queuedAt
+  // ascending (oldest upload first). Previously we sorted the active group by
+  // progress descending — but progress ticks on every socket message, so rows
+  // re-shuffled mid-render whenever any active upload's percentage advanced.
+  // queuedAt is set once when the ingest job is created and never changes, so
+  // the order within the active group is stable for the lifetime of the upload.
   const _baseSorted = sortAssets(filtered, sortField, sortDir);
   const sorted = activeIngestByFilename.size === 0 ? _baseSorted : (() => {
     const active: MediaAsset[] = [];
@@ -1131,9 +1158,9 @@ const { openMenu } = useContextMenu();
       }
     }
     active.sort((a, b) => {
-      const pa = (activeIngestByFilename.get(a.name) ?? activeIngestByFilename.get(a.originalFilename))?.progress ?? 0;
-      const pb = (activeIngestByFilename.get(b.name) ?? activeIngestByFilename.get(b.originalFilename))?.progress ?? 0;
-      return pb - pa;
+      const ja = activeIngestByFilename.get(a.name) ?? activeIngestByFilename.get(a.originalFilename);
+      const jb = activeIngestByFilename.get(b.name) ?? activeIngestByFilename.get(b.originalFilename);
+      return (ja?.queuedAt ?? '').localeCompare(jb?.queuedAt ?? '');
     });
     return [...active, ...rest];
   })();
@@ -1151,72 +1178,57 @@ const { openMenu } = useContextMenu();
   async function handleBulkDelete(deleteFile: boolean) {
     if (!selectedIds.size) return;
     setBulkDeleteWorking(true);
+    setBulkDeleteError(null);
     const ids = [...selectedIds];
-    await Promise.all(
-      ids.map((id) =>
-        fetch(`/api/projects/${projectId}/media/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' }),
-      ),
+
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(`/api/projects/${projectId}/media/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' });
+          if (res.ok) return { id, ok: true as const };
+          let message = `HTTP ${res.status}`;
+          try {
+            const body = await res.json() as { error?: string };
+            if (body.error) message = body.error;
+          } catch { /* response wasn't JSON */ }
+          return { id, ok: false as const, message };
+        } catch (err) {
+          return { id, ok: false as const, message: (err as Error).message || 'Network error' };
+        }
+      }),
     );
-    if (selectedAsset && ids.includes(selectedAsset.assetId)) setSelectedAsset(null);
-    setSelectedIds(new Set());
-    setConfirmBulkDelete(null);
+
+    const succeeded = results.filter((r) => r.ok).map((r) => r.id);
+    const failed    = results.filter((r) => !r.ok);
+
+    // Drop successes from selection regardless; failures stay selected so the user
+    // can retry without losing track of which items didn't go through.
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of succeeded) next.delete(id);
+      return next;
+    });
+    if (selectedAsset && succeeded.includes(selectedAsset.assetId)) setSelectedAsset(null);
+
+    if (failed.length === 0) {
+      setConfirmBulkDelete(null);
+      setBulkDeleteError(null);
+    } else {
+      const summary = failed.length === ids.length
+        ? `Failed to delete ${failed.length} item${failed.length === 1 ? '' : 's'}: ${failed[0].message}`
+        : `Deleted ${succeeded.length} of ${ids.length}. ${failed.length} failed — first error: ${failed[0].message}`;
+      setBulkDeleteError(summary);
+    }
+
     setBulkDeleteWorking(false);
     await fetchAssets();
   }
 
-  async function handleBulkShare() {
+  function handleBulkShare() {
     if (!selectedIds.size) return;
-    setShareWorking(true);
-    setShareError(null);
-    setShareResult(null);
-    try {
-      const res  = await fetch(`/api/projects/${projectId}/media/share`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ assetIds: [...selectedIds] }),
-      });
-      const data = await res.json() as { shareUrl?: string; fileCount?: number; skipped?: number; error?: string };
-      if (!res.ok) { setShareError(data.error ?? 'Failed to create share link'); return; }
-      if (data.shareUrl) {
-        setShareResult({ url: data.shareUrl, count: data.fileCount ?? selectedIds.size, skipped: data.skipped ?? 0 });
-      }
-    } catch {
-      setShareError('Network error — could not create share link');
-    } finally {
-      setShareWorking(false);
-    }
+    setShowDeliverableModal(true);
   }
 
-  async function handleOpenCfSettings() {
-    setCfSettingsError(null);
-    setCfSettingsOpen(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}`);
-      if (res.ok) {
-        const data = await res.json() as { project: { cloudflareDefaults?: { thumbnailFrameNumber?: number } } };
-        setCfSettingsFrame(data.project.cloudflareDefaults?.thumbnailFrameNumber ?? 24);
-      }
-    } catch { /* keep current value */ }
-  }
-
-  async function handleSaveCfSettings() {
-    setCfSettingsError(null);
-    setCfSettingsSaving(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cloudflareDefaults: { thumbnailFrameNumber: cfSettingsFrame } }),
-      });
-      const data = await res.json() as { error?: string };
-      if (!res.ok) { setCfSettingsError(data.error ?? 'Failed to save'); return; }
-      setCfSettingsOpen(false);
-    } catch {
-      setCfSettingsError('Network error — could not save settings');
-    } finally {
-      setCfSettingsSaving(false);
-    }
-  }
 
   async function handleBulkLeaderPassPublish() {
     if (!selectedIds.size) return;
@@ -1259,13 +1271,6 @@ const { openMenu } = useContextMenu();
     } finally {
       setRetranscribeWorking(false);
     }
-  }
-
-  function handleCopyShareUrl() {
-    if (!shareResult) return;
-    navigator.clipboard.writeText(shareResult.url).catch(() => {});
-    setShareCopied(true);
-    setTimeout(() => setShareCopied(false), 2000);
   }
 
   function handleBulkDownload() {
@@ -1324,7 +1329,6 @@ const { openMenu } = useContextMenu();
               <span className="proj-upload-zone-label">
                 Drag files here or <span className="proj-upload-zone-link">click to browse</span>
               </span>
-              <span className="proj-upload-zone-hint">Drag from Explorer to register in place · or click to browse</span>
             </>
           )}
         </div>
@@ -1391,41 +1395,19 @@ const { openMenu } = useContextMenu();
               ))}
             </div>
             <div className="ma-toolbar-right">
+              {/* CF (Cloudflare defaults) gear removed per cleanup pass —
+                  defaults are still set internally; UI was unused. */}
               <button
                 type="button"
-                className="ma-shares-btn"
-                onClick={() => void handleOpenCfSettings()}
-                title="Cloudflare defaults"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3"/>
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                </svg>
-                CF
-              </button>
-              <button
-                type="button"
-                className={`ma-shares-btn${showSharesPanel ? ' ma-shares-btn--active' : ''}`}
-                onClick={() => { setShowSharesPanel((v) => !v); if (!showSharesPanel) setSelectedAsset(null); }}
-                title="Review links"
+                className={`ma-shares-btn${showHub ? ' ma-shares-btn--active' : ''}`}
+                onClick={() => { setShowHub((v) => !v); if (!showHub) setSelectedAsset(null); }}
+                title="Review links + deliveries"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                   <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                 </svg>
-                Reviews
-              </button>
-              <button
-                type="button"
-                className={`ma-shares-btn${showDeliveryPanel ? ' ma-shares-btn--active' : ''}`}
-                onClick={() => { setShowDeliveryPanel((v) => !v); if (!showDeliveryPanel) setSelectedAsset(null); }}
-                title="Delivery links"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                Delivery
+                Deliverables
               </button>
               <div className="m-view-toggle">
                 <button className={`m-view-btn${viewMode === 'list' ? ' active' : ''}`} type="button"
@@ -1468,28 +1450,13 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
-              onClick={() => {
-                const selected = assets.filter((a) => selectedIds.has(a.assetId));
-                setSardiusBatchAssets(selected);
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              Push to Sardius
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => void handleBulkShare()}
-              disabled={shareWorking}
+              onClick={handleBulkShare}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                 <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
               </svg>
-              {shareWorking ? 'Creating share…' : 'Create Share Link'}
+              Create Review Link
             </button>
             <button
               type="button"
@@ -1497,7 +1464,7 @@ const { openMenu } = useContextMenu();
               onClick={() => {
                 const selected = assets.filter((a) => selectedIds.has(a.assetId));
                 setDeliveryPending(selected);
-                setShowDeliveryPanel(true);
+                setShowHub(true);
                 setSelectedAsset(null);
               }}
             >
@@ -1506,6 +1473,21 @@ const { openMenu } = useContextMenu();
                 <line x1="12" y1="15" x2="12" y2="3"/>
               </svg>
               Create Delivery
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
+              onClick={() => {
+                const selected = assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid);
+                if (selected.length) setThumbnailBatchAssets(selected);
+              }}
+              disabled={assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid).length === 0}
+              title="Set a custom poster image as the player thumbnail for each selected Cloudflare video"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+              </svg>
+              Set Thumbnail
             </button>
             <button
               type="button"
@@ -1531,19 +1513,7 @@ const { openMenu } = useContextMenu();
               Download
             </button>
             {publishError && <span className="ma-selection-error">{publishError}</span>}
-            {shareError && <span className="ma-selection-error">{shareError}</span>}
             {retranscribeError && <span className="ma-selection-error">{retranscribeError}</span>}
-            <button
-              type="button"
-              className="ma-selection-action ma-selection-action--danger"
-              onClick={() => setConfirmBulkDelete({ deleteFile: false })}
-              disabled={bulkDeleteWorking}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-              </svg>
-              Remove Selected
-            </button>
             <button
               type="button"
               className="ma-selection-action ma-selection-action--danger"
@@ -1617,44 +1587,6 @@ const { openMenu } = useContextMenu();
 
       </div>
 
-      {/* Cloudflare project defaults modal */}
-      {cfSettingsOpen && (
-        <div className="ma-cf-settings-overlay" onClick={() => setCfSettingsOpen(false)}>
-          <div className="ma-cf-settings-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="ma-cf-settings-header">
-              <span className="ma-cf-settings-title">Cloudflare Defaults</span>
-              <button type="button" className="ma-cf-settings-close" onClick={() => setCfSettingsOpen(false)} aria-label="Close">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <div className="ma-cf-settings-body">
-              <label className="ma-cf-settings-label" htmlFor="cf-proj-thumb-frame">
-                Default thumbnail frame
-                <span className="ma-cf-settings-hint">Frame number used when pushing to Cloudflare (e.g. 24 ≈ 0.8s at 30fps, skips fade-in)</span>
-              </label>
-              <input
-                id="cf-proj-thumb-frame"
-                type="number"
-                min={1}
-                step={1}
-                className="ma-cf-settings-input"
-                value={cfSettingsFrame}
-                onChange={(e) => setCfSettingsFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              />
-              {cfSettingsError && <p className="ma-cf-settings-error">{cfSettingsError}</p>}
-            </div>
-            <div className="ma-cf-settings-footer">
-              <button type="button" className="ma-cf-settings-cancel" onClick={() => setCfSettingsOpen(false)}>Cancel</button>
-              <button type="button" className="ma-cf-settings-save" onClick={() => void handleSaveCfSettings()} disabled={cfSettingsSaving}>
-                {cfSettingsSaving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Sardius batch push modal */}
       {sardiusBatchAssets && (
         <SardiusPushModal
@@ -1662,6 +1594,16 @@ const { openMenu } = useContextMenu();
           projectId={projectId}
           onClose={() => setSardiusBatchAssets(null)}
           onPushed={() => { setSardiusBatchAssets(null); void fetchAssets(); }}
+        />
+      )}
+
+      {/* Batch "Set Thumbnail" modal */}
+      {thumbnailBatchAssets && (
+        <BatchSetThumbnailModal
+          projectId={projectId}
+          assetIds={thumbnailBatchAssets.map((a) => a.assetId)}
+          onClose={() => setThumbnailBatchAssets(null)}
+          onDone={() => { void fetchAssets(); }}
         />
       )}
 
@@ -1674,65 +1616,40 @@ const { openMenu } = useContextMenu();
         onGoToTranscript={onGoToTranscript}
       />
 
-      {/* Shares panel */}
-      <SharesPanel
+      {/* Unified Deliverables hub (Review Links + Deliveries tabs) */}
+      <DeliverablesHub
         projectId={projectId}
         assets={assets}
-        open={showSharesPanel}
-        onClose={() => setShowSharesPanel(false)}
+        open={showHub}
+        onClose={() => setShowHub(false)}
+        pendingDeliveryCreate={deliveryPending}
+        onPendingDeliveryConsumed={() => setDeliveryPending(null)}
       />
 
-      {/* Delivery panel */}
-      <DeliveryPanel
-        projectId={projectId}
-        projectName={projectName}
-        assets={assets}
-        open={showDeliveryPanel}
-        onClose={() => setShowDeliveryPanel(false)}
-        pendingCreate={deliveryPending}
-        onPendingConsumed={() => setDeliveryPending(null)}
-      />
-
-      {/* Share result modal */}
-      {shareResult && (
-        <div className="ma-share-modal-backdrop" onClick={() => setShareResult(null)} aria-hidden="true">
-          <div className="ma-share-modal" role="dialog" aria-label="Share link ready" onClick={(e) => e.stopPropagation()}>
-            <div className="ma-share-modal-header">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-              </svg>
-              <span>Share link ready</span>
-              <button type="button" className="ma-share-modal-close" onClick={() => setShareResult(null)} aria-label="Close">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <p className="ma-share-modal-desc">
-              {shareResult.count} file{shareResult.count !== 1 ? 's' : ''} added to Frame.io presentation
-              {shareResult.skipped > 0 && ` (${shareResult.skipped} skipped — not yet on Frame.io)`}.
-            </p>
-            <div className="ma-share-modal-url-row">
-              <span className="ma-share-modal-url">{shareResult.url}</span>
-              <button
-                type="button"
-                className="ma-share-modal-copy-btn"
-                onClick={handleCopyShareUrl}
-              >
-                {shareCopied ? '✓ Copied' : 'Copy link'}
-              </button>
-            </div>
-            <a
-              href={shareResult.url}
-              target="_blank"
-              rel="noreferrer"
-              className="ma-share-modal-open-link"
-            >
-              Open in Frame.io ↗
-            </a>
-          </div>
-        </div>
+      {/* Phase E: new shared DeliverableModal for the bulk "Create Review Link" path */}
+      {showDeliverableModal && (
+        <DeliverableModal
+          projectId={projectId}
+          availableAssets={assets
+            .filter((a) => selectedIds.has(a.assetId))
+            .map((a) => ({
+              assetId: a.assetId,
+              name: a.name,
+              hasFrameio: Boolean(a.frameio.assetId || a.frameio.stackId),
+            }))}
+          initiallySelectedAssetIds={[...selectedIds]}
+          defaultName={
+            selectedIds.size === 1
+              ? (assets.find((a) => selectedIds.has(a.assetId))?.name ?? '')
+              : `${selectedIds.size} clips — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+          }
+          onClose={() => setShowDeliverableModal(false)}
+          onCreated={() => {
+            // Refresh assets so any new frameio state shows up; the SharesPanel
+            // will refresh on next open (legacy mirror keeps it in sync for now).
+            void fetchAssets();
+          }}
+        />
       )}
 
       {/* Bulk delete confirm */}
@@ -1748,8 +1665,9 @@ const { openMenu } = useContextMenu();
           })()}
           confirmLabel={bulkDeleteWorking ? (confirmBulkDelete.deleteFile ? 'Deleting…' : 'Removing…') : (confirmBulkDelete.deleteFile ? 'Delete Files' : 'Remove')}
           danger
+          error={bulkDeleteError}
           onConfirm={() => void handleBulkDelete(confirmBulkDelete.deleteFile)}
-          onClose={() => setConfirmBulkDelete(null)}
+          onClose={() => { setConfirmBulkDelete(null); setBulkDeleteError(null); }}
         />
       )}
 

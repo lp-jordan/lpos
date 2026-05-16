@@ -284,7 +284,6 @@ export function ScriptsTab({ projectId, readOnly = false }: Readonly<Props>) {
               <span className="proj-upload-zone-label">
                 Drag files here or <span className="proj-upload-zone-link">click to browse</span>
               </span>
-              <span className="proj-upload-zone-hint">.docx · .pdf · .txt</span>
             </>
           )}
         </div>

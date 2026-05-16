@@ -145,9 +145,18 @@ export class SlateService {
   private playbackConnection: PlaybackConnectionState = createDefaultPlaybackConnectionState({ host: this.config.atem.switcherIp });
   private cqMixerState: CqMixerState = createDefaultCqMixerState(this.config.mixer.ip);
   private atemFilenameBase = '';
+  // Tracks the previous bridge `connected` value so refreshAtemState can detect
+  // false→true transitions and push the project-derived filename to the
+  // switcher. The initial setRecordingFilename from loadProject() at server
+  // startup typically fires before the ATEM is connected and silently drops.
+  private atemPreviousConnected = false;
   private atemQueue = new SerialTaskQueue();
   private atemBridge: AtemBridgeClient;
   private travelModeActive = false;
+  // In-memory only — does not persist across restarts. When true, the inner
+  // atem-connection instance has been torn down to silence its reconnect loop
+  // while the ATEM is off-network. Users toggle this from the gear menu.
+  private atemPaused = false;
   private audioMonitor: SlateAudioMonitorService;
   private cqMixer: CqMixerClient;
   private atemInterval: NodeJS.Timeout | null = null;
@@ -259,6 +268,7 @@ export class SlateService {
     this.emitAtemState(socket);
     this.emitAtemProfiles(socket);
     this.emitTravelMode(socket);
+    this.emitAtemPaused(socket);
     this.emitAudioMonitorState(socket);
     this.emitPlaybackConnectionState(socket);
     this.emitCqMixerState(socket);
@@ -368,6 +378,7 @@ export class SlateService {
     socket.on('atemConnect', async (payload: { ipAddress?: string }) => {
       const ip = (payload?.ipAddress ?? '').trim();
       if (!ip) { this.emitAtemToast(socket, 'error', 'Enter the ATEM IP address first'); return; }
+      if (this.atemPaused) { this.emitAtemToast(socket, 'error', 'ATEM reconnect is paused — resume from the gear menu first'); return; }
       try {
         await this.executeAtemCommand(socket, 'Connect', async () => {
           this.config.atem.switcherIp = ip;
@@ -388,6 +399,7 @@ export class SlateService {
       const url = (payload?.bridgeUrl ?? '').trim();
       const ip = (payload?.atemIp ?? '').trim();
       if (!url) { this.emitAtemToast(socket, 'error', 'Enter the remote bridge URL first'); return; }
+      if (this.atemPaused) { this.emitAtemToast(socket, 'error', 'ATEM reconnect is paused — resume from the gear menu first'); return; }
       try {
         await this.atemBridge.enableRemote(url);
         this.travelModeActive = true;
@@ -406,6 +418,7 @@ export class SlateService {
     });
 
     socket.on('atemDisableTravelMode', async (payload: { atemIp?: string }) => {
+      if (this.atemPaused) { this.emitAtemToast(socket, 'error', 'ATEM reconnect is paused — resume from the gear menu first'); return; }
       const ip = (payload?.atemIp ?? '').trim();
       this.atemBridge.disableRemote();
       this.travelModeActive = false;
@@ -421,6 +434,48 @@ export class SlateService {
           }).catch(() => {});
         })();
       }
+    });
+
+    socket.on('atemPause', async () => {
+      if (this.atemPaused) return;
+      // Flip the flag and notify clients synchronously so the UI responds
+      // immediately, then run the disconnect OUTSIDE the serial atemQueue.
+      // Pausing is a "stop the world" action — it must not wait behind a
+      // 30-second Auto-connect or Resume sitting in the queue. The flag itself
+      // is what gates future connect handlers, so the reconnect-spam stop is
+      // in effect the moment we emit; the disconnect call is cleanup.
+      this.atemPaused = true;
+      this.emitAtemPaused();
+      try {
+        await this.atemBridge.disconnect();
+        await this.refreshAtemState();
+        this.emitAtemToast(socket, 'success', 'ATEM reconnect paused');
+      } catch (err) {
+        // Don't revert the flag — the user's intent is to stop the spam, which
+        // is already enforced by the paused gate on atemConnect / travel-mode
+        // handlers. A failed disconnect just means the inner atem-connection
+        // instance was already gone, which is the desired end state anyway.
+        this.log('ATEM pause: bridge disconnect failed', (err as Error).message);
+      }
+    });
+
+    socket.on('atemResume', async () => {
+      if (!this.atemPaused) return;
+      this.atemPaused = false;
+      this.emitAtemPaused();
+      const ip = this.config.atem.switcherIp.trim();
+      if (!ip) {
+        this.emitAtemToast(socket, 'info', 'ATEM reconnect resumed — no IP configured');
+        return;
+      }
+      try {
+        await this.executeAtemCommand(socket, 'Resume', () => this.atemBridge.connect(ip));
+        if (this.atemState.connected) {
+          this.emitAtemToast(socket, 'success', `Reconnected to ATEM at ${ip}`);
+        } else {
+          this.emitAtemToast(socket, 'info', `Reconnecting to ${ip}… auto-reconnect is active`);
+        }
+      } catch (err) { this.log('ATEM resume failed', (err as Error).message); }
     });
 
     socket.on('atemSaveProfile', (payload: { name?: string; ip?: string }) => {
@@ -496,7 +551,12 @@ export class SlateService {
     });
 
     socket.on('atemStartRecording', async (payload?: { filename?: string }) => {
-      const filename = ((payload?.filename ?? '') || this.atemFilenameBase).trim();
+      // Re-derive from the current project + today's date so the filename
+      // stays correct across midnight, bridge restarts, and any case where
+      // atemFilenameBase got stale. Caller-supplied payload still wins so a
+      // manually-set filename via the gear menu isn't silently overwritten.
+      const derived = this.deriveFilenameFromCurrentProject();
+      const filename = ((payload?.filename ?? '') || derived || this.atemFilenameBase).trim();
       if (!filename) { this.emitAtemToast(socket, 'error', 'Recording filename is required'); return; }
       if (this.atemState.connected && !this.atemState.recording.hasDrive) {
         this.emitAtemToast(socket, 'error', 'No drive connected to ATEM — attach a USB drive before recording');
@@ -574,6 +634,17 @@ export class SlateService {
     this.log(`Loaded project ${projectId} (${this.notes.length} notes)`);
   }
 
+  // Compute the recording filename from the currently-loaded project + today's
+  // date. Returns '' if no project is loaded or the project has been deleted.
+  // Called on every record-start so a slate process that's been running for
+  // days still tags recordings with today's date.
+  private deriveFilenameFromCurrentProject(): string {
+    if (!this.currentProjectId) return '';
+    const project = this.projectStore.getById(this.currentProjectId);
+    if (!project) return '';
+    return generateRecordingBaseName(project.name, new Date(), project.clientName);
+  }
+
   private projectLoadedPayload() {
     return { projectId: this.currentProjectId, notes: this.notes };
   }
@@ -607,6 +678,10 @@ export class SlateService {
 
   private emitTravelMode(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
     target.emit('travelMode', { active: this.travelModeActive, bridgeUrl: this.config.atem.travelBridgeUrl });
+  }
+
+  private emitAtemPaused(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
+    target.emit('atemPaused', { paused: this.atemPaused });
   }
 
   private emitAtemState(target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')) {
@@ -651,7 +726,26 @@ export class SlateService {
       }
       const bridgeState = await this.atemBridge.getState();
       this.atemState = { ...createDefaultAtemState(), ...bridgeState, bridgeAvailable: true, switcherIp: bridgeState.switcherIp || this.config.atem.switcherIp };
-      if (!this.atemFilenameBase) this.atemFilenameBase = this.atemState.recording.filename || '';
+      // Back-fill the local filename cache only if we have no project loaded.
+      // When a project IS loaded, prefer the project-derived value over
+      // whatever stale name the switcher is reporting from a previous shoot.
+      if (!this.atemFilenameBase) {
+        this.atemFilenameBase = this.deriveFilenameFromCurrentProject() || this.atemState.recording.filename || '';
+      }
+      // Detect false→true ATEM connection transition. Push the
+      // project-derived filename to the switcher so the auto-set from
+      // loadProject() (which silently dropped if it fired pre-connect) lands
+      // as soon as the connection comes up.
+      if (this.atemState.connected && !this.atemPreviousConnected) {
+        const derived = this.deriveFilenameFromCurrentProject();
+        if (derived) {
+          this.atemFilenameBase = derived;
+          this.atemBridge.setRecordingFilename(derived).catch((err) =>
+            this.log('ATEM filename push on reconnect skipped', (err as Error).message)
+          );
+        }
+      }
+      this.atemPreviousConnected = this.atemState.connected;
       this.emitAtemState();
       return this.atemState;
     } catch (err) {

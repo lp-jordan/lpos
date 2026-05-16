@@ -512,12 +512,15 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
             <AtemPanel
               atemState={slate.atemState}
               travelMode={slate.travelMode}
+              atemPaused={slate.atemPaused}
               settingsOpen={atemSettingsOpen}
               onSettingsToggle={() => setAtemSettingsOpen((v) => !v)}
               onConnect={slate.atemConnect}
               onDisconnect={slate.atemDisconnect}
               onEnableTravelMode={slate.atemEnableTravelMode}
               onDisableTravelMode={slate.atemDisableTravelMode}
+              onPause={slate.atemPause}
+              onResume={slate.atemResume}
               onSetFilename={slate.atemSetFilename}
               onSetPreview={slate.atemSetPreview}
               onSetProgram={slate.atemSetProgram}

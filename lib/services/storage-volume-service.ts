@@ -242,3 +242,15 @@ export function resolveProjectMediaStorageDir(projectId: string): string {
   }
   return path.join(base, 'media');
 }
+
+export function resolveProjectPhotosStorageDir(projectId: string): string {
+  const decision = getStorageAllocationDecision();
+  if (!decision.active) {
+    invalidateStorageCache();
+    throw new Error('No eligible LPOS storage drive is available. Add or enable a writable volume in Storage Settings.');
+  }
+
+  const photosDir = path.join(decision.active.managedRoot, 'projects', projectId, 'photos');
+  fs.mkdirSync(path.join(photosDir, '.thumbs'), { recursive: true });
+  return photosDir;
+}

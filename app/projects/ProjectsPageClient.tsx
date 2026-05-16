@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { clientProjectsHref, projectHref } from '@/lib/urls/project-url';
 import { useProjects } from '@/hooks/useProjects';
 import { useClientOwners } from '@/hooks/useClientOwners';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
@@ -138,6 +139,8 @@ interface ProjectsPageClientProps {
   initialStats: Record<string, ClientStats>;
   initialCurrentUser: UserSummary | null;
   initialPromotedClients: string[];
+  /** When set, render the per-client drill-in for this client. Driven by URL: /projects/clients/[clientName]. */
+  activeClient?: string | null;
 }
 
 export function ProjectsPageClient({
@@ -147,9 +150,9 @@ export function ProjectsPageClient({
   initialStats,
   initialCurrentUser,
   initialPromotedClients,
+  activeClient = null,
 }: ProjectsPageClientProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { projects } = useProjects(initialProjects);
   const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners(initialOwners, initialUsers);
   const currentUser = initialCurrentUser;
@@ -159,13 +162,6 @@ export function ProjectsPageClient({
 
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
-  const [activeClient, setActiveClient] = useState<string | null>(null);
-
-  // Restore client context when navigating back from a project page.
-  useEffect(() => {
-    const client = searchParams.get('client');
-    if (client) setActiveClient(client);
-  }, [searchParams]);
   const [showArchived, setShowArchived] = useState(false);
 
   // Selection
@@ -254,8 +250,7 @@ export function ProjectsPageClient({
     } else if (selected.size > 0) {
       toggleSelect(project.projectId, e);
     } else {
-      const clientParam = project.clientName ? `?client=${encodeURIComponent(project.clientName)}` : '';
-      router.push(`/projects/${project.projectId}${clientParam}`);
+      router.push(projectHref(project.clientName, project.projectId));
     }
   }
 
@@ -312,7 +307,7 @@ export function ProjectsPageClient({
         ...toRename.map((p) => apiPatch(p.projectId, { clientName: value })),
         renameClient(renaming.currentName, value),
       ]);
-      if (activeClient === renaming.currentName) setActiveClient(value);
+      if (activeClient === renaming.currentName) router.push(clientProjectsHref(value));
     } else {
       await apiPatch(renaming.id, { name: value });
     }
@@ -325,7 +320,7 @@ export function ProjectsPageClient({
       type: 'item',
       label: 'Open',
       icon: <IconOpen />,
-      onClick: () => router.push(`/projects/${project.projectId}`),
+      onClick: () => router.push(projectHref(project.clientName, project.projectId)),
     },
     {
       type: 'item',
@@ -408,7 +403,7 @@ export function ProjectsPageClient({
         };
 
     return [
-      { type: 'item', label: 'Open',          icon: <IconOpen />,   onClick: () => { setActiveClient(clientName); setSearch(''); } },
+      { type: 'item', label: 'Open',          icon: <IconOpen />,   onClick: () => router.push(clientProjectsHref(clientName)) },
       { type: 'item', label: 'Rename Client', icon: <IconPencil />, onClick: () => setRenaming({ id: '', currentName: clientName, isClient: true }) },
       { type: 'separator' },
       ...ownerEntries,
@@ -428,7 +423,7 @@ export function ProjectsPageClient({
           <button
             className="proj-back-btn"
             type="button"
-            onClick={() => { setActiveClient(null); setSearch(''); clearSelection(); }}
+            onClick={() => router.push('/projects')}
             aria-label="Back to clients"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -578,10 +573,12 @@ export function ProjectsPageClient({
         )}
         {taskProject && (
           <NewTaskModal
-            projects={activeProjects}
+            clientNames={Array.from(new Set(activeProjects.map((p) => p.clientName).filter(Boolean)))}
             users={users}
             currentUserId={currentUser?.id ?? ''}
-            defaultProjectId={taskProject.projectId}
+            taskType="editing"
+            defaultClientName={taskProject.clientName ?? undefined}
+            lockedClient
             onCreated={() => setTaskProject(null)}
             onClose={() => setTaskProject(null)}
           />
@@ -660,7 +657,7 @@ export function ProjectsPageClient({
                 mediaCount={stats?.mediaCount ?? 0}
                 scriptCount={stats?.scriptCount ?? 0}
                 owner={owner}
-                onClick={() => { setActiveClient(client); setSearch(''); }}
+                onClick={() => router.push(clientProjectsHref(client))}
                 onContextMenu={(e) => { clientMenu.open(e, client); }}
               />
             );
@@ -680,7 +677,7 @@ export function ProjectsPageClient({
                 clientName={client}
                 count={count}
                 owner={owner}
-                onClick={() => { setActiveClient(client); setSearch(''); }}
+                onClick={() => router.push(clientProjectsHref(client))}
                 onContextMenu={(e) => { clientMenu.open(e, client); }}
               />
             );
@@ -712,10 +709,12 @@ export function ProjectsPageClient({
       )}
       {taskProject && (
         <NewTaskModal
-          projects={activeProjects}
+          clientNames={Array.from(new Set(activeProjects.map((p) => p.clientName).filter(Boolean)))}
           users={users}
           currentUserId=""
-          defaultProjectId={taskProject.projectId}
+          taskType="editing"
+          defaultClientName={taskProject.clientName ?? undefined}
+          lockedClient
           onCreated={() => setTaskProject(null)}
           onClose={() => setTaskProject(null)}
         />

@@ -29,6 +29,7 @@ import { formatTimecode } from '@/lib/utils/time';
 
 type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
+import { DeliverableModal } from '@/components/projects/DeliverableModal';
 
 // ── Theater mode error boundary ────────────────────────────────────────────
 // VideoTheaterMode renders untrusted comment text and does live DOM mutations
@@ -178,7 +179,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setName(asset.name);
     setDescription(asset.description);
     setMetaDirty(false);
-    setShareError(null);
     setShowLeaderPassErrorDetails(false);
     setRenamingTitle(false);
   }, [asset]);
@@ -221,9 +221,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   // ── Frame.io ───────────────────────────────────────────────────────────────
   const [fioUploading, setFioUploading]       = useState(false);
   const [fioError, setFioError]               = useState<string | null>(null);
-  const [copied, setCopied]                   = useState(false);
-  const [shareGenerating, setShareGenerating]   = useState(false);
-  const [shareError, setShareError]             = useState<string | null>(null);
+  const [copiedShareId, setCopiedShareId]     = useState<string | null>(null);
+  // Phase E: shareGenerating + shareError dropped — DeliverableModal owns those.
+  const [showDeliverableModal, setShowDeliverableModal] = useState(false);
   const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
   const [deletingShareId,   setDeletingShareId]   = useState<string | null>(null);
 
@@ -356,10 +356,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
-  function handleCopyLink(url: string) {
+  function handleCopyLink(url: string, shareId: string) {
     navigator.clipboard.writeText(url).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedShareId(shareId);
+    setTimeout(() => setCopiedShareId((cur) => (cur === shareId ? null : cur)), 2000);
   }
 
   function handleCopyEmbedUrl(url: string) {
@@ -387,12 +387,23 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
+  // Phase E: reads from the new /deliverables endpoint and shape-maps to the
+  // legacy AssetShareLink shape so the existing dropdown JSX keeps working.
+  // The downstream-display fields we use are shareId, shareUrl, name, createdAt —
+  // all present in both shapes.
   const fetchShareLinks = useCallback(async (assetId: string) => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/media/${assetId}/shares`);
+      const res = await fetch(`/api/projects/${projectId}/media/${assetId}/deliverables`);
       if (!res.ok) return;
-      const data = await res.json() as { shares: AssetShareLink[] };
-      setExistingShareLinks(data.shares);
+      const data = await res.json() as {
+        deliverables: Array<{ deliverableId: string; name: string; shortUrl: string; createdAt: string }>;
+      };
+      setExistingShareLinks(data.deliverables.map((d) => ({
+        shareId: d.deliverableId,
+        shareUrl: d.shortUrl,
+        name: d.name,
+        createdAt: d.createdAt,
+      })));
     } catch { /* ignore */ }
   }, [projectId]);
 
@@ -400,40 +411,20 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     if (asset?.assetId) void fetchShareLinks(asset.assetId);
   }, [asset?.assetId, fetchShareLinks]);
 
-  async function handleGenerateShareLink() {
+  function handleGenerateShareLink() {
     if (!asset) return;
-    setShareGenerating(true);
-    setShareError(null);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/media/share`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ assetIds: [asset.assetId], name: `Review — ${asset.name}` }),
-      });
-      const data = await res.json() as { shareUrl?: string; shareId?: string; error?: string };
-      if (!res.ok) { setShareError(data.error ?? 'Failed to generate share link'); return; }
-      if (data.shareUrl && data.shareId) {
-        const link: AssetShareLink = {
-          shareId:   data.shareId,
-          shareUrl:  data.shareUrl,
-          name:      `Review — ${asset.name}`,
-          createdAt: new Date().toISOString(),
-        };
-        setExistingShareLinks((prev) => [...prev.filter((l) => l.shareId !== data.shareId), link]);
-      }
-    } catch {
-      setShareError('Network error — could not generate share link');
-    } finally {
-      setShareGenerating(false);
-    }
+    setShowDeliverableModal(true);
   }
 
+  // Phase E: shareId here is actually a deliverableId (we reshaped the response
+  // upstream). Deleting goes through the unified /deliverables endpoint, which
+  // also deletes the underlying Frame.io share so the link stops resolving.
   async function handleDeleteShareLink(shareId: string) {
     if (!asset) return;
     setDeletingShareId(shareId);
     try {
       const res = await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/shares?shareId=${encodeURIComponent(shareId)}`,
+        `/api/projects/${projectId}/deliverables/${shareId}`,
         { method: 'DELETE' },
       );
       if (res.ok) setExistingShareLinks((prev) => prev.filter((l) => l.shareId !== shareId));
@@ -686,17 +677,21 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 {asset.name !== asset.originalFilename && (
                   <span className="mad-header-filename">{asset.originalFilename}</span>
                 )}
-                {(asset.leaderpass.status === 'preparing' || asset.cloudflare.status === 'uploading' || asset.cloudflare.status === 'processing') && (
-                  <div className="mad-uploading-row">
-                    <span className="mad-spinner" aria-hidden="true" />
-                    <span className="mad-uploading-label">
-                      {asset.cloudflare.status === 'processing'
-                        ? 'Cloudflare is processing the asset…'
-                        : `Uploading to Cloudflare… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
-                    </span>
-                  </div>
-                )}
-                {asset.cloudflare.status !== 'none' && (() => {
+                {/* ── Cloudflare / LeaderPass status row ── */}
+                {(() => {
+                  const cfStatus   = asset.cloudflare.status;
+                  const lpStatus   = asset.leaderpass.status;
+                  const isStale    = asset.cloudflare.isStale;
+                  const currentVer = asset.frameio.version;
+                  const publishedVer = asset.cloudflare.versionNumber;
+                  const isActive   = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
+                  const isPushable = !isActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || isStale);
+                  const isReady    = cfStatus === 'ready';
+                  const hasState   = cfStatus !== 'none';
+                  const staleTooltip = isStale && publishedVer != null
+                    ? `Cloudflare reflects v${publishedVer}; current LPOS version is v${currentVer}. Re-push to update.`
+                    : undefined;
+
                   // Derive the embed src from the HLS URL (strip manifest path, add /iframe).
                   // posterUrl will be appended when available (Platform page sets it).
                   const embedBase = asset.cloudflare.hlsUrl
@@ -705,26 +700,77 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   const embedSrc = embedBase
                     ? `${embedBase}/iframe${asset.cloudflare.posterUrl ? `?poster=${encodeURIComponent(asset.cloudflare.posterUrl)}` : ''}`
                     : null;
-                  const isReady = asset.cloudflare.status === 'ready';
 
                   return (
                     <>
-                      <div className="mad-info-grid">
-                        <span className="mad-info-label">Cloudflare</span>
-                        <span className="mad-info-value">{CLOUDFLARE_STREAM_STATUS_LABEL[asset.cloudflare.status]}</span>
-                        <span className="mad-info-label">Stream UID</span>
-                        <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
-                        {asset.leaderpass.playbackUrl && (
-                          <>
-                            <span className="mad-info-label">Preview</span>
-                            <span className="mad-info-value">
-                              <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
-                                Open Cloudflare preview ↗
-                              </a>
-                            </span>
-                          </>
-                        )}
-                      </div>
+                      {/* Push button — shown when no upload is in flight */}
+                      {isPushable && (
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => void handlePushToLeaderPass()}
+                          disabled={lpPublishing || !asset.filePath}
+                          title={!asset.filePath ? 'No local file — cannot upload' : undefined}
+                        >
+                          {lpPublishing
+                            ? 'Queuing…'
+                            : isStale
+                              ? `Push v${currentVer} to Cloudflare`
+                              : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare Push' : 'Push to Cloudflare'}
+                        </button>
+                      )}
+
+                      {/* In-progress spinner + force-reset escape hatch */}
+                      {isActive && (
+                        <div className="mad-uploading-row">
+                          <span className="mad-spinner" aria-hidden="true" />
+                          <span className="mad-uploading-label">
+                            {cfStatus === 'processing'
+                              ? 'Cloudflare is processing the asset…'
+                              : `Uploading to Cloudflare… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
+                          </span>
+                          <button
+                            type="button"
+                            className="mad-lp-force-reset"
+                            onClick={() => void handleResetLeaderPass()}
+                            disabled={lpResetting}
+                            title="Force-reset if the upload is stuck (e.g. after a server restart)"
+                          >
+                            {lpResetting ? 'Resetting…' : 'Force reset'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Info grid — shown whenever there is any CF state */}
+                      {hasState && (
+                        <div className="mad-info-grid">
+                          <span className="mad-info-label">Cloudflare</span>
+                          <span className="mad-info-value">
+                            {CLOUDFLARE_STREAM_STATUS_LABEL[cfStatus]}
+                            {isStale && publishedVer != null && (
+                              <span
+                                className="mad-cf-stale-dot"
+                                title={staleTooltip}
+                                aria-label={staleTooltip}
+                              >
+                                v{publishedVer}
+                              </span>
+                            )}
+                          </span>
+                          <span className="mad-info-label">Stream UID</span>
+                          <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
+                          {asset.leaderpass.playbackUrl && (
+                            <>
+                              <span className="mad-info-label">Preview</span>
+                              <span className="mad-info-value">
+                                <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
+                                  Open Cloudflare preview ↗
+                                </a>
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      )}
 
                       {isReady && embedSrc && (
                         <div className="mad-cf-embed-block">
@@ -772,6 +818,20 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           {cfThumbError && <span className="mad-cf-thumb-error">{cfThumbError}</span>}
                         </div>
                       )}
+
+                      {/* Reset button for ready/awaiting_platform — re-push a new version */}
+                      {(isReady || lpStatus === 'awaiting_platform') && (
+                        <div className="mad-lp-action-row">
+                          <button
+                            type="button"
+                            className="mad-action-btn"
+                            onClick={() => void handleResetLeaderPass()}
+                            disabled={lpResetting}
+                          >
+                            {lpResetting ? 'Resetting…' : 'Reset & Re-push'}
+                          </button>
+                        </div>
+                      )}
                     </>
                   );
                 })()}
@@ -806,6 +866,26 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   );
                 })()}
               </div>
+              <button
+                type="button"
+                className="mad-close-btn"
+                onClick={async () => {
+                  const url = `${window.location.origin}/projects/${projectId}?assetId=${asset.assetId}`;
+                  try {
+                    await navigator.clipboard.writeText(url);
+                    toast({ id: `copy-link:${asset.assetId}`, kind: 'publish', tone: 'success', title: 'Link copied', body: 'Share this URL with a teammate to open this asset.' });
+                  } catch {
+                    toast({ id: `copy-link-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard. Copy manually from the address bar.' });
+                  }
+                }}
+                aria-label="Copy link to this asset"
+                title="Copy link to this asset"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+                  <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+                </svg>
+              </button>
               <button type="button" className="mad-close-btn" onClick={onClose} aria-label="Close">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -876,14 +956,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                 <button
                                   type="button"
                                   className="mad-fio-menu-item"
-                                  onClick={() => { void handleGenerateShareLink(); }}
-                                  disabled={shareGenerating}
+                                  onClick={() => { setFioDropdownOpen(false); handleGenerateShareLink(); }}
                                 >
                                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                                     <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                                   </svg>
-                                  {shareGenerating ? 'Generating…' : 'New review link'}
+                                  New review link
                                 </button>
                                 {existingShareLinks.length > 0 && <div className="mad-fio-menu-divider" />}
                                 {existingShareLinks.map((link) => (
@@ -892,10 +971,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                     <button
                                       type="button"
                                       className="mad-fio-menu-share-btn"
-                                      onClick={() => handleCopyLink(link.shareUrl)}
+                                      onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
                                       title="Copy link"
                                     >
-                                      {copied ? '✓' : (
+                                      {copiedShareId === link.shareId ? '✓' : (
                                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                                           <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
@@ -919,7 +998,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                     </button>
                                   </div>
                                 ))}
-                                {shareError && <p className="mad-fio-menu-error">{shareError}</p>}
                               </div>
                             </>
                           )}
@@ -1377,6 +1455,28 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           </>
         )}
       </aside>
+
+      {/* Phase E: shared deliverable modal for the per-asset "New review link" entry point */}
+      {showDeliverableModal && asset && (
+        <DeliverableModal
+          projectId={projectId}
+          availableAssets={[{
+            assetId: asset.assetId,
+            name: asset.name,
+            hasFrameio: Boolean(asset.frameio.assetId || asset.frameio.stackId),
+          }]}
+          initiallySelectedAssetIds={[asset.assetId]}
+          defaultName={`Review — ${asset.name}`}
+          onClose={() => setShowDeliverableModal(false)}
+          onCreated={() => {
+            // Refetch the asset's share link list so the new one appears in
+            // the dropdown without waiting for a panel close+reopen. The
+            // legacy mirror in deliverable-publish.ts writes asset_share_links
+            // so this fetch will see the new row.
+            void fetchShareLinks(asset.assetId);
+          }}
+        />
+      )}
     </>
   );
 }

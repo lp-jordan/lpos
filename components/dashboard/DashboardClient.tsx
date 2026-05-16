@@ -7,6 +7,7 @@ import type { Task } from '@/lib/models/task';
 import type { ProjectNote } from '@/lib/models/project-note';
 import type { UserSummary } from '@/lib/models/user';
 import { TaskBoard } from '@/components/tasks/TaskBoard';
+import { ActivityStrip } from '@/components/dashboard/ActivityStrip';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -297,8 +298,13 @@ export function DashboardClient({
   return (
     <div className="page-stack">
       <div className="dashboard-header">
-        <h1 className="dashboard-title">My Dashboard</h1>
-        <p className="dashboard-subtitle">Welcome back, {firstName}.</p>
+        <div className="dashboard-header-titles">
+          <h1 className="dashboard-title">My Dashboard</h1>
+          <p className="dashboard-subtitle">Welcome back, {firstName}.</p>
+        </div>
+        <ActivityStrip
+          projectMap={new Map(allProjects.map((p) => [p.projectId, p.name]))}
+        />
       </div>
 
       {/* Primary workspace: full-width Kanban board */}

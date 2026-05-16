@@ -504,3 +504,52 @@ export async function deleteCloudflareVideo(uid: string): Promise<void> {
     throw new Error(body || `Cloudflare Stream delete failed (${response.status})`);
   }
 }
+
+export interface CloudflareVideoSummary {
+  uid: string;
+  status: string;
+  created: string | null;
+  meta: Record<string, unknown> | null;
+  /** Cloudflare's "creator" field — we set this to the LPOS assetId (truncated to 64 chars) on upload */
+  creator: string | null;
+}
+
+/**
+ * Lists all videos in the account. Pages until the result count is < page size.
+ * Used by the orphan reconciler — do NOT call on a hot path.
+ */
+export async function listCloudflareVideos(): Promise<CloudflareVideoSummary[]> {
+  const config = getConfig();
+  const collected: CloudflareVideoSummary[] = [];
+  const pageSize = 1000;
+  let before: string | null = null;
+
+  // Cloudflare's Stream list endpoint paginates via `before` (a timestamp) — see docs.
+  // We stop when a page returns fewer items than the page size.
+  // Hard cap of 50 pages so a misbehaving API doesn't spin forever.
+  for (let page = 0; page < 50; page += 1) {
+    const url = new URL(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream`);
+    url.searchParams.set('limit', String(pageSize));
+    if (before) url.searchParams.set('before', before);
+
+    const response = await fetch(url.toString(), { method: 'GET', headers: authHeaders(config) });
+    const result = await parseCloudflareResponse<Array<{ uid: string; status?: { state?: string }; created?: string; meta?: Record<string, unknown>; creator?: string }>>(response);
+
+    for (const v of result) {
+      collected.push({
+        uid: v.uid,
+        status: v.status?.state ?? 'unknown',
+        created: v.created ?? null,
+        meta: v.meta ?? null,
+        creator: v.creator ?? null,
+      });
+    }
+
+    if (result.length < pageSize) return collected;
+    const oldest = result[result.length - 1].created;
+    if (!oldest || oldest === before) return collected;
+    before = oldest;
+  }
+
+  return collected;
+}

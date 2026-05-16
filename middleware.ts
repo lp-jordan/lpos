@@ -35,8 +35,11 @@ function isGuestAllowed(pathname: string, method: string): boolean {
   if (pathname.startsWith('/api/presentation/')) return true;
   if (pathname.startsWith('/api/studio/lighting')) return true;
   if (pathname.startsWith('/api/studio/wled')) return true;
+  // Old shape (handled by redirect shim, but middleware runs first — must allow)
   if (/^\/projects\/[^/]+\/scripts$/.test(pathname)) return true;
-  // Script upload: allow GET (list) and POST (upload) but not DELETE
+  // New shape: /projects/clients/<clientName>/<projectId>/scripts
+  if (/^\/projects\/clients\/[^/]+\/[^/]+\/scripts$/.test(pathname)) return true;
+  // Script upload API: allow GET (list) and POST (upload) but not DELETE
   if (/^\/api\/projects\/[^/]+\/scripts$/.test(pathname) && (method === 'GET' || method === 'POST')) return true;
   return false;
 }

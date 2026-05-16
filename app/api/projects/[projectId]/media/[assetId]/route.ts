@@ -9,6 +9,7 @@ import { deleteFrameioFile } from '@/lib/services/frameio';
 import { getTranscripterService } from '@/lib/services/container';
 import { deleteTranscriptsByAsset } from '@/lib/transcripts/store';
 import { deleteCloudflareVideo, isCloudflareStreamConfigured } from '@/lib/services/cloudflare-stream';
+import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -69,11 +70,38 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     if (!asset) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     // ── Cloudflare Stream deletion ─────────────────────────────────────────
+    // Best-effort with one retry. If both attempts fail, record the UID as an
+    // orphan so the user can purge it manually from /settings instead of it
+    // silently leaking storage on Cloudflare forever. The daily reconciler
+    // would eventually catch it too, but recording here surfaces it within
+    // 24h × (sweep interval) seconds rather than waiting for the next sweep.
     const cfUid = asset.cloudflare?.uid;
     if (cfUid && isCloudflareStreamConfigured()) {
-      // Best-effort: don't let a Cloudflare error block local cleanup
-      try { await deleteCloudflareVideo(cfUid); } catch (err) {
-        console.warn(`[asset-delete] failed to delete Cloudflare video uid=${cfUid}:`, err);
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          await deleteCloudflareVideo(cfUid);
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          console.warn(`[asset-delete] failed to delete Cloudflare video uid=${cfUid} (attempt ${attempt}):`, lastErr);
+        }
+      }
+      if (lastErr) {
+        try {
+          recordOrphan({
+            uid: cfUid,
+            assetId,
+            projectId,
+            reason: 'delete_failed',
+            attempts: 2,
+            lastError: lastErr,
+          });
+          console.warn(`[asset-delete] recorded uid=${cfUid} as Cloudflare orphan for manual purge`);
+        } catch (recordErr) {
+          console.error(`[asset-delete] failed to record orphan uid=${cfUid}:`, recordErr);
+        }
       }
     }
 
@@ -95,8 +123,13 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     }
 
     // ── Cancel in-progress transcription and delete all completed transcripts
-    getTranscripterService().cancelByAsset(assetId);
-    deleteTranscriptsByAsset(projectId, assetId);
+    // Both calls are best-effort: a transcripter hiccup (e.g. service not yet
+    // initialised, no transcripts on disk) must NOT 500 the whole delete and
+    // strand the asset half-removed. Log + continue.
+    try { getTranscripterService().cancelByAsset(assetId); }
+    catch (err) { console.warn(`[asset-delete] cancelByAsset failed for ${assetId}:`, err); }
+    try { deleteTranscriptsByAsset(projectId, assetId); }
+    catch (err) { console.warn(`[asset-delete] deleteTranscriptsByAsset failed for ${assetId}:`, err); }
 
     // ── Local registry + optional disk file ───────────────────────────────
     const removed = removeAsset(projectId, assetId);

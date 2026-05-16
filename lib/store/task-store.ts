@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { Task, TaskPriority } from '@/lib/models/task';
-import type { TaskPhase } from '@/lib/models/task-phase';
+import type { TaskType } from '@/lib/models/task-phase';
 import { getCoreDb, withTransaction } from './core-db';
 
 interface TaskRow {
   task_id: string;
   description: string;
-  project_id: string;
-  client_name: string | null;
-  phase: string;
+  client_name: string;
+  task_type: string;
+  category: string | null;
   priority: string;
   status: string;
-  notes: string | null;
   created_by: string;
   created_at: string;
   completed_at: string | null;
@@ -26,12 +25,11 @@ function rowToTask(row: TaskRow, assignedTo: string[]): Task {
   return {
     taskId: row.task_id,
     description: row.description,
-    projectId: row.project_id,
-    clientName: row.client_name ?? null,
-    phase: row.phase as TaskPhase,
+    clientName: row.client_name,
+    taskType: row.task_type as TaskType,
+    category: row.category ?? null,
     priority: row.priority as TaskPriority,
     status: row.status,
-    notes: row.notes ?? null,
     createdBy: row.created_by,
     assignedTo,
     createdAt: row.created_at,
@@ -86,25 +84,25 @@ export class TaskStore {
 
   create(input: {
     description: string;
-    projectId: string;
-    clientName?: string | null;
-    phase: TaskPhase;
+    clientName?: string;
+    taskType: TaskType;
+    category?: string | null;
     priority?: TaskPriority;
     status?: string;
-    notes?: string | null;
     createdBy: string;
     assignedTo?: string[];
   }): Task {
     const db = getCoreDb();
+    // Category only applies to Platform tasks; ignore any value passed for Editing.
+    const category = input.taskType === 'platform' ? (input.category?.trim() || null) : null;
     const task: Task = {
       taskId: randomUUID(),
       description: input.description.trim(),
-      projectId: input.projectId,
-      clientName: input.clientName ?? null,
-      phase: input.phase,
+      clientName: input.clientName?.trim() || 'General',
+      taskType: input.taskType,
+      category,
       priority: input.priority ?? 'medium',
       status: input.status ?? 'not_started',
-      notes: input.notes ?? null,
       createdBy: input.createdBy,
       assignedTo: input.assignedTo?.length ? input.assignedTo : [input.createdBy],
       createdAt: new Date().toISOString(),
@@ -112,9 +110,9 @@ export class TaskStore {
 
     withTransaction(db, () => {
       db.prepare(
-        `INSERT INTO tasks (task_id, description, project_id, client_name, phase, priority, status, notes, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(task.taskId, task.description, task.projectId, task.clientName, task.phase, task.priority, task.status, task.notes, task.createdBy, task.createdAt);
+        `INSERT INTO tasks (task_id, description, client_name, task_type, category, priority, status, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(task.taskId, task.description, task.clientName, task.taskType, task.category, task.priority, task.status, task.createdBy, task.createdAt);
 
       for (const userId of task.assignedTo) {
         db.prepare('INSERT INTO task_assignees (task_id, user_id) VALUES (?, ?)').run(task.taskId, userId);
@@ -126,7 +124,7 @@ export class TaskStore {
 
   update(
     taskId: string,
-    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'notes' | 'phase' | 'projectId'>>,
+    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'taskType' | 'clientName' | 'category'>>,
   ): Task | null {
     const db = getCoreDb();
     const existing = this.getById(taskId);
@@ -145,12 +143,15 @@ export class TaskStore {
       ...patch,
       completedAt: completedAt ?? undefined,
     };
+    // Editing tasks force-null the category — switching a Platform task back to
+    // Editing should clear the category rather than carry it as orphan metadata.
+    const nextCategory = next.taskType === 'platform' ? (next.category ?? null) : null;
 
     withTransaction(db, () => {
       db.prepare(
-        `UPDATE tasks SET description = ?, phase = ?, priority = ?, status = ?, notes = ?, completed_at = ?, project_id = ?
+        `UPDATE tasks SET description = ?, task_type = ?, category = ?, priority = ?, status = ?, completed_at = ?, client_name = ?
          WHERE task_id = ?`,
-      ).run(next.description, next.phase, next.priority, next.status, next.notes, completedAt, next.projectId, taskId);
+      ).run(next.description, next.taskType, nextCategory, next.priority, next.status, completedAt, next.clientName, taskId);
 
       if (patch.assignedTo !== undefined) {
         db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(taskId);
@@ -160,7 +161,7 @@ export class TaskStore {
       }
     });
 
-    return next;
+    return { ...next, category: nextCategory };
   }
 
   delete(taskId: string): boolean {

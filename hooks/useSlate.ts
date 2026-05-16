@@ -47,6 +47,7 @@ export interface SlateState {
   atemState: AtemState | null;
   atemProfiles: AtemProfile[];
   travelMode: TravelModeState;
+  atemPaused: boolean;
   audioMonitor: ClientAudioMonitorState;
   playbackConnection: PlaybackConnectionState | null;
   cqMixerState: CqMixerState | null;
@@ -76,6 +77,8 @@ export interface SlateActions {
   atemDeleteProfile: (name: string) => void;
   atemEnableTravelMode: (bridgeUrl: string, atemIp: string) => void;
   atemDisableTravelMode: (atemIp: string) => void;
+  atemPause: () => void;
+  atemResume: () => void;
   setStudioTab: (tab: StudioTab) => void;
   joinAudioMonitor: () => void;
   leaveAudioMonitor: () => void;
@@ -209,6 +212,7 @@ export function useSlate(): SlateState & SlateActions {
   const [atemState, setAtemState] = useState<AtemState | null>(DEFAULT_ATEM_STATE);
   const [atemProfiles, setAtemProfiles] = useState<AtemProfile[]>([]);
   const [travelMode, setTravelMode] = useState<TravelModeState>({ active: false, bridgeUrl: '' });
+  const [atemPaused, setAtemPaused] = useState(false);
   const [remoteAudioMonitor, setRemoteAudioMonitor] = useState<AudioMonitorState>(DEFAULT_AUDIO_MONITOR_STATE);
   const [audioJoined, setAudioJoined] = useState(false);
   const [audioLocallyMuted, setAudioLocallyMuted] = useState(true);
@@ -426,6 +430,7 @@ export function useSlate(): SlateState & SlateActions {
 
     socket.on('atemProfiles', (profiles: AtemProfile[]) => setAtemProfiles(profiles));
     socket.on('travelMode', (state: TravelModeState) => setTravelMode(state));
+    socket.on('atemPaused', (state: { paused: boolean }) => setAtemPaused(Boolean(state?.paused)));
     let toastTimer: ReturnType<typeof setTimeout> | null = null;
     socket.on('atemCommandResult', (result: AtemToast) => {
       if (toastTimer) clearTimeout(toastTimer);
@@ -458,6 +463,7 @@ export function useSlate(): SlateState & SlateActions {
     atemState,
     atemProfiles,
     travelMode,
+    atemPaused,
     audioMonitor,
     playbackConnection,
     cqMixerState,
@@ -496,6 +502,8 @@ export function useSlate(): SlateState & SlateActions {
     atemDeleteProfile: (name) => emit('atemDeleteProfile', { name }),
     atemEnableTravelMode: (bridgeUrl, atemIp) => emit('atemEnableTravelMode', { bridgeUrl, atemIp }),
     atemDisableTravelMode: (atemIp) => emit('atemDisableTravelMode', { atemIp }),
+    atemPause: () => emit('atemPause'),
+    atemResume: () => emit('atemResume'),
     setStudioTab: (tab) => {
       activeTabRef.current = tab;
       if (tab === 'audio' || tab === 'camera') {

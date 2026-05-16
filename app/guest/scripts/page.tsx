@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getProjectStore } from '@/lib/services/container';
+import { projectHref } from '@/lib/urls/project-url';
 
 export default function GuestScriptsPage() {
   const projects = getProjectStore().getAll().filter((p) => !p.archived);
@@ -20,7 +21,7 @@ export default function GuestScriptsPage() {
         {projects.map((project) => (
           <Link
             key={project.projectId}
-            href={`/projects/${project.projectId}/scripts`}
+            href={projectHref(project.clientName, project.projectId, 'scripts')}
             className="home-tile"
           >
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

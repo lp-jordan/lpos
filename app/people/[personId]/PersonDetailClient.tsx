@@ -42,7 +42,13 @@ const labelStyle: React.CSSProperties = {
 };
 
 const valueStyle: React.CSSProperties = {
-  fontSize: '0.875rem', color: 'var(--text)',
+  fontSize: '0.875rem',
+  color: 'var(--text)',
+  // Long values (URLs, multi-word company names) were overflowing their
+  // flex/grid columns and pushing layout. Break inside the word when nothing
+  // else fits; minWidth: 0 lets the flex/grid parent shrink the cell.
+  overflowWrap: 'anywhere',
+  minWidth: 0,
 };
 
 const inputStyle: React.CSSProperties = {
@@ -762,7 +768,7 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
         {/* Left column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <OverviewPanel person={person} onUpdated={setPerson} />
-          <AccountPanel person={person} onUpdated={setPerson} />
+          <AccountPanel key={person.status} person={person} onUpdated={setPerson} />
           <ContactsPanel personId={person.prospectId} contacts={contacts} onChange={setContacts} />
         </div>
 

@@ -199,6 +199,51 @@ export class ProspectStore {
     return rowToProspect(row, getAssigneesForProspect(prospectId));
   }
 
+  /**
+   * Case-insensitive company lookup. Used by the Projects → People wiring to
+   * find whether an existing prospect already represents this client before
+   * creating a duplicate. Trims + lowercases both sides; doesn't fuzzy-match
+   * (fuzzy is handled separately by the create-time warning).
+   */
+  getByCompany(company: string): Prospect | null {
+    const normalized = company.trim().toLowerCase();
+    if (!normalized) return null;
+    const row = getCoreDb()
+      .prepare(`SELECT * FROM prospects WHERE LOWER(TRIM(company)) = ? LIMIT 1`)
+      .get(normalized) as ProspectRow | undefined;
+    if (!row) return null;
+    return rowToProspect(row, getAssigneesForProspect(row.prospect_id));
+  }
+
+  /**
+   * Idempotent "this client name has a corresponding active prospect" helper.
+   * - Found and already 'active' → return as-is.
+   * - Found but not yet 'active' → promote (sets status='active', promoted_at,
+   *   client_name) so the prospect now represents an active client.
+   * - Not found → create a fresh prospect AND promote it to active in one go.
+   *
+   * The single entry point keeps the project create/update path simple — it
+   * just calls this with `(clientName, actorId)` and stops thinking about it.
+   * Promotion uses the existing promote() method so prospect_status_history
+   * gets a proper transition row.
+   */
+  ensureProspectForClient(clientName: string, actorId: string): Prospect {
+    const trimmed = clientName.trim();
+    if (!trimmed) {
+      throw new Error('ensureProspectForClient: clientName is empty');
+    }
+    const existing = this.getByCompany(trimmed);
+    if (existing) {
+      if (existing.status === 'active') return existing;
+      const promoted = this.promote(existing.prospectId, trimmed, actorId);
+      return promoted ?? existing;
+    }
+    // No existing prospect — create then promote.
+    const created = this.create({ company: trimmed, createdBy: actorId });
+    const promoted = this.promote(created.prospectId, trimmed, actorId);
+    return promoted ?? created;
+  }
+
   // ── CRUD ───────────────────────────────────────────────────────────────────
 
   create(input: {

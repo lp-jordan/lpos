@@ -7,6 +7,8 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getProjectStore, getUploadQueueService } from '@/lib/services/container';
 import { getAsset } from '@/lib/store/media-registry';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
+import { getSession } from '@/lib/services/api-auth';
+import { getUserById } from '@/lib/store/user-store';
 
 const s3 = new S3Client({
   region: 'auto',
@@ -59,6 +61,14 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
   const project = getProjectStore().getById(projectId)
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+
+  // Capture the creating user's email so the ingest server can attribute any
+  // future trouble reports to the right person (notified via Slack DM + in-app).
+  // Session is best-effort — POSTs from system contexts (none today) would land
+  // with createdByUserEmail null and fall back to the all-admins broadcast.
+  const session = await getSession(req)
+  const creator = session ? getUserById(session.userId) : null
+  const createdByUserEmail = creator?.email ?? null
 
   const body = await req.json() as {
     assetIds:    string[]
@@ -128,7 +138,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           `Uploading file ${i + 1} of ${total}…`,
         )
 
-        await uploadToR2({ key: r2Key, filePath, mimeType, fileSize })
+        await uploadToR2({ key: r2Key, filePath, mimeType })
 
         // ── Thumbnail ──────────────────────────────────────────────────────────
         let thumbnailUrl: string | undefined
@@ -175,11 +185,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         headers: { 'Content-Type': 'application/json', 'x-api-key': INGEST_API_KEY },
         body: JSON.stringify({
           token,
-          project_name: project.name,
-          client_name:  body.clientName?.trim() || null,
-          label:        body.label?.trim()       || null,
-          expires_at:   body.expiresAt,
-          assets:       r2Assets,
+          project_name:          project.name,
+          client_name:           body.clientName?.trim() || null,
+          label:                 body.label?.trim()       || null,
+          expires_at:            body.expiresAt,
+          assets:                r2Assets,
+          created_by_user_email: createdByUserEmail,
+          // Echoed back to dashboard verbatim in trouble reports so the
+          // notification's click-through link can deep-link to the right project.
+          project_id:            projectId,
         }),
       })
 
@@ -205,34 +219,26 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
 // ── S3 upload ─────────────────────────────────────────────────────────────────
 
-// R2 rejects single-part uploads > 5 GB; use multipart for large files.
-const MULTIPART_THRESHOLD = 5 * 1024 * 1024 * 1024
-
+// Always go through @aws-sdk/lib-storage's Upload — it buffers each part in
+// memory before sending, so transient R2 5xx errors can be retried. Direct
+// PutObjectCommand with a fs.createReadStream body is non-retryable: once the
+// stream is consumed, the SDK has nothing to rewind to and surfaces the failure
+// as "An error was encountered in a non-retryable streaming request".
 async function uploadToR2({
-  key, filePath, mimeType, fileSize,
+  key, filePath, mimeType,
 }: {
-  key: string; filePath: string; mimeType: string; fileSize: number;
+  key: string; filePath: string; mimeType: string;
 }): Promise<void> {
-  if (fileSize <= MULTIPART_THRESHOLD) {
-    await s3.send(new PutObjectCommand({
-      Bucket:        R2_BUCKET,
-      Key:           key,
-      Body:          fs.createReadStream(filePath) as unknown as ReadableStream,
-      ContentType:   mimeType,
-      ContentLength: fileSize,
-    }))
-  } else {
-    const upload = new Upload({
-      client: s3,
-      params: {
-        Bucket:      R2_BUCKET,
-        Key:         key,
-        Body:        fs.createReadStream(filePath),
-        ContentType: mimeType,
-      },
-    })
-    await upload.done()
-  }
+  const upload = new Upload({
+    client: s3,
+    params: {
+      Bucket:      R2_BUCKET,
+      Key:         key,
+      Body:        fs.createReadStream(filePath),
+      ContentType: mimeType,
+    },
+  })
+  await upload.done()
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

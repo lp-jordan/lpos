@@ -122,8 +122,7 @@ export function PresentationPanel() {
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          <span className="pres-dropzone-title">Drop a .pptx or .pdf file here</span>
-          <span className="pres-dropzone-sub">or click to browse — PDF gives best quality</span>
+          <span className="pres-dropzone-title">Drop a presentation here or click to browse</span>
           {presentation.uploadError && (
             <span className="pres-upload-error">{presentation.uploadError}</span>
           )}

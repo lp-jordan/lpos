@@ -4,14 +4,16 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import type { TranscriptEntry } from '@/lib/transcripts/types';
+import { projectHref } from '@/lib/urls/project-url';
 
 interface Props {
   projectId: string;
+  clientName: string;
   initialTranscripts: TranscriptEntry[];
   onOpen?: (entry: TranscriptEntry) => void;
 }
 
-export function TranscriptOutputList({ projectId, initialTranscripts, onOpen }: Readonly<Props>) {
+export function TranscriptOutputList({ projectId, clientName, initialTranscripts, onOpen }: Readonly<Props>) {
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>(initialTranscripts);
   const [selectedIds, setSelectedIds]  = useState<Set<string>>(new Set());
   const lastSelectedIdx                = useRef<number>(-1);
@@ -143,7 +145,7 @@ export function TranscriptOutputList({ projectId, initialTranscripts, onOpen }: 
           label: 'Open Source Media',
           icon: <MediaIcon />,
           disabled: !entry.assetId,
-          onClick: () => router.push(`/projects/${projectId}/media`),
+          onClick: () => router.push(projectHref(clientName, projectId, 'media')),
         },
         { type: 'separator' as const },
       ] : []),

@@ -7,12 +7,14 @@ interface Props {
   body: string;
   confirmLabel?: string;
   danger?: boolean;
+  /** Inline error shown below the body. When present, the modal stays open after confirm. */
+  error?: string | null;
   onConfirm: () => Promise<void> | void;
   onClose: () => void;
 }
 
 export function ConfirmModal({
-  title, body, confirmLabel = 'Confirm', danger = false, onConfirm, onClose,
+  title, body, confirmLabel = 'Confirm', danger = false, error, onConfirm, onClose,
 }: Readonly<Props>) {
   const [busy, setBusy] = useState(false);
 
@@ -28,6 +30,11 @@ export function ConfirmModal({
           <h2 className="modal-title">{title}</h2>
         </div>
         <p className="modal-body-text">{body}</p>
+        {error && (
+          <p className="modal-body-text" style={{ color: '#e07070', marginTop: '0.5rem' }}>
+            {error}
+          </p>
+        )}
         <div className="modal-actions">
           <button type="button" className="modal-btn-ghost" onClick={onClose} disabled={busy}>
             Cancel
@@ -38,7 +45,7 @@ export function ConfirmModal({
             disabled={busy}
             onClick={handleConfirm}
           >
-            {busy ? 'Working…' : confirmLabel}
+            {busy ? 'Working…' : (error ? 'Retry' : confirmLabel)}
           </button>
         </div>
       </div>
