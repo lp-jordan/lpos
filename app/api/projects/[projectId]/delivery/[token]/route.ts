@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const INGEST_URL     = process.env.INGEST_BASE_URL!
+const INGEST_URL     = (process.env.INGEST_BASE_URL ?? '').replace(/\/$/, '')
 const INGEST_API_KEY = process.env.INGEST_API_KEY!
 
 type Ctx = { params: Promise<{ projectId: string; token: string }> }
+
+async function safeJson(res: Response): Promise<unknown> {
+  const ct = res.headers.get('content-type') ?? ''
+  if (ct.includes('application/json')) return res.json()
+  const text = await res.text()
+  return { error: text.slice(0, 200) }
+}
 
 // PATCH /api/projects/[projectId]/delivery/[token]
 // Body: { label?: string, expiresAt?: string }
@@ -22,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     signal:  req.signal,
   })
 
-  const data = await res.json()
+  const data = await safeJson(res)
   return NextResponse.json(data, { status: res.ok ? 200 : res.status })
 }
 
@@ -36,6 +43,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     signal:  req.signal,
   })
 
-  const data = await res.json()
+  const data = await safeJson(res)
   return NextResponse.json(data, { status: res.ok ? 200 : res.status })
 }
