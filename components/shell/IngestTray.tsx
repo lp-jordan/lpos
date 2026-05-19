@@ -84,7 +84,6 @@ function JobRow({
   const [collapsed, setCollapsed] = useState(isTerminal);
   const detail = describeJob(job, now);
 
-  // A queued job with a tempPath and partial progress is a resumable chunked upload.
   const isResumable = job.status === 'queued' && !!job.tempPath && (job.progress ?? 0) > 0;
 
   return (
