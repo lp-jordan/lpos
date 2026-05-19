@@ -26,6 +26,7 @@ const s3 = new S3Client({
 const INGEST_URL     = (process.env.INGEST_BASE_URL ?? '').replace(/\/$/, '')
 const INGEST_API_KEY = process.env.INGEST_API_KEY!
 const R2_BUCKET      = process.env.R2_BUCKET!
+const DATA_DIR       = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data')
 
 ;['INGEST_BASE_URL', 'INGEST_API_KEY', 'R2_ENDPOINT', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'].forEach((k) => {
   if (!process.env[k]) console.error(`[delivery] ⚠ Missing env var: ${k}`)
@@ -130,9 +131,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   activeDeliveryJobs.set(token, jobId)
 
   void (async () => {
-    const mediaDir   = resolveProjectMediaStorageDir(projectId)
-    const projectDir = path.dirname(mediaDir)
-    const total      = eligible.length
+    const mediaDir       = resolveProjectMediaStorageDir(projectId)
+    const transcriptsDir = path.join(DATA_DIR, 'projects', projectId, 'transcripts')
+    const subtitlesDir   = path.join(DATA_DIR, 'projects', projectId, 'subtitles')
+    const total          = eligible.length
     const videoAssets: { asset: NonNullable<ReturnType<typeof getAsset>>; filename: string; r2Key: string }[] = []
 
     try {
@@ -228,9 +230,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       console.log(`[delivery] created token ${token} for project ${projectId}`)
 
       // ── Phase B: Upload transcripts ───────────────────────────────────────────
-      const transcriptsDir = path.join(projectDir, 'transcripts')
-      const subtitlesDir   = path.join(projectDir, 'subtitles')
-
       for (const { asset, r2Key } of videoAssets) {
         if (queue.isCancelled(jobId)) { cleanup(token); return }
 
@@ -341,7 +340,7 @@ function transcodeProxy(inputPath: string, outputPath: string, jobId: string): P
     const proc = spawn(ffmpegPath, [
       '-nostdin',
       '-i', inputPath,
-      '-vf', "scale='min(1920,iw)':-2",
+      '-vf', 'scale=min(1920\\,iw):-2',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '28',
@@ -351,14 +350,17 @@ function transcodeProxy(inputPath: string, outputPath: string, jobId: string): P
       '-b:a', '128k',
       '-movflags', '+faststart',
       '-y', outputPath,
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    ], { stdio: ['ignore', 'ignore', 'pipe'] })
 
     activeFfmpegProcs.set(jobId, proc)
+
+    let stderrBuf = ''
+    proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
 
     proc.on('close', (code) => {
       activeFfmpegProcs.delete(jobId)
       if (code === 0) resolve()
-      else reject(new Error(`ffmpeg exited with code ${code}`))
+      else reject(new Error(`ffmpeg exited with code ${code}: ${stderrBuf.slice(-300)}`))
     })
     proc.on('error', (err) => {
       activeFfmpegProcs.delete(jobId)
