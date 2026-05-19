@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUploadQueueService } from '@/lib/services/container';
-import { activeDeliveryJobs, activeFfmpegProcs } from '@/lib/services/delivery-job-registry';
+import { activeDeliveryJobs, killFfmpegProc } from '@/lib/services/delivery-job-registry';
 
 type Ctx = { params: Promise<{ projectId: string; token: string }> }
 
@@ -17,12 +17,7 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
 
   const queue = getUploadQueueService()
   queue.cancel(jobId)
-
-  // Kill any in-progress ffmpeg transcode immediately
-  const proc = activeFfmpegProcs.get(jobId)
-  if (proc) {
-    proc.kill('SIGTERM')
-  }
+  killFfmpegProc(jobId)
 
   return NextResponse.json({ ok: true })
 }

@@ -12,7 +12,7 @@ import { getAsset } from '@/lib/store/media-registry';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { getSession } from '@/lib/services/api-auth';
 import { getUserById } from '@/lib/store/user-store';
-import { activeDeliveryJobs, activeFfmpegProcs } from '@/lib/services/delivery-job-registry';
+import { activeDeliveryJobs, activeFfmpegProcs, killFfmpegProc } from '@/lib/services/delivery-job-registry';
 
 const s3 = new S3Client({
   region: 'auto',
@@ -354,8 +354,13 @@ function transcodeProxy(inputPath: string, outputPath: string, jobId: string): P
 
     activeFfmpegProcs.set(jobId, proc)
 
+    // Keep only the tail of stderr to surface errors without unbounded memory growth.
+    const STDERR_CAP = 4096
     let stderrBuf = ''
-    proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString() })
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuf += chunk.toString()
+      if (stderrBuf.length > STDERR_CAP) stderrBuf = stderrBuf.slice(-STDERR_CAP)
+    })
 
     proc.on('close', (code) => {
       activeFfmpegProcs.delete(jobId)
@@ -372,7 +377,11 @@ function transcodeProxy(inputPath: string, outputPath: string, jobId: string): P
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function cleanup(token: string) {
+  const jobId = activeDeliveryJobs.get(token)
   activeDeliveryJobs.delete(token)
+  // Belt-and-suspenders: kill any ffmpeg proc still alive at cleanup time
+  // (e.g. if cleanup races the SIGTERM sent by the cancel endpoint)
+  if (jobId) killFfmpegProc(jobId)
 }
 
 function isVideo(mimeType: string, ext: string): boolean {
