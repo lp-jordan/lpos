@@ -230,11 +230,18 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       console.log(`[delivery] created token ${token} for project ${projectId}`)
 
       // ── Phase B: Upload transcripts ───────────────────────────────────────────
+      console.log(`[delivery:${token}] Phase B — checking ${videoAssets.length} video asset(s) for transcripts`)
       for (const { asset, r2Key } of videoAssets) {
         if (queue.isCancelled(jobId)) { cleanup(token); return }
 
-        const txJobId = asset.transcription?.jobId
-        if (!txJobId || asset.transcription?.status !== 'done') continue
+        const txStatus = asset.transcription?.status
+        const txJobId  = asset.transcription?.jobId
+        console.log(`[delivery:${token}] asset ${asset.assetId}: transcription status=${txStatus} jobId=${txJobId}`)
+
+        if (!txJobId || txStatus !== 'done') {
+          console.log(`[delivery:${token}] skipping transcripts for ${asset.assetId} (not done or no jobId)`)
+          continue
+        }
 
         const candidates: { localPath: string; kind: string; ext: string }[] = [
           { localPath: path.join(transcriptsDir, `${txJobId}.srt`), kind: 'srt', ext: 'srt' },
@@ -242,31 +249,44 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           { localPath: path.join(transcriptsDir, `${txJobId}.txt`), kind: 'txt', ext: 'txt' },
         ]
 
+        console.log(`[delivery:${token}] transcript candidates:`, candidates.map(c => `${c.kind}=${c.localPath} exists=${fs.existsSync(c.localPath)}`))
+
         const toUpload = candidates.filter(c => fs.existsSync(c.localPath))
-        if (!toUpload.length) continue
+        if (!toUpload.length) {
+          console.log(`[delivery:${token}] no transcript files found on disk for ${asset.assetId}`)
+          continue
+        }
 
         const uploadedTranscripts: { r2_key: string; filename: string; file_size: number; kind: string }[] = []
         const baseName = path.basename(asset.filePath!, path.extname(asset.filePath!))
 
         for (const { localPath, kind, ext } of toUpload) {
-          const txR2Key   = `delivery/${token}/transcripts/${asset.assetId}_${kind}.${ext}`
+          const txR2Key    = `delivery/${token}/transcripts/${asset.assetId}_${kind}.${ext}`
           const txFilename = `${sanitize(baseName)}.${ext}`
           const txSize     = fs.statSync(localPath).size
           await uploadToR2({ key: txR2Key, filePath: localPath, mimeType: mimeForTranscriptKind(kind) })
           uploadedTranscripts.push({ r2_key: txR2Key, filename: txFilename, file_size: txSize, kind })
+          console.log(`[delivery:${token}] uploaded transcript ${kind} for ${asset.assetId}`)
         }
 
-        await fetch(`${INGEST_URL}/api/delivery/${token}/transcripts`, {
+        const txRes = await fetch(`${INGEST_URL}/api/delivery/${token}/transcripts`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': INGEST_API_KEY },
           body:    JSON.stringify({ asset_r2_key: r2Key, transcripts: uploadedTranscripts }),
-        }).catch(err => console.warn(`[delivery] transcript registration failed for ${asset.assetId}:`, err))
+        }).catch(err => { console.warn(`[delivery:${token}] transcript registration fetch failed:`, err); return null })
+        if (txRes && !txRes.ok) {
+          const t = await txRes.text().catch(() => '')
+          console.warn(`[delivery:${token}] transcript registration ${txRes.status}: ${t}`)
+        } else {
+          console.log(`[delivery:${token}] transcripts registered for ${asset.assetId}`)
+        }
       }
 
       if (queue.isCancelled(jobId)) { cleanup(token); return }
 
       // ── Phase C: Transcode + upload proxies ───────────────────────────────────
       const videoTotal = videoAssets.length
+      console.log(`[delivery:${token}] Phase C — transcoding ${videoTotal} proxy/proxies`)
       if (videoTotal > 0) {
         queue.setProgress(jobId, 68, `Transcoding ${videoTotal} proxy${videoTotal !== 1 ? 's' : ''}…`)
       }
@@ -281,10 +301,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         const tmpPath     = path.join(os.tmpdir(), `lpos-proxy-${jobId}-${i}.mp4`)
         const pctStart    = 68 + Math.round((i / videoTotal) * 30)
 
+        console.log(`[delivery:${token}] starting proxy ${i + 1}/${videoTotal}: ${filename} → ${tmpPath}`)
         queue.setProgress(jobId, pctStart, `Transcoding proxy ${i + 1} of ${videoTotal}: ${filename}…`)
 
         try {
           await transcodeProxy(asset.filePath!, tmpPath, jobId)
+          console.log(`[delivery:${token}] proxy transcode done: ${filename}`)
 
           if (queue.isCancelled(jobId)) {
             fs.rmSync(tmpPath, { force: true })
@@ -297,12 +319,19 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           const proxySize = fs.statSync(tmpPath).size
           await uploadToR2({ key: proxyR2Key, filePath: tmpPath, mimeType: 'video/mp4' })
           fs.rmSync(tmpPath, { force: true })
+          console.log(`[delivery:${token}] proxy uploaded to R2: ${proxyR2Key} (${proxySize} bytes)`)
 
-          await fetch(`${INGEST_URL}/api/delivery/${token}/assets/proxy`, {
+          const patchRes = await fetch(`${INGEST_URL}/api/delivery/${token}/assets/proxy`, {
             method:  'PATCH',
             headers: { 'Content-Type': 'application/json', 'x-api-key': INGEST_API_KEY },
             body:    JSON.stringify({ r2_key: r2Key, proxy_r2_key: proxyR2Key, proxy_file_size: proxySize }),
-          }).catch(err => console.warn(`[delivery] proxy registration failed for ${asset.assetId}:`, err))
+          }).catch(err => { console.warn(`[delivery:${token}] proxy PATCH fetch failed:`, err); return null })
+          if (patchRes && !patchRes.ok) {
+            const t = await patchRes.text().catch(() => '')
+            console.warn(`[delivery:${token}] proxy PATCH ${patchRes.status}: ${t}`)
+          } else {
+            console.log(`[delivery:${token}] proxy registered with ingest for ${asset.assetId}`)
+          }
 
           queue.setProgress(
             jobId,
@@ -312,8 +341,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         } catch (err) {
           fs.rmSync(tmpPath, { force: true })
           if (queue.isCancelled(jobId)) { cleanup(token); return }
-          console.warn(`[delivery] proxy transcode failed for ${asset.assetId}:`, err)
-          // Non-fatal — continue with remaining assets
+          console.warn(`[delivery:${token}] proxy transcode failed for ${asset.assetId}:`, err)
         }
       }
 
