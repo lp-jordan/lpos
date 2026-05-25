@@ -117,3 +117,30 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 
 ### Credential rotation
 See `docs/credential-rotation-runbook.md` for step-by-step rotation of all secrets.
+
+## Responsive Layout & Mobile
+
+How the app adapts between desktop and phone-sized screens.
+
+### What it does
+Pages share one global stylesheet and a single shell. The chrome swaps form factor at a breakpoint, and individual layouts collapse their columns/rows as the viewport narrows so content stays on screen.
+
+### Key files
+| File | Role |
+|------|------|
+| `components/shell/AppShell.tsx` | Top-level shell. Home (`/`) renders a chrome-free hero variant; all other routes render the nav + breadcrumb + `main.app-content` variant. |
+| `components/shell/NavBar.tsx` | Renders both navs: a floating desktop pill (`.navbar`) and a mobile bottom tab bar (`.bottom-tab-bar`). CSS decides which is visible. |
+| `components/projects/ProjectWorkflowNav.tsx` | The 7-stage project workflow nav (`.workflow-nav`). |
+| `app/globals.css` | All styling, including every responsive rule. |
+
+### How it adapts (inputs → outputs)
+- **Navigation chrome:** at `≤768px` the desktop pill (`.navbar`) hides and the fixed `.bottom-tab-bar` (~56px tall) shows. At `≤430px` the tab bar drops its text labels (icons only).
+- **Content insets:** `.app-content` reserves bottom padding for the tab bar (`56px + env(safe-area-inset-bottom)`); fixed bottom-corner UI (`.storage-gear-link`, `.tray-group`) and slide-in side panels (`.sh-panel`, `.sep`) are lifted above it.
+- **Layout collapse:** multi-column grids (`.proj-grid`, `.proj-client-grid`, `.workflow-nav`, dashboard grids) reduce column counts as width drops; the project workflow nav and the project detail tab strip (`.proj-tabs`) become horizontal-scroll strips on mobile.
+
+### Breakpoint conventions
+Established `max-width` breakpoints, used consistently across the file: **1300, 1100, 900, 768, 700, 480, 430px**. `768px` is the primary desktop↔mobile chrome switch; `480/430px` handle the narrowest phones. New responsive rules should reuse these values. The consolidated "Mobile layout fixes" block at the end of `globals.css` is appended last so its mobile-only rules win over earlier equal-specificity rules without editing them.
+
+### Current status / known gaps
+- Mobile fixes are CSS-only and verified by source analysis, not yet on-device (no browser-automation tooling installed; production server is auth-gated).
+- Minor non-blocking whitespace items remain (platform page inline `60vh`, `.activity-strip-item` max-width) — they don't cut content off.

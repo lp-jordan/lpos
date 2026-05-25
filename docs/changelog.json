@@ -1,5 +1,20 @@
 [
   {
+    "timestamp": "2026-05-20T12:00:00Z",
+    "title": "Mobile layout audit and responsive fixes",
+    "summary": "Audited every page group for elements overflowing on phone screens and appended a consolidated mobile-only CSS block to globals.css. Home tiles now wrap instead of clipping off-screen; the project workflow nav became a horizontal-scroll pill strip instead of 7 oversized stacked buttons; the client grid collapses 4 to 2 to 1 columns; slide-in side panels (shares, script editor) lift above the bottom tab bar; and several toolbars and media rows stop forcing horizontal overflow. All changes are gated behind max-width media queries, so the desktop layout is unchanged."
+  },
+  {
+    "timestamp": "2026-05-20T00:00:00Z",
+    "title": "Add \"All\" scope tab to task board",
+    "summary": "Added a third scope tab (All) to the Mine / Others toggle on the task board. Selecting All shows every task of the active type regardless of assignment. Required only a type union update and a new button — the existing filter already had a passthrough return true for unknown scopes."
+  },
+  {
+    "timestamp": "2026-05-19T00:00:00Z",
+    "title": "HLS playback via hls.js",
+    "summary": "Switched all video players from raw Frame.io originalUrl (raw uploaded file) to highQualityUrl (H.264 HLS transcode). Added useHlsPlayer hook that uses native HLS on Safari and hls.js on Chrome/Firefox/Edge. Fixes .mov playback cross-browser and improves scrubbing performance via adaptive bitrate streaming. Falls back to originalUrl if transcode not ready."
+  },
+  {
     "timestamp": "2026-04-29T00:00:00Z",
     "title": "Git push to remote",
     "summary": "Staged and pushed 111 changed/new files from lpos-dashboard to github.com/lp-jordan/lpos main branch (commit 6584493). Excluded .DS_Store and atem-bridge.zip. Covers all accumulated changes since the 4-17-26 commit."

@@ -18,6 +18,7 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === '/signin') return true;
   if (pathname === '/guest-pin') return true;
   if (pathname.startsWith('/api/auth/')) return true;
+  if (pathname.startsWith('/api/ep/')) return true;  // machine-to-machine auth via X-EP-Secret
   if (pathname.startsWith('/_next/')) return true;
   if (pathname === '/favicon.ico') return true;
   if (/\.[a-zA-Z0-9]+$/.test(pathname)) return true;

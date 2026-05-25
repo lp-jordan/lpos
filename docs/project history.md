@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-05-20 — Mobile layout audit and responsive fixes
+
+**User prompt:** "Can you look over how each page is displayed on mobile devices and see if there's anything we can do to keep all elements on screen? Right now, the home page tabs are cut off on small screens, navigating through projects is a bit of a mess, etc."
+
+**Summary:** Audited the dashboard across page groups for elements overflowing or being cut off on phone-width screens, then applied a single consolidated, mobile-only CSS fix block appended to `app/globals.css`. Fixes the two flagged problems (home tiles clipping off-screen; project workflow nav collapsing to 7 oversized stacked buttons) plus the most impactful additional breakages found in the audit. All changes are CSS-only and gated behind `max-width` media queries, so the desktop experience is unchanged.
+
+**Files changed:** `app/globals.css`
+
+**Implementation summary:** Appended a clearly-marked "Mobile layout fixes" block at the end of `globals.css` (last in source order so it overrides earlier equal-specificity rules without editing them). At ≤768px: `.home-tiles` now wraps instead of overflowing; `.workflow-nav` converts from a button-tile grid into a horizontal-scroll pill strip (compact `.workflow-link` pills) so all 7 stages stay reachable without filling the screen; `.proj-client-grid` drops from 4 columns to 2; slide-in side panels `.sh-panel` and `.sep` are lifted with `bottom: calc(56px + env(safe-area-inset-bottom))` so their footers/close buttons clear the bottom tab bar; `.proj-scripts-toolbar-right` and `.proj-transcript-filter-input` stop forcing horizontal overflow. At ≤480px: home tiles shrink to 132px (2-up), `.proj-client-grid` becomes single-column, `.ma-row` drops its metadata/badge columns (keeping name + actions), `.proj-bulk-bar` wraps, and `.task-col` min-width reduces to 150px. Verified the file's brace balance (3116/3116) after the edit.
+
+**Decision rationale:** Chose CSS-only media-query additions appended at the end of the file because they are low-risk on a live production tree — they cannot affect the desktop layout existing users see, only improve small screens, and they avoid mutating the many existing scattered media-query blocks. The workflow nav was made a horizontal-scroll pill strip (standard mobile pattern) rather than a 2-col grid or dropdown, as it keeps every stage one tap away with no extra interaction while reclaiming vertical space. Reused the existing breakpoints already in the file (768px, 480px) for consistency.
+
+**Alternatives considered:**
+- Workflow nav as a compact 2-column grid or a dropdown selector — rejected the dropdown (adds a tap) and the grid (still consumes vertical space); the scroll strip was the best balance. (Posed these options to the user; the clarifying question was dismissed, so proceeded with the recommended scroll-strip.)
+- Editing the existing in-place media-query blocks rather than appending — avoided to minimise risk of regressions in the large shared CSS file.
+- Forcing side panels to full `100vw` on mobile — skipped; their existing `max-width` already prevents horizontal overflow, so only the bottom-tab-bar overlap needed fixing.
+
+**Commands/tests run:** Static review of JSX class usage and matching CSS rules (two parallel exploration passes); brace-balance check on `globals.css`. No dev server started or restarted (server lifecycle is user-managed); changes require a rebuild/restart to appear in the running production process.
+
+**Assumptions / follow-ups:**
+- Changes were not visually verified in a live browser (production server is auth-gated and no browser-automation tooling is installed); fixes are based on source/CSS analysis. Recommend a quick on-device check after the next restart.
+- Lower-priority items left as-is for now: platform page inline `60vh` spacing and `.activity-strip-item` max-width — these don't cut content off, just leave extra whitespace.
+
+---
+
+## 2026-05-20 — Add "All" scope tab to task board
+
+**User prompt:** "Can we add an 'all' option on the platform task page along with mine and others? Users are getting confused having to go between the two tabs creating new tasks"
+
+**Summary:** Added a third "All" scope tab to the Mine / Others toggle in TaskBoard. Shows every task of the active type regardless of assignment. No API or filter changes needed — the existing filter already falls through to `return true` for any scope that isn't `'mine'` or `'others'`.
+
+**Files changed:** `components/tasks/TaskBoard.tsx`
+
+**Implementation summary:** Updated `viewScope` state type to include `'all'`, added an "All" button to the scope toggle with matching active styling.
+
+**Decision rationale:** Minimal change — the filter logic already supported a passthrough case; only the type union and UI button were missing.
+
+---
+
+## 2026-05-19 — HLS playback via hls.js
+
+**User prompt:** "Ok let's do it. So hls will improve playback speeds for everyone. Will it affect theater mode/comments/scrubbing/etc?"
+
+**Summary:** Implemented HLS-based video playback across all LPOS video players. Installed hls.js, created a `useHlsPlayer` hook, updated the `frameio-stream` route to serve `highQualityUrl` (H.264 HLS transcode) instead of `originalUrl` (raw file), and wired the hook into `InlineVideoPlayer`, `VideoTheaterMode`, and `MediaDetailPanel`. Fixes `.mov` playback on Chrome/Firefox/Edge and improves scrubbing/seeking speed for all users due to adaptive bitrate HLS vs. raw file download.
+
+**Files changed:**
+- `package.json`, `package-lock.json` — added hls.js@1.6.16
+- `hooks/useHlsPlayer.ts` — new hook; detects Safari (native HLS) vs. other browsers (hls.js); falls back to direct src for non-HLS URLs
+- `app/api/projects/[projectId]/media/[assetId]/frameio-stream/route.ts` — switched from `originalUrl` to `highQualityUrl ?? originalUrl`
+- `components/media/InlineVideoPlayer.tsx` — added `useHlsPlayer`, removed `src` from `<video>`
+- `components/media/VideoTheaterMode.tsx` — added `useHlsPlayer`, removed `src` from `<video>`
+- `components/media/MediaDetailPanel.tsx` — added `useHlsPlayer` at component level; derived `sidebarVideoSrc`; removed `src` from both raw `<video>` elements
+
+**Implementation rationale:** Frame.io's `highQualityUrl` is an H.264 HLS manifest (pre-signed CloudFront URL) that plays in all browsers but requires hls.js on non-Safari. Safari handles HLS natively. The hook detects the browser capability via `video.canPlayType('application/vnd.apple.mpegurl')` and loads hls.js dynamically (code-split) only when needed. All existing scrub/seek/comment logic operates on `videoRef.current.currentTime` and is unaffected — hls.js attaches to the same `<video>` element without changing its API.
+
+**Fallback:** If `highQualityUrl` is null (transcode not ready), the route falls back to `originalUrl`. If hls.js isn't supported, the hook falls back to setting `src` directly.
+
+**Commands run:** `npm install hls.js`, `npx tsc --noEmit` (no new errors)
+
+---
+
 ## 2026-04-29 — Git push to remote
 
 **User prompt:** "Can you push the current version of this project to git? Or, lpos-dashboard specifically"
