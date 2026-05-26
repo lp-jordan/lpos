@@ -55,6 +55,7 @@ import { PromotionProcessor } from './promotion-processor';
 import { PresenceService } from './presence-service';
 import { LpReleaseService } from './lp-release-service';
 import { BackupService } from './backup-service';
+import { B2MediaSyncService } from './b2-media-sync-service';
 import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
@@ -108,6 +109,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_backupService: BackupService | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_b2MediaSyncService: B2MediaSyncService | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_cloudflareOrphanReconciler: CloudflareOrphanReconciler | undefined;
   // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
@@ -145,6 +148,7 @@ let promotionQueueService: PromotionQueueService | null = null;
 let presenceService: PresenceService | null = null;
 let lpReleaseService: LpReleaseService | null = null;
 let backupService: BackupService | null = null;
+let b2MediaSyncService: B2MediaSyncService | null = null;
 let cloudflareOrphanReconciler: CloudflareOrphanReconciler | null = null;
 let prospectStore: ProspectStore | null = null;
 let clientStore: ClientStore | null = null;
@@ -246,6 +250,10 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   backupService.start();
   globalThis.__lpos_backupService = backupService;
 
+  b2MediaSyncService = new B2MediaSyncService();
+  b2MediaSyncService.start();
+  globalThis.__lpos_b2MediaSyncService = b2MediaSyncService;
+
   cloudflareOrphanReconciler = new CloudflareOrphanReconciler();
   cloudflareOrphanReconciler.start();
   globalThis.__lpos_cloudflareOrphanReconciler = cloudflareOrphanReconciler;
@@ -300,6 +308,7 @@ export async function stopServices(): Promise<void> {
   driveWatcherService?.stop();
   lpReleaseService?.stop();
   backupService?.stop();
+  b2MediaSyncService?.stop();
   cloudflareOrphanReconciler?.stop();
   wledService?.stop();
   await Promise.all([
@@ -498,6 +507,10 @@ export function getLpReleaseService(): LpReleaseService | null {
 
 export function getBackupService(): BackupService | null {
   return globalThis.__lpos_backupService ?? backupService ?? null;
+}
+
+export function getB2MediaSyncService(): B2MediaSyncService | null {
+  return globalThis.__lpos_b2MediaSyncService ?? b2MediaSyncService ?? null;
 }
 
 export function getCloudflareOrphanReconciler(): CloudflareOrphanReconciler | null {
