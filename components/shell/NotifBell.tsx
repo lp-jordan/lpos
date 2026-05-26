@@ -11,6 +11,19 @@ import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notifica
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
 import type { DeliveryNotification } from '@/lib/models/delivery-notification';
 
+type NotifTab = 'tasks' | 'prospects' | 'deliveries' | 'pipeline';
+
+const TAB_STORAGE_KEY = 'lpos-notif-tab';
+
+function getInitialTab(): NotifTab {
+  if (typeof window === 'undefined') return 'tasks';
+  const stored = localStorage.getItem(TAB_STORAGE_KEY);
+  if (stored === 'tasks' || stored === 'prospects' || stored === 'deliveries' || stored === 'pipeline') {
+    return stored;
+  }
+  return 'tasks';
+}
+
 function buildNotifHref(notif: Pick<NotificationRecord, 'projectId' | 'assetId'>): string | null {
   if (!notif.projectId) return null;
   if (!notif.assetId) return `/projects/${notif.projectId}`;
@@ -47,7 +60,7 @@ function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; on
   return (
     <button
       type="button"
-      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
       onClick={onClick}
       role="menuitem"
     >
@@ -68,7 +81,7 @@ function DeliveryNotifItem({ notif, onClick }: { notif: DeliveryNotification; on
   return (
     <button
       type="button"
-      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
       onClick={onClick}
       role="menuitem"
     >
@@ -91,7 +104,7 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
   return (
     <button
       type="button"
-      className={`notif-item notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
       onClick={onClick}
       role="menuitem"
     >
@@ -105,8 +118,17 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
   );
 }
 
+const TAB_ORDER: NotifTab[] = ['pipeline', 'deliveries', 'tasks', 'prospects'];
+const TAB_LABEL: Record<NotifTab, string> = {
+  pipeline: 'Pipeline',
+  deliveries: 'Deliveries',
+  tasks: 'Tasks',
+  prospects: 'People',
+};
+
 export function NotifBell() {
   const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<NotifTab>(getInitialTab);
   const rootRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { notifications: pipelineNotifs, unreadCount: pipelineUnread, markAllRead: markPipelineRead } = useToast();
@@ -115,6 +137,20 @@ export function NotifBell() {
   const { notifications: deliveryNotifs, unreadCount: deliveryUnread, markAllRead: markDeliveriesRead } = useDeliveryNotifications();
 
   const totalUnread = pipelineUnread + taskUnread + prospectUnread + deliveryUnread;
+
+  const unreadByTab: Record<NotifTab, number> = {
+    tasks: taskUnread,
+    prospects: prospectUnread,
+    deliveries: deliveryUnread,
+    pipeline: pipelineUnread,
+  };
+
+  function markTabRead(tab: NotifTab) {
+    if (tab === 'tasks') markTasksRead();
+    else if (tab === 'prospects') markProspectsRead();
+    else if (tab === 'deliveries') markDeliveriesRead();
+    else markPipelineRead();
+  }
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -137,14 +173,15 @@ export function NotifBell() {
     const opening = !open;
     setOpen(opening);
     if (opening) {
-      markPipelineRead();
-      markTasksRead();
-      markProspectsRead();
-      markDeliveriesRead();
+      markTabRead(activeTab);
     }
   }
 
-  const hasAny = pipelineNotifs.length > 0 || taskNotifs.length > 0 || prospectNotifs.length > 0 || deliveryNotifs.length > 0;
+  function switchTab(tab: NotifTab) {
+    setActiveTab(tab);
+    localStorage.setItem(TAB_STORAGE_KEY, tab);
+    markTabRead(tab);
+  }
 
   return (
     <div className="notif-bell" ref={rootRef}>
@@ -170,83 +207,95 @@ export function NotifBell() {
 
       {open && (
         <div className="notif-panel" role="menu" aria-label="Notifications">
-          <div className="notif-panel-header">Notifications</div>
-          <div className="notif-panel-list">
-            {!hasAny && (
-              <div className="notif-empty">No notifications yet</div>
-            )}
+          <div className="notif-tabs" role="tablist">
+            {TAB_ORDER.map((tab) => {
+              const count = unreadByTab[tab];
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab}
+                  className={`notif-tab${activeTab === tab ? ' notif-tab--active' : ''}`}
+                  onClick={() => switchTab(tab)}
+                >
+                  {TAB_LABEL[tab]}
+                  {count > 0 && (
+                    <span className="notif-tab-badge">{count > 9 ? '9+' : count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
-            {deliveryNotifs.length > 0 && (
-              <>
-                <div className="notif-section-label">Deliveries</div>
-                {deliveryNotifs.slice(0, 10).map((notif) => (
-                  <DeliveryNotifItem
-                    key={notif.notifId}
-                    notif={notif}
-                    onClick={() => {
-                      if (notif.href) router.push(notif.href);
-                      setOpen(false);
-                    }}
-                  />
-                ))}
-              </>
-            )}
-
-            {taskNotifs.length > 0 && (
-              <>
-                <div className="notif-section-label">Tasks</div>
-                {taskNotifs.slice(0, 10).map((notif) => (
-                  <TaskNotifItem
-                    key={notif.notifId}
-                    notif={notif}
-                    onClick={() => {
-                      router.push(`/dashboard?task=${notif.taskId}`);
-                      setOpen(false);
-                    }}
-                  />
-                ))}
-              </>
-            )}
-
-            {prospectNotifs.length > 0 && (
-              <>
-                <div className="notif-section-label">Prospects</div>
-                {prospectNotifs.slice(0, 10).map((notif) => (
-                  <ProspectNotifItem
-                    key={notif.notifId}
-                    notif={notif}
-                    onClick={() => {
-                      router.push(`/prospects/${notif.prospectId}`);
-                      setOpen(false);
-                    }}
-                  />
-                ))}
-              </>
-            )}
-
-            {pipelineNotifs.length > 0 && (
-              <>
-                <div className="notif-section-label">Pipeline</div>
-                {pipelineNotifs.map((notif) => {
-                  const href = buildNotifHref(notif);
-                  return (
-                    <button
-                      key={notif.id}
-                      type="button"
-                      className={`notif-item notif-item--${notif.tone}${href ? ' notif-item--clickable' : ''}`}
+          <div className="notif-panel-list" role="tabpanel">
+            {activeTab === 'deliveries' && (
+              deliveryNotifs.length === 0
+                ? <div className="notif-empty">No delivery notifications</div>
+                : deliveryNotifs.slice(0, 10).map((notif) => (
+                    <DeliveryNotifItem
+                      key={notif.notifId}
+                      notif={notif}
                       onClick={() => {
-                        if (href) router.push(href);
+                        if (notif.href) router.push(notif.href);
                         setOpen(false);
                       }}
-                      disabled={!href}
-                      role="menuitem"
-                    >
-                      <span className="notif-item-title">{notif.title}</span>
-                      <span className="notif-item-body">{notif.body}</span>
-                    </button>
-                  );
-                })}
-              </>
+                    />
+                  ))
+            )}
+
+            {activeTab === 'tasks' && (
+              taskNotifs.length === 0
+                ? <div className="notif-empty">No task notifications</div>
+                : taskNotifs.slice(0, 10).map((notif) => (
+                    <TaskNotifItem
+                      key={notif.notifId}
+                      notif={notif}
+                      onClick={() => {
+                        router.push(`/dashboard?task=${notif.taskId}`);
+                        setOpen(false);
+                      }}
+                    />
+                  ))
+            )}
+
+            {activeTab === 'prospects' && (
+              prospectNotifs.length === 0
+                ? <div className="notif-empty">No prospect notifications</div>
+                : prospectNotifs.slice(0, 10).map((notif) => (
+                    <ProspectNotifItem
+                      key={notif.notifId}
+                      notif={notif}
+                      onClick={() => {
+                        router.push(`/prospects/${notif.prospectId}`);
+                        setOpen(false);
+                      }}
+                    />
+                  ))
+            )}
+
+            {activeTab === 'pipeline' && (
+              pipelineNotifs.length === 0
+                ? <div className="notif-empty">No pipeline notifications</div>
+                : pipelineNotifs.map((notif) => {
+                    const href = buildNotifHref(notif);
+                    return (
+                      <button
+                        key={notif.id}
+                        type="button"
+                        className={`notif-item notif-item--${notif.tone}${href ? ' notif-item--clickable' : ''}`}
+                        onClick={() => {
+                          if (href) router.push(href);
+                          setOpen(false);
+                        }}
+                        disabled={!href}
+                        role="menuitem"
+                      >
+                        <span className="notif-item-title">{notif.title}</span>
+                        <span className="notif-item-body">{notif.body}</span>
+                      </button>
+                    );
+                  })
             )}
           </div>
         </div>
