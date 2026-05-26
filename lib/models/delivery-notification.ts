@@ -7,7 +7,7 @@
  * so NotifBell can render it with the same pattern.
  */
 
-export type DeliveryNotifType = 'trouble_reported';
+export type DeliveryNotifType = 'trouble_reported' | 'delivery_expired';
 
 export interface DeliveryNotification {
   notifId:        string;

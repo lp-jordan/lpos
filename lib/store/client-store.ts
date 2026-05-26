@@ -5,15 +5,17 @@ export interface Client {
   clientId:   string;
   name:       string;
   prospectId: string | null;
+  isParent:   boolean;
   createdBy:  string;
   createdAt:  string;
 }
 
 function rowToClient(row: Record<string, unknown>): Client {
   return {
-    clientId:   row.client_id as string,
-    name:       row.name      as string,
+    clientId:   row.client_id   as string,
+    name:       row.name        as string,
     prospectId: row.prospect_id as string | null,
+    isParent:   (row.is_parent  as number | null) === 1,
     createdBy:  row.created_by  as string,
     createdAt:  row.created_at  as string,
   };
@@ -37,7 +39,7 @@ export class ClientStore {
     getCoreDb()
       .prepare(`INSERT INTO clients (client_id, name, prospect_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(id, name, prospectId, createdBy, now);
-    return { clientId: id, name, prospectId, createdBy, createdAt: now };
+    return { clientId: id, name, prospectId, isParent: false, createdBy, createdAt: now };
   }
 
   getByProspectId(prospectId: string): Client | null {

@@ -13,7 +13,7 @@ import type {
 } from '@/lib/services/atem-utils';
 import type { CqMixerState } from '@/lib/services/cq-mixer-client';
 
-export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation';
+export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation' | 'machines';
 
 export interface SlateProject {
   projectId: string;

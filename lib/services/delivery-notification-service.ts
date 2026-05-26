@@ -59,6 +59,46 @@ function resolveRecipients(createdByUserEmail: string | null): string[] {
   return ids;
 }
 
+export interface DeliveryExpiredPayload {
+  deliveryToken:      string;
+  projectName:        string;
+  clientName:         string | null;
+  label:              string | null;
+  createdByUserEmail: string | null;
+  projectId:          string | null;
+}
+
+export async function notifyDeliveryExpired(input: DeliveryExpiredPayload): Promise<void> {
+  const recipients = resolveRecipients(input.createdByUserEmail);
+  if (recipients.length === 0) {
+    console.warn(
+      `[delivery-notif] no recipients for expired delivery ${input.deliveryToken} — alert dropped`,
+    );
+    return;
+  }
+
+  const href  = buildHref(input.projectId);
+  const store = getDeliveryNotificationStore();
+  const io    = getIo();
+
+  for (const userId of recipients) {
+    const notif = store.create({
+      userId,
+      type:          'delivery_expired',
+      deliveryToken: input.deliveryToken,
+      projectName:   input.projectName,
+      clientName:    input.clientName,
+      label:         input.label,
+      description:   null,
+      queueSummary:  null,
+      userAgent:     null,
+      href,
+    });
+
+    if (io) io.to(`user:${userId}`).emit('delivery:notification', notif);
+  }
+}
+
 export async function notifyDeliveryTrouble(input: DeliveryTroublePayload): Promise<void> {
   const recipients = resolveRecipients(input.createdByUserEmail);
   if (recipients.length === 0) {

@@ -7,6 +7,7 @@ export interface User {
   name: string;
   avatarUrl: string | null;
   slackEmail: string | null;
+  nasIngestAccess: boolean;
   createdAt: string;
   lastLoginAt: string;
 }
@@ -17,6 +18,7 @@ export interface UserSummary {
   name: string;
   avatarUrl: string | null;
   isGuest: boolean;
+  nasIngestAccess: boolean;
 }
 
 /** Fixed ID for the shared guest account. */

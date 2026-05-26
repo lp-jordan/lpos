@@ -404,6 +404,13 @@ export function markOrphanedFolderResolved(driveFileId: string): void {
   ).run(new Date().toISOString(), driveFileId);
 }
 
+/** Update the parent folder of a Drive asset after a successful moveFile() call. */
+export function moveDriveAsset(entityId: string, targetDriveId: string): void {
+  getDriveSyncDb().prepare(
+    'UPDATE drive_assets SET parent_drive_id = ? WHERE entity_id = ?'
+  ).run(targetDriveId, entityId);
+}
+
 function rowToOrphaned(row: Record<string, unknown>): DriveOrphanedFolder {
   return {
     id:            row.id as string,

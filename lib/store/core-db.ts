@@ -625,6 +625,20 @@ function runMigrations(db: DatabaseSync): void {
     console.warn('[core-db v14] delivery_notifications create skipped:', (err as Error).message);
   }
 
+  // v15: NAS ingest access flag on users.
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN nas_ingest_access INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
+  // v16: isParent flag on clients — marks umbrella org clients.
+  try {
+    db.exec(`ALTER TABLE clients ADD COLUMN is_parent INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.
