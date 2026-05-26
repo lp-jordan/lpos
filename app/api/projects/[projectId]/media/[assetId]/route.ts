@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { getAsset, patchAsset, removeAsset } from '@/lib/store/media-registry';
 import type { AssetPatch } from '@/lib/store/media-registry';
 import { getAllShareAssets, removeShareAsset } from '@/lib/store/share-assets-store';
+import { purgeAssetFromAllDeliverables } from '@/lib/store/deliverable-store';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { deleteFrameioFile } from '@/lib/services/frameio';
@@ -130,6 +131,10 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     catch (err) { console.warn(`[asset-delete] cancelByAsset failed for ${assetId}:`, err); }
     try { deleteTranscriptsByAsset(projectId, assetId); }
     catch (err) { console.warn(`[asset-delete] deleteTranscriptsByAsset failed for ${assetId}:`, err); }
+
+    // ── Remove from all review links ──────────────────────────────────────
+    try { purgeAssetFromAllDeliverables(assetId); }
+    catch (err) { console.warn(`[asset-delete] purgeAssetFromAllDeliverables failed for ${assetId}:`, err); }
 
     // ── Local registry + optional disk file ───────────────────────────────
     const removed = removeAsset(projectId, assetId);

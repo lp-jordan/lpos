@@ -25,6 +25,10 @@ const PROJECT_SUB_LABELS: Record<string, string> = {
   media:       'Media',
 };
 
+function toTitleCase(seg: string): string {
+  return seg.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 type Crumb = { label: string; href: string; isLast: boolean };
 
 export function Breadcrumb() {
@@ -77,7 +81,7 @@ export function Breadcrumb() {
       });
       if (segments[4]) {
         crumbs.push({
-          label:  PROJECT_SUB_LABELS[segments[4]] ?? segments[4],
+          label:  PROJECT_SUB_LABELS[segments[4]] ?? toTitleCase(segments[4]),
           href:   `/projects/clients/${clientEnc}/${projectId}/${segments[4]}`,
           isLast: true,
         });
@@ -90,7 +94,7 @@ export function Breadcrumb() {
       if (!label) {
         const project  = projects.find((p) => p.projectId === seg);
         const prospect = prospects.find((p) => p.prospectId === seg);
-        label = project?.name ?? prospect?.company ?? seg;
+        label = project?.name ?? prospect?.company ?? toTitleCase(seg);
       }
       return { label, href, isLast: i === segments.length - 1 };
     });

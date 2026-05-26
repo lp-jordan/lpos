@@ -9,6 +9,9 @@ const CACHE_PATH = path.join(DOCS_DIR, 'changelog-cache.json');
 
 const MODEL = process.env.CLAUDE_MODEL ?? 'claude-sonnet-4-6';
 
+// Set to false to re-enable once the widget is back in the UI.
+const WHATS_NEW_ENABLED = false;
+
 interface ChangelogEntry {
   timestamp: string;
   title: string;
@@ -21,6 +24,10 @@ interface Cache {
 }
 
 export async function GET() {
+  if (!WHATS_NEW_ENABLED) {
+    return NextResponse.json({ hasContent: false, bullets: [], date: new Date().toISOString().slice(0, 10) });
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   let entries: ChangelogEntry[] = [];

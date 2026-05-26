@@ -320,6 +320,34 @@ function initSchema(db: DatabaseSync): void {
       created_at      TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_delivery_notifs_user_read ON delivery_notifications(user_id, read);
+
+    -- EditPanel auth tokens: one row per (user, machine) approval, minted via the
+    -- /ep/link approval flow. Raw token is only ever returned at mint time and
+    -- stored in editpanel's local config; the DB only sees its sha256 hash.
+    CREATE TABLE IF NOT EXISTS ep_tokens (
+      token_id     TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      machine_name TEXT NOT NULL,
+      token_hash   TEXT NOT NULL UNIQUE,
+      created_at   TEXT NOT NULL,
+      last_used_at TEXT,
+      revoked_at   TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ep_tokens_user    ON ep_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ep_tokens_active  ON ep_tokens(revoked_at);
+
+    -- B2 media sync configuration — operational knobs that admins tune at
+    -- runtime (not credentials, which stay in env/Doppler). Single-row table
+    -- with id=1; B2MediaSyncService reads this on every tick so changes
+    -- take effect within ~1 minute.
+    CREATE TABLE IF NOT EXISTS b2_sync_config (
+      config_id   INTEGER PRIMARY KEY CHECK (config_id = 1),
+      sync_dirs   TEXT NOT NULL DEFAULT '[]',  -- JSON array of absolute paths
+      retain_days INTEGER NOT NULL DEFAULT 30,
+      sync_hour   INTEGER NOT NULL DEFAULT 2,  -- 0–23
+      updated_at  TEXT NOT NULL
+    );
   `);
 }
 
@@ -632,9 +660,41 @@ function runMigrations(db: DatabaseSync): void {
     // Column already exists
   }
 
+  // v15b: NAS ingest *active* flag — the user's persisted toggle state, distinct
+  // from the access permission. Recovered after a `git checkout HEAD -- .` wipe.
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN nas_ingest_active INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
   // v16: isParent flag on clients — marks umbrella org clients.
   try {
     db.exec(`ALTER TABLE clients ADD COLUMN is_parent INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
+  // v17: Attachments — JSON array on prospect_updates and task_comments rows.
+  // Recovered after a `git checkout HEAD -- .` wipe. Originally numbered v15 in
+  // the source session (2026-05-19), but v15/v16 are now occupied by the
+  // nas_ingest_access + is_parent migrations that landed in the meantime.
+  try {
+    db.exec(`ALTER TABLE prospect_updates ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE task_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'`);
+  } catch {
+    // Column already exists
+  }
+
+  // v18: Entity type on prospects — Individual or Organization.
+  // Existing rows default to 'individual'. Recovered alongside v17 — original
+  // session intended this as v16.
+  try {
+    db.exec(`ALTER TABLE prospects ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'individual'`);
   } catch {
     // Column already exists
   }

@@ -1,6 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  useDraggable,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
 import type { Task } from '@/lib/models/task';
 import { getStatusLabel, getStatusColor } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
@@ -11,8 +22,10 @@ interface Props {
   /** Already filtered to taskType='platform' + the active scope. */
   tasks: Task[];
   users: UserSummary[];
+  highlightTaskId: string | null;
   onSelectTask: (taskId: string) => void;
   onCardContextMenu: (e: React.MouseEvent, taskId: string) => void;
+  onCategoryChange: (taskId: string, newCategory: string) => void;
 }
 
 // Tiny local avatar — same look as TaskCard's, just inlined here so the list
@@ -96,9 +109,20 @@ function assignCategoryColors(groups: Group[]): Map<string, string> {
   return map;
 }
 
-export function PlatformListView({ tasks, users, onSelectTask, onCardContextMenu }: Readonly<Props>) {
+// Prefix added to droppable IDs so they don't collide with task IDs (UUIDs).
+const CAT_DROP_PREFIX = 'cat::';
+
+export function PlatformListView({
+  tasks,
+  users,
+  highlightTaskId,
+  onSelectTask,
+  onCardContextMenu,
+  onCategoryChange,
+}: Readonly<Props>) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [categories, setCategories] = useState<string[]>(STARTER_PLATFORM_CATEGORIES);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
 
   // Live category list from the admin-managed store. The admin's sort order
   // dictates the group order in this view. Falls back to the F2 hardcoded list
@@ -154,6 +178,14 @@ export function PlatformListView({ tasks, users, onSelectTask, onCardContextMenu
   // see the full iteration order, not just one label at a time.
   const categoryColors = useMemo(() => assignCategoryColors(groups), [groups]);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const draggingTask = draggingTaskId
+    ? (tasks.find((t) => t.taskId === draggingTaskId) ?? null)
+    : null;
+
   function toggleCollapse(label: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -163,74 +195,148 @@ export function PlatformListView({ tasks, users, onSelectTask, onCardContextMenu
     });
   }
 
+  function handleDragStart(event: DragStartEvent) {
+    setDraggingTaskId(event.active.id as string);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setDraggingTaskId(null);
+    const { active, over } = event;
+    if (!over) return;
+    const overId = over.id as string;
+    if (!overId.startsWith(CAT_DROP_PREFIX)) return;
+    const newCategory = overId.slice(CAT_DROP_PREFIX.length);
+    const task = tasks.find((t) => t.taskId === (active.id as string));
+    if (!task || task.category === newCategory) return;
+    onCategoryChange(task.taskId, newCategory);
+  }
+
   return (
-    <div className="platform-list">
-      <div className="platform-list-cols" role="row">
-        <div className="platform-list-col platform-list-col--desc">Description</div>
-        <div className="platform-list-col">Client</div>
-        <div className="platform-list-col">Person</div>
-        <div className="platform-list-col">Status</div>
-        <div className="platform-list-col">Priority</div>
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <div className="platform-list">
+        <div className="platform-list-cols" role="row">
+          <div className="platform-list-col platform-list-col--handle" aria-hidden="true" />
+          <div className="platform-list-col platform-list-col--desc">Description</div>
+          <div className="platform-list-col">Client</div>
+          <div className="platform-list-col">Person</div>
+          <div className="platform-list-col">Status</div>
+          <div className="platform-list-col">Priority</div>
+        </div>
+
+        {groups.length === 0 && (
+          <p className="platform-list-empty">No platform tasks yet.</p>
+        )}
+
+        {groups.map((group) => {
+          const isCollapsed = collapsed.has(group.label);
+          const color = categoryColors.get(group.label) ?? ORPHAN_COLOR;
+          // Append two hex chars to the 6-char hex to control alpha at the CSS
+          // layer without needing color-mix() — works in every browser.
+          const colorFaint = `${color}22`; // ~13% opacity tint
+          return (
+            <DroppableCategoryGroup
+              key={group.label}
+              group={group}
+              color={color}
+              colorFaint={colorFaint}
+              isCollapsed={isCollapsed}
+              onToggleCollapse={() => toggleCollapse(group.label)}
+              users={users}
+              highlightTaskId={highlightTaskId}
+              onSelectTask={onSelectTask}
+              onCardContextMenu={onCardContextMenu}
+            />
+          );
+        })}
       </div>
 
-      {groups.length === 0 && (
-        <p className="platform-list-empty">No platform tasks yet.</p>
+      <DragOverlay>
+        {draggingTask && (
+          <div className="platform-list-drag-overlay">
+            {draggingTask.description}
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+function DroppableCategoryGroup({
+  group,
+  color,
+  colorFaint,
+  isCollapsed,
+  onToggleCollapse,
+  users,
+  highlightTaskId,
+  onSelectTask,
+  onCardContextMenu,
+}: Readonly<{
+  group: Group;
+  color: string;
+  colorFaint: string;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+  users: UserSummary[];
+  highlightTaskId: string | null;
+  onSelectTask: (taskId: string) => void;
+  onCardContextMenu: (e: React.MouseEvent, taskId: string) => void;
+}>) {
+  const { setNodeRef, isOver } = useDroppable({ id: `${CAT_DROP_PREFIX}${group.label}` });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`platform-list-group${isOver ? ' platform-list-group--drag-over' : ''}`}
+      style={{ '--cat-color': color, '--cat-color-faint': colorFaint } as React.CSSProperties}
+    >
+      <button
+        type="button"
+        className="platform-list-group-header"
+        onClick={onToggleCollapse}
+        aria-expanded={!isCollapsed}
+      >
+        <span className="platform-list-group-chevron">{isCollapsed ? '▸' : '▾'}</span>
+        <span className="platform-list-group-name">
+          {group.label}
+          {group.isOrphan && <span className="platform-list-group-orphan"> (legacy)</span>}
+        </span>
+        <span className="platform-list-group-count">{group.tasks.length}</span>
+      </button>
+
+      {!isCollapsed && group.tasks.length === 0 && (
+        <div className="platform-list-group-empty">No tasks in this category.</div>
       )}
 
-      {groups.map((group) => {
-        const isCollapsed = collapsed.has(group.label);
-        const color = categoryColors.get(group.label) ?? ORPHAN_COLOR;
-        // Append two hex chars to the 6-char hex to control alpha at the CSS
-        // layer without needing color-mix() — works in every browser.
-        const colorFaint = `${color}22`; // ~13% opacity tint
-        return (
-          <div
-            key={group.label}
-            className="platform-list-group"
-            style={{ '--cat-color': color, '--cat-color-faint': colorFaint } as React.CSSProperties}
-          >
-            <button
-              type="button"
-              className="platform-list-group-header"
-              onClick={() => toggleCollapse(group.label)}
-              aria-expanded={!isCollapsed}
-            >
-              <span className="platform-list-group-chevron">{isCollapsed ? '▸' : '▾'}</span>
-              <span className="platform-list-group-name">
-                {group.label}
-                {group.isOrphan && <span className="platform-list-group-orphan"> (legacy)</span>}
-              </span>
-              <span className="platform-list-group-count">{group.tasks.length}</span>
-            </button>
-
-            {!isCollapsed && group.tasks.length === 0 && (
-              <div className="platform-list-group-empty">No tasks in this category.</div>
-            )}
-
-            {!isCollapsed && group.tasks.map((task) => (
-              <PlatformListRow
-                key={task.taskId}
-                task={task}
-                users={users}
-                onSelectTask={onSelectTask}
-                onCardContextMenu={onCardContextMenu}
-              />
-            ))}
-          </div>
-        );
-      })}
+      {!isCollapsed && group.tasks.map((task) => (
+        <DraggableListRow
+          key={task.taskId}
+          task={task}
+          users={users}
+          highlight={highlightTaskId === task.taskId}
+          onSelectTask={onSelectTask}
+          onCardContextMenu={onCardContextMenu}
+        />
+      ))}
     </div>
   );
 }
 
-function PlatformListRow({
-  task, users, onSelectTask, onCardContextMenu,
+function DraggableListRow({
+  task,
+  users,
+  highlight,
+  onSelectTask,
+  onCardContextMenu,
 }: Readonly<{
   task: Task;
   users: UserSummary[];
+  highlight: boolean;
   onSelectTask: (taskId: string) => void;
   onCardContextMenu: (e: React.MouseEvent, taskId: string) => void;
 }>) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.taskId });
+
   const statusLabel = getStatusLabel(task.taskType, task.status);
   const statusColor = getStatusColor(task.taskType, task.status);
   const assignees = users.filter((u) => task.assignedTo.includes(u.id));
@@ -239,13 +345,32 @@ function PlatformListRow({
 
   return (
     <div
-      className="platform-list-row"
+      ref={setNodeRef}
+      data-task-id={task.taskId}
+      className={`platform-list-row${highlight ? ' platform-list-row--highlight' : ''}${isDragging ? ' platform-list-row--dragging' : ''}`}
       role="row"
       onClick={() => onSelectTask(task.taskId)}
       onContextMenu={(e) => onCardContextMenu(e, task.taskId)}
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onSelectTask(task.taskId); }}
     >
+      <div
+        className="platform-list-drag-handle"
+        {...attributes}
+        {...listeners}
+        onClick={(e) => e.stopPropagation()}
+        title="Drag to move to a different category"
+      >
+        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
+          <circle cx="2" cy="2"  r="1.5"/>
+          <circle cx="8" cy="2"  r="1.5"/>
+          <circle cx="2" cy="7"  r="1.5"/>
+          <circle cx="8" cy="7"  r="1.5"/>
+          <circle cx="2" cy="12" r="1.5"/>
+          <circle cx="8" cy="12" r="1.5"/>
+        </svg>
+      </div>
+
       <div className="platform-list-cell platform-list-cell--desc" title={task.description}>
         {task.description}
       </div>

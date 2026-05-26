@@ -1,9 +1,11 @@
 import { getProjectStore } from '@/lib/services/container';
 import { readRegistry } from '@/lib/store/media-registry';
+import { listPhotos } from '@/lib/store/photo-registry';
 import { readScriptsRegistry } from '@/lib/store/scripts-registry';
 
 export interface ClientStats {
-  mediaCount: number;
+  videoCount: number;
+  photoCount: number;
   scriptCount: number;
 }
 
@@ -18,8 +20,9 @@ export function getClientStats(): Record<string, ClientStats> {
 
   for (const project of projects) {
     const client = project.clientName;
-    if (!stats[client]) stats[client] = { mediaCount: 0, scriptCount: 0 };
-    stats[client].mediaCount += readRegistry(project.projectId).length;
+    if (!stats[client]) stats[client] = { videoCount: 0, photoCount: 0, scriptCount: 0 };
+    stats[client].videoCount += readRegistry(project.projectId).length;
+    stats[client].photoCount += listPhotos(project.projectId).length;
     stats[client].scriptCount += readScriptsRegistry(project.projectId).length;
   }
 

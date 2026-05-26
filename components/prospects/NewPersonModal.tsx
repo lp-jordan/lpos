@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { Prospect } from '@/lib/models/prospect';
+import type { EntityType, Prospect } from '@/lib/models/prospect';
 import { ACCOUNT_MODELS, PERSON_SOURCES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 
@@ -15,6 +15,7 @@ interface Props {
 export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose }: Props) {
   const companyRef = useRef<HTMLInputElement>(null);
   const [company,      setCompany]      = useState('');
+  const [entityType,   setEntityType]   = useState<EntityType>('individual');
   const [website,      setWebsite]      = useState('');
   const [industry,     setIndustry]     = useState('');
   const [source,       setSource]       = useState('');
@@ -41,6 +42,7 @@ export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company:      company.trim(),
+          entityType,
           website:      website.trim() || null,
           industry:     industry.trim() || null,
           source:       source || null,
@@ -81,6 +83,30 @@ export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose 
                 autoFocus
                 disabled={saving}
               />
+            </div>
+
+            {/* Entity type */}
+            <div className="modal-field">
+              <label className="modal-label">Type <span style={{ color: 'var(--color-error,#e55)' }}>*</span></label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {(['individual', 'organization'] as const).map((et) => (
+                  <button
+                    key={et}
+                    type="button"
+                    onClick={() => setEntityType(et)}
+                    disabled={saving}
+                    style={{
+                      flex: 1, padding: '0.35rem 0', borderRadius: 6, fontSize: '0.82rem', fontWeight: 600,
+                      border: `1px solid ${entityType === et ? 'var(--accent)' : 'var(--color-border,#444)'}`,
+                      background: entityType === et ? 'var(--accent-soft)' : 'transparent',
+                      color: entityType === et ? 'var(--accent-strong)' : 'var(--muted)',
+                      cursor: 'pointer', transition: 'all 120ms ease', textTransform: 'capitalize',
+                    }}
+                  >
+                    {et}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Website + Industry */}

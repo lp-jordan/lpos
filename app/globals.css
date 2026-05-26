@@ -1813,6 +1813,25 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   background: var(--line);
 }
 
+/* Activity sort bucket dividers */
+.proj-bucket-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 2px 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.proj-bucket-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
 .proj-new-btn {
   padding: 8px 18px;
   border: 1px solid var(--accent);
@@ -2314,6 +2333,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 /* Upload feedback */
 .m-upload-feedback { color: var(--success); font-size: 0.84rem; margin: 0; }
 .m-upload-feedback--error { color: #e07070; }
+.m-upload-feedback--info  { color: var(--muted); }
 .m-upload-feedback--info  { color: var(--muted); }
 
 /* File meta (size) */
@@ -15029,6 +15049,22 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   white-space: nowrap;
 }
 
+.assets-new-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--accent-dim, rgba(219,175,95,0.3));
+  border-radius: var(--radius-sm);
+}
+
+.assets-new-folder-hint {
+  font-size: 0.75rem;
+  color: var(--muted-soft);
+  white-space: nowrap;
+}
+
 /* Lock overlay */
 .assets-lock-overlay {
   display: flex;
@@ -15273,6 +15309,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: var(--text);
 }
 .assets-folder-row--open { color: var(--text); }
+.assets-folder-row--drag-target {
+  background: rgba(219, 175, 95, 0.12) !important;
+  outline: 1px solid rgba(219, 175, 95, 0.45);
+  outline-offset: -1px;
+  color: var(--text);
+}
 .assets-folder-row--drag-target {
   background: rgba(219, 175, 95, 0.12) !important;
   outline: 1px solid rgba(219, 175, 95, 0.45);
@@ -16531,6 +16573,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .platform-list-row--highlight { animation: task-highlight-pulse 1.6s ease-out forwards; }
+.platform-list-row--highlight { animation: task-highlight-pulse 1.6s ease-out forwards; }
 .platform-list-row--dragging { opacity: 0; }
 
 /* Drag handle: hidden until the row is hovered, then fades in as a subtle grip. */
@@ -17197,6 +17240,102 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: var(--muted);
   font-size: 0.72rem;
   font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Mobile layout fixes — keep elements on screen on small devices ─────────── */
+/* Appended last so these win over earlier equal-specificity rules. CSS-only,    */
+/* gated behind small-screen media queries, so desktop is unaffected.            */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  /* Home hero: tiles previously sat in a fixed non-wrapping row (3×160px ≈ 520px)
+     and clipped off the right edge. Allow wrapping and tighten spacing. */
+  .home-hero {
+    gap: 28px;
+    padding: 28px 16px;
+  }
+  .home-tiles {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  /* Project workflow nav: was a chunky grid that collapsed to one full-width
+     column (7 giant stacked buttons). Turn it into a horizontal-scroll pill
+     strip so all stages stay reachable without dominating the screen. */
+  .workflow-nav {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .workflow-nav::-webkit-scrollbar { display: none; }
+  .workflow-link {
+    flex: 0 0 auto;
+    padding: 9px 15px;
+    border-radius: 999px;
+    white-space: nowrap;
+    font-size: 0.86rem;
+  }
+
+  /* Client grid: was a fixed 4-column grid with no breakpoint. */
+  .proj-client-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  /* Slide-in side panels (shares/deliverables, script editor) sat behind the
+     56px bottom tab bar, hiding their footers and close buttons. Lift them. */
+  .sh-panel,
+  .sep {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  /* Toolbars that didn't wrap until they'd already overflowed. */
+  .proj-scripts-toolbar-right {
+    margin-left: 0;
+    width: 100%;
+  }
+  .proj-transcript-filter-input {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Two primary home tiles per row on the narrowest phones. */
+  .home-tile {
+    width: 132px;
+    height: 132px;
+  }
+
+  /* Single-column client grid below 480px. */
+  .proj-client-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Media list rows: 6 columns squeezed metadata/badges to unreadable widths.
+     Drop the secondary columns and keep name + actions. */
+  .ma-row {
+    grid-template-columns: 28px 52px 1fr auto;
+    gap: 8px;
+  }
+  .ma-row-meta,
+  .ma-row-badges {
+    display: none;
+  }
+
+  /* Bulk action bar: let buttons wrap instead of forcing horizontal scroll. */
+  .proj-bulk-bar {
+    flex-wrap: wrap;
+  }
+
+  /* Task board columns: narrower so fewer columns overflow horizontally. */
+  .task-col {
+    min-width: 150px;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */

@@ -11,6 +11,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { FrameIOComment } from '@/lib/services/frameio';
 import { formatTimecode } from '@/lib/utils/time';
+import { useHlsPlayer } from '@/hooks/useHlsPlayer';
 
 interface Props {
   src:             string;
@@ -48,6 +49,9 @@ export function InlineVideoPlayer({
     onSeekHandled?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekTarget]);
+
+  // Attach HLS stream (or plain URL) to the video element.
+  useHlsPlayer(videoRef, src);
 
   // Reset state when src changes
   useEffect(() => {
@@ -91,7 +95,6 @@ export function InlineVideoPlayer({
           key={assetId}
           ref={videoRef}
           className="ivp-video"
-          src={src}
           preload="metadata"
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}

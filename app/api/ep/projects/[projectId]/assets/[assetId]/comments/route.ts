@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireEpSecret } from '@/lib/services/ep-auth';
+import { requireEpToken } from '@/lib/services/ep-auth';
 import { getAsset } from '@/lib/store/media-registry';
 import { getComments } from '@/lib/services/frameio';
 import { getCommentAuthor } from '@/lib/store/comment-authors-store';
@@ -13,8 +13,8 @@ type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
  * EditPanel uses these to place review markers on the source Resolve timeline.
  */
 export async function GET(req: NextRequest, { params }: Ctx) {
-  const authError = requireEpSecret(req);
-  if (authError) return authError;
+  const auth = requireEpToken(req);
+  if (auth instanceof NextResponse) return auth;
 
   const { projectId, assetId } = await params;
   const asset = getAsset(projectId, assetId);

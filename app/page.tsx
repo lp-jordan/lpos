@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
-import { WhatsNewWidget } from '@/components/home/WhatsNewWidget';
+// import { WhatsNewWidget } from '@/components/home/WhatsNewWidget'; // disabled — nobody using it
 
 export default async function HomePage() {
   const cookieStore = await cookies();
@@ -16,7 +16,7 @@ export default async function HomePage() {
       <div className="home-brand">
         <span className="home-title-wrap">
           <h1 className="home-title">LPOS</h1>
-          <WhatsNewWidget />
+          {/* <WhatsNewWidget /> */}
         </span>
         <p className="home-subtitle">LeaderPass Operating System</p>
       </div>

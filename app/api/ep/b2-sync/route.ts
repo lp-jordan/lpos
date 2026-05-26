@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireEpSecret } from '@/lib/services/ep-auth';
+import { requireEpToken } from '@/lib/services/ep-auth';
 import { getB2MediaSyncService } from '@/lib/services/container';
 
 /**
@@ -7,8 +7,8 @@ import { getB2MediaSyncService } from '@/lib/services/container';
  * Returns the current B2 media sync status (last run result + live state).
  */
 export async function GET(req: NextRequest) {
-  const authError = requireEpSecret(req);
-  if (authError) return authError;
+  const auth = requireEpToken(req);
+  if (auth instanceof NextResponse) return auth;
 
   const svc = getB2MediaSyncService();
   if (!svc) {
@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
  * Returns 409 if a sync is already running.
  */
 export async function POST(req: NextRequest) {
-  const authError = requireEpSecret(req);
-  if (authError) return authError;
+  const auth = requireEpToken(req);
+  if (auth instanceof NextResponse) return auth;
 
   const svc = getB2MediaSyncService();
   if (!svc) {

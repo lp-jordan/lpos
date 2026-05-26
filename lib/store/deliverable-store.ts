@@ -305,6 +305,12 @@ export function removeAssetFromDeliverable(deliverableId: string, assetId: strin
   ).run(deliverableId, assetId);
 }
 
+export function purgeAssetFromAllDeliverables(assetId: string): void {
+  getCoreDb().prepare(
+    `DELETE FROM deliverable_assets WHERE asset_id = ?`,
+  ).run(assetId);
+}
+
 export function deleteDeliverable(deliverableId: string): boolean {
   const result = getCoreDb()
     .prepare(`DELETE FROM deliverables WHERE deliverable_id = ?`)

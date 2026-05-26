@@ -1,5 +1,6 @@
 export const APP_SESSION_COOKIE = 'lpos_session';
 export const GOOGLE_STATE_COOKIE = 'lpos_google_state';
+export const POST_SIGNIN_REDIRECT_COOKIE = 'lpos_post_signin';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 import type { UserRole } from '@/lib/models/user';

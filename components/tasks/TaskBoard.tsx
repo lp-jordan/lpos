@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   DndContext,
   DragOverlay,
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export function TaskBoard({ initialTasks, allProjects, users, currentUserId, commentCounts: initialCommentCounts }: Readonly<Props>) {
+  const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(initialCommentCounts);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -54,23 +56,41 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     setPlatformView(next);
     try { window.localStorage.setItem('lpos:tasks:platformView', next); } catch { /* ignore */ }
   }
-  const [viewScope, setViewScope] = useState<'mine' | 'all'>('mine');
+  const [viewScope, setViewScope] = useState<'mine' | 'others' | 'all'>('mine');
   const [scopeLoading, setScopeLoading] = useState(false);
   const [phaseAnimKey, setPhaseAnimKey] = useState(0);
   const [contextMenu, setContextMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
   const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
-  // Refetch task list whenever the Mine/All scope changes. 'mine' returns only tasks
-  // the current user created or is assigned to; 'all' returns every task in the system.
-  // The first run refetches 'mine' redundantly with initialTasks — cheap, keeps state
-  // canonical against the server if the page has been open for a while.
+  // On mount, read ?task= param, trigger highlight, then clean the URL.
+  useEffect(() => {
+    const taskId = new URLSearchParams(window.location.search).get('task');
+    if (!taskId) return;
+    setHighlightedId(taskId);
+    router.replace('/dashboard', { scroll: false } as Parameters<typeof router.replace>[1]);
+  }, [router]);
+
+  useEffect(() => {
+    if (!highlightedId) return;
+    const scrollTimer = setTimeout(() => {
+      document.querySelector(`[data-task-id="${highlightedId}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+    const clearTimer = setTimeout(() => setHighlightedId(null), 1800);
+    return () => { clearTimeout(scrollTimer); clearTimeout(clearTimer); };
+  }, [highlightedId]);
+
+  // Refetch task list on scope change. Both 'mine' and 'others' need the full task list
+  // to filter client-side; we always fetch scope=all from the server and filter in render.
+  // The first run refetches redundantly with initialTasks — cheap, keeps state canonical.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setScopeLoading(true);
       try {
-        const res = await fetch(`/api/tasks${viewScope === 'all' ? '?scope=all' : ''}`);
+        const res = await fetch('/api/tasks?scope=all');
         if (!res.ok) throw new Error(`Failed to load tasks (${res.status})`);
         const data = await res.json() as { tasks: Task[] };
         if (!cancelled) setTasks(data.tasks);
@@ -97,12 +117,11 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   const selectedTask = tasks.find((t) => t.taskId === selectedTaskId) ?? null;
   const taskTypeConfig = getTaskTypeConfig(activeTaskType);
 
-  // Filtered tasks: scope (mine/all) + active task type
+  // Filtered tasks: scope (mine/others) + active task type
   const visibleTasks = tasks.filter((t) => {
     if (t.taskType !== activeTaskType) return false;
-    if (viewScope === 'mine') {
-      return t.assignedTo.includes(currentUserId);
-    }
+    if (viewScope === 'mine')   return  t.assignedTo.includes(currentUserId);
+    if (viewScope === 'others') return !t.assignedTo.includes(currentUserId);
     return true;
   });
 
@@ -227,13 +246,32 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
       setDoneCollapsed(true);
     }
     if (viewScope === 'mine' && !task.assignedTo.includes(currentUserId)) {
-      setViewScope('all');
+      setViewScope('others');
     }
   }, [activeTaskType, viewScope, currentUserId, upsertTask]);
 
   function handleCardContextMenu(e: React.MouseEvent, taskId: string) {
     e.preventDefault();
     setContextMenu({ taskId, x: e.clientX, y: e.clientY });
+  }
+
+  async function handleCategoryChange(taskId: string, newCategory: string) {
+    const task = tasks.find((t) => t.taskId === taskId);
+    if (!task) return;
+    setTasks((prev) => prev.map((t) => t.taskId === taskId ? { ...t, category: newCategory } : t));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: newCategory }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { task: Task };
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? data.task : t));
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? task : t));
+      setDragError(`Failed to move task: ${(err as Error).message}`);
+    }
   }
 
   async function handleRenameCommit(taskId: string, title: string) {
@@ -377,8 +415,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
         <PlatformListView
           tasks={visibleTasks}
           users={users}
+          highlightTaskId={highlightedId}
           onSelectTask={(id) => setSelectedTaskId((prev) => prev === id ? null : id)}
           onCardContextMenu={handleCardContextMenu}
+          onCategoryChange={(taskId, cat) => void handleCategoryChange(taskId, cat)}
         />
       ) : (
         <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -399,6 +439,7 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
                 users={users}
                 commentCounts={commentCounts}
                 selectedTaskId={selectedTaskId}
+                highlightTaskId={highlightedId}
                 renamingTaskId={renamingTaskId}
                 collapsed={s.value === taskTypeConfig.terminalStatus ? doneCollapsed : false}
                 onToggleCollapse={() => setDoneCollapsed((v) => !v)}

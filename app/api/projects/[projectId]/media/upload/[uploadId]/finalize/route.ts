@@ -140,5 +140,6 @@ export async function POST(
   // Registered successfully.
   db.prepare("UPDATE upload_sessions SET status = 'finalized', updated_at = ? WHERE upload_id = ?")
     .run(now, uploadId);
+  getProjectStore().touch(projectId);
   return NextResponse.json({ asset: result.asset });
 }

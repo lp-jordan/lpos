@@ -962,7 +962,6 @@ export async function postComment(
       owner?:       { name?: string; avatar_url?: string | null };
     };
   };
-
   const c      = result.data;
   if (!c) throw new Error('Frame.io postComment returned no data');
   const author = c.author ?? c.owner;
@@ -982,37 +981,25 @@ export async function postComment(
 
 /**
  * Post a reply to an existing comment.
- * POST /v4/accounts/{id}/files/{file_id}/comments  (with parent_id)
+ *
+ * Frame.io V4 has no reply-creation endpoint — replies are not in the
+ * CreateCommentParamsData schema. We work around this by posting a top-level
+ * comment with a "Reply to above: " prefix so reviewers see the context in
+ * Frame.io, while LPOS stores the parentId→replyId mapping separately and
+ * reconstructs the thread on read.
  */
 export async function postReply(
-  fileId:   string,
-  parentId: string,
-  text:     string,
+  fileId:    string,
+  _parentId: string, // stored by the route layer; not sent to Frame.io
+  text:      string,
 ): Promise<FrameIOCommentReply> {
-  const { accountId } = await discover();
-  const res    = await fioFetch(
-    `${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`,
-    { method: 'POST', body: JSON.stringify({ data: { text, parent_id: parentId } }) },
-  );
-  const result = await res.json() as {
-    data?: {
-      id:           string;
-      text:         string;
-      inserted_at?: string | null;
-      created_at?:  string | null;
-      author?:      { name?: string; avatar_url?: string | null };
-      owner?:       { name?: string; avatar_url?: string | null };
-    };
-  };
-  const c = result.data;
-  if (!c) throw new Error('Frame.io postReply returned no data');
-  const author = c.author ?? c.owner;
+  const comment = await postComment(fileId, `Reply to above: ${text}`, null, null);
   return {
-    id:           c.id,
-    text:         c.text,
-    authorName:   author?.name ?? '',
-    authorAvatar: author?.avatar_url ?? null,
-    createdAt:    c.inserted_at ?? c.created_at ?? '',
+    id:           comment.id,
+    text,           // return clean text; Frame.io stores the prefixed version
+    authorName:   comment.authorName,
+    authorAvatar: comment.authorAvatar,
+    createdAt:    comment.createdAt,
   };
 }
 
@@ -1143,13 +1130,12 @@ export interface FrameIOMediaLinks {
  * the full string in encodeURIComponent — that encodes commas as %2C, which
  * caused high_quality and efficient to silently return null previously.
  *
- * NOTE: high_quality and efficient are HLS manifest URLs
- * (stream-download.frame.io/manifest/hls?token=JWT), not direct MP4 files.
- * They require hls.js to play in Chrome/Firefox. Only originalUrl is a plain
- * MP4 that works as a bare <video src> cross-browser.
- *
- * TODO: integrate hls.js to use the smaller transcoded HLS streams instead of
- * the raw original file. Until then, frameio-stream/route.ts uses originalUrl.
+ * NOTE: high_quality.download_url and efficient.download_url are NOT HLS manifests.
+ * Despite the /manifest/hls path on stream-download.frame.io, they carry
+ * CloudFront overrides (response-content-type=video/mp4, response-content-disposition=attachment)
+ * that force the CDN to serve the raw video file as a download.
+ * Only original.inline_url is suitable for inline browser playback via <video src>.
+ * frameio-stream/route.ts uses originalUrl for this reason.
  */
 export async function getFileMediaLinks(fileId: string): Promise<FrameIOMediaLinks> {
   const { accountId } = await discover();

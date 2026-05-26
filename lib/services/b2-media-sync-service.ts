@@ -8,7 +8,7 @@
  *   1. List all existing B2 objects and build a size-indexed map.
  *   2. Walk each configured source directory recursively.
  *   3. Upload any file missing from B2 or whose local size differs.
- *   4. After uploads, sweep objects older than RETAIN_DAYS.
+ *   4. After uploads, sweep objects older than retainDays.
  *
  * Size comparison is the incremental check — media files don't change
  * silently, so matching size means the upload is current.
@@ -18,19 +18,23 @@
  * 4 concurrent). Suitable for multi-GB raw footage.
  *
  * Schedule:
- *   Polls once per minute. Fires when the wall-clock hour matches
- *   B2_MEDIA_SYNC_HOUR and hasn't already run today.
+ *   Polls once per minute. Fires when the wall-clock hour matches the
+ *   admin-configured sync_hour and hasn't already run today.
  *
- * Required env vars:
+ * Credentials (Doppler env vars — required):
  *   B2_MEDIA_ENDPOINT          — S3-compatible URL (e.g. https://s3.us-west-004.backblazeb2.com)
  *   B2_MEDIA_KEY_ID            — Application Key ID
  *   B2_MEDIA_APPLICATION_KEY   — Application Key
  *   B2_MEDIA_BUCKET            — bucket name
- *   B2_MEDIA_SYNC_DIRS         — colon-separated absolute paths to sync
  *
- * Optional:
- *   B2_MEDIA_RETAIN_DAYS       — days to keep; default 30
- *   B2_MEDIA_SYNC_HOUR         — 24h hour to run (0–23); default 2 (2 AM)
+ * Operational knobs (admin-tunable via Settings → B2 Media Sync, stored in
+ * lpos-core.sqlite via b2-sync-config-store):
+ *   syncDirs                   — absolute paths to walk and upload
+ *   retainDays                 — days to keep before sweeping
+ *   syncHour                   — wall-clock hour (0–23) for the daily run
+ *
+ * Service reads these on every poll, so admin edits take effect within ~1
+ * minute without restarting LPOS.
  */
 
 import fs from 'node:fs';
@@ -38,21 +42,13 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { getB2SyncConfig } from '@/lib/store/b2-sync-config-store';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DATA_DIR     = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const RETAIN_DAYS  = parseInt(process.env.B2_MEDIA_RETAIN_DAYS ?? '30', 10);
-const SYNC_HOUR    = parseInt(process.env.B2_MEDIA_SYNC_HOUR   ?? '2',  10);
-const STATUS_FILE  = path.join(DATA_DIR, 'b2-media-sync-status.json');
-const POLL_MS      = 60_000; // check every minute
-
-function getSyncDirs(): string[] {
-  return (process.env.B2_MEDIA_SYNC_DIRS ?? '')
-    .split(':')
-    .map((d) => d.trim())
-    .filter(Boolean);
-}
+const DATA_DIR    = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
+const STATUS_FILE = path.join(DATA_DIR, 'b2-media-sync-status.json');
+const POLL_MS     = 60_000; // check every minute
 
 export function isB2MediaConfigured(): boolean {
   return !!(
@@ -119,12 +115,15 @@ export class B2MediaSyncService {
       console.log('[B2MediaSync] credentials not configured — service idle');
       return;
     }
-    if (getSyncDirs().length === 0) {
-      console.log('[B2MediaSync] B2_MEDIA_SYNC_DIRS not set — service idle');
-      return;
-    }
 
-    console.log(`[B2MediaSync] starting — sync hour ${SYNC_HOUR}, retain ${RETAIN_DAYS} days, dirs: ${getSyncDirs().join(', ')}`);
+    // We always start the timer once creds are present — sync_dirs can be
+    // edited in admin settings at any time and the next tick picks it up.
+    const cfg = getB2SyncConfig();
+    if (cfg.syncDirs.length === 0) {
+      console.log('[B2MediaSync] no sync dirs configured yet (set them in Settings → B2 Media Sync); polling will pick up changes');
+    } else {
+      console.log(`[B2MediaSync] starting — sync hour ${cfg.syncHour}, retain ${cfg.retainDays} days, dirs: ${cfg.syncDirs.join(', ')}`);
+    }
     this.timer = setInterval(() => this.tick(), POLL_MS);
   }
 
@@ -135,9 +134,11 @@ export class B2MediaSyncService {
   // ── Scheduling ─────────────────────────────────────────────────────────────
 
   private tick(): void {
+    const cfg   = getB2SyncConfig();
+    if (cfg.syncDirs.length === 0) return;        // nothing to do yet
     const now   = new Date();
     const today = now.toISOString().slice(0, 10);
-    if (now.getHours() === SYNC_HOUR && this.lastRunDate !== today) {
+    if (now.getHours() === cfg.syncHour && this.lastRunDate !== today) {
       this.lastRunDate = today; // mark before async to prevent double-fire
       void this.runSync();
     }
@@ -153,7 +154,8 @@ export class B2MediaSyncService {
 
     this.isRunning = true;
     const timestamp = new Date().toISOString();
-    const dirs      = getSyncDirs();
+    const cfg       = getB2SyncConfig();
+    const dirs      = cfg.syncDirs;
     const client    = makeClient();
     const bucket    = getBucket();
 
@@ -231,8 +233,8 @@ export class B2MediaSyncService {
       console.error(`[B2MediaSync] fatal sync error: ${(err as Error).message}`);
     }
 
-    // 3. Retention sweep
-    const swept = await this.sweep(client, bucket);
+    // 3. Retention sweep — uses the same cfg snapshot taken at start of run
+    const swept = await this.sweep(client, bucket, cfg.retainDays);
 
     const result: B2SyncRunResult = {
       timestamp, dirs, uploaded, skipped, failed, swept, errors,
@@ -246,9 +248,9 @@ export class B2MediaSyncService {
 
   // ── Retention sweep ────────────────────────────────────────────────────────
 
-  private async sweep(client: S3Client, bucket: string): Promise<number> {
+  private async sweep(client: S3Client, bucket: string, retainDays: number): Promise<number> {
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - RETAIN_DAYS);
+    cutoff.setDate(cutoff.getDate() - retainDays);
     let swept = 0;
     try {
       let token: string | undefined;
@@ -275,11 +277,12 @@ export class B2MediaSyncService {
   // ── Status ─────────────────────────────────────────────────────────────────
 
   getStatus(): B2SyncStatus {
+    const cfg = getB2SyncConfig();
     return {
       configured:  isB2MediaConfigured(),
       running:     this.isRunning,
-      nextRunHour: SYNC_HOUR,
-      syncDirs:    getSyncDirs(),
+      nextRunHour: cfg.syncHour,
+      syncDirs:    cfg.syncDirs,
       lastRun:     this.loadLastRun(),
     };
   }

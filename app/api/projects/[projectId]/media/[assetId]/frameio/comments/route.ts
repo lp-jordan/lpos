@@ -13,6 +13,7 @@ import { getComments, postComment, postReply, deleteComment, updateComment, togg
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById } from '@/lib/store/user-store';
 import { getCommentAuthor, setCommentAuthor, removeCommentAuthor } from '@/lib/store/comment-authors-store';
+import { getAllReplyParents, setReplyParent, removeReplyParent } from '@/lib/store/comment-replies-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -31,9 +32,31 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
 
   try {
-    const comments = await getComments(fileId);
+    const comments    = await getComments(fileId);
+    const replyMap    = getAllReplyParents(projectId);
+    const replyIds    = new Set(Object.keys(replyMap));
+
+    // Separate comments that LPOS posted as fake top-level replies
+    const topLevel    = comments.filter(c => !replyIds.has(c.id));
+    const lposReplies = comments.filter(c =>  replyIds.has(c.id));
+
+    // Inject fake replies back into their parent's replies array
+    for (const r of lposReplies) {
+      const parent = topLevel.find(c => c.id === replyMap[r.id]);
+      if (!parent) continue;
+      const authorEntry = getCommentAuthor(projectId, r.id);
+      parent.replies.push({
+        id:           r.id,
+        text:         r.text.replace(/^Reply to above:\s*/i, ''),
+        authorName:   authorEntry?.name ?? r.authorName,
+        authorAvatar: r.authorAvatar,
+        createdAt:    r.createdAt,
+      });
+    }
+
     patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
-    const named = comments.map(c => {
+
+    const named = topLevel.map(c => {
       const entry = getCommentAuthor(projectId, c.id);
       return {
         ...c,
@@ -77,6 +100,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     // Reply to an existing comment
     if (body.parentId) {
       const reply = await postReply(fileId, body.parentId, body.text.trim());
+      setReplyParent(projectId, reply.id, body.parentId);
+      if (lposUser) setCommentAuthor(projectId, reply.id, { name: lposUser.name, userId: lposUser.id });
       patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
       const namedReply = lposUser ? { ...reply, authorName: lposUser.name } : reply;
       return NextResponse.json({ reply: namedReply, parentId: body.parentId }, { status: 201 });
@@ -89,6 +114,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     const named = { ...comment, ...(lposUser ? { authorName: lposUser.name } : {}), fromFrame: false };
     return NextResponse.json({ comment: named }, { status: 201 });
   } catch (err) {
+    console.error('[frameio/comments POST]', (err as Error).message);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
@@ -141,6 +167,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   try {
     await deleteComment(commentId);
     removeCommentAuthor(projectId, commentId);
+    removeReplyParent(projectId, commentId);
     patchAsset(projectId, assetId, {
       frameio: { commentCount: Math.max(0, asset.frameio.commentCount - 1) },
     });

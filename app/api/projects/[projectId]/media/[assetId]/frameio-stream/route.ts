@@ -15,6 +15,10 @@ type Params = { params: Promise<{ projectId: string; assetId: string }> };
  * its memory budget for large files, making LPOS unreachable for all users
  * while theater mode was open (server process alive, no connections accepted).
  *
+ * Uses high_quality.download_url (H.264 1080p transcode) so that .mov and
+ * other non-web formats play in all browsers — Frame.io transcodes everything.
+ * Falls back to original.inline_url if the transcode isn't ready yet.
+ *
  * Direct redirect is safe because Frame.io CDN URLs are pre-signed
  * CloudFront/S3 URLs — authentication is in the URL signature, not the
  * request origin. The <video> element loads them without CORS enforcement.
@@ -38,10 +42,9 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<str
   if (!frameioFileId) return null;
 
   const links = await getFileMediaLinks(frameioFileId);
-  // highQualityUrl and efficientUrl are HLS manifest URLs — they require hls.js
-  // to play in Chrome/Firefox and cannot be used as a bare <video src>.
-  // TODO: use links.highQualityUrl once hls.js is integrated.
-  const url   = links.originalUrl;
+  // Prefer the H.264 1080p transcode — works for all original formats including
+  // .mov. Falls back to inline_url (original file) if transcode isn't ready yet.
+  const url = links.highQualityUrl ?? links.originalUrl;
   if (!url) return null;
 
   urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -61,6 +64,13 @@ export async function GET(req: NextRequest, { params }: Params) {
         { error: 'No stream URL available yet — Frame.io may still be processing' },
         { status: 404 },
       );
+    }
+
+    // ?raw — return the CDN URL as JSON instead of redirecting.
+    // Used by the hls.js client path to avoid the Firefox Origin:null CORS block
+    // that occurs when hls.js follows a same-origin → cross-origin 302 redirect.
+    if (req.nextUrl.searchParams.has('raw')) {
+      return NextResponse.json({ url: streamUrl });
     }
 
     // 302 so the browser re-checks on each new session — CDN pre-signed URLs

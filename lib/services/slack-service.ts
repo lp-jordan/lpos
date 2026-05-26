@@ -97,6 +97,32 @@ export async function sendSlackDeliveryTroubleDm(input: {
   await postDm(slackUserId, lines.join('\n'));
 }
 
+export async function sendSlackDeliveryExpiredDm(input: {
+  email:       string;
+  projectName: string;
+  clientName:  string | null;
+  label:       string | null;
+  href:        string | null;
+}): Promise<void> {
+  if (!TOKEN) return;
+
+  const slackUserId = await lookupSlackUserId(input.email);
+  if (!slackUserId) return;
+
+  const title = input.clientName
+    ? `*"${input.projectName}"* — ${input.clientName}`
+    : `*"${input.projectName}"*`;
+
+  const lines: string[] = [
+    ':timer_clock: *Delivery link expired*',
+    title,
+  ];
+  if (input.label) lines.push(`Label: ${input.label}`);
+  if (input.href)  lines.push(`<${input.href}|Open delivery panel →>`);
+
+  await postDm(slackUserId, lines.join('\n'));
+}
+
 async function postDm(slackUserId: string, text: string): Promise<void> {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',

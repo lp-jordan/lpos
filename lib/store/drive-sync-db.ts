@@ -281,6 +281,14 @@ export function renameDriveAsset(entityId: string, newName: string): DriveAsset 
   return row ? rowToAsset(row) : null;
 }
 
+export function moveDriveAsset(entityId: string, newParentDriveId: string): void {
+  const db  = getDriveSyncDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    'UPDATE drive_assets SET parent_drive_id = ?, synced_at = ? WHERE entity_id = ?'
+  ).run(newParentDriveId, now, entityId);
+}
+
 export function deleteDriveAssetByEntityId(entityId: string): void {
   getDriveSyncDb()
     .prepare('DELETE FROM drive_assets WHERE entity_id = ?')
@@ -402,13 +410,6 @@ export function markOrphanedFolderResolved(driveFileId: string): void {
   getDriveSyncDb().prepare(
     'UPDATE drive_orphaned_folders SET resolved_at = ? WHERE drive_file_id = ?'
   ).run(new Date().toISOString(), driveFileId);
-}
-
-/** Update the parent folder of a Drive asset after a successful moveFile() call. */
-export function moveDriveAsset(entityId: string, targetDriveId: string): void {
-  getDriveSyncDb().prepare(
-    'UPDATE drive_assets SET parent_drive_id = ? WHERE entity_id = ?'
-  ).run(targetDriveId, entityId);
 }
 
 function rowToOrphaned(row: Record<string, unknown>): DriveOrphanedFolder {

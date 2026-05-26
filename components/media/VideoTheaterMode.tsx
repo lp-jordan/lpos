@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { FrameIOComment, FrameIOCommentReply } from '@/lib/services/frameio';
 import { formatTimecode } from '@/lib/utils/time';
+import { useHlsPlayer } from '@/hooks/useHlsPlayer';
 
 interface Props {
   src:                  string;
@@ -64,6 +65,9 @@ export function VideoTheaterMode({
   const [replyingToId,    setReplyingToId]   = useState<string | null>(null);
   const [replyText,       setReplyText]      = useState('');
   const [replyPosting,    setReplyPosting]   = useState(false);
+
+  // Attach HLS stream (or plain URL) to the video element.
+  useHlsPlayer(videoRef, src);
 
   const scheduleHide = useCallback(() => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -289,7 +293,6 @@ export function VideoTheaterMode({
             <video
               ref={videoRef}
               className="vt-video"
-              src={src}
               preload="metadata"
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}

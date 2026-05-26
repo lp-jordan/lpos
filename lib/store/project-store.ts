@@ -166,6 +166,13 @@ export class ProjectStore {
     return project;
   }
 
+  touch(projectId: string): void {
+    const db = getCoreDb();
+    const label = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    db.prepare(`UPDATE projects SET updated_at = ? WHERE project_id = ?`).run(label, projectId);
+    this.broadcast();
+  }
+
   update(
     projectId: string,
     patch: Partial<Pick<Project, 'name' | 'clientName' | 'updatedAt' | 'archived' | 'phase' | 'subPhase' | 'cloudflareDefaults'>>,

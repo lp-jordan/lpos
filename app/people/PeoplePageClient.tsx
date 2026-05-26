@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Prospect, ProspectStatus } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
@@ -11,11 +11,11 @@ import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { ContextMenu } from '@/components/shared/ContextMenu';
 import type { MenuEntry } from '@/components/shared/ContextMenu';
 import { useContextMenu } from '@/hooks/useContextMenu';
-
-type ViewMode    = 'card' | 'list';
-type ScopeFilter = 'mine' | 'all';
-type TabFilter   = 'prospects' | 'active' | 'all';
-type SortMode    = 'updated' | 'name' | 'value' | 'newest';
+type ViewMode      = 'card' | 'list';
+type ScopeFilter   = 'all' | 'mine' | 'others';
+type TabFilter     = 'prospects' | 'active' | 'all';
+type EntityFilter  = 'all' | 'individual' | 'organization';
+type SortMode      = 'updated' | 'name' | 'value' | 'newest' | 'billing';
 
 function compactCurrency(v: number): string {
   if (v === 0) return '$0';
@@ -24,29 +24,47 @@ function compactCurrency(v: number): string {
   return `$${v.toLocaleString()}`;
 }
 
-// ── Status badge ──────────────────────────────────────────────────────────────
+// ── Badges ────────────────────────────────────────────────────────────────────
 
-const STATUS_STYLE: Record<ProspectStatus, { bg: string; border: string; color: string }> = {
-  prospect: { bg: 'rgba(91,141,217,0.15)',  border: '#5b8dd9', color: '#5b8dd9' },
-  active:   { bg: 'rgba(90,185,90,0.15)',   border: '#5ab95a', color: '#5ab95a' },
-  inactive: { bg: 'rgba(120,120,120,0.15)', border: '#888',    color: '#888'    },
+// Subtle status chip — used for prospect/active labels, de-emphasised
+const STATUS_STYLE: Record<ProspectStatus, { color: string }> = {
+  prospect: { color: 'rgba(91,141,217,0.55)'  },
+  active:   { color: 'rgba(90,185,90,0.55)'   },
+  inactive: { color: 'rgba(150,150,150,0.55)' },
 };
-
 const STATUS_LABELS: Record<ProspectStatus, string> = {
   prospect: 'Prospect',
-  active:   'Active',
+  active:   'Client',
   inactive: 'Inactive',
 };
-
 function StatusBadge({ status }: { status: ProspectStatus }) {
   const s = STATUS_STYLE[status];
   return (
     <span style={{
-      display: 'inline-block', padding: '0.2rem 0.55rem', borderRadius: '999px',
-      border: `1px solid ${s.border}`, backgroundColor: s.bg, color: s.color,
-      fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.03em', whiteSpace: 'nowrap',
+      fontSize: '0.68rem', fontWeight: 500, color: s.color,
+      letterSpacing: '0.04em', whiteSpace: 'nowrap',
     }}>
       {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+// Prominent billing status badge — used only on active clients
+const BILLING_BADGE_STYLE: Record<string, { bg: string; border: string; color: string; label: string }> = {
+  not_started: { bg: 'rgba(180,140,80,0.15)',  border: '#b48c50', color: '#b48c50', label: 'Not Started' },
+  active:      { bg: 'rgba(90,185,90,0.15)',   border: '#5ab95a', color: '#5ab95a', label: 'Active'      },
+  declined:    { bg: 'rgba(224,82,82,0.15)',   border: '#e05252', color: '#e05252', label: 'Declined'    },
+  cancelled:   { bg: 'rgba(130,130,130,0.12)', border: '#888',    color: '#888',    label: 'Cancelled'   },
+};
+function BillingBadge({ status }: { status: string | null }) {
+  const cfg = BILLING_BADGE_STYLE[status ?? 'not_started'] ?? BILLING_BADGE_STYLE['not_started'];
+  return (
+    <span style={{
+      display: 'inline-block', padding: '0.2rem 0.55rem', borderRadius: '999px',
+      border: `1px solid ${cfg.border}`, backgroundColor: cfg.bg, color: cfg.color,
+      fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.03em', whiteSpace: 'nowrap',
+    }}>
+      {cfg.label}
     </span>
   );
 }
@@ -146,7 +164,10 @@ function PersonCard({ person, allUsers, lastUpdate, selected, onNavigate, onSele
             {person.company}
           </span>
         </div>
-        <StatusBadge status={person.status} />
+        {person.status === 'active'
+          ? <BillingBadge status={person.recurringBillingStatus} />
+          : <StatusBadge status={person.status} />
+        }
       </div>
 
       {lastUpdate ? (
@@ -199,7 +220,10 @@ function PersonRow({ person, allUsers, selected, onNavigate, onSelect, onContext
       <span style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-strong)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {person.company}
       </span>
-      <StatusBadge status={person.status} />
+      {person.status === 'active'
+        ? <BillingBadge status={person.recurringBillingStatus} />
+        : <StatusBadge status={person.status} />
+      }
       <AvatarStrip userIds={person.assignedTo} allUsers={allUsers} />
       <span style={{ fontSize: '0.78rem', color: 'var(--muted-soft)', whiteSpace: 'nowrap' }}>
         {relativeDate(person.updatedAt)}
@@ -229,6 +253,44 @@ function BulkBar({ count, onArchive, onDelete, onDeselect }: {
   );
 }
 
+// ── Parent row ────────────────────────────────────────────────────────────────
+
+interface ParentRowProps {
+  clientId:   string;
+  clientName: string;
+  children:   Prospect[];
+  onNavigate: () => void;
+}
+
+function ParentRow({ clientName, children, onNavigate }: ParentRowProps) {
+  const totalMRR = children.reduce(
+    (s, p) => s + (p.monthlyLpRevenue ?? 0) + (p.monthlyLpTechRevenue ?? 0),
+    0,
+  );
+  return (
+    <div
+      className="proj-client-row"
+      style={{ cursor: 'pointer', userSelect: 'none', background: 'rgba(255,255,255,0.02)' }}
+      onClick={onNavigate}
+    >
+      <span style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--text-strong)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {clientName}
+      </span>
+      <span style={{ fontSize: '0.72rem', color: 'var(--muted)', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--line)', borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+        {children.length} engagement{children.length !== 1 ? 's' : ''}
+      </span>
+      {totalMRR > 0 && (
+        <span style={{ fontSize: '0.78rem', color: 'var(--muted-soft)', whiteSpace: 'nowrap' }}>
+          {compactCurrency(totalMRR)}/mo
+        </span>
+      )}
+      <svg className="proj-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="9 18 15 12 9 6"/>
+      </svg>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -236,19 +298,27 @@ interface Props {
   currentUserId:     string;
   accessUsers:       UserSummary[];
   lastUpdateBodies?: Record<string, string>;
+  parentClients:     { clientId: string; name: string }[];
 }
 
-export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, lastUpdateBodies }: Props) {
+export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, lastUpdateBodies, parentClients }: Props) {
   const router = useRouter();
+
+  // name → clientId map for O(1) parent lookup + navigation URL building
+  const parentMap = new Map(parentClients.map((c) => [c.name, c.clientId]));
 
   const [people,       setPeople]       = useState<Prospect[]>(initialPeople);
   const [search,       setSearch]       = useState('');
   const [viewMode,     setViewMode]     = useState<ViewMode>('card');
   const [scope,        setScope]        = useState<ScopeFilter>('all');
   const [tab,          setTab]          = useState<TabFilter>('prospects');
+  const [entityFilter, setEntityFilter] = useState<EntityFilter>('all');
   const [sort,         setSort]         = useState<SortMode>('updated');
   const [showArchived, setShowArchived] = useState(false);
   const [showNew,      setShowNew]      = useState(false);
+  const [showFilter,   setShowFilter]   = useState(false);
+  const filterRef   = useRef<HTMLDivElement>(null);
+  const didRestoreRef = useRef(false);
 
   const [selected,       setSelected]       = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
@@ -259,6 +329,55 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
 
   const personMenu = useContextMenu<Prospect>();
 
+  // ── Persist filters in URL ─────────────────────────────────────────────────
+
+  // On mount: restore any filter state saved in the URL.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const t = p.get('tab')    as TabFilter   | null;
+    const so = p.get('sort')  as SortMode    | null;
+    const v = p.get('view')   as ViewMode    | null;
+    const sc = p.get('scope') as ScopeFilter | null;
+    const en = p.get('entity') as EntityFilter | null;
+    const q = p.get('q');
+    const ar = p.get('archived');
+    if (t  && ['prospects','active','all'].includes(t))                          setTab(t);
+    if (so && ['updated','name','value','newest','billing'].includes(so))        setSort(so);
+    if (v  && ['card','list'].includes(v))                                      setViewMode(v);
+    if (sc && ['all','mine','others'].includes(sc))                             setScope(sc);
+    if (en && ['all','individual','organization'].includes(en))                 setEntityFilter(en);
+    if (q  != null)                                                             setSearch(q);
+    if (ar === '1')                                                             setShowArchived(true);
+    didRestoreRef.current = true;
+  }, []);
+
+  // After restore: keep URL in sync whenever filters change.
+  useEffect(() => {
+    if (!didRestoreRef.current) return;
+    const p = new URLSearchParams();
+    if (tab          !== 'prospects') p.set('tab',     tab);
+    if (sort         !== 'updated')   p.set('sort',    sort);
+    if (viewMode     !== 'card')      p.set('view',    viewMode);
+    if (scope        !== 'all')       p.set('scope',   scope);
+    if (entityFilter !== 'all')       p.set('entity',  entityFilter);
+    if (search)                       p.set('q',       search);
+    if (showArchived)                 p.set('archived','1');
+    const qs = p.toString();
+    router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
+  }, [tab, sort, viewMode, scope, entityFilter, search, showArchived]);
+
+  // Close filter popover on outside click
+  useEffect(() => {
+    if (!showFilter) return;
+    function handle(e: MouseEvent) {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setShowFilter(false);
+      }
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [showFilter]);
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const tabFiltered = people.filter((p) => {
@@ -268,9 +387,11 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
   });
 
   const filtered = tabFiltered.filter((p) => {
-    if (!showArchived && p.archived)                                       return false;
-    if (showArchived  && !p.archived)                                      return false;
-    if (scope === 'mine' && !p.assignedTo.includes(currentUserId))        return false;
+    if (!showArchived && p.archived)                                        return false;
+    if (showArchived  && !p.archived)                                       return false;
+    if (scope === 'mine'   && !p.assignedTo.includes(currentUserId))       return false;
+    if (scope === 'others' &&  p.assignedTo.includes(currentUserId))       return false;
+    if (entityFilter !== 'all' && p.entityType !== entityFilter)            return false;
     if (search && !p.company.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -287,6 +408,12 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
           ? ((b.monthlyLpRevenue ?? 0) + (b.monthlyLpTechRevenue ?? 0)) * 12
           : (b.estimatedFirstYearValue ?? 0);
         return vb - va;
+      }
+      case 'billing': {
+        const priority: Record<string, number> = { declined: 0, not_started: 1, cancelled: 2, active: 3 };
+        const pa = priority[a.recurringBillingStatus ?? 'not_started'] ?? 1;
+        const pb = priority[b.recurringBillingStatus ?? 'not_started'] ?? 1;
+        return pa !== pb ? pa - pb : a.company.localeCompare(b.company, undefined, { sensitivity: 'base' });
       }
       default: return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     }
@@ -397,38 +524,51 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
 
   return (
     <div className="page-stack">
-      {/* Controls */}
       <div className="proj-controls">
-        <input
-          className="proj-search"
-          type="text"
-          placeholder="Search people…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <div className="proj-controls-right">
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortMode)}
-            style={{
-              padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500,
-              border: '1px solid var(--color-border,#444)', background: 'var(--color-input-bg,#1a1a1a)',
-              color: 'var(--muted)', cursor: 'pointer',
-            }}
-          >
-            <option value="updated">Last updated</option>
-            <option value="name">Name A–Z</option>
-            <option value="value">Value ↓</option>
-            <option value="newest">Newest</option>
-          </select>
-          <ViewToggle mode={viewMode} onChange={setViewMode} />
-          <button type="button" className="proj-new-btn" onClick={() => setShowNew(true)}>
-            + New
-          </button>
+          {/* Inline type tabs */}
+          <div className="proj-filter-pills" style={{ flexShrink: 0 }}>
+            <button type="button" className={`proj-filter-pill${tab === 'prospects' ? ' active' : ''}`} onClick={() => { setTab('prospects'); setShowArchived(false); setSelected(new Set()); }}>
+              Prospects{prospectCount > 0 ? ` (${prospectCount})` : ''}
+            </button>
+            <button type="button" className={`proj-filter-pill${tab === 'active' ? ' active' : ''}`} onClick={() => { setTab('active'); setShowArchived(false); setSelected(new Set()); }}>
+              Clients{activeCount > 0 ? ` (${activeCount})` : ''}
+            </button>
+            <button type="button" className={`proj-filter-pill${tab === 'all' ? ' active' : ''}`} onClick={() => { setTab('all'); setShowArchived(false); setSelected(new Set()); }}>
+              All
+            </button>
+          </div>
+          <input
+            className="proj-search"
+            type="text"
+            placeholder="Search people…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <div className="proj-controls-right">
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortMode)}
+              style={{
+                padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500,
+                border: '1px solid var(--color-border,#444)', background: 'var(--color-input-bg,#1a1a1a)',
+                color: 'var(--muted)', cursor: 'pointer',
+              }}
+            >
+              <option value="updated">Last updated</option>
+              <option value="name">Name A–Z</option>
+              <option value="value">Value ↓</option>
+              <option value="newest">Newest</option>
+              <option value="billing">Sub. status</option>
+            </select>
+            <ViewToggle mode={viewMode} onChange={setViewMode} />
+            <button type="button" className="proj-new-btn" onClick={() => setShowNew(true)}>
+              + New
+            </button>
+          </div>
         </div>
-      </div>
 
       {/* Pipeline summary strip */}
+
       {(allProspects.length > 0 || allActiveClients.length > 0) && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: '1.5rem',
@@ -460,35 +600,95 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
         </div>
       )}
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <div className="proj-filter-pills" style={{ marginRight: '0.5rem' }}>
-          <button
-            type="button"
-            className={`proj-filter-pill${tab === 'prospects' ? ' active' : ''}`}
-            onClick={() => { setTab('prospects'); setShowArchived(false); setSelected(new Set()); }}
-          >
-            Prospects{prospectCount > 0 ? ` (${prospectCount})` : ''}
-          </button>
-          <button
-            type="button"
-            className={`proj-filter-pill${tab === 'active' ? ' active' : ''}`}
-            onClick={() => { setTab('active'); setShowArchived(false); setSelected(new Set()); }}
-          >
-            Clients{activeCount > 0 ? ` (${activeCount})` : ''}
-          </button>
-          <button
-            type="button"
-            className={`proj-filter-pill${tab === 'all' ? ' active' : ''}`}
-            onClick={() => { setTab('all'); setShowArchived(false); setSelected(new Set()); }}
-          >
-            All
-          </button>
-        </div>
+      {/* Filter row */}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Filter popover */}
+        <div ref={filterRef} style={{ position: 'relative' }}>
+          {(() => {
+            const activeCount2 = (scope !== 'all' ? 1 : 0) + (entityFilter !== 'all' ? 1 : 0);
+            return (
+              <button
+                type="button"
+                onClick={() => setShowFilter((v) => !v)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '0.3rem 0.75rem', borderRadius: 6, fontSize: '0.8rem', fontWeight: 500,
+                  border: `1px solid ${showFilter || activeCount2 > 0 ? 'var(--accent)' : 'var(--color-border,#444)'}`,
+                  background: showFilter || activeCount2 > 0 ? 'var(--accent-soft)' : 'var(--color-input-bg,#1a1a1a)',
+                  color: showFilter || activeCount2 > 0 ? 'var(--accent-strong)' : 'var(--muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                </svg>
+                Filter
+                {activeCount2 > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 16, height: 16, borderRadius: '50%', fontSize: '0.68rem', fontWeight: 700,
+                    background: 'var(--accent)', color: '#fff',
+                  }}>
+                    {activeCount2}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
 
-        <div className="proj-filter-pills">
-          <button type="button" className={`proj-filter-pill${scope === 'all' ? ' active' : ''}`} onClick={() => setScope('all')}>Everyone</button>
-          <button type="button" className={`proj-filter-pill${scope === 'mine' ? ' active' : ''}`} onClick={() => setScope('mine')}>Mine</button>
+          {showFilter && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 60,
+              background: 'var(--surface-1)', border: '1px solid var(--line)',
+              borderRadius: 10, padding: '14px 16px', minWidth: 220,
+              boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column', gap: 16,
+            }}>
+              {/* Assigned */}
+              <div>
+                <p style={{ margin: '0 0 8px', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--muted-soft)', textTransform: 'uppercase' }}>Assigned</p>
+                <div className="proj-filter-pills">
+                  {([['all', 'All'], ['mine', 'Mine'], ['others', 'Others']] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      className={`proj-filter-pill${scope === val ? ' active' : ''}`}
+                      onClick={() => setScope(val)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Entity */}
+              <div>
+                <p style={{ margin: '0 0 8px', fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--muted-soft)', textTransform: 'uppercase' }}>Entity</p>
+                <div className="proj-filter-pills">
+                  {([['all', 'All'], ['individual', 'Individual'], ['organization', 'Organization']] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      className={`proj-filter-pill${entityFilter === val ? ' active' : ''}`}
+                      onClick={() => setEntityFilter(val)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Reset */}
+              {(scope !== 'all' || entityFilter !== 'all') && (
+                <button
+                  type="button"
+                  onClick={() => { setScope('all'); setEntityFilter('all'); setShowArchived(false); setSelected(new Set()); }}
+                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', fontSize: '0.78rem', color: 'var(--muted)', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  Reset filters
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {archivedCount > 0 && (
@@ -535,35 +735,115 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
       {/* Card view */}
       {viewMode === 'card' && sorted.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-          {sorted.map((p) => (
-            <PersonCard
-              key={p.prospectId}
-              person={p}
-              allUsers={accessUsers}
-              lastUpdate={lastUpdateBodies?.[p.prospectId]}
-              selected={selected.has(p.prospectId)}
-              onNavigate={() => router.push(`/people/${p.prospectId}`)}
-              onSelect={(e) => handleSelectClick(p.prospectId, e)}
-              onContext={(e) => personMenu.open(e, p)}
-            />
-          ))}
+          {(() => {
+            const showingClients = tab === 'active' || tab === 'all';
+            const useGrouped     = showingClients && !search;
+            const seen           = new Set<string>();
+            const rendered: React.ReactNode[] = [];
+            for (const p of sorted) {
+              if (!useGrouped) {
+                const isChild     = p.status !== 'prospect' && p.clientName && parentMap.has(p.clientName);
+                const displayName = isChild ? `${p.clientName} › ${p.company}` : undefined;
+                rendered.push(
+                  <PersonCard key={p.prospectId} person={displayName ? { ...p, company: displayName } : p}
+                    allUsers={accessUsers} lastUpdate={lastUpdateBodies?.[p.prospectId]}
+                    selected={selected.has(p.prospectId)} onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+                continue;
+              }
+              if (p.status === 'prospect') {
+                rendered.push(
+                  <PersonCard key={p.prospectId} person={p} allUsers={accessUsers}
+                    lastUpdate={lastUpdateBodies?.[p.prospectId]} selected={selected.has(p.prospectId)}
+                    onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+                continue;
+              }
+              const parentName     = p.clientName && parentMap.has(p.clientName) ? p.clientName : null;
+              const parentClientId = parentName ? parentMap.get(parentName) : null;
+              if (parentName && parentClientId) {
+                if (seen.has(parentName)) continue;
+                seen.add(parentName);
+                const children = sorted.filter((c) => c.clientName === parentName);
+                const totalMRR = children.reduce((s, c) => s + (c.monthlyLpRevenue ?? 0) + (c.monthlyLpTechRevenue ?? 0), 0);
+                rendered.push(
+                  <div key={`parent-card-${parentName}`} className="proj-client-card"
+                    style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', cursor: 'pointer', userSelect: 'none', background: 'rgba(255,255,255,0.02)' }}
+                    onClick={() => router.push(`/people/org/${parentClientId}`)}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-strong)', lineHeight: 1.3 }}>{parentName}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--muted)', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--line)', borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                        {children.length} engagement{children.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    {totalMRR > 0 && <span style={{ fontSize: '0.8rem', color: 'var(--muted-soft)' }}>{compactCurrency(totalMRR)}/mo</span>}
+                    <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--muted)' }}>{children.map((c) => c.company).join(' · ')}</p>
+                  </div>,
+                );
+              } else {
+                rendered.push(
+                  <PersonCard key={p.prospectId} person={p} allUsers={accessUsers}
+                    lastUpdate={lastUpdateBodies?.[p.prospectId]} selected={selected.has(p.prospectId)}
+                    onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+              }
+            }
+            return rendered;
+          })()}
         </div>
       )}
 
       {/* List view */}
       {viewMode === 'list' && sorted.length > 0 && (
         <div className="proj-list">
-          {sorted.map((p) => (
-            <PersonRow
-              key={p.prospectId}
-              person={p}
-              allUsers={accessUsers}
-              selected={selected.has(p.prospectId)}
-              onNavigate={() => router.push(`/people/${p.prospectId}`)}
-              onSelect={(e) => handleSelectClick(p.prospectId, e)}
-              onContext={(e) => personMenu.open(e, p)}
-            />
-          ))}
+          {(() => {
+            const showingClients = tab === 'active' || tab === 'all';
+            const useGrouped     = showingClients && !search;
+            const seen           = new Set<string>();
+            const rendered: React.ReactNode[] = [];
+            for (const p of sorted) {
+              if (!useGrouped) {
+                const isChild     = p.status !== 'prospect' && p.clientName && parentMap.has(p.clientName);
+                const displayName = isChild ? `${p.clientName} › ${p.company}` : undefined;
+                rendered.push(
+                  <PersonRow key={p.prospectId} person={displayName ? { ...p, company: displayName } : p}
+                    allUsers={accessUsers} selected={selected.has(p.prospectId)}
+                    onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+                continue;
+              }
+              if (p.status === 'prospect') {
+                rendered.push(
+                  <PersonRow key={p.prospectId} person={p} allUsers={accessUsers} selected={selected.has(p.prospectId)}
+                    onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+                continue;
+              }
+              const parentName     = p.clientName && parentMap.has(p.clientName) ? p.clientName : null;
+              const parentClientId = parentName ? parentMap.get(parentName) : null;
+              if (parentName && parentClientId) {
+                if (seen.has(parentName)) continue;
+                seen.add(parentName);
+                const children = sorted.filter((c) => c.clientName === parentName);
+                rendered.push(
+                  <ParentRow key={`parent-${parentName}`} clientId={parentClientId} clientName={parentName}
+                    children={children} onNavigate={() => router.push(`/people/org/${parentClientId}`)} />,
+                );
+              } else {
+                rendered.push(
+                  <PersonRow key={p.prospectId} person={p} allUsers={accessUsers} selected={selected.has(p.prospectId)}
+                    onNavigate={() => router.push(`/people/${p.prospectId}`)}
+                    onSelect={(e) => handleSelectClick(p.prospectId, e)} onContext={(e) => personMenu.open(e, p)} />,
+                );
+              }
+            }
+            return rendered;
+          })()}
         </div>
       )}
 

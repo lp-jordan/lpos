@@ -15,6 +15,7 @@ import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
 import { UPLOAD_CHUNK_SIZE_BYTES } from '@/lib/upload-constants';
@@ -178,6 +179,12 @@ const IconDelivery = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
     <line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+const IconReviewLink = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
   </svg>
 );
 
@@ -445,6 +452,7 @@ export function MediaTab({
   const [selectedAsset,   setSelectedAsset]   = useState<MediaAsset | null>(null);
   const [isDragOver,      setIsDragOver]      = useState(false);
   const [uploadError,     setUploadError]     = useState<string | null>(null);
+  const [uploadInfo,      setUploadInfo]      = useState<string | null>(null);
   const [confirmDelete,   setConfirmDelete]   = useState<{ asset: MediaAsset; deleteFile: boolean } | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<{ deleteFile: boolean } | null>(null);
   const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
@@ -463,14 +471,20 @@ export function MediaTab({
   // legacy POST-and-show-modal flow) with a single boolean — DeliverableModal
   // handles its own creation, error, and success-with-copy states.
   const [showDeliverableModal, setShowDeliverableModal] = useState(false);
+  const [reviewLinkAsset,      setReviewLinkAsset]      = useState<MediaAsset | null>(null);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
+  const [nasActive, setNasActive] = useState(false);
   // CF settings state removed with the gear button (cleanup pass).
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
+  const currentUser = useCurrentUser();
+  useEffect(() => {
+    if (currentUser?.nasIngestAccess) setNasActive(currentUser.nasIngestActive);
+  }, [currentUser]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const commentCountsRef = useRef<Map<string, number>>(new Map());
@@ -734,15 +748,15 @@ const { openMenu } = useContextMenu();
     }
   }
 
-  async function confirmChunkedVersion(uploadId: string, replaceAssetId: string): Promise<{ ok: boolean; error?: string }> {
+  async function confirmChunkedVersion(uploadId: string, replaceAssetId: string): Promise<{ ok: boolean; code?: string; message?: string; error?: string }> {
     try {
       const res = await fetch(`/api/projects/${projectId}/media/upload/${uploadId}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ replaceAssetId }),
       });
-      if (res.ok) return { ok: true };
-      const d = await res.json() as { error?: string };
+      const d = await res.json() as { code?: string; message?: string; error?: string };
+      if (res.ok) return { ok: true, code: d.code, message: d.message };
       return { ok: false, error: d.error ?? 'Version confirmation failed' };
     } catch {
       return { ok: false, error: 'Network error confirming version' };
@@ -785,6 +799,7 @@ const { openMenu } = useContextMenu();
   async function uploadFiles(files: File[]) {
     if (!files.length) return;
     setUploadError(null);
+    setUploadInfo(null);
     startBatch();
 
     // Warn the user if they try to leave while uploads are in progress.
@@ -875,7 +890,11 @@ const { openMenu } = useContextMenu();
           );
           if (confirmed) {
             const confirmResult = await confirmChunkedVersion(firstAttempt.uploadId, firstAttempt.existingAsset.assetId);
-            if (!confirmResult.ok) setUploadError(confirmResult.error ?? `Upload failed for "${files[i].name}"`);
+            if (confirmResult.code === 'no_change_needed') {
+              setUploadInfo(confirmResult.message ?? `No update was made — this file is identical to the current version.`);
+            } else if (!confirmResult.ok) {
+              setUploadError(confirmResult.error ?? `Upload failed for "${files[i].name}"`);
+            }
           } else {
             await abortChunkedUpload(firstAttempt.uploadId);
           }
@@ -895,6 +914,29 @@ const { openMenu } = useContextMenu();
     const files = filterAccepted(e.target.files ?? new FileList());
     if (files.length) void uploadFiles(files);
     e.target.value = '';
+  }
+
+  async function toggleNasIngestActive() {
+    if (!currentUser?.nasIngestAccess) return;
+    const next = !nasActive;
+    setNasActive(next);
+    fetch('/api/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nasIngestActive: next }),
+    }).catch(() => {});
+  }
+
+  function handleUploadZoneContextMenu(e: React.MouseEvent) {
+    if (!currentUser?.nasIngestAccess) return;
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY, [
+      {
+        type: 'item',
+        label: nasActive ? 'Disable NAS ingest mode' : 'Enable NAS ingest mode',
+        onClick: () => { void toggleNasIngestActive(); },
+      },
+    ]);
   }
 
   function handleDragOver(e: React.DragEvent)  { e.preventDefault(); setIsDragOver(true); }
@@ -958,13 +1000,51 @@ const { openMenu } = useContextMenu();
     void fetchAssets();
   }
 
+  async function nasIngestFromPath(sourcePath: string, replaceAssetId?: string): Promise<void> {
+    setUploadError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/ingest-from-nas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourcePath, replaceAssetId }),
+      });
+      const data = await res.json() as {
+        asset?: unknown;
+        error?: string;
+        code?: string;
+        existingAsset?: MediaAsset;
+        currentVersionNumber?: number;
+      };
+
+      if (res.ok) {
+        void fetchAssets();
+        return;
+      }
+
+      if (data.code === 'version_confirmation_required' && data.existingAsset) {
+        const confirmed = await requestVersionConfirmation(
+          data.existingAsset,
+          data.currentVersionNumber ?? data.existingAsset.frameio.version ?? 1,
+        );
+        if (confirmed) await nasIngestFromPath(sourcePath, data.existingAsset.assetId);
+        return;
+      }
+
+      setUploadError(data.error ?? 'Ingest failed.');
+    } catch {
+      setUploadError('Network error — could not reach the server.');
+    }
+  }
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setIsDragOver(false);
 
-    // ── Path detection (Windows Explorer drag) ──────────────────────────────
-    // Explorer provides file:// URIs in text/uri-list. Detect and register
-    // in place so large NAS files are never copied into the app.
+    // ── Path detection (Finder / Explorer drag) ─────────────────────────────
+    // When dragging from a native file manager, the browser includes file://
+    // URIs in text/uri-list. In NAS mode we hand these to the server-side
+    // ingest route (proper copy into LPOS media dir). Otherwise we use the
+    // existing registered-path fallback.
     const uriList = e.dataTransfer.getData('text/uri-list');
     if (uriList) {
       const paths = uriList
@@ -975,7 +1055,11 @@ const { openMenu } = useContextMenu();
         .filter((p) => ACCEPTED_EXTS.some((ext) => p.toLowerCase().endsWith(ext)));
 
       if (paths.length) {
-        void registerPaths(paths);
+        if (nasActive) {
+          for (const p of paths) void nasIngestFromPath(p);
+        } else {
+          void registerPaths(paths);
+        }
         return;
       }
     }
@@ -1079,6 +1163,12 @@ const { openMenu } = useContextMenu();
           setShowHub(true);
           setSelectedAsset(null);
         },
+      },
+      {
+        type: 'item' as const,
+        label: 'Create Review Link',
+        icon: <IconReviewLink />,
+        onClick: () => setReviewLinkAsset(asset),
       },
       { type: 'separator' as const },
       {
@@ -1311,15 +1401,21 @@ const { openMenu } = useContextMenu();
 
         {/* Drop zone */}
         <div
-          className={`proj-upload-zone${isDragOver ? ' proj-upload-zone--active' : ''}`}
-          onClick={() => fileInputRef.current?.click()}
+          className={`proj-upload-zone${isDragOver ? ' proj-upload-zone--active' : ''}${nasActive ? ' proj-upload-zone--nas' : ''}`}
+          onClick={() => { if (!nasActive) fileInputRef.current?.click(); }}
+          onContextMenu={handleUploadZoneContextMenu}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           role="button"
           tabIndex={0}
-          aria-label="Upload media — click or drag files here"
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}
+          aria-label={nasActive ? 'NAS ingest mode — drag files here' : 'Upload media — click or drag files here'}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              if (!nasActive) fileInputRef.current?.click();
+            }
+          }}
         >
           {isDragOver ? (
             <span className="proj-upload-zone-label proj-upload-zone-label--drop">Drop to upload</span>
@@ -1327,8 +1423,20 @@ const { openMenu } = useContextMenu();
             <>
               <IconUpload />
               <span className="proj-upload-zone-label">
-                Drag files here or <span className="proj-upload-zone-link">click to browse</span>
+                {nasActive
+                  ? <>Drag files here</>
+                  : <>Drag files here or <span className="proj-upload-zone-link">click to browse</span></>
+                }
               </span>
+              {nasActive && (
+                <span style={{
+                  position: 'absolute', top: '0.5rem', right: '0.6rem',
+                  fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.06em',
+                  textTransform: 'uppercase', opacity: 0.7,
+                  background: 'var(--color-accent, #4a9eff)', color: '#fff',
+                  borderRadius: '3px', padding: '0.1rem 0.35rem',
+                }}>NAS</span>
+              )}
             </>
           )}
         </div>
@@ -1348,6 +1456,13 @@ const { openMenu } = useContextMenu();
           <p className="m-upload-feedback m-upload-feedback--error">
             {uploadError}
             <button type="button" onClick={() => setUploadError(null)}>✕</button>
+          </p>
+        )}
+
+        {uploadInfo && (
+          <p className="m-upload-feedback m-upload-feedback--info">
+            {uploadInfo}
+            <button type="button" onClick={() => setUploadInfo(null)}>✕</button>
           </p>
         )}
 
@@ -1625,6 +1740,22 @@ const { openMenu } = useContextMenu();
         pendingDeliveryCreate={deliveryPending}
         onPendingDeliveryConsumed={() => setDeliveryPending(null)}
       />
+
+      {/* Single-asset review link (right-click context menu) */}
+      {reviewLinkAsset && (
+        <DeliverableModal
+          projectId={projectId}
+          availableAssets={[{
+            assetId: reviewLinkAsset.assetId,
+            name: reviewLinkAsset.name,
+            hasFrameio: Boolean(reviewLinkAsset.frameio.assetId || reviewLinkAsset.frameio.stackId),
+          }]}
+          initiallySelectedAssetIds={[reviewLinkAsset.assetId]}
+          defaultName={reviewLinkAsset.name}
+          onClose={() => setReviewLinkAsset(null)}
+          onCreated={() => { setReviewLinkAsset(null); void fetchAssets(); }}
+        />
+      )}
 
       {/* Phase E: new shared DeliverableModal for the bulk "Create Review Link" path */}
       {showDeliverableModal && (

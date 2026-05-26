@@ -16,6 +16,7 @@ interface Props {
   users: UserSummary[];
   commentCounts: Record<string, number>;
   selectedTaskId: string | null;
+  highlightTaskId: string | null;
   renamingTaskId: string | null;
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -36,6 +37,7 @@ export function TaskColumn({
   users,
   commentCounts,
   selectedTaskId,
+  highlightTaskId,
   renamingTaskId,
   collapsed,
   onToggleCollapse,
@@ -91,6 +93,7 @@ export function TaskColumn({
                 users={users}
                 commentCount={commentCounts[task.taskId] ?? 0}
                 selected={selectedTaskId === task.taskId}
+                highlight={highlightTaskId === task.taskId}
                 isRenaming={renamingTaskId === task.taskId}
                 onClick={() => onSelectTask(task.taskId)}
                 onContextMenu={(e) => onCardContextMenu(e, task.taskId)}

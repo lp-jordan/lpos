@@ -10,6 +10,7 @@ interface UserRow {
   avatar_url: string | null;
   slack_email: string | null;
   nas_ingest_access: number | null;
+  nas_ingest_active: number | null;
   created_at: string;
   last_login_at: string;
 }
@@ -22,7 +23,8 @@ function rowToUser(row: UserRow): User {
     name: row.name,
     avatarUrl: row.avatar_url,
     slackEmail: row.slack_email ?? null,
-    nasIngestAccess: (row.nas_ingest_access ?? 0) === 1,
+    nasIngestAccess: Boolean(row.nas_ingest_access),
+    nasIngestActive: Boolean(row.nas_ingest_active),
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
   };
@@ -68,7 +70,12 @@ export function upsertGoogleUser(input: {
   db.prepare(
     'INSERT INTO users (id, google_sub, email, name, avatar_url, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
   ).run(id, input.googleSub, input.email, input.name, input.avatarUrl, now, now);
-  return { id, googleSub: input.googleSub, email: input.email, name: input.name, avatarUrl: input.avatarUrl, slackEmail: null, nasIngestAccess: false, createdAt: now, lastLoginAt: now };
+  return {
+    id, googleSub: input.googleSub, email: input.email, name: input.name,
+    avatarUrl: input.avatarUrl, slackEmail: null,
+    nasIngestAccess: false, nasIngestActive: false,
+    createdAt: now, lastLoginAt: now,
+  };
 }
 
 const GUEST_USER_ID = '00000000-0000-0000-0000-000000000001';
@@ -99,6 +106,12 @@ export function setNasIngestAccess(userId: string, enabled: boolean): void {
     .run(enabled ? 1 : 0, userId);
 }
 
+export function setNasIngestActive(userId: string, active: boolean): void {
+  getCoreDb()
+    .prepare('UPDATE users SET nas_ingest_active = ? WHERE id = ?')
+    .run(active ? 1 : 0, userId);
+}
+
 export function toUserSummary(user: User | null): UserSummary | null {
   if (!user) return null;
   return {
@@ -108,5 +121,6 @@ export function toUserSummary(user: User | null): UserSummary | null {
     avatarUrl: user.avatarUrl,
     isGuest: user.id === GUEST_USER_ID,
     nasIngestAccess: user.nasIngestAccess,
+    nasIngestActive: user.nasIngestActive,
   };
 }

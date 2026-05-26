@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
 import { clientProjectsHref, projectHref } from '@/lib/urls/project-url';
 import { useProjects } from '@/hooks/useProjects';
@@ -22,6 +22,10 @@ import type { ClientOwners } from '@/lib/models/client-owner';
 import type { ClientStats } from '@/lib/services/client-stats';
 
 type ViewMode = 'card' | 'list';
+type SortMode = 'alpha' | 'activity';
+type ActivityBucket = 'Today' | 'Yesterday' | 'This Week' | 'This Month' | 'Earlier';
+
+const ACTIVITY_BUCKETS: ActivityBucket[] = ['Today', 'Yesterday', 'This Week', 'This Month', 'Earlier'];
 
 // ── Link-group color helper ───────────────────────────────────────────────────
 
@@ -66,6 +70,20 @@ function formatRelativeDate(iso: string | null | undefined): string {
   } catch { return ''; }
 }
 
+function getActivityBucket(iso: string | null | undefined): ActivityBucket {
+  if (!iso) return 'Earlier';
+  try {
+    const ms = new Date(iso).getTime();
+    if (isNaN(ms)) return 'Earlier';
+    const days = Math.floor((Date.now() - ms) / 86_400_000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7)  return 'This Week';
+    if (days < 30) return 'This Month';
+    return 'Earlier';
+  } catch { return 'Earlier'; }
+}
+
 // ── SVG icon helpers ──────────────────────────────────────────────────────────
 
 function IconOpen()    { return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>; }
@@ -105,6 +123,31 @@ function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
           <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+// ── Sort toggle ───────────────────────────────────────────────────────────────
+
+function SortToggle({ mode, onChange }: { mode: SortMode; onChange: (m: SortMode) => void }) {
+  return (
+    <div className="m-view-toggle">
+      <button
+        className={`m-view-btn m-view-btn--text${mode === 'alpha' ? ' active' : ''}`}
+        type="button"
+        onClick={() => onChange('alpha')}
+        title="Sort alphabetically"
+      >A–Z</button>
+      <button
+        className={`m-view-btn${mode === 'activity' ? ' active' : ''}`}
+        type="button"
+        onClick={() => onChange('activity')}
+        title="Sort by recent activity"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
         </svg>
       </button>
     </div>
@@ -162,7 +205,30 @@ export function ProjectsPageClient({
 
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
+  const [clientSort, setClientSort] = useState<SortMode>('alpha');
   const [showArchived, setShowArchived] = useState(false);
+
+  // URL persistence
+  const didRestoreRef = useRef(false);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const v = p.get('view') as ViewMode | null;
+    const q = p.get('q');
+    const ar = p.get('archived');
+    if (v  && ['card', 'list'].includes(v)) setViewMode(v);
+    if (q  != null)                         setSearch(q);
+    if (ar === '1')                         setShowArchived(true);
+    didRestoreRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (!didRestoreRef.current) return;
+    const p = new URLSearchParams();
+    if (viewMode !== 'card') p.set('view', viewMode);
+    if (search)              p.set('q', search);
+    if (showArchived)        p.set('archived', '1');
+    const qs = p.toString();
+    router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
+  }, [viewMode, search, showArchived]);
 
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -205,6 +271,33 @@ export function ProjectsPageClient({
   const filteredClients = clients.filter((c) =>
     !search || c.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Latest updatedAt across each client's active projects
+  const clientLatestActivity: Record<string, string> = {};
+  for (const p of activeProjects) {
+    if (!p.updatedAt) continue;
+    const cur = clientLatestActivity[p.clientName];
+    if (!cur || p.updatedAt > cur) clientLatestActivity[p.clientName] = p.updatedAt;
+  }
+
+  // Apply sort
+  const sortedClients = clientSort === 'alpha'
+    ? filteredClients
+    : [...filteredClients].sort((a, b) => {
+        const aDate = clientLatestActivity[a] ?? '';
+        const bDate = clientLatestActivity[b] ?? '';
+        return bDate < aDate ? -1 : bDate > aDate ? 1 : 0;
+      });
+
+  // Pre-group for bucket dividers in activity sort
+  const clientBucketGroups: Array<{ bucket: ActivityBucket; clients: string[] }> =
+    clientSort === 'activity'
+      ? (() => {
+          const map: Record<ActivityBucket, string[]> = { Today: [], Yesterday: [], 'This Week': [], 'This Month': [], Earlier: [] };
+          for (const c of sortedClients) map[getActivityBucket(clientLatestActivity[c])].push(c);
+          return ACTIVITY_BUCKETS.filter(b => map[b].length > 0).map(b => ({ bucket: b, clients: map[b] }));
+        })()
+      : [];
 
   const filteredClientProjects = clientProjects.filter((p) =>
     !search || p.name.toLowerCase().includes(search.toLowerCase())
@@ -625,6 +718,7 @@ export function ProjectsPageClient({
           onChange={(e) => setSearch(e.target.value)}
         />
         <div className="proj-controls-right">
+          <SortToggle mode={clientSort} onChange={setClientSort} />
           <ViewToggle mode={viewMode} onChange={setViewMode} />
           <button type="button" className="proj-new-btn" onClick={() => setShowNewModal(true)}>
             + New Client
@@ -643,50 +737,115 @@ export function ProjectsPageClient({
       )}
 
       {/* Client cards */}
-      {viewMode === 'card' && filteredClients.length > 0 && (
-        <div className="proj-client-grid">
-          {filteredClients.map((client) => {
-            const count = activeProjects.filter((p) => p.clientName === client).length;
-            const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
-            const stats = clientStats[client];
-            return (
-              <ClientCard
-                key={client}
-                clientName={client}
-                count={count}
-                mediaCount={stats?.mediaCount ?? 0}
-                scriptCount={stats?.scriptCount ?? 0}
-                owner={owner}
-                onClick={() => router.push(clientProjectsHref(client))}
-                onContextMenu={(e) => { clientMenu.open(e, client); }}
-              />
-            );
-          })}
-        </div>
+      {viewMode === 'card' && sortedClients.length > 0 && (
+        clientSort === 'activity' ? (
+          <>
+            {clientBucketGroups.map(({ bucket, clients: bucketClients }) => (
+              <Fragment key={bucket}>
+                <div className="proj-bucket-divider"><span>{bucket}</span></div>
+                <div className="proj-client-grid">
+                  {bucketClients.map((client) => {
+                    const count = activeProjects.filter((p) => p.clientName === client).length;
+                    const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
+                    const stats = clientStats[client];
+                    return (
+                      <ClientCard
+                        key={client}
+                        clientName={client}
+                        count={count}
+                        videoCount={stats?.videoCount ?? 0}
+                        photoCount={stats?.photoCount ?? 0}
+                        scriptCount={stats?.scriptCount ?? 0}
+                        owner={owner}
+                        onClick={() => router.push(clientProjectsHref(client))}
+                        onContextMenu={(e) => { clientMenu.open(e, client); }}
+                      />
+                    );
+                  })}
+                </div>
+              </Fragment>
+            ))}
+          </>
+        ) : (
+          <div className="proj-client-grid">
+            {sortedClients.map((client) => {
+              const count = activeProjects.filter((p) => p.clientName === client).length;
+              const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
+              const stats = clientStats[client];
+              return (
+                <ClientCard
+                  key={client}
+                  clientName={client}
+                  count={count}
+                  videoCount={stats?.videoCount ?? 0}
+                  photoCount={stats?.photoCount ?? 0}
+                  scriptCount={stats?.scriptCount ?? 0}
+                  owner={owner}
+                  onClick={() => router.push(clientProjectsHref(client))}
+                  onContextMenu={(e) => { clientMenu.open(e, client); }}
+                />
+              );
+            })}
+          </div>
+        )
       )}
 
       {/* Client list */}
-      {viewMode === 'list' && filteredClients.length > 0 && (
-        <div className="proj-list">
-          {filteredClients.map((client) => {
-            const count = activeProjects.filter((p) => p.clientName === client).length;
-            const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
-            return (
-              <ClientRow
-                key={client}
-                clientName={client}
-                count={count}
-                owner={owner}
-                onClick={() => router.push(clientProjectsHref(client))}
-                onContextMenu={(e) => { clientMenu.open(e, client); }}
-              />
-            );
-          })}
-        </div>
+      {viewMode === 'list' && sortedClients.length > 0 && (
+        clientSort === 'activity' ? (
+          <>
+            {clientBucketGroups.map(({ bucket, clients: bucketClients }) => (
+              <Fragment key={bucket}>
+                <div className="proj-bucket-divider"><span>{bucket}</span></div>
+                <div className="proj-list">
+                  {bucketClients.map((client) => {
+                    const count = activeProjects.filter((p) => p.clientName === client).length;
+                    const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
+                    const stats = clientStats[client];
+                    return (
+                      <ClientRow
+                        key={client}
+                        clientName={client}
+                        count={count}
+                        videoCount={stats?.videoCount ?? 0}
+                        photoCount={stats?.photoCount ?? 0}
+                        scriptCount={stats?.scriptCount ?? 0}
+                        owner={owner}
+                        onClick={() => router.push(clientProjectsHref(client))}
+                        onContextMenu={(e) => { clientMenu.open(e, client); }}
+                      />
+                    );
+                  })}
+                </div>
+              </Fragment>
+            ))}
+          </>
+        ) : (
+          <div className="proj-list">
+            {sortedClients.map((client) => {
+              const count = activeProjects.filter((p) => p.clientName === client).length;
+              const owner = owners[client] ? users.find((u) => u.id === owners[client]) : undefined;
+              const stats = clientStats[client];
+              return (
+                <ClientRow
+                  key={client}
+                  clientName={client}
+                  count={count}
+                  videoCount={stats?.videoCount ?? 0}
+                  photoCount={stats?.photoCount ?? 0}
+                  scriptCount={stats?.scriptCount ?? 0}
+                  owner={owner}
+                  onClick={() => router.push(clientProjectsHref(client))}
+                  onContextMenu={(e) => { clientMenu.open(e, client); }}
+                />
+              );
+            })}
+          </div>
+        )
       )}
 
       {/* No results */}
-      {projects.length > 0 && filteredClients.length === 0 && (
+      {projects.length > 0 && sortedClients.length === 0 && (
         <p className="m-empty">No clients match your search.</p>
       )}
 
@@ -931,8 +1090,8 @@ function ProjectRow({ project: p, selected, selectionActive, onClick, onToggle, 
 
 // ── Client card ───────────────────────────────────────────────────────────────
 
-function ClientCard({ clientName, count, mediaCount, scriptCount, owner, onClick, onContextMenu }: {
-  clientName: string; count: number; mediaCount: number; scriptCount: number; owner?: UserSummary;
+function ClientCard({ clientName, count, videoCount, photoCount, scriptCount, owner, onClick, onContextMenu }: {
+  clientName: string; count: number; videoCount: number; photoCount: number; scriptCount: number; owner?: UserSummary;
   onClick: () => void; onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -948,7 +1107,8 @@ function ClientCard({ clientName, count, mediaCount, scriptCount, owner, onClick
           <span className="proj-client-card-name" title={clientName}>{clientName}</span>
           <div className="proj-client-card-stats">
             <span className="proj-client-card-stat">{count} project{count !== 1 ? 's' : ''}</span>
-            <span className="proj-client-card-stat">{mediaCount > 0 ? `${mediaCount} media` : 'No media'}</span>
+            <span className="proj-client-card-stat">{videoCount > 0 ? `${videoCount} video${videoCount !== 1 ? 's' : ''}` : 'No videos'}</span>
+            <span className="proj-client-card-stat">{photoCount > 0 ? `${photoCount} photo${photoCount !== 1 ? 's' : ''}` : 'No photos'}</span>
             <span className="proj-client-card-stat">{scriptCount > 0 ? `${scriptCount} script${scriptCount !== 1 ? 's' : ''}` : 'No scripts'}</span>
           </div>
         </div>
@@ -964,8 +1124,8 @@ function ClientCard({ clientName, count, mediaCount, scriptCount, owner, onClick
 
 // ── Client row ────────────────────────────────────────────────────────────────
 
-function ClientRow({ clientName, count, owner, onClick, onContextMenu }: {
-  clientName: string; count: number; owner?: UserSummary;
+function ClientRow({ clientName, count, videoCount, photoCount, scriptCount, owner, onClick, onContextMenu }: {
+  clientName: string; count: number; videoCount: number; photoCount: number; scriptCount: number; owner?: UserSummary;
   onClick: () => void; onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -978,6 +1138,9 @@ function ClientRow({ clientName, count, owner, onClick, onContextMenu }: {
       <span className="proj-client-row-initial">{clientName.charAt(0).toUpperCase()}</span>
       <span className="proj-client-row-name">{clientName}</span>
       <span className="proj-client-row-count">{count} project{count !== 1 ? 's' : ''}</span>
+      <span className="proj-client-row-count">{videoCount} video{videoCount !== 1 ? 's' : ''}</span>
+      <span className="proj-client-row-count">{photoCount} photo{photoCount !== 1 ? 's' : ''}</span>
+      <span className="proj-client-row-count">{scriptCount} script{scriptCount !== 1 ? 's' : ''}</span>
       {owner && <OwnerAvatar user={owner} size={20} />}
       <svg className="proj-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="9 18 15 12 9 6"/>

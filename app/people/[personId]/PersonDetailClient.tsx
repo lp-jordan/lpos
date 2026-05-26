@@ -3,14 +3,16 @@
 import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { Prospect, ProspectContact, ProspectStatus, ProspectStatusHistory, ProspectUpdate } from '@/lib/models/prospect';
-import { ACCOUNT_MODELS, BILLING_STATUSES, EXPANSION_POTENTIALS, PERSON_SOURCES, REVENUE_TYPES } from '@/lib/models/prospect';
+import type { EntityType, Prospect, ProspectContact, ProspectStatus, ProspectStatusHistory, ProspectUpdate } from '@/lib/models/prospect';
+import { ACCOUNT_MODELS, BILLING_STATUSES, ENTITY_TYPES, EXPANSION_POTENTIALS, PERSON_SOURCES, REVENUE_TYPES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ContactModal } from '@/components/prospects/ContactModal';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { UpdatesLog } from '@/components/prospects/UpdatesLog';
 import { PromoteModal } from '@/components/prospects/PromoteModal';
+import type { PromoteResult } from '@/components/prospects/PromoteModal';
+import type { Client } from '@/lib/store/client-store';
 import { DatePicker } from '@/components/shared/DatePicker';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -94,15 +96,17 @@ function formatCurrency(value: number | null): string {
 // ── Overview panel ────────────────────────────────────────────────────────────
 
 function OverviewPanel({ person, onUpdated, readOnly }: { person: Prospect; onUpdated: (p: Prospect) => void; readOnly?: boolean }) {
-  const [editing,  setEditing]  = useState(false);
-  const [company,  setCompany]  = useState(person.company);
-  const [website,  setWebsite]  = useState(person.website  ?? '');
-  const [industry, setIndustry] = useState(person.industry ?? '');
-  const [saving,   setSaving]   = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [editing,    setEditing]    = useState(false);
+  const [company,    setCompany]    = useState(person.company);
+  const [entityType, setEntityType] = useState<EntityType>(person.entityType);
+  const [website,    setWebsite]    = useState(person.website  ?? '');
+  const [industry,   setIndustry]   = useState(person.industry ?? '');
+  const [saving,     setSaving]     = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
 
   function handleCancel() {
-    setCompany(person.company); setWebsite(person.website ?? ''); setIndustry(person.industry ?? '');
+    setCompany(person.company); setEntityType(person.entityType);
+    setWebsite(person.website ?? ''); setIndustry(person.industry ?? '');
     setEditing(false); setError(null);
   }
 
@@ -112,7 +116,7 @@ function OverviewPanel({ person, onUpdated, readOnly }: { person: Prospect; onUp
     try {
       const res  = await fetch(`/api/prospects/${person.prospectId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body:   JSON.stringify({ company: company.trim(), website, industry }),
+        body:   JSON.stringify({ company: company.trim(), entityType, website, industry }),
       });
       const data = await res.json() as { prospect?: Prospect; error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Save failed.');
@@ -142,6 +146,32 @@ function OverviewPanel({ person, onUpdated, readOnly }: { person: Prospect; onUp
           {editing
             ? <input style={inputStyle} value={company} onChange={(e) => setCompany(e.target.value)} autoFocus disabled={saving} />
             : <span style={{ ...valueStyle, fontWeight: 600 }}>{person.company}</span>}
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>Type</span>
+          {editing
+            ? (
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                {ENTITY_TYPES.map((et) => (
+                  <button
+                    key={et.value}
+                    type="button"
+                    onClick={() => setEntityType(et.value as EntityType)}
+                    disabled={saving}
+                    style={{
+                      flex: 1, padding: '0.25rem 0', borderRadius: 6, fontSize: '0.8rem', fontWeight: 600,
+                      border: `1px solid ${entityType === et.value ? 'var(--accent)' : 'var(--color-border,#444)'}`,
+                      background: entityType === et.value ? 'var(--accent-soft)' : 'transparent',
+                      color: entityType === et.value ? 'var(--accent-strong)' : 'var(--muted)',
+                      cursor: 'pointer', transition: 'all 120ms ease',
+                    }}
+                  >
+                    {et.label}
+                  </button>
+                ))}
+              </div>
+            )
+            : <span style={valueStyle}>{ENTITY_TYPES.find((et) => et.value === person.entityType)?.label ?? 'Individual'}</span>}
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>Website</span>
@@ -648,7 +678,8 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
   const [savingStatus,   setSavingStatus]   = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [savingArchive,  setSavingArchive]  = useState(false);
-  const [showPromote,    setShowPromote]    = useState(false);
+  const [showPromote,     setShowPromote]     = useState(false);
+  const [existingClients, setExistingClients] = useState<Client[]>([]);
 
   const statusStyle  = STATUS_STYLE[person.status];
   const isProspect   = person.status === 'prospect';
@@ -680,10 +711,24 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
     } finally { setSavingArchive(false); setConfirmArchive(false); }
   }
 
-  async function handlePromote(clientName: string) {
+  async function openPromoteModal() {
+    try {
+      const res  = await fetch('/api/clients');
+      const data = await res.json() as { clients?: Client[] };
+      setExistingClients(data.clients ?? []);
+    } catch {
+      setExistingClients([]);
+    }
+    setShowPromote(true);
+  }
+
+  async function handlePromote(result: PromoteResult) {
+    const body = result.mode === 'new'
+      ? { clientName: result.clientName }
+      : { existingClientId: result.existingClientId };
     const res  = await fetch(`/api/prospects/${person.prospectId}/promote`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body:   JSON.stringify({ clientName }),
+      body:   JSON.stringify(body),
     });
     const data = await res.json() as { prospect?: Prospect; error?: string };
     if (!res.ok) throw new Error(data.error ?? 'Promotion failed.');
@@ -743,7 +788,7 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
           {isProspect && (
             <button
               type="button"
-              onClick={() => setShowPromote(true)}
+              onClick={() => void openPromoteModal()}
               style={{ padding: '0.3rem 1rem', borderRadius: 6, fontSize: '0.82rem', fontWeight: 600, border: '1px solid var(--accent)', background: 'var(--accent-soft)', color: 'var(--accent-strong)', cursor: 'pointer' }}
             >
               Promote →
@@ -789,6 +834,7 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
       {showPromote && (
         <PromoteModal
           companyName={person.company}
+          existingClients={existingClients}
           onConfirm={handlePromote}
           onClose={() => setShowPromote(false)}
         />

@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 
 export interface ClientStats {
-  mediaCount: number;
+  videoCount: number;
+  photoCount: number;
   scriptCount: number;
 }
 

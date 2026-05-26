@@ -354,10 +354,11 @@ export class AmaranService {
       }
 
       if (msg.type === 'response' && typeof msg.action === 'string') {
-        const resolver = this.pending.get(msg.action);
-        if (resolver) {
+        const entry = this.pending.get(msg.action);
+        if (entry) {
+          clearTimeout(entry.timer);
           this.pending.delete(msg.action);
-          resolver({ code: Number(msg.code ?? -1), data: msg.data ?? null });
+          entry.resolve({ code: Number(msg.code ?? -1), data: msg.data ?? null });
         }
       }
     } catch {
@@ -412,7 +413,10 @@ export class AmaranService {
 
   // ── Low-level request/response ──────────────────────────────────────────────
 
-  private pending = new Map<string, (res: { code: number; data: unknown }) => void>();
+  private pending = new Map<string, {
+    resolve: (res: { code: number; data: unknown }) => void;
+    timer:   ReturnType<typeof setTimeout>;
+  }>();
 
   private sendRequest(
     action: string,
@@ -431,14 +435,14 @@ export class AmaranService {
       // node_id, so we can't key by action+nodeId. Collision is avoided by
       // ensuring no two concurrent requests use the same action (discovery and
       // refresh process fixtures sequentially; preset apply is already sequential).
-      this.pending.set(action, resolve);
-
       const timer = setTimeout(() => {
-        if (this.pending.has(action)) {
+        if (this.pending.get(action)?.timer === timer) {
           this.pending.delete(action);
           reject(new Error(`[amaran] timeout waiting for ${action}`));
         }
       }, 5_000);
+
+      this.pending.set(action, { resolve, timer });
 
       try {
         this.ws.send(JSON.stringify({ id: ++_reqId, ...req }));

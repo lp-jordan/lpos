@@ -104,14 +104,26 @@ export async function POST(
   }
 
   const now = new Date().toISOString();
+
+  if (result.outcome === 'duplicate') {
+    try { fs.unlinkSync(session.temp_path); } catch { /* already gone */ }
+    db.prepare("UPDATE upload_sessions SET status = 'finalized', updated_at = ? WHERE upload_id = ?")
+      .run(now, uploadId);
+    ingestQueue?.complete(session.job_id);
+    return NextResponse.json({
+      code: 'no_change_needed',
+      message: `No update was made — this file is identical to the current version of ${result.asset.name}.`,
+      existingAsset: result.asset,
+    });
+  }
+
   db.prepare("UPDATE upload_sessions SET status = 'finalized', updated_at = ? WHERE upload_id = ?")
     .run(now, uploadId);
 
-  // outcome should always be 'registered' here since replaceAssetId bypasses
-  // version-conflict detection in finalizeUploadedAsset.
   if (result.outcome !== 'registered') {
     return NextResponse.json({ error: 'Unexpected finalization outcome' }, { status: 500 });
   }
 
+  getProjectStore().touch(projectId);
   return NextResponse.json({ asset: result.asset });
 }

@@ -17,7 +17,7 @@ import type { Project } from '@/lib/models/project';
 import { registerAsset, patchAsset, getAsset } from '@/lib/store/media-registry';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
-import { findCanonicalVersionCandidate } from '@/lib/store/canonical-asset-store';
+import { findCanonicalVersionCandidate, isExactHashMatch } from '@/lib/store/canonical-asset-store';
 import { probeDuration, extractThumbnail } from '@/lib/services/media-probe';
 import { getTranscripterService, getIngestQueueService } from '@/lib/services/container';
 
@@ -77,6 +77,13 @@ export async function finalizeUploadedAsset(input: FinalizeInput): Promise<Final
   let priorFrameioStackId: string | null = null;
   if (replaceAssetId) {
     const priorAsset = getAsset(projectId, replaceAssetId);
+
+    // Bail out early if the incoming file is byte-for-byte identical to the
+    // current version — no new version row should be created.
+    if (priorAsset && isExactHashMatch(replaceAssetId, preComputedHash)) {
+      return { outcome: 'duplicate', asset: priorAsset };
+    }
+
     priorFrameioFileId  = priorAsset?.frameio.assetId ?? null;
     priorFrameioStackId = priorAsset?.frameio.stackId ?? null;
   }

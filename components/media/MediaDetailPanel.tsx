@@ -64,8 +64,8 @@ class TheaterErrorBoundary extends Component<
   }
 }
 import { VideoTheaterMode } from './VideoTheaterMode';
-import { SardiusPushModal } from './SardiusPushModal';
-import { SARDIUS_STATUS_LABEL } from '@/lib/models/media-asset';
+import { useHlsPlayer } from '@/hooks/useHlsPlayer';
+
 
 interface Props {
   asset:              MediaAsset | null;
@@ -151,14 +151,23 @@ function TitleRenameInput({ initial, onCommit, onCancel }: { initial: string; on
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
   const sidebarVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Derive the sidebar video src so the HLS hook can be called unconditionally
+  // at the top level (hooks must not be called inside conditionals).
+  const sidebarVideoSrc = asset?.frameio.assetId
+    ? `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`
+    : asset?.filePath
+      ? `/api/projects/${projectId}/media/${asset.assetId}/stream?v=${asset.frameio?.version ?? 0}`
+      : '';
+  useHlsPlayer(sidebarVideoRef, sidebarVideoSrc);
+
   const { toast } = useToast();
   const [renamingTitle,               setRenamingTitle]               = useState(false);
   const [showLeaderPassErrorDetails, setShowLeaderPassErrorDetails] = useState(false);
   const [theaterSrc,                 setTheaterSrc]                 = useState<string | null>(null);
   const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
-  const [moreInfoOpen,               setMoreInfoOpen]               = useState(false);
-  const [fioDropdownOpen,            setFioDropdownOpen]            = useState(false);
-  const [sardiusModalOpen, setSardiusModalOpen] = useState(false);
+  const [advancedOpen,               setAdvancedOpen]               = useState(false);
+  const [reviewLinksOpen,            setReviewLinksOpen]            = useState(false);
 
   function openTheater(src: string) {
     const t = sidebarVideoRef.current?.currentTime ?? 0;
@@ -245,21 +254,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     return () => clearInterval(id);
   }, [asset, pollFio]);
 
-  const pollSardius = useCallback(async () => {
-    if (!asset || asset.sardius.status !== 'uploading') return;
-    try {
-      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/sardius`);
-      const data = await res.json() as { sardius?: { status?: string } };
-      if (data.sardius?.status !== 'uploading') onUpdated();
-    } catch { /* ignore */ }
-  }, [asset, projectId, onUpdated]);
-
-  useEffect(() => {
-    if (!asset || asset.sardius.status !== 'uploading') return;
-    const id = setInterval(() => { void pollSardius(); }, 4000);
-    return () => clearInterval(id);
-  }, [asset, pollSardius]);
-
   const pollLeaderPass = useCallback(async () => {
     if (!asset) return;
     const active = asset.leaderpass.status === 'preparing'
@@ -313,10 +307,11 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [lpError, setLpError] = useState<string | null>(null);
   const [lpResetting, setLpResetting] = useState(false);
 
-  const [cfEmbedCopied, setCfEmbedCopied]   = useState(false);
-  const [cfThumbFrame, setCfThumbFrame]      = useState(24);
-  const [cfThumbApplying, setCfThumbApplying] = useState(false);
-  const [cfThumbError, setCfThumbError]      = useState<string | null>(null);
+  const [cfEmbedCopied,    setCfEmbedCopied]    = useState(false);
+  const [cfThumbFrame,     setCfThumbFrame]     = useState(24);
+  const [cfThumbApplying,  setCfThumbApplying]  = useState(false);
+  const [cfThumbError,     setCfThumbError]     = useState<string | null>(null);
+  const [cfResetConfirm,   setCfResetConfirm]   = useState(false);
 
   async function handlePushToLeaderPass() {
     if (!asset) return;
@@ -374,12 +369,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setCfThumbApplying(true);
     try {
       const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/cloudflare`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ thumbnailFrameNumber: cfThumbFrame }),
+        body:    JSON.stringify({ thumbnailFrameNumber: cfThumbFrame }),
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) setCfThumbError(data.error ?? 'Failed to apply thumbnail frame');
+      else onUpdated();
     } catch {
       setCfThumbError('Network error — could not apply thumbnail frame');
     } finally {
@@ -410,11 +406,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   useEffect(() => {
     if (asset?.assetId) void fetchShareLinks(asset.assetId);
   }, [asset?.assetId, fetchShareLinks]);
-
-  function handleGenerateShareLink() {
-    if (!asset) return;
-    setShowDeliverableModal(true);
-  }
 
   // Phase E: shareId here is actually a deliverableId (we reshaped the response
   // upstream). Deleting goes through the unified /deliverables endpoint, which
@@ -583,13 +574,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
-  // ── Sardius ────────────────────────────────────────────────────────────────
-  async function handleResetSardius() {
-    if (!asset) return;
-    await fetch(`/api/projects/${projectId}/media/${asset.assetId}/sardius`, { method: 'DELETE' });
-    onUpdated();
-  }
-
   // ── Re-transcribe ──────────────────────────────────────────────────────────
   async function handleRetranscribe() {
     if (!asset) return;
@@ -627,13 +611,24 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
         </TheaterErrorBoundary>
       )}
 
-      {sardiusModalOpen && asset && (
-        <SardiusPushModal
-          assets={[asset]}
-          projectId={projectId}
-          onClose={() => setSardiusModalOpen(false)}
-          onPushed={() => { setSardiusModalOpen(false); onUpdated(); }}
-        />
+      {cfResetConfirm && (
+        <div className="mad-confirm-overlay" onClick={() => setCfResetConfirm(false)}>
+          <div className="mad-confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <p className="mad-confirm-title">Reset & Re-push?</p>
+            <p className="mad-confirm-body">The current Cloudflare Stream will be deleted and a new upload queued from the current LPOS version. The video will be temporarily unavailable.</p>
+            <div className="mad-confirm-actions">
+              <button type="button" className="mad-action-btn" onClick={() => setCfResetConfirm(false)}>Cancel</button>
+              <button
+                type="button"
+                className="mad-action-btn mad-action-btn--danger"
+                disabled={lpResetting}
+                onClick={async () => { setCfResetConfirm(false); await handleResetLeaderPass(); }}
+              >
+                {lpResetting ? 'Resetting…' : 'Reset & Re-push'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {open && <div className="mad-backdrop" onClick={onClose} aria-hidden="true" />}
@@ -667,203 +662,14 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       </span>
                     );
                   })()}
-                  {asset.fileSize !== null && (
-                    <span className="mad-header-meta-item">{formatBytes(asset.fileSize)}</span>
-                  )}
-                  {asset.duration !== null && asset.duration > 0 && (
-                    <span className="mad-header-meta-item">{formatTimestamp(asset.duration)}</span>
-                  )}
                 </div>
-                {asset.name !== asset.originalFilename && (
-                  <span className="mad-header-filename">{asset.originalFilename}</span>
-                )}
-                {/* ── Cloudflare / LeaderPass status row ── */}
+                {/* ── Compact meta: size · duration · filename ── */}
                 {(() => {
-                  const cfStatus   = asset.cloudflare.status;
-                  const lpStatus   = asset.leaderpass.status;
-                  const isStale    = asset.cloudflare.isStale;
-                  const currentVer = asset.frameio.version;
-                  const publishedVer = asset.cloudflare.versionNumber;
-                  const isActive   = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
-                  const isPushable = !isActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || isStale);
-                  const isReady    = cfStatus === 'ready';
-                  const hasState   = cfStatus !== 'none';
-                  const staleTooltip = isStale && publishedVer != null
-                    ? `Cloudflare reflects v${publishedVer}; current LPOS version is v${currentVer}. Re-push to update.`
-                    : undefined;
-
-                  // Derive the embed src from the HLS URL (strip manifest path, add /iframe).
-                  // posterUrl will be appended when available (Platform page sets it).
-                  const embedBase = asset.cloudflare.hlsUrl
-                    ? asset.cloudflare.hlsUrl.replace('/manifest/video.m3u8', '')
-                    : null;
-                  const embedSrc = embedBase
-                    ? `${embedBase}/iframe${asset.cloudflare.posterUrl ? `?poster=${encodeURIComponent(asset.cloudflare.posterUrl)}` : ''}`
-                    : null;
-
-                  return (
-                    <>
-                      {/* Push button — shown when no upload is in flight */}
-                      {isPushable && (
-                        <button
-                          type="button"
-                          className="mad-action-btn mad-action-btn--primary"
-                          onClick={() => void handlePushToLeaderPass()}
-                          disabled={lpPublishing || !asset.filePath}
-                          title={!asset.filePath ? 'No local file — cannot upload' : undefined}
-                        >
-                          {lpPublishing
-                            ? 'Queuing…'
-                            : isStale
-                              ? `Push v${currentVer} to Cloudflare`
-                              : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare Push' : 'Push to Cloudflare'}
-                        </button>
-                      )}
-
-                      {/* In-progress spinner + force-reset escape hatch */}
-                      {isActive && (
-                        <div className="mad-uploading-row">
-                          <span className="mad-spinner" aria-hidden="true" />
-                          <span className="mad-uploading-label">
-                            {cfStatus === 'processing'
-                              ? 'Cloudflare is processing the asset…'
-                              : `Uploading to Cloudflare… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
-                          </span>
-                          <button
-                            type="button"
-                            className="mad-lp-force-reset"
-                            onClick={() => void handleResetLeaderPass()}
-                            disabled={lpResetting}
-                            title="Force-reset if the upload is stuck (e.g. after a server restart)"
-                          >
-                            {lpResetting ? 'Resetting…' : 'Force reset'}
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Info grid — shown whenever there is any CF state */}
-                      {hasState && (
-                        <div className="mad-info-grid">
-                          <span className="mad-info-label">Cloudflare</span>
-                          <span className="mad-info-value">
-                            {CLOUDFLARE_STREAM_STATUS_LABEL[cfStatus]}
-                            {isStale && publishedVer != null && (
-                              <span
-                                className="mad-cf-stale-dot"
-                                title={staleTooltip}
-                                aria-label={staleTooltip}
-                              >
-                                v{publishedVer}
-                              </span>
-                            )}
-                          </span>
-                          <span className="mad-info-label">Stream UID</span>
-                          <span className="mad-info-value mad-info-value--mono">{asset.cloudflare.uid ?? '—'}</span>
-                          {asset.leaderpass.playbackUrl && (
-                            <>
-                              <span className="mad-info-label">Preview</span>
-                              <span className="mad-info-value">
-                                <a href={asset.leaderpass.playbackUrl} target="_blank" rel="noreferrer" className="mad-video-unavail-link">
-                                  Open Cloudflare preview ↗
-                                </a>
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      )}
-
-                      {isReady && embedSrc && (
-                        <div className="mad-cf-embed-block">
-                          <span className="mad-cf-embed-label">Stream Embed URL</span>
-                          <div className="mad-cf-embed-row">
-                            <input
-                              className="mad-cf-embed-input"
-                              readOnly
-                              value={embedSrc}
-                              onFocus={(e) => e.currentTarget.select()}
-                            />
-                            <button
-                              type="button"
-                              className="mad-cf-embed-copy"
-                              onClick={() => handleCopyEmbedUrl(embedSrc)}
-                            >
-                              {cfEmbedCopied ? '✓ Copied' : 'Copy'}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {isReady && (
-                        <div className="mad-cf-thumb-row">
-                          <label className="mad-cf-thumb-label" htmlFor="cf-thumb-frame">
-                            Thumbnail frame
-                          </label>
-                          <input
-                            id="cf-thumb-frame"
-                            type="number"
-                            min={1}
-                            step={1}
-                            className="mad-cf-thumb-input"
-                            value={cfThumbFrame}
-                            onChange={(e) => setCfThumbFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                          />
-                          <button
-                            type="button"
-                            className="mad-action-btn"
-                            onClick={handleApplyCfThumb}
-                            disabled={cfThumbApplying}
-                          >
-                            {cfThumbApplying ? 'Applying…' : 'Apply'}
-                          </button>
-                          {cfThumbError && <span className="mad-cf-thumb-error">{cfThumbError}</span>}
-                        </div>
-                      )}
-
-                      {/* Reset button for ready/awaiting_platform — re-push a new version */}
-                      {(isReady || lpStatus === 'awaiting_platform') && (
-                        <div className="mad-lp-action-row">
-                          <button
-                            type="button"
-                            className="mad-action-btn"
-                            onClick={() => void handleResetLeaderPass()}
-                            disabled={lpResetting}
-                          >
-                            {lpResetting ? 'Resetting…' : 'Reset & Re-push'}
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                {asset.leaderpass.status === 'awaiting_platform' && (
-                  <p className="mad-hint">
-                    Cloudflare delivery is ready. LPOS has stored the prepared payload and is waiting for the LeaderPass platform API handoff.
-                  </p>
-                )}
-                {asset.leaderpass.lastPreparedAt && (
-                  <p className="mad-hint">Prepared {formatDate(asset.leaderpass.lastPreparedAt)}</p>
-                )}
-                {(lpError || asset.leaderpass.lastError || asset.cloudflare.lastError) && (() => {
-                  const message = lpError ?? asset.leaderpass.lastError ?? asset.cloudflare.lastError ?? '';
-                  const preview = summarizeError(message);
-                  const truncated = preview !== message;
-
-                  return (
-                    <div className="mad-error-block">
-                      <p className={`mad-error ${showLeaderPassErrorDetails ? 'mad-error--expanded' : 'mad-error--clamped'}`}>
-                        {showLeaderPassErrorDetails ? message : preview}
-                      </p>
-                      {truncated && (
-                        <button
-                          type="button"
-                          className="mad-error-toggle"
-                          onClick={() => setShowLeaderPassErrorDetails((current) => !current)}
-                        >
-                          {showLeaderPassErrorDetails ? 'Show less' : 'Show full error'}
-                        </button>
-                      )}
-                    </div>
-                  );
+                  const parts: string[] = [];
+                  if (asset.fileSize !== null) parts.push(formatBytes(asset.fileSize));
+                  if (asset.duration !== null && asset.duration > 0) parts.push(formatTimestamp(asset.duration));
+                  if (asset.originalFilename) parts.push(asset.originalFilename);
+                  return parts.length ? <p className="mad-header-meta-row">{parts.join(' · ')}</p> : null;
                 })()}
               </div>
               <button
@@ -923,85 +729,63 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           </svg>
                           Theater mode
                         </button>
-                        {/* Frame.io logo + share-links dropdown */}
-                        <div className="mad-fio-menu-wrap">
-                          <button
-                            type="button"
-                            className={`mad-fio-menu-btn${fioDropdownOpen ? ' mad-fio-menu-btn--active' : ''}`}
-                            onClick={() => setFioDropdownOpen(o => !o)}
-                            aria-label="Frame.io options"
-                            title="Frame.io"
+                        {/* Review links dropdown */}
+                        {existingShareLinks.length > 0 && (
+                          <div className="mad-review-links-wrap">
+                            <button
+                              type="button"
+                              className={`mad-action-btn mad-review-links-btn${reviewLinksOpen ? ' mad-review-links-btn--active' : ''}`}
+                              onClick={() => setReviewLinksOpen(o => !o)}
+                              title={`${existingShareLinks.length} review link${existingShareLinks.length !== 1 ? 's' : ''}`}
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+                                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+                              </svg>
+                              {existingShareLinks.length}
+                            </button>
+                            {reviewLinksOpen && (
+                              <>
+                                <div className="mad-review-links-backdrop" onClick={() => setReviewLinksOpen(false)} />
+                                <div className="mad-review-links-menu">
+                                  {existingShareLinks.map((link) => (
+                                    <div key={link.shareId} className="mad-review-links-item">
+                                      <span className="mad-review-links-name">{link.name}</span>
+                                      <button
+                                        type="button"
+                                        className="mad-icon-btn"
+                                        onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
+                                        title="Copy link"
+                                      >
+                                        {copiedShareId === link.shareId ? '✓' : (
+                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                                          </svg>
+                                        )}
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {/* Frame.io icon link */}
+                        {(asset.frameio.playerUrl || asset.frameio.reviewLink) && (
+                          <a
+                            href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mad-icon-btn"
+                            title="Open in Frame.io"
                           >
-                            frame.io
-                          </button>
-                          {fioDropdownOpen && (
-                            <>
-                              <div className="mad-fio-menu-backdrop" onClick={() => setFioDropdownOpen(false)} />
-                              <div className="mad-fio-menu">
-                                {(asset.frameio.playerUrl || asset.frameio.reviewLink) && (
-                                  <a
-                                    href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="mad-fio-menu-item mad-fio-menu-item--link"
-                                    onClick={() => setFioDropdownOpen(false)}
-                                  >
-                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                                      <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                                    </svg>
-                                    Open in Frame.io
-                                  </a>
-                                )}
-                                <button
-                                  type="button"
-                                  className="mad-fio-menu-item"
-                                  onClick={() => { setFioDropdownOpen(false); handleGenerateShareLink(); }}
-                                >
-                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                                  </svg>
-                                  New review link
-                                </button>
-                                {existingShareLinks.length > 0 && <div className="mad-fio-menu-divider" />}
-                                {existingShareLinks.map((link) => (
-                                  <div key={link.shareId} className="mad-fio-menu-share-row">
-                                    <span className="mad-fio-menu-share-url">{link.shareUrl}</span>
-                                    <button
-                                      type="button"
-                                      className="mad-fio-menu-share-btn"
-                                      onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
-                                      title="Copy link"
-                                    >
-                                      {copiedShareId === link.shareId ? '✓' : (
-                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                                          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                                        </svg>
-                                      )}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="mad-fio-menu-share-btn mad-fio-menu-share-btn--danger"
-                                      onClick={() => void handleDeleteShareLink(link.shareId)}
-                                      disabled={deletingShareId === link.shareId}
-                                      title="Delete review link"
-                                      aria-label="Delete review link"
-                                    >
-                                      {deletingShareId === link.shareId ? '…' : (
-                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-                                          <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-                                        </svg>
-                                      )}
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </>
-                          )}
-                        </div>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                              <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                            </svg>
+                          </a>
+                        )}
                       </div>
                     </>
                   );
@@ -1027,6 +811,47 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           </svg>
                           Theater mode
                         </button>
+                        {existingShareLinks.length > 0 && (
+                          <div className="mad-review-links-wrap">
+                            <button
+                              type="button"
+                              className={`mad-action-btn mad-review-links-btn${reviewLinksOpen ? ' mad-review-links-btn--active' : ''}`}
+                              onClick={() => setReviewLinksOpen(o => !o)}
+                              title={`${existingShareLinks.length} review link${existingShareLinks.length !== 1 ? 's' : ''}`}
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+                                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+                              </svg>
+                              {existingShareLinks.length}
+                            </button>
+                            {reviewLinksOpen && (
+                              <>
+                                <div className="mad-review-links-backdrop" onClick={() => setReviewLinksOpen(false)} />
+                                <div className="mad-review-links-menu">
+                                  {existingShareLinks.map((link) => (
+                                    <div key={link.shareId} className="mad-review-links-item">
+                                      <span className="mad-review-links-name">{link.name}</span>
+                                      <button
+                                        type="button"
+                                        className="mad-icon-btn"
+                                        onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
+                                        title="Copy link"
+                                      >
+                                        {copiedShareId === link.shareId ? '✓' : (
+                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                                          </svg>
+                                        )}
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   );
@@ -1244,17 +1069,267 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 </div>
               )}
 
-              {/* ── More info (collapsed by default) ── */}
-              <div className="mad-section mad-more-info-section">
+              {/* ── Cloudflare ── */}
+              {(() => {
+                const cfStatus     = asset.cloudflare.status;
+                const lpStatus     = asset.leaderpass.status;
+                const isStale      = asset.cloudflare.isStale;
+                const currentVer   = asset.frameio.version;
+                const publishedVer = asset.cloudflare.versionNumber;
+                const isActive     = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
+                const isPushable   = !isActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || isStale);
+                const isReady      = cfStatus === 'ready';
+                const hasState     = cfStatus !== 'none';
+                const staleTooltip = isStale && publishedVer != null
+                  ? `Cloudflare reflects v${publishedVer}; current LPOS version is v${currentVer}. Re-push to update.`
+                  : undefined;
+                const embedBase = asset.cloudflare.hlsUrl
+                  ? asset.cloudflare.hlsUrl.replace('/manifest/video.m3u8', '')
+                  : null;
+                const embedSrc = embedBase
+                  ? `${embedBase}/iframe${asset.cloudflare.posterUrl ? `?poster=${encodeURIComponent(asset.cloudflare.posterUrl)}` : ''}`
+                  : null;
+                const posterPreviewUrl = asset.cloudflare.posterUrl
+                  ?? (embedBase ? `${embedBase}/thumbnails/thumbnail.jpg` : null);
+                const cfBadgeClass = cfStatus === 'ready'
+                  ? (isStale ? 'stale' : 'done')
+                  : cfStatus === 'failed' ? 'failed'
+                  : (cfStatus === 'uploading' || cfStatus === 'processing') ? 'processing'
+                  : 'none';
+
+                return (
+                  <div className="mad-section">
+                    {/* ── Head: title · status · preview link · reset icon ── */}
+                    <div className="mad-section-head">
+                      <span className="mad-section-title">Cloudflare</span>
+                      {hasState && (
+                        <span className={`mad-tx-badge mad-tx-badge--${cfBadgeClass}`} title={staleTooltip}>
+                          {CLOUDFLARE_STREAM_STATUS_LABEL[cfStatus]}
+                          {isStale && publishedVer != null && <span className="mad-cf-stale-ver"> v{publishedVer}</span>}
+                        </span>
+                      )}
+                      {asset.leaderpass.playbackUrl && (
+                        <a
+                          href={asset.leaderpass.playbackUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mad-icon-btn"
+                          title="Open Cloudflare preview"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                            <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                          </svg>
+                        </a>
+                      )}
+                      {(isReady || lpStatus === 'awaiting_platform') && (
+                        <button
+                          type="button"
+                          className="mad-icon-btn"
+                          onClick={() => setCfResetConfirm(true)}
+                          disabled={lpResetting}
+                          title="Reset & Re-push"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* ── Copy Stream URL — dedicated labeled button ── */}
+                    {isReady && embedSrc && (
+                      <button
+                        type="button"
+                        className="mad-action-btn mad-cf-copy-stream-btn"
+                        onClick={() => handleCopyEmbedUrl(embedSrc)}
+                      >
+                        {cfEmbedCopied ? (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                            Copied!
+                          </>
+                        ) : (
+                          <>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                            </svg>
+                            Copy Stream URL
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* ── Thumbnail preview + frame setter ── */}
+                    {isReady && posterPreviewUrl && (
+                      <div className="mad-cf-thumb-inline-row">
+                        <span className="mad-cf-thumb-inline-label">Thumbnail</span>
+                        <a href={posterPreviewUrl} target="_blank" rel="noreferrer" className="mad-cf-thumb-preview-link" title="View full size">
+                          <img className="mad-cf-thumb-preview-img" src={posterPreviewUrl} alt="Current poster" />
+                        </a>
+                        <div className="mad-cf-thumb-setter">
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="mad-cf-thumb-input"
+                            value={cfThumbFrame}
+                            onChange={(e) => setCfThumbFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                            title="Frame number to use as thumbnail"
+                          />
+                          <button
+                            type="button"
+                            className="mad-action-btn"
+                            onClick={handleApplyCfThumb}
+                            disabled={cfThumbApplying}
+                          >
+                            {cfThumbApplying ? 'Applying…' : 'Apply'}
+                          </button>
+                        </div>
+                        {cfThumbError && <span className="mad-cf-thumb-error">{cfThumbError}</span>}
+                      </div>
+                    )}
+
+                    {/* ── Push button (unpushed / failed / stale) ── */}
+                    {isPushable && (
+                      <button
+                        type="button"
+                        className="mad-action-btn mad-action-btn--primary"
+                        onClick={() => void handlePushToLeaderPass()}
+                        disabled={lpPublishing || !asset.filePath}
+                        title={!asset.filePath ? 'No local file — cannot upload' : undefined}
+                      >
+                        {lpPublishing
+                          ? 'Queuing…'
+                          : isStale
+                            ? `Push v${currentVer} to Cloudflare`
+                            : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare Push' : 'Push to Cloudflare'}
+                      </button>
+                    )}
+
+                    {/* ── Upload in progress ── */}
+                    {isActive && (
+                      <div className="mad-uploading-row">
+                        <span className="mad-spinner" aria-hidden="true" />
+                        <span className="mad-uploading-label">
+                          {cfStatus === 'processing'
+                            ? 'Cloudflare is processing the asset…'
+                            : `Uploading to Cloudflare… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
+                        </span>
+                        <button
+                          type="button"
+                          className="mad-lp-force-reset"
+                          onClick={() => void handleResetLeaderPass()}
+                          disabled={lpResetting}
+                          title="Force-reset if the upload is stuck"
+                        >
+                          {lpResetting ? 'Resetting…' : 'Force reset'}
+                        </button>
+                      </div>
+                    )}
+
+                    {asset.leaderpass.lastPreparedAt && (
+                      <p className="mad-hint">Prepared {formatDate(asset.leaderpass.lastPreparedAt)}</p>
+                    )}
+
+                    {(lpError || asset.leaderpass.lastError || asset.cloudflare.lastError) && (() => {
+                      const message  = lpError ?? asset.leaderpass.lastError ?? asset.cloudflare.lastError ?? '';
+                      const preview  = summarizeError(message);
+                      const truncated = preview !== message;
+                      return (
+                        <div className="mad-error-block">
+                          <p className={`mad-error ${showLeaderPassErrorDetails ? 'mad-error--expanded' : 'mad-error--clamped'}`}>
+                            {showLeaderPassErrorDetails ? message : preview}
+                          </p>
+                          {truncated && (
+                            <button
+                              type="button"
+                              className="mad-error-toggle"
+                              onClick={() => setShowLeaderPassErrorDetails(c => !c)}
+                            >
+                              {showLeaderPassErrorDetails ? 'Show less' : 'Show full error'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })()}
+
+              {/* ── Transcription ── */}
+              <div className="mad-section">
+                <div className="mad-section-head">
+                  <span className="mad-section-title">Transcription</span>
+                  <div className="mad-tx-status-group">
+                    <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
+                      {{
+                        none:       'Not Transcribed',
+                        queued:     'Queued',
+                        processing: 'Transcribing…',
+                        done:       'Done',
+                        failed:     'Failed',
+                      }[asset.transcription.status]}
+                    </span>
+                    {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
+                      <span
+                        className="mad-tx-version-pill"
+                        title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
+                      >
+                        v{asset.transcription.sourceVersionNumber ?? '?'}
+                      </span>
+                    )}
+                  </div>
+                  {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
+                    <button
+                      type="button"
+                      className="mad-icon-btn"
+                      onClick={handleRetranscribe}
+                      disabled={!asset.filePath}
+                      title={!asset.filePath ? 'No local file path' : asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start transcription'}
+                      aria-label="Re-transcribe"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
+                  <button
+                    type="button"
+                    className="mad-action-btn mad-action-btn--primary"
+                    onClick={() => onGoToTranscript(asset.transcription.jobId!)}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                      <polyline points="14 2 14 8 20 8"/>
+                      <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    Go to Transcript
+                  </button>
+                )}
+                {asset.transcription.completedAt && (
+                  <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
+                )}
+              </div>
+
+              {/* ── Advanced (collapsible) ── */}
+              <div className="mad-section mad-advanced-section">
                 <button
                   type="button"
-                  className="mad-more-info-toggle"
-                  onClick={() => setMoreInfoOpen(o => !o)}
-                  aria-expanded={moreInfoOpen}
+                  className="mad-advanced-toggle"
+                  onClick={() => setAdvancedOpen(o => !o)}
+                  aria-expanded={advancedOpen}
                 >
-                  <span className="mad-section-title">More info</span>
+                  <span className="mad-section-title">Advanced</span>
                   <svg
-                    className={`mad-more-info-chevron${moreInfoOpen ? ' mad-more-info-chevron--open' : ''}`}
+                    className={`mad-advanced-chevron${advancedOpen ? ' mad-advanced-chevron--open' : ''}`}
                     width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
                     aria-hidden="true"
@@ -1263,134 +1338,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                   </svg>
                 </button>
 
-                {moreInfoOpen && (
-                  <div className="mad-more-info-content">
+                {advancedOpen && (
+                  <div className="mad-advanced-content">
 
-                    {/* Transcription */}
-                    <div className="mad-more-info-sub">
-                      <div className="mad-section-head">
-                        <span className="mad-section-title">Transcription</span>
-                        <div className="mad-tx-status-group">
-                          <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
-                            {{
-                              none:       'Not Transcribed',
-                              queued:     'Queued',
-                              processing: 'Transcribing…',
-                              done:       'Done',
-                              failed:     'Failed',
-                            }[asset.transcription.status]}
-                          </span>
-                          {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
-                            <span
-                              className="mad-tx-version-pill"
-                              title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
-                            >
-                              v{asset.transcription.sourceVersionNumber ?? '?'}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
-                        <button
-                          type="button"
-                          className="mad-action-btn mad-action-btn--primary"
-                          onClick={() => onGoToTranscript(asset.transcription.jobId!)}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/>
-                            <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-                          </svg>
-                          Go to Transcript
-                        </button>
-                      )}
-                      {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
-                        <button
-                          type="button"
-                          className="mad-action-btn"
-                          onClick={handleRetranscribe}
-                          disabled={!asset.filePath}
-                          title={!asset.filePath ? 'No local file path' : undefined}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                          </svg>
-                          {asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start Transcription'}
-                        </button>
-                      )}
-                      {asset.transcription.completedAt && (
-                        <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
-                      )}
-                    </div>
-
-                    {/* Sardius */}
-                    <div className="mad-more-info-sub">
-                      <div className="mad-section-head">
-                        <span className="mad-section-title">Sardius</span>
-                        {asset.sardius.status !== 'none' && (
-                          <span className={`mad-tx-badge mad-tx-badge--${asset.sardius.status === 'ready' ? 'done' : asset.sardius.status === 'failed' ? 'failed' : 'processing'}`}>
-                            {SARDIUS_STATUS_LABEL[asset.sardius.status]}
-                          </span>
-                        )}
-                      </div>
-
-                      {asset.sardius.status === 'none' && (
-                        <button
-                          type="button"
-                          className="mad-action-btn mad-action-btn--primary"
-                          onClick={() => setSardiusModalOpen(true)}
-                          disabled={!asset.filePath}
-                          title={!asset.filePath ? 'No local file path — cannot push to Sardius' : undefined}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                          </svg>
-                          Push to Sardius
-                        </button>
-                      )}
-
-                      {asset.sardius.status === 'uploading' && (
-                        <div className="mad-uploading-row">
-                          <span className="mad-spinner" aria-hidden="true" />
-                          <span className="mad-uploading-label">
-                            Uploading {asset.sardius.remoteFilename ?? 'file'} via FTP…
-                          </span>
-                        </div>
-                      )}
-
-                      {asset.sardius.status === 'queued' && (
-                        <>
-                          <p className="sardius-queued-hint">
-                            In the Sardius watch folder — processed within 15 minutes.
-                          </p>
-                          {asset.sardius.remotePath && (
-                            <div className="mad-info-grid">
-                              <span className="mad-info-label">Remote path</span>
-                              <span className="mad-info-value mad-info-value--mono">{asset.sardius.remotePath}/{asset.sardius.remoteFilename}</span>
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {asset.sardius.status === 'failed' && asset.sardius.lastError && (
-                        <p className="mad-error">{asset.sardius.lastError}</p>
-                      )}
-
-                      {asset.sardius.status !== 'none' && (
-                        <button
-                          type="button"
-                          className="mad-action-btn"
-                          onClick={() => void handleResetSardius()}
-                          style={{ marginTop: 6 }}
-                        >
-                          Reset Sardius
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Metadata */}
                     <div className="mad-more-info-sub">
                       <div className="mad-section-head">
                         <span className="mad-section-title">Metadata</span>
@@ -1426,7 +1376,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       </div>
                     </div>
 
-                    {/* File Info */}
                     <div className="mad-more-info-sub">
                       <span className="mad-section-title">File Info</span>
                       <div className="mad-info-grid">

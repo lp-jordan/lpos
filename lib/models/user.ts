@@ -7,7 +7,10 @@ export interface User {
   name: string;
   avatarUrl: string | null;
   slackEmail: string | null;
+  /** Admin-granted permission: whether this user is allowed to see/use NAS ingest. */
   nasIngestAccess: boolean;
+  /** User's persisted NAS-ingest toggle state — independent of the access flag. */
+  nasIngestActive: boolean;
   createdAt: string;
   lastLoginAt: string;
 }
@@ -19,6 +22,7 @@ export interface UserSummary {
   avatarUrl: string | null;
   isGuest: boolean;
   nasIngestAccess: boolean;
+  nasIngestActive: boolean;
 }
 
 /** Fixed ID for the shared guest account. */

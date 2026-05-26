@@ -35,6 +35,7 @@ interface Props {
   users: UserSummary[];
   commentCount: number;
   selected: boolean;
+  highlight?: boolean;
   isRenaming: boolean;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -47,6 +48,7 @@ export function TaskCard({
   users,
   commentCount,
   selected,
+  highlight = false,
   isRenaming,
   onClick,
   onContextMenu,
@@ -101,7 +103,8 @@ export function TaskCard({
       style={style}
       {...attributes}
       {...(isRenaming ? {} : listeners)}
-      className={`task-card${isDone ? ' task-card--done' : ''}${selected ? ' task-card--selected' : ''}${isDragging ? ' task-card--dragging' : ''}${isRenaming ? ' task-card--renaming' : ''}`}
+      data-task-id={task.taskId}
+      className={`task-card${isDone ? ' task-card--done' : ''}${selected ? ' task-card--selected' : ''}${isDragging ? ' task-card--dragging' : ''}${isRenaming ? ' task-card--renaming' : ''}${highlight ? ' task-card--highlight' : ''}`}
       onClick={isRenaming ? undefined : onClick}
       onContextMenu={isRenaming ? undefined : onContextMenu}
       role="button"

@@ -1206,3 +1206,10 @@ export function migrateAllLegacyProjects(): { projectId: string; assetCount: num
 export function getCurrentAssetVersion(assetId: string): CanonicalAssetVersion | null {
   return getLatestNonDuplicateVersionForAsset(assetId);
 }
+
+export function isExactHashMatch(assetId: string, contentHash: string): boolean {
+  const version = getLatestNonDuplicateVersionForAsset(assetId);
+  if (!version) return false;
+  const media = getPrimaryMediaFileForVersion(version.asset_version_id);
+  return Boolean(media?.content_hash && media.content_hash === contentHash);
+}

@@ -72,7 +72,9 @@ function DeliveryNotifItem({ notif, onClick }: { notif: DeliveryNotification; on
       onClick={onClick}
       role="menuitem"
     >
-      <div className="notif-task-type">Delivery trouble report</div>
+      <div className="notif-task-type">
+        {notif.type === 'delivery_expired' ? 'Delivery link expired' : 'Delivery trouble report'}
+      </div>
       <div className="notif-task-title">{title}</div>
       {notif.description && (
         <div className="notif-task-from">&ldquo;{notif.description}&rdquo;</div>

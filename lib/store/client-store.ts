@@ -15,7 +15,7 @@ function rowToClient(row: Record<string, unknown>): Client {
     clientId:   row.client_id   as string,
     name:       row.name        as string,
     prospectId: row.prospect_id as string | null,
-    isParent:   (row.is_parent  as number | null) === 1,
+    isParent:   Boolean(row.is_parent),
     createdBy:  row.created_by  as string,
     createdAt:  row.created_at  as string,
   };
@@ -40,6 +40,13 @@ export class ClientStore {
       .prepare(`INSERT INTO clients (client_id, name, prospect_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(id, name, prospectId, createdBy, now);
     return { clientId: id, name, prospectId, isParent: false, createdBy, createdAt: now };
+  }
+
+  getById(clientId: string): Client | null {
+    const row = getCoreDb()
+      .prepare(`SELECT * FROM clients WHERE client_id = ?`)
+      .get(clientId) as Record<string, unknown> | undefined;
+    return row ? rowToClient(row) : null;
   }
 
   getByProspectId(prospectId: string): Client | null {
@@ -75,5 +82,21 @@ export class ClientStore {
       .prepare(`SELECT * FROM clients ORDER BY created_at DESC`)
       .all() as Record<string, unknown>[];
     return rows.map(rowToClient);
+  }
+
+  /** Mark a client as a parent org (container). Idempotent. */
+  setAsParent(clientId: string): void {
+    getCoreDb()
+      .prepare(`UPDATE clients SET is_parent = 1 WHERE client_id = ?`)
+      .run(clientId);
+  }
+
+  /** Returns the set of client names that are parent orgs. Used by the
+   *  People page to group child prospects under their parent row. */
+  getParentClientNames(): Set<string> {
+    const rows = getCoreDb()
+      .prepare(`SELECT name FROM clients WHERE is_parent = 1`)
+      .all() as { name: string }[];
+    return new Set(rows.map((r) => r.name));
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireEpSecret } from '@/lib/services/ep-auth';
+import { requireEpToken } from '@/lib/services/ep-auth';
 import { getIngestQueueDb } from '@/lib/store/ingest-queue-db';
 import { readRegistry } from '@/lib/store/media-registry';
 
@@ -22,8 +22,8 @@ type UploadSessionRow = {
  * Returns { asset: { assetId, projectId, originalFilename } | null, status }
  */
 export async function GET(req: NextRequest, { params }: Ctx) {
-  const authError = requireEpSecret(req);
-  if (authError) return authError;
+  const auth = requireEpToken(req);
+  if (auth instanceof NextResponse) return auth;
 
   const { uploadId } = await params;
 

@@ -5,6 +5,7 @@ import type { Task, TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
 import { TASK_TYPE_CONFIGS, getTaskTypeConfig } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
+import type { TaskCategory } from '@/lib/models/task-category';
 import { CommentThread } from './CommentThread';
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
@@ -41,6 +42,8 @@ export function TaskDetailModal({
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [clientName, setClientName] = useState<string>(task.clientName || 'General');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(task.assignedTo);
+  const [category, setCategory] = useState<string | null>(task.category ?? null);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -54,6 +57,22 @@ export function TaskDetailModal({
     setTimeout(onClose, 140);
   }
 
+  // Fetch categories when showing a platform task.
+  useEffect(() => {
+    if (taskType !== 'platform') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/task-categories');
+        if (!res.ok) return;
+        const data = await res.json() as { categories?: TaskCategory[] };
+        const labels = (data.categories ?? []).map((c) => c.label).filter(Boolean);
+        if (!cancelled && labels.length > 0) setCategoryOptions(labels);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [taskType]);
+
   // Reset state when task changes
   useEffect(() => {
     setTitle(task.description);
@@ -62,6 +81,7 @@ export function TaskDetailModal({
     setPriority(task.priority);
     setClientName(task.clientName || 'General');
     setAssigneeIds(task.assignedTo);
+    setCategory(task.category ?? null);
     setConfirmDelete(false);
   }, [task.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -128,7 +148,13 @@ export function TaskDetailModal({
     const nextDefault = getTaskTypeConfig(t).defaultStatus;
     setTaskType(t);
     setStatus(nextDefault);
+    if (t !== 'platform') setCategory(null);
     void patch({ taskType: t, status: nextDefault });
+  }
+
+  function handleCategoryChange(c: string) {
+    setCategory(c);
+    void patch({ category: c });
   }
 
   function handleStatusChange(s: string) {
@@ -253,6 +279,22 @@ export function TaskDetailModal({
                 ))}
               </select>
             </div>
+
+            {taskType === 'platform' && (
+              <div className="task-detail-field">
+                <span className="task-detail-label">Category</span>
+                <select
+                  className="task-panel-select"
+                  value={category ?? ''}
+                  onChange={(e) => handleCategoryChange(e.target.value)}
+                >
+                  {!category && <option value="">— none —</option>}
+                  {categoryOptions.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="task-detail-field task-detail-field--assignees" ref={assigneeRef}>
               <span className="task-detail-label">Assigned to</span>

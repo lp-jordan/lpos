@@ -12,7 +12,7 @@
 import { getDeliveryNotificationStore, getIo } from '@/lib/services/container';
 import { getUserById, getUserByEmail } from '@/lib/store/user-store';
 import { getAdmins } from '@/lib/store/admin-store';
-import { sendSlackDeliveryTroubleDm } from '@/lib/services/slack-service';
+import { sendSlackDeliveryTroubleDm, sendSlackDeliveryExpiredDm } from '@/lib/services/slack-service';
 
 export interface DeliveryTroublePayload {
   deliveryToken:      string;
@@ -71,15 +71,13 @@ export interface DeliveryExpiredPayload {
 export async function notifyDeliveryExpired(input: DeliveryExpiredPayload): Promise<void> {
   const recipients = resolveRecipients(input.createdByUserEmail);
   if (recipients.length === 0) {
-    console.warn(
-      `[delivery-notif] no recipients for expired delivery ${input.deliveryToken} — alert dropped`,
-    );
+    console.warn(`[delivery-notif] no recipients resolved for expired delivery ${input.deliveryToken} — alert dropped`);
     return;
   }
 
-  const href  = buildHref(input.projectId);
+  const href = buildHref(input.projectId);
   const store = getDeliveryNotificationStore();
-  const io    = getIo();
+  const io = getIo();
 
   for (const userId of recipients) {
     const notif = store.create({
@@ -96,6 +94,19 @@ export async function notifyDeliveryExpired(input: DeliveryExpiredPayload): Prom
     });
 
     if (io) io.to(`user:${userId}`).emit('delivery:notification', notif);
+
+    const user = getUserById(userId);
+    if (user) {
+      sendSlackDeliveryExpiredDm({
+        email:       user.slackEmail ?? user.email,
+        projectName: input.projectName,
+        clientName:  input.clientName,
+        label:       input.label,
+        href,
+      }).catch((err: unknown) => {
+        console.warn('[delivery-notif] Slack DM failed:', err);
+      });
+    }
   }
 }
 

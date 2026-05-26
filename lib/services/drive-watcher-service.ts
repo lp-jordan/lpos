@@ -559,6 +559,7 @@ export class DriveWatcherService {
         name:       fileName,
       });
 
+      getProjectStore().touch(ctx.projectId);
       console.log(`[drive-watcher] indexed asset: ${fileName} → ${ctx.projectName}`);
     } catch (err) {
       console.error(`[drive-watcher] failed to index asset ${fileId}:`, err);

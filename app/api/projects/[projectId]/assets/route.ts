@@ -11,6 +11,7 @@ import { requireRole } from '@/lib/services/api-auth';
 import { getProjectStore } from '@/lib/services/container';
 import { getCoreDb } from '@/lib/store/core-db';
 import { getDriveAssetsByProject, getDriveAssetsByProjects } from '@/lib/store/drive-sync-db';
+import { resolveAssetsFolder } from '@/lib/services/drive-folder-service';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -30,10 +31,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
   const groupId = row?.asset_link_group_id ?? null;
 
+  const assetsFolderDriveId = resolveAssetsFolder(project.name, project.clientName);
+
   if (!groupId) {
     const all    = getDriveAssetsByProject(projectId);
     const assets = all.filter((a) => a.entityType === 'asset');
-    return NextResponse.json({ assets });
+    return NextResponse.json({ assets, assetsFolderDriveId });
   }
 
   // For grouped projects, return assets belonging to ALL projects in the group
@@ -55,6 +58,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
   return NextResponse.json({
     assets,
+    assetsFolderDriveId,
     assetLinkGroupId:  groupId,
     sharedFolderName:  group?.shared_folder_name,
     linkedProjects,

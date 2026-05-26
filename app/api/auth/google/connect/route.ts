@@ -1,11 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GOOGLE_STATE_COOKIE, createGoogleState, getSessionCookieOptions } from '@/lib/services/session-auth';
+import {
+  GOOGLE_STATE_COOKIE,
+  POST_SIGNIN_REDIRECT_COOKIE,
+  createGoogleState,
+  getSessionCookieOptions,
+} from '@/lib/services/session-auth';
 import { buildAppUrl } from '@/lib/services/app-origin';
 
 const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 
 function getRedirectUri(req: NextRequest): string {
   return process.env.GOOGLE_REDIRECT_URI?.trim() || buildAppUrl('/api/auth/google/callback', req).toString();
+}
+
+/**
+ * Only allow same-origin redirect paths (e.g. `/ep/link?...`) — never absolute
+ * URLs, never custom schemes. Prevents open-redirect abuse on the post-signin
+ * round-trip.
+ */
+function sanitizeReturnTo(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+  return raw;
 }
 
 export async function GET(req: NextRequest) {
@@ -30,5 +46,13 @@ export async function GET(req: NextRequest) {
   response.cookies.set(GOOGLE_STATE_COOKIE, state, {
     ...getSessionCookieOptions(10 * 60),
   });
+
+  // Round-trip a post-signin redirect (e.g. /ep/link?machine=...) through Google.
+  const returnTo = sanitizeReturnTo(req.nextUrl.searchParams.get('return_to'));
+  if (returnTo) {
+    response.cookies.set(POST_SIGNIN_REDIRECT_COOKIE, returnTo, {
+      ...getSessionCookieOptions(10 * 60),
+    });
+  }
   return response;
 }

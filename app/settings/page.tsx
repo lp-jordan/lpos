@@ -12,6 +12,10 @@ import { ConsoleAlertsCard } from '@/components/settings/ConsoleAlertsCard';
 import { LpReleasesCard } from '@/components/settings/LpReleasesCard';
 import { WhatsNewTestCard } from '@/components/settings/WhatsNewTestCard';
 import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel';
+import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
+import { StorageMapCard } from '@/components/settings/StorageMapCard';
+import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
+import { B2SyncConfigCard } from '@/components/settings/B2SyncConfigCard';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -60,6 +64,9 @@ export default async function SettingsPage() {
         </div>
       )}
 
+      {role === 'admin' && <EpTokensPanel />}
+      {role === 'admin' && <B2SyncConfigCard />}
+      {role === 'admin' && <StorageMapCard />}
       {role === 'admin' && <WhatsNewTestCard />}
       {role === 'admin' && <LpReleasesCard />}
       {role === 'admin' && <ActiveClientsCard />}
@@ -68,6 +75,7 @@ export default async function SettingsPage() {
       {role === 'admin' && <SlackUsersCard />}
       {role === 'admin' && <GuestPinCard />}
       {role === 'admin' && <ProspectsAccessPanel />}
+      {role === 'admin' && <NasIngestPanel />}
       {role === 'admin' && <TaskCategoriesPanel />}
       {role === 'admin' && <CloudflareOrphansPanel />}
       {role === 'admin' && <AdminsPanel />}

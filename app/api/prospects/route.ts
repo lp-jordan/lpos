@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
     website?:      unknown;
     industry?:     unknown;
     source?:       unknown;
+    entityType?:   unknown;
     accountModel?: unknown;
     assignedTo?:   unknown;
     openingNote?:  unknown;
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
     website:      typeof body.website === 'string' ? body.website : null,
     industry:     typeof body.industry === 'string' ? body.industry : null,
     source:       typeof body.source === 'string' ? body.source : null,
+    entityType:   body.entityType === 'organization' ? 'organization' : 'individual',
     accountModel: typeof body.accountModel === 'string' ? body.accountModel : null,
     assignedTo:   Array.isArray(body.assignedTo) ? (body.assignedTo as string[]) : undefined,
     createdBy:    session!.userId,

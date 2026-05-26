@@ -1,4 +1,4 @@
-const CACHE = 'lpos-shell-v2';
+const CACHE = 'lpos-shell-v3';
 const SHELL_URLS = ['/', '/projects', '/media', '/slate', '/dashboard'];
 
 self.addEventListener('install', (e) => {
@@ -53,6 +53,7 @@ self.addEventListener('notificationclick', (e) => {
 self.addEventListener('fetch', (e) => {
   // Only handle same-origin GET requests; skip API routes entirely
   const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
   if (e.request.method !== 'GET') return;
   if (url.pathname.startsWith('/api/')) return;
 

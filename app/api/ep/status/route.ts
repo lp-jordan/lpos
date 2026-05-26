@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireEpSecret } from '@/lib/services/ep-auth';
+import { requireEpToken } from '@/lib/services/ep-auth';
 import { upsertInstance } from '@/lib/store/ep-instances';
 
 /**
@@ -9,8 +9,8 @@ import { upsertInstance } from '@/lib/store/ep-instances';
  * Stores current Resolve state, job queue counts, and instance identity.
  */
 export async function POST(req: NextRequest) {
-  const authError = requireEpSecret(req);
-  if (authError) return authError;
+  const auth = requireEpToken(req);
+  if (auth instanceof NextResponse) return auth;
 
   const body = await req.json() as {
     instance_id?: string;

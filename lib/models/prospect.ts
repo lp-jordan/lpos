@@ -31,8 +31,10 @@ export const EXPANSION_POTENTIALS = [
 ] as const;
 
 export const BILLING_STATUSES = [
-  { value: 'active',   label: 'Active'   },
-  { value: 'declined', label: 'Declined' },
+  { value: 'not_started', label: 'Not Started' },
+  { value: 'active',      label: 'Active'      },
+  { value: 'declined',    label: 'Declined'    },
+  { value: 'cancelled',   label: 'Cancelled'   },
 ] as const;
 
 export const PERSON_SOURCES = [
@@ -42,12 +44,20 @@ export const PERSON_SOURCES = [
   { value: 'other',    label: 'Other'    },
 ] as const;
 
+export const ENTITY_TYPES = [
+  { value: 'individual',   label: 'Individual'   },
+  { value: 'organization', label: 'Organization' },
+] as const;
+
+export type EntityType = 'individual' | 'organization';
+
 export interface Prospect {
   prospectId:  string;
   company:     string;
   website:     string | null;
   industry:    string | null;
   source:      string | null;
+  entityType:  EntityType;
   status:      ProspectStatus;
   archived:    boolean;
   createdBy:   string;
