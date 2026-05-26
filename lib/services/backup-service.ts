@@ -1,11 +1,11 @@
 /**
  * BackupService
  *
- * Nightly backup of LPOS state to Cloudflare R2:
+ * Nightly backup of LPOS state to Backblaze B2 (S3-compatible API):
  *   - All *.sqlite files in DATA_DIR (consistent snapshot via VACUUM INTO)
  *   - All top-level *.json files in DATA_DIR (config + credentials + ad-hoc state)
  *
- * Falls back to a local data/backups/ directory when R2 env vars are absent.
+ * Falls back to a local data/backups/ directory when B2 env vars are absent.
  *
  * Safe copy strategy for SQLite: VACUUM INTO '/tmp/…' produces a defragmented,
  * fully consistent snapshot while the source DB is live. The snapshot is
@@ -15,11 +15,11 @@
  *  - Runs once ~30 s after start() to validate config on first boot.
  *  - Repeats every 24 h thereafter.
  *
- * Required env vars (R2 mode):
- *   R2_BACKUP_BUCKET              — bucket name
- *   R2_BACKUP_ACCESS_KEY_ID       — R2 access key
- *   R2_BACKUP_SECRET_ACCESS_KEY   — R2 secret key
- *   CLOUDFLARE_ACCOUNT_ID         — used to build the R2 endpoint URL
+ * Required env vars (B2 mode):
+ *   B2_ENDPOINT          — S3-compatible endpoint, e.g. https://s3.us-west-004.backblazeb2.com
+ *   B2_KEY_ID            — Backblaze Application Key ID
+ *   B2_APPLICATION_KEY   — Backblaze Application Key
+ *   B2_BUCKET            — bucket name
  *
  * Optional:
  *   LPOS_BACKUP_RETAIN_DAYS       — days to keep; default 7
@@ -50,7 +50,7 @@ export interface BackupFileResult {
 
 export interface BackupResult {
   timestamp:  string;
-  target:     'r2' | 'local';
+  target:     'b2' | 'local';
   files:      BackupFileResult[];
   swept:      number;    // old backup entries deleted
 }
@@ -63,21 +63,21 @@ const INTERVAL_MS = 24 * 60 * 60 * 1_000; // 24 h
 const FIRST_RUN_DELAY_MS = 90_000;         // 90 s after start() — lets Drive scan finish first
 
 function getR2Client(): S3Client | null {
-  const accountId  = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const accessKey  = process.env.R2_BACKUP_ACCESS_KEY_ID;
-  const secretKey  = process.env.R2_BACKUP_SECRET_ACCESS_KEY;
-  const bucket     = process.env.R2_BACKUP_BUCKET;
-  if (!accountId || !accessKey || !secretKey || !bucket) return null;
+  const endpoint  = process.env.B2_ENDPOINT;
+  const accessKey = process.env.B2_KEY_ID;
+  const secretKey = process.env.B2_APPLICATION_KEY;
+  const bucket    = process.env.B2_BUCKET;
+  if (!endpoint || !accessKey || !secretKey || !bucket) return null;
 
   return new S3Client({
     region: 'auto',
-    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    endpoint,
     credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
   });
 }
 
 function getR2Bucket(): string {
-  return process.env.R2_BACKUP_BUCKET ?? '';
+  return process.env.B2_BUCKET ?? '';
 }
 
 async function vacuumInto(dbPath: string, tmpPath: string): Promise<void> {
@@ -159,7 +159,7 @@ export class BackupService {
     const timestamp = new Date().toISOString();
     const dateKey   = todayPrefix();
     const r2        = getR2Client();
-    const target: 'r2' | 'local' = r2 ? 'r2' : 'local';
+    const target: 'b2' | 'local' = r2 ? 'b2' : 'local';
 
     console.log(`[BackupService] starting backup — target: ${target}`);
 
