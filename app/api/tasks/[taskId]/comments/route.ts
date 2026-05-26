@@ -28,10 +28,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const task = getTaskStore().getById(taskId);
   if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
 
-  const body = await req.json() as { body?: string };
+  const body = await req.json() as { body?: string; attachments?: unknown };
   if (!body.body?.trim()) {
     return NextResponse.json({ error: 'body is required' }, { status: 400 });
   }
+
+  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
 
   // Resolve @firstName mentions to userIds
   const allUsers = getAllUsers();
@@ -52,6 +54,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     body: body.body,
     authorId: session.userId,
     mentions,
+    attachments,
   });
 
   // Notify: assignees (except commenter) + @mentioned users

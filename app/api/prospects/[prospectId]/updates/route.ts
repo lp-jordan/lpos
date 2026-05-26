@@ -28,13 +28,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     return NextResponse.json({ error: 'Not found.' }, { status: 404 });
   }
 
-  const body = await req.json() as { body?: unknown };
+  const body = await req.json() as { body?: unknown; attachments?: unknown };
   if (!body.body || typeof body.body !== 'string' || !body.body.trim()) {
     return NextResponse.json({ error: 'Update body is required.' }, { status: 400 });
   }
 
+  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+
   const prospect = store.getById(prospectId)!;
-  const update   = store.addUpdate(prospectId, session!.userId, body.body.trim());
+  const update   = store.addUpdate(prospectId, session!.userId, body.body.trim(), attachments);
 
   const actor = getUserById(session!.userId);
 

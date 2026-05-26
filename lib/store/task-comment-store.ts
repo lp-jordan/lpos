@@ -1,25 +1,29 @@
 import { randomUUID } from 'node:crypto';
-import type { TaskComment } from '@/lib/models/task-comment';
+import type { TaskComment, TaskCommentAttachment } from '@/lib/models/task-comment';
 import { getCoreDb, withTransaction } from './core-db';
 
 interface CommentRow {
-  comment_id: string;
-  task_id: string;
-  body: string;
-  author_id: string;
-  created_at: string;
-  edited_at: string | null;
+  comment_id:  string;
+  task_id:     string;
+  body:        string;
+  author_id:   string;
+  created_at:  string;
+  edited_at:   string | null;
+  attachments: string; // JSON
 }
 
 function rowToComment(row: CommentRow, mentions: string[]): TaskComment {
+  let attachments: TaskCommentAttachment[] = [];
+  try { attachments = JSON.parse(row.attachments || '[]') as TaskCommentAttachment[]; } catch { /* */ }
   return {
-    commentId: row.comment_id,
-    taskId: row.task_id,
-    body: row.body,
-    authorId: row.author_id,
+    commentId:   row.comment_id,
+    taskId:      row.task_id,
+    body:        row.body,
+    authorId:    row.author_id,
     mentions,
-    createdAt: row.created_at,
-    editedAt: row.edited_at ?? undefined,
+    createdAt:   row.created_at,
+    editedAt:    row.edited_at ?? undefined,
+    attachments,
   };
 }
 
@@ -60,25 +64,28 @@ export class TaskCommentStore {
   }
 
   create(input: {
-    taskId: string;
-    body: string;
-    authorId: string;
-    mentions: string[];
+    taskId:      string;
+    body:        string;
+    authorId:    string;
+    mentions:    string[];
+    attachments?: TaskCommentAttachment[];
   }): TaskComment {
-    const db = getCoreDb();
+    const db          = getCoreDb();
+    const attachments = input.attachments ?? [];
     const comment: TaskComment = {
-      commentId: randomUUID(),
-      taskId: input.taskId,
-      body: input.body.trim(),
-      authorId: input.authorId,
-      mentions: input.mentions,
-      createdAt: new Date().toISOString(),
+      commentId:   randomUUID(),
+      taskId:      input.taskId,
+      body:        input.body.trim(),
+      authorId:    input.authorId,
+      mentions:    input.mentions,
+      createdAt:   new Date().toISOString(),
+      attachments,
     };
     withTransaction(db, () => {
       db.prepare(
-        `INSERT INTO task_comments (comment_id, task_id, body, author_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(comment.commentId, comment.taskId, comment.body, comment.authorId, comment.createdAt);
+        `INSERT INTO task_comments (comment_id, task_id, body, author_id, created_at, attachments)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(comment.commentId, comment.taskId, comment.body, comment.authorId, comment.createdAt, JSON.stringify(attachments));
       for (const userId of comment.mentions) {
         db.prepare(
           'INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?, ?)',

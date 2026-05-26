@@ -98,6 +98,13 @@ export interface ProspectContact {
   createdAt:   string;
 }
 
+export interface ProspectUpdateAttachment {
+  key:  string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
 export interface ProspectUpdate {
   updateId:    string;
   prospectId:  string;
@@ -105,6 +112,7 @@ export interface ProspectUpdate {
   body:        string;
   createdAt:   string;
   editedAt:    string | null;
+  attachments: ProspectUpdateAttachment[];
 }
 
 export interface ProspectStatusHistory {

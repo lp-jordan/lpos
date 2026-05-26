@@ -7,7 +7,6 @@ import { LightingPanel } from '@/components/slate/LightingPanel';
 import { PlaybackPanel } from '@/components/slate/PlaybackPanel';
 import { CameraPanel } from '@/components/slate/CameraPanel';
 import { PresentationPanel } from '@/components/studio/PresentationPanel';
-import { EpMachinesPanel } from '@/components/slate/EpMachinesPanel';
 import { SlateModal, ModalType } from '@/components/slate/SlateModal';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 
@@ -68,7 +67,7 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
   const [editNoteText, setEditNoteText] = useState('');
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectClient, setNewProjectClient] = useState<string | undefined>();
-  const VALID_TABS = ['notes', 'atem', 'lighting', 'camera', 'audio', 'playback', 'presentation', 'machines'] as const;
+  const VALID_TABS = ['notes', 'atem', 'lighting', 'camera', 'audio', 'playback', 'presentation'] as const;
   type StudioTab = typeof VALID_TABS[number];
   const isLightingGuest = isGuest && guestAccess === 'lighting';
   const [studioTab, setStudioTab] = useState<StudioTab>(
@@ -316,16 +315,10 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                 <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
               </svg>
             )},
-            { id: 'machines', label: 'Machines', icon: (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-              </svg>
-            )},
           ] as { id: StudioTab; label: string; icon: React.ReactNode; soon?: boolean }[]).map((tab) => {
             const guestLocked = isLightingGuest
               ? tab.id !== 'lighting'
-              : isGuest && tab.id !== 'presentation' && tab.id !== 'machines';
+              : isGuest && tab.id !== 'presentation';
             return (
               <button
                 key={tab.id}
@@ -733,9 +726,6 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
           )}
 
           {studioTab === 'presentation' && <PresentationPanel />}
-
-          {/* ── Machines tab ── */}
-          {studioTab === 'machines' && <EpMachinesPanel />}
 
         </section>
       </div>

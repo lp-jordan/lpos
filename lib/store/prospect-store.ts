@@ -6,6 +6,7 @@ import type {
   ProspectStatus,
   ProspectStatusHistory,
   ProspectUpdate,
+  ProspectUpdateAttachment,
 } from '@/lib/models/prospect';
 import { getCoreDb, withTransaction } from './core-db';
 
@@ -65,6 +66,7 @@ interface UpdateRow {
   body:        string;
   created_at:  string;
   edited_at:   string | null;
+  attachments: string; // JSON-encoded ProspectUpdateAttachment[]
 }
 
 interface StatusHistoryRow {
@@ -126,13 +128,16 @@ function rowToContact(row: ContactRow): ProspectContact {
 }
 
 function rowToUpdate(row: UpdateRow): ProspectUpdate {
+  let attachments: ProspectUpdateAttachment[] = [];
+  try { attachments = JSON.parse(row.attachments || '[]') as ProspectUpdateAttachment[]; } catch { /* tolerate bad JSON */ }
   return {
-    updateId:   row.update_id,
-    prospectId: row.prospect_id,
-    authorId:   row.author_id,
-    body:       row.body,
-    createdAt:  row.created_at,
-    editedAt:   row.edited_at,
+    updateId:    row.update_id,
+    prospectId:  row.prospect_id,
+    authorId:    row.author_id,
+    body:        row.body,
+    createdAt:   row.created_at,
+    editedAt:    row.edited_at,
+    attachments,
   };
 }
 
@@ -538,20 +543,29 @@ export class ProspectStore {
     ).map(rowToUpdate);
   }
 
-  addUpdate(prospectId: string, authorId: string, body: string): ProspectUpdate {
+  addUpdate(
+    prospectId:  string,
+    authorId:    string,
+    body:        string,
+    attachments: ProspectUpdateAttachment[] = [],
+  ): ProspectUpdate {
     const now    = new Date().toISOString();
     const update: ProspectUpdate = {
-      updateId:   randomUUID(),
+      updateId:    randomUUID(),
       prospectId,
       authorId,
-      body:       body.trim(),
-      createdAt:  now,
-      editedAt:   null,
+      body:        body.trim(),
+      createdAt:   now,
+      editedAt:    null,
+      attachments,
     };
     getCoreDb().prepare(`
-      INSERT INTO prospect_updates (update_id, prospect_id, author_id, body, created_at, edited_at)
-      VALUES (?, ?, ?, ?, ?, NULL)
-    `).run(update.updateId, update.prospectId, update.authorId, update.body, update.createdAt);
+      INSERT INTO prospect_updates (update_id, prospect_id, author_id, body, created_at, edited_at, attachments)
+      VALUES (?, ?, ?, ?, ?, NULL, ?)
+    `).run(
+      update.updateId, update.prospectId, update.authorId, update.body, update.createdAt,
+      JSON.stringify(attachments),
+    );
     getCoreDb()
       .prepare('UPDATE prospects SET updated_at = ? WHERE prospect_id = ?')
       .run(now, prospectId);

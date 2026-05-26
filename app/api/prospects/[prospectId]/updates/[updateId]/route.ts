@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { requireProspectsAccess, getSession } from '@/lib/services/api-auth';
 import { getProspectStore } from '@/lib/services/container';
+import { deleteAttachment } from '@/lib/services/r2-attachments';
 
 type Ctx = { params: Promise<{ prospectId: string; updateId: string }> };
 
@@ -42,6 +43,11 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   if (existing.authorId !== session!.userId) {
     return NextResponse.json({ error: 'You can only delete your own updates.' }, { status: 403 });
   }
+
+  // Clean up R2 attachments before removing the record
+  void Promise.allSettled(
+    existing.attachments.map((a) => deleteAttachment(a.key)),
+  );
 
   store.deleteUpdate(updateId);
   return NextResponse.json({ ok: true });

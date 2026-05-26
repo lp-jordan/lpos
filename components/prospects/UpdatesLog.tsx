@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import type { ProspectUpdate } from '@/lib/models/prospect';
+import { useEffect, useRef, useState, useTransition } from 'react';
+import type { ProspectUpdate, ProspectUpdateAttachment } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
@@ -20,33 +20,208 @@ function relativeDate(iso: string): string {
   } catch { return ''; }
 }
 
-const MENTION_RE = /@\[([^\]]+)\]\(([^)]+)\)/g;
+// ── Link / mention parsing ────────────────────────────────────────────────────
 
-function renderBody(text: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  let last = 0;
+const MENTION_RE = /@\[([^\]]+)\]\(([^)]+)\)/g;
+const URL_RE     = /https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)/]/g;
+
+type Segment =
+  | { type: 'text';    text: string }
+  | { type: 'mention'; name: string }
+  | { type: 'url';     href: string };
+
+function parseSegments(text: string): Segment[] {
+  const hits: { index: number; length: number; seg: Segment }[] = [];
+
   let m: RegExpExecArray | null;
   MENTION_RE.lastIndex = 0;
   while ((m = MENTION_RE.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    parts.push(
-      <span key={m.index} style={{ color: 'var(--accent-strong)', fontWeight: 600 }}>
-        @{m[1]}
-      </span>,
-    );
-    last = m.index + m[0].length;
+    hits.push({ index: m.index, length: m[0].length, seg: { type: 'mention', name: m[1] } });
   }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts.length > 0 ? parts : text;
+  URL_RE.lastIndex = 0;
+  while ((m = URL_RE.exec(text)) !== null) {
+    hits.push({ index: m.index, length: m[0].length, seg: { type: 'url', href: m[0] } });
+  }
+
+  hits.sort((a, b) => a.index - b.index);
+
+  const out: Segment[] = [];
+  let pos = 0;
+  for (const { index, length, seg } of hits) {
+    if (index < pos) continue; // inside a previous match (shouldn't happen but guard it)
+    if (index > pos) out.push({ type: 'text', text: text.slice(pos, index) });
+    out.push(seg);
+    pos = index + length;
+  }
+  if (pos < text.length) out.push({ type: 'text', text: text.slice(pos) });
+  return out;
+}
+
+const ROUTE_LABELS: Record<string, string> = {
+  prospects: 'Prospect', projects: 'Project', people: 'People',
+  settings:  'Settings', dashboard: 'Dashboard', platform: 'Platform', queue: 'Queue',
+};
+const ID_RE = /^[0-9a-f-]{8,}$|^[\w-]{20,}$/i;
+
+function toLabel(seg: string): string {
+  return ROUTE_LABELS[seg] ?? (seg[0].toUpperCase() + seg.slice(1).replace(/-/g, ' '));
+}
+
+function abbreviateUrl(href: string): string {
+  try {
+    const url        = new URL(href);
+    const isInternal = typeof window !== 'undefined' && url.hostname === window.location.hostname;
+    if (isInternal) {
+      const segs = url.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
+      if (segs[0] === 'projects' && segs[1] === 'clients' && segs[2]) {
+        const client = segs[2];
+        const sub    = segs[4] && !ID_RE.test(segs[4]) ? toLabel(segs[4]) : 'Project';
+        return `${client}: ${sub}`;
+      }
+      for (let i = segs.length - 1; i >= 0; i--) {
+        if (!ID_RE.test(segs[i])) return toLabel(segs[i]);
+      }
+      return 'Link';
+    }
+    return url.hostname.replace(/^www\./, '');
+  } catch {
+    return href.length > 50 ? href.slice(0, 47) + '…' : href;
+  }
+}
+
+const labelCache = new Map<string, string>();
+const UUID_RE    = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function needsResolution(href: string): boolean {
+  try {
+    const u = new URL(href);
+    return typeof window !== 'undefined' && u.hostname === window.location.hostname && UUID_RE.test(u.pathname);
+  } catch { return false; }
+}
+
+const LINK_STYLE: React.CSSProperties = {
+  color: '#d4960a', fontWeight: 500, textDecoration: 'underline',
+  textDecorationStyle: 'dotted', textUnderlineOffset: 2,
+};
+
+function LinkToken({ href }: { href: string }) {
+  const [label, setLabel] = useState<string>(() => labelCache.get(href) ?? abbreviateUrl(href));
+  const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (!needsResolution(href)) return;
+    if (labelCache.has(href)) { setLabel(labelCache.get(href)!); return; }
+    fetch(`/api/link-label?url=${encodeURIComponent(href)}`)
+      .then((r) => r.json())
+      .then((d: { label?: string | null }) => {
+        if (d.label) {
+          labelCache.set(href, d.label);
+          startTransition(() => setLabel(d.label!));
+        }
+      })
+      .catch(() => {});
+  }, [href]);
+
+  return <a href={href} target="_blank" rel="noopener noreferrer" style={LINK_STYLE}>{label}</a>;
+}
+
+function renderBody(text: string): React.ReactNode {
+  const segs = parseSegments(text);
+  if (segs.length === 0) return text;
+  return segs.map((seg, i) => {
+    if (seg.type === 'text')    return <span key={i}>{seg.text}</span>;
+    if (seg.type === 'mention') return (
+      <span key={i} style={{ color: 'var(--accent-strong)', fontWeight: 600 }}>@{seg.name}</span>
+    );
+    return <LinkToken key={i} href={seg.href} />;
+  });
 }
 
 function getMentionQuery(text: string, cursor: number): string | null {
-  const before  = text.slice(0, cursor);
-  const atIdx   = before.lastIndexOf('@');
+  const before = text.slice(0, cursor);
+  const atIdx  = before.lastIndexOf('@');
   if (atIdx === -1) return null;
   const between = before.slice(atIdx + 1);
   if (/[\s]/.test(between)) return null;
   return between;
+}
+
+// ── Attachment display ────────────────────────────────────────────────────────
+
+function AttachmentChip({ a }: { a: ProspectUpdateAttachment }) {
+  const url     = `/api/attachment?key=${encodeURIComponent(a.key)}`;
+  const isImage = a.mime.startsWith('image/');
+
+  if (isImage) {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--line)' }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={a.name}
+          style={{ display: 'block', maxWidth: 220, maxHeight: 160, objectFit: 'cover' }}
+        />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      download={a.name}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '0.3rem 0.65rem', borderRadius: 6,
+        border: '1px solid var(--line)', background: 'var(--surface-1)',
+        color: 'var(--text)', fontSize: '0.8rem', textDecoration: 'none',
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <span style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+    </a>
+  );
+}
+
+// ── Pending upload chip (compose area) ────────────────────────────────────────
+
+interface PendingAttachment extends ProspectUpdateAttachment {
+  uploading?: boolean;
+  error?:     string;
+}
+
+function PendingChip({ p, onRemove }: { p: PendingAttachment; onRemove: () => void }) {
+  const isImage = p.mime.startsWith('image/');
+  const label   = p.uploading ? 'Uploading…' : p.error ? 'Failed' : p.name;
+
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '0.25rem 0.5rem', borderRadius: 6,
+      border: `1px solid ${p.error ? 'var(--color-error,#e55)' : 'var(--line)'}`,
+      background: 'var(--surface-1)', fontSize: '0.78rem', color: 'var(--text)',
+      opacity: p.uploading ? 0.6 : 1,
+    }}>
+      {isImage
+        ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      }
+      <span style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      {!p.uploading && (
+        <button
+          type="button"
+          onClick={onRemove}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0, lineHeight: 1, marginLeft: 2 }}
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      )}
+    </div>
+  );
 }
 
 // ── Single update entry ───────────────────────────────────────────────────────
@@ -218,6 +393,13 @@ function UpdateEntry({ update, author, isOwn, prospectId, onEdited, onDeleted, r
             {renderBody(update.body)}
           </p>
         )}
+
+        {/* Attachments */}
+        {update.attachments.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+            {update.attachments.map((a) => <AttachmentChip key={a.key} a={a} />)}
+          </div>
+        )}
       </div>
 
       {confirmDel && (
@@ -252,7 +434,10 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
   const [focused,       setFocused]       = useState(false);
   const [mentionQuery,  setMentionQuery]  = useState<string | null>(null);
   const [mentionCursor, setMentionCursor] = useState(0);
+  const [pending,       setPending]       = useState<PendingAttachment[]>([]);
+  const [dragOver,      setDragOver]      = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const userMap = new Map(allUsers.map((u) => [u.id, u]));
 
@@ -262,14 +447,50 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
       : mentionQuery === '' || u.name.toLowerCase().includes(mentionQuery.toLowerCase()),
   );
 
+  const hasUploading = pending.some((p) => p.uploading);
+
+  // ── Upload ──────────────────────────────────────────────────────────────────
+
+  async function uploadFile(file: File) {
+    const tempKey = `pending-${Math.random()}`;
+    const stub: PendingAttachment = { key: tempKey, name: file.name, mime: file.type, size: file.size, uploading: true };
+    setPending((prev) => [...prev, stub]);
+
+    const form = new FormData();
+    form.append('file', file);
+
+    try {
+      const res  = await fetch(`/api/prospects/${prospectId}/updates/attachments`, { method: 'POST', body: form });
+      const data = await res.json() as { key?: string; name?: string; mime?: string; size?: number; error?: string };
+      if (!res.ok || !data.key) {
+        setPending((prev) => prev.map((p) => p.key === tempKey ? { ...p, uploading: false, error: data.error ?? 'Upload failed' } : p));
+        return;
+      }
+      setPending((prev) => prev.map((p) =>
+        p.key === tempKey ? { key: data.key!, name: data.name!, mime: data.mime!, size: data.size!, uploading: false } : p,
+      ));
+    } catch {
+      setPending((prev) => prev.map((p) => p.key === tempKey ? { ...p, uploading: false, error: 'Upload failed' } : p));
+    }
+  }
+
+  function handleFiles(files: FileList | File[]) {
+    for (const file of Array.from(files)) {
+      void uploadFile(file);
+    }
+  }
+
+  // ── Post ────────────────────────────────────────────────────────────────────
+
   async function handlePost() {
-    if (!compose.trim()) return;
+    if (!compose.trim() && pending.filter((p) => !p.error && !p.uploading).length === 0) return;
     setPosting(true);
     try {
+      const attachments = pending.filter((p) => !p.error && !p.uploading).map(({ key, name, mime, size }) => ({ key, name, mime, size }));
       const res  = await fetch(`/api/prospects/${prospectId}/updates`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ body: compose.trim() }),
+        body:    JSON.stringify({ body: compose.trim() || '.', attachments }),
       });
       const data = await res.json() as { update?: ProspectUpdate };
       if (res.ok && data.update) {
@@ -277,6 +498,7 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
         setCompose('');
         setFocused(false);
         setMentionQuery(null);
+        setPending([]);
       }
     } finally {
       setPosting(false);
@@ -290,6 +512,8 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
   function handleDeleted(updateId: string) {
     setUpdates((prev) => prev.filter((u) => u.updateId !== updateId));
   }
+
+  // ── Compose input ───────────────────────────────────────────────────────────
 
   function handleComposeChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const val    = e.target.value;
@@ -321,32 +545,40 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (mentionQuery !== null && mentionCandidates.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setMentionCursor((c) => Math.min(c + 1, mentionCandidates.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setMentionCursor((c) => Math.max(c - 1, 0));
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        insertMention(mentionCandidates[mentionCursor]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setMentionQuery(null);
-        return;
-      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionCursor((c) => Math.min(c + 1, mentionCandidates.length - 1)); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setMentionCursor((c) => Math.max(c - 1, 0)); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertMention(mentionCandidates[mentionCursor]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(null); return; }
     }
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       void handlePost();
     }
   }
+
+  // ── Drag-and-drop ───────────────────────────────────────────────────────────
+
+  function handleDragOver(e: React.DragEvent) {
+    if (readOnly) return;
+    e.preventDefault();
+    setDragOver(true);
+  }
+
+  function handleDragLeave() { setDragOver(false); }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (readOnly) return;
+    if (e.dataTransfer.files.length) {
+      setFocused(true);
+      handleFiles(e.dataTransfer.files);
+    }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  const canPost = !hasUploading && !posting && (compose.trim() || pending.some((p) => !p.error && !p.uploading));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -355,23 +587,30 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
           This prospect has been promoted. No new updates can be added.
         </p>
       )}
+
       {!readOnly && (
         <div style={{ position: 'relative', marginBottom: 20 }}>
-          <div style={{
-            border: `1px solid ${focused ? 'var(--accent)' : 'var(--color-border,#444)'}`,
-            borderRadius: 8, overflow: 'visible',
-            transition: 'border-color 150ms ease',
-          }}>
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            style={{
+              border: `1px solid ${dragOver ? 'var(--accent)' : focused ? 'var(--accent)' : 'var(--color-border,#444)'}`,
+              borderRadius: 8, overflow: 'visible',
+              transition: 'border-color 150ms ease',
+              background: dragOver ? 'rgba(var(--accent-rgb,99,102,241),0.05)' : undefined,
+            }}
+          >
             <textarea
               ref={textareaRef}
               value={compose}
               onChange={handleComposeChange}
               onFocus={() => setFocused(true)}
-              onBlur={() => { if (!compose.trim()) setFocused(false); }}
+              onBlur={() => { if (!compose.trim() && pending.length === 0) setFocused(false); }}
               onKeyDown={handleKeyDown}
-              placeholder="Add an update… (@name to mention)"
+              placeholder="Add an update… (@name to mention, or drop a file)"
               disabled={posting}
-              rows={focused || compose ? 3 : 1}
+              rows={focused || compose || pending.length > 0 ? 3 : 1}
               style={{
                 width: '100%', boxSizing: 'border-box', resize: 'none',
                 padding: '0.65rem 0.85rem',
@@ -382,27 +621,69 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
                 borderRadius: 8,
               }}
             />
-            {(focused || compose) && (
+
+            {/* Pending attachments row */}
+            {pending.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0.75rem 0.6rem' }}>
+                {pending.map((p) => (
+                  <PendingChip
+                    key={p.key}
+                    p={p}
+                    onRemove={() => setPending((prev) => prev.filter((x) => x.key !== p.key))}
+                  />
+                ))}
+              </div>
+            )}
+
+            {(focused || compose || pending.length > 0) && (
               <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '0.4rem 0.65rem 0.5rem',
                 borderTop: '1px solid var(--line)',
               }}>
-                <span style={{ fontSize: '0.72rem', color: 'var(--muted-soft)' }}>
-                  ⌘↵ to post · @name to mention
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Attach button */}
+                  <button
+                    type="button"
+                    title="Attach file"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={posting}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--muted)', padding: 2, lineHeight: 1,
+                      display: 'flex', alignItems: 'center',
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                  </button>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--muted-soft)' }}>
+                    ⌘↵ to post · @name to mention
+                  </span>
+                </div>
                 <button
                   type="button"
                   className="modal-btn-primary"
                   style={{ padding: '0.28rem 0.9rem', fontSize: '0.8rem' }}
                   onClick={handlePost}
-                  disabled={posting || !compose.trim()}
+                  disabled={!canPost}
                 >
-                  {posting ? 'Posting…' : 'Post'}
+                  {posting ? 'Posting…' : hasUploading ? 'Uploading…' : 'Post'}
                 </button>
               </div>
             )}
           </div>
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => { if (e.target.files) { setFocused(true); handleFiles(e.target.files); e.target.value = ''; } }}
+          />
 
           {/* Mention picker */}
           {mentionQuery !== null && mentionCandidates.length > 0 && (
