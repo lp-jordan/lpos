@@ -302,9 +302,6 @@ export function DashboardClient({
           <h1 className="dashboard-title">My Dashboard</h1>
           <p className="dashboard-subtitle">Welcome back, {firstName}.</p>
         </div>
-        <ActivityStrip
-          projectMap={new Map(allProjects.map((p) => [p.projectId, p.name]))}
-        />
       </div>
 
       {/* Primary workspace: full-width Kanban board */}
@@ -315,6 +312,13 @@ export function DashboardClient({
           users={users}
           currentUserId={userId}
           commentCounts={commentCounts}
+        />
+      </section>
+
+      {/* Activity strip — sits below the task board, shares its width */}
+      <section className="dashboard-activity-section">
+        <ActivityStrip
+          projectMap={new Map(allProjects.map((p) => [p.projectId, p.name]))}
         />
       </section>
 

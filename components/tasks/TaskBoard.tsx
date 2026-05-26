@@ -317,7 +317,7 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           ))}
         </div>
 
-        {/* Mine / All toggle */}
+        {/* Mine / Others / All toggle */}
         <div className="task-scope-toggle">
           <button
             type="button"
@@ -325,6 +325,13 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
             onClick={() => setViewScope('mine')}
           >
             Mine
+          </button>
+          <button
+            type="button"
+            className={`task-scope-btn${viewScope === 'others' ? ' task-scope-btn--active' : ''}`}
+            onClick={() => setViewScope('others')}
+          >
+            Others
           </button>
           <button
             type="button"
