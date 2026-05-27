@@ -8,12 +8,14 @@ import { PipelineTray } from '@/components/shell/PipelineTray';
 import { UserMenu } from '@/components/shell/UserMenu';
 import { NotifBell } from '@/components/shell/NotifBell';
 import { WishListButton } from '@/components/shell/WishListButton';
+import { VersionTag } from '@/components/shell/VersionTag';
 import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { VersionConfirmProvider } from '@/contexts/VersionConfirmContext';
 import { RestartCountdownBanner } from '@/components/shell/RestartCountdownBanner';
 import { PresenceReporter } from '@/components/PresenceReporter';
 import type { UserSummary } from '@/lib/models/user';
+import type { AppVersion } from '@/lib/version';
 
 function TrayGroup() {
   return (
@@ -53,7 +55,13 @@ export function AppShell({
   children,
   currentUser,
   hasProspects = false,
-}: Readonly<{ children: React.ReactNode; currentUser: UserSummary | null; hasProspects?: boolean }>) {
+  version,
+}: Readonly<{
+  children: React.ReactNode;
+  currentUser: UserSummary | null;
+  hasProspects?: boolean;
+  version: AppVersion;
+}>) {
   const pathname = usePathname();
   const isHome = pathname === '/';
   const isStudio = pathname.startsWith('/slate');
@@ -69,6 +77,7 @@ export function AppShell({
             <div className="app-home" data-guest={isGuest || undefined}>
               <PresenceReporter />
               <RestartCountdownBanner />
+              <VersionTag version={version} />
               {children}
               {currentUser && !isGuest && <NotifBell />}
               {currentUser && !isGuest && <UserMenu user={currentUser} />}
@@ -90,6 +99,7 @@ export function AppShell({
             <div className="app-inner" data-guest={isGuest || undefined}>
               <PresenceReporter />
               <RestartCountdownBanner />
+              <VersionTag version={version} />
               {currentUser && !isSignIn && !isGuest && <NotifBell />}
               {currentUser && !isSignIn && !isGuest && <UserMenu user={currentUser} />}
               {isGuest && <GuestSignOutButton />}

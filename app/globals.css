@@ -14458,6 +14458,35 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: rgba(255, 255, 255, 0.28);
 }
 
+/* ── Version tag (top-right build chip) ──────────────────────────────────── */
+
+/* Sits above the row of round buttons (notif-bell, user-menu, storage-gear)
+   which live at top:20px. Auto-advances on every git commit; click to copy
+   the full SHA so we can `git checkout` to the exact build a user was on. */
+.version-tag {
+  position: fixed;
+  top: 4px;
+  right: 8px;
+  z-index: 70;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.34);
+  background: transparent;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.version-tag:hover,
+.version-tag:focus-visible {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(14, 20, 28, 0.6);
+  outline: none;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* ── Mobile optimizations ────────────────────────────────────────────────── */
 /* ─────────────────────────────────────────────────────────────────────────── */

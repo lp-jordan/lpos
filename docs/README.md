@@ -144,3 +144,23 @@ Established `max-width` breakpoints, used consistently across the file: **1300, 
 ### Current status / known gaps
 - Mobile fixes are CSS-only and verified by source analysis, not yet on-device (no browser-automation tooling installed; production server is auth-gated).
 - Minor non-blocking whitespace items remain (platform page inline `60vh`, `.activity-strip-item` max-width) — they don't cut content off.
+
+## Build / Version Tag
+
+### What it does
+Displays a tiny build identifier in the very top-right corner of every page (`v.<commit-count> · <short-sha>`). The commit count auto-advances every git commit (and therefore every push); the short SHA pinpoints the exact build. Clicking the chip copies the full 40-char SHA so we can `git checkout <sha>` to recover the precise code state — useful when chasing user-reported regressions or recovering lost code.
+
+### Key files
+| File | Role |
+|------|------|
+| `lib/version.ts` | Server-side helper. Reads git via `execSync` once at module load and caches. Returns `{ count, sha, shaShort, branch, dirty, date, display }`. Falls back to `v.dev` if git is unavailable. |
+| `app/layout.tsx` | Calls `getAppVersion()` and passes the result to `AppShell` as a prop. |
+| `components/shell/AppShell.tsx` | Renders `<VersionTag />` in both the home and inner layouts. |
+| `components/shell/VersionTag.tsx` | Client component. Renders the chip; click-to-copy SHA via `navigator.clipboard`. Tooltip shows full SHA + branch + commit date. |
+| `app/globals.css` (`.version-tag`) | Fixed `top:4px right:8px`, 10px monospace, dim until hover. |
+
+### When it refreshes
+On server restart. The git lookup runs once at module load (cached in a module-level variable). After a `git commit` and `git pull` the next `npm start` cycle picks up the new count and SHA.
+
+### Dirty marker
+If the working tree had uncommitted changes when the server started, an asterisk appears (`v.28* · 7755ccb`) — a hint that the running build doesn't match a tagged commit.

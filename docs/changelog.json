@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-27T12:49:45Z",
+    "title": "Auto-advancing build version chip in top-right corner",
+    "summary": "Added a tiny fixed-position chip in the top-right corner showing `v.<commit-count> · <short-sha>`. The commit count auto-advances on every git commit (and therefore every push); clicking the chip copies the full SHA so we can `git checkout` to the exact build a user reported a bug against — directly addressing the recent need to recover lost code. Implementation reads git via `execSync` once at server start in `lib/version.ts`, caches the result, passes it from the server `layout.tsx` to `AppShell` as a prop, and renders via `components/shell/VersionTag.tsx`. A `*` suffix appears when the running tree had uncommitted changes at boot."
+  },
+  {
     "timestamp": "2026-05-20T12:00:00Z",
     "title": "Mobile layout audit and responsive fixes",
     "summary": "Audited every page group for elements overflowing on phone screens and appended a consolidated mobile-only CSS block to globals.css. Home tiles now wrap instead of clipping off-screen; the project workflow nav became a horizontal-scroll pill strip instead of 7 oversized stacked buttons; the client grid collapses 4 to 2 to 1 columns; slide-in side panels (shares, script editor) lift above the bottom tab bar; and several toolbars and media rows stop forcing horizontal overflow. All changes are gated behind max-width media queries, so the desktop layout is unchanged."

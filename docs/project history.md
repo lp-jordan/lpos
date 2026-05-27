@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-05-27 — Auto-advancing build version chip in top-right corner
+
+**Timestamp:** 2026-05-27T12:49:45Z
+
+**Prompt:** We desperatley need to implement some sort of auto-advancing version number system for each git push. I'l like it displayed very small in the top right corner of lpos. This should also help if we ever need to locate lost code like we recently had to do.
+
+**Summary:** Added a small fixed-position build chip to the LPOS shell that reads the current git HEAD at server start and renders `v.<commit-count> · <short-sha>`. The commit count is monotonic (advances every commit, hence every push), and the chip is click-to-copy so the full SHA can be checked out to recover an exact past state.
+
+**Files changed:**
+- `lib/version.ts` (new)
+- `components/shell/VersionTag.tsx` (new)
+- `components/shell/AppShell.tsx`
+- `app/layout.tsx`
+- `app/globals.css`
+- `docs/README.md`
+
+**Implementation summary:**
+
+`lib/version.ts` exports `getAppVersion()` which runs four `execSync` calls — `git rev-list --count HEAD`, `git rev-parse HEAD`, `git rev-parse --abbrev-ref HEAD`, `git log -1 --format=%cI`, plus a porcelain status check for a dirty flag — and caches the result in a module-level variable. stderr is piped to `'ignore'` so failures (no `.git`, shipped build) don't spam logs; on any error we return a safe `v.dev` shape. The repo root is resolved from `__dirname` so production cwd quirks don't matter.
+
+`app/layout.tsx` (a server component) calls `getAppVersion()` once per render and passes the result to `AppShell` as a `version` prop. `AppShell.tsx` accepts the prop and mounts `<VersionTag version={version} />` in both the home and inner layout branches.
+
+`VersionTag.tsx` is a tiny client component that renders the `display` string, a tooltip with the full SHA + branch + commit date, and a click handler that copies the full SHA via `navigator.clipboard`. On copy it briefly swaps the text to "copied".
+
+Styling lives in `app/globals.css` as `.version-tag`: `position: fixed; top: 4px; right: 8px; font-size: 10px; color: rgba(255,255,255,0.34)` — sits above the existing top-right row (notif-bell, user-menu, storage-gear at `top: 20px`) without overlap, almost invisible until hover.
+
+**Decision rationale:**
+- **Commit count + SHA over semver** — commit count gives a human-readable monotonic progression with zero maintenance (no version-bump step to forget); the SHA is what actually lets us `git checkout` to recover code. Together they answer "is this newer than what I had?" and "where exactly did this come from?" without any extra tooling.
+- **Read git at server start, cache** — chosen over per-request reads to avoid spawning child processes on every page render. The user manages the server lifecycle manually, so a restart-driven refresh matches the existing workflow. Also chosen over a generated `version.json` checked into the repo: no commit-the-version-bump dance, no merge conflicts on the version file, no possibility of forgetting to regenerate.
+- **Server prop over `/api/version` fetch** — the version is constant for the life of a page render; passing it as a prop from the server layout avoids an extra round-trip on first paint and keeps the chip visible immediately.
+- **Click-to-copy** — surfaces the full SHA (the part you actually paste into `git checkout`) without making the UI noisy.
+- **Dirty flag (`*` suffix)** — instantly tells us when the running build doesn't match a tagged commit, which would otherwise silently make a SHA misleading.
+
+**Alternatives considered:**
+- **Pre-push hook bumping a version file** — fragile (hooks aren't installed by default for new clones), and creates commit churn for the version bump itself. Rejected.
+- **Build-time injection via `next.config.mjs` env vars** — works, but requires a rebuild for every visible version update; the current restart-only flow is lighter.
+- **Per-request git lookup** — most accurate but adds a child-process spawn to every render. Rejected; the user opted for restart-on-refresh in the planning question.
+
+**Commands/tests run:**
+- `npx tsc --noEmit -p .` — clean.
+- Ad-hoc execution of `getAppVersion()` via tsx: returned `{ count: 28, shaShort: '7755ccb', branch: 'main', dirty: true, display: 'v.28* · 7755ccb' }` — dirty flag expected because tree had in-flight edits at test time.
+
+**Assumptions / follow-ups:**
+- The `dirty` asterisk will disappear automatically once these changes are committed.
+- The version refreshes on server restart, not on commit. If the user wants a "redeploy" indicator that doesn't require a restart, that's a follow-up (e.g. invalidate the cache when a sentinel file changes).
+- The chip is unconditionally rendered; if guest users should not see it, the `data-guest` selector on `.app-home` / `.app-inner` can hide it via CSS later.
+
+---
+
 ## 2026-05-20 — Mobile layout audit and responsive fixes
 
 **User prompt:** "Can you look over how each page is displayed on mobile devices and see if there's anything we can do to keep all elements on screen? Right now, the home page tabs are cut off on small screens, navigating through projects is a bit of a mess, etc."
