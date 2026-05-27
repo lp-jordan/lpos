@@ -148,7 +148,7 @@ Established `max-width` breakpoints, used consistently across the file: **1300, 
 ## Build / Version Tag
 
 ### What it does
-Displays a tiny build identifier in the very top-right corner of every page (`v.<commit-count> · <short-sha>`). The commit count auto-advances every git commit (and therefore every push); the short SHA pinpoints the exact build. Clicking the chip copies the full 40-char SHA so we can `git checkout <sha>` to recover the precise code state — useful when chasing user-reported regressions or recovering lost code.
+Displays a tiny build identifier in the very top-left corner of every page (`v.<commit-count> · <short-sha>`). The commit count auto-advances every git commit (and therefore every push); the short SHA pinpoints the exact build. Clicking the chip copies the full 40-char SHA so we can `git checkout <sha>` to recover the precise code state — useful when chasing user-reported regressions or recovering lost code.
 
 ### Key files
 | File | Role |
@@ -157,7 +157,7 @@ Displays a tiny build identifier in the very top-right corner of every page (`v.
 | `app/layout.tsx` | Calls `getAppVersion()` and passes the result to `AppShell` as a prop. |
 | `components/shell/AppShell.tsx` | Renders `<VersionTag />` in both the home and inner layouts. |
 | `components/shell/VersionTag.tsx` | Client component. Renders the chip; click-to-copy SHA via `navigator.clipboard`. Tooltip shows full SHA + branch + commit date. |
-| `app/globals.css` (`.version-tag`) | Fixed `top:4px right:8px`, 10px monospace, dim until hover. |
+| `app/globals.css` (`.version-tag`) | Fixed `top:4px left:8px`, 10px monospace, dim until hover. Sits above the breadcrumb bar (`top:20px left:32px`) and clear of the navbar pill (centered) and the right-side bell/menu/gear stack. |
 
 ### When it refreshes
 On server restart. The git lookup runs once at module load (cached in a module-level variable). After a `git commit` and `git pull` the next `npm start` cycle picks up the new count and SHA.

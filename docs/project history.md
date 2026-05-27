@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-05-27 — Move version chip from top-right to top-left
+
+**Timestamp:** 2026-05-27T12:54:33Z
+
+**Prompt:** Ok wait sorry, I don't want to compete with the notif bell or user menu. is top left clean?
+
+**Summary:** Relocated the build version chip from the top-right corner to the top-left to avoid visually competing with the notif-bell / user-menu / storage-gear stack on the right.
+
+**Files changed:**
+- `app/globals.css` — `.version-tag` rule: `right: 8px` → `left: 8px`; comment updated.
+- `docs/README.md` — Build / Version Tag section: "top-right" → "top-left".
+
+**Implementation summary:** Single-property CSS swap. Top-left at `top: 4px` sits above the breadcrumb bar (which starts at `top: 20px left: 32px`) with comfortable clearance. The navbar pill is centered and only visible on hover, so it doesn't intrude on the corner. The component, server helper, and prop wiring from the previous entry are unchanged.
+
+**Decision rationale:** Top-left is the only "clean" corner — the right side has the bell/menu/gear stack at `top: 20px`, the breadcrumb at `top: 20px left: 32px` leaves the `top: 4px` row free, and the navbar pill is centered. Mobile breakpoint shifts breadcrumb to `left: 16px` but still doesn't reach `top: 4px`.
+
+**Alternatives considered:**
+- **Status-bar style band along the top edge** — much heavier visual change; rejected to keep the chip unobtrusive.
+- **Bottom-corner placement** — would clash with the storage-gear and tray-group, which are bottom-corner fixed.
+
+**Commands/tests run:** Visual reasoning from existing fixed-position selectors in `globals.css`; no compile needed (CSS-only).
+
+**Assumptions / follow-ups:**
+- The chip is still rendered for guests. If the top-left feels too prominent for the guest experience specifically, hide via `.app-home[data-guest] .version-tag, .app-inner[data-guest] .version-tag { display: none; }`.
+
+---
+
 ## 2026-05-27 — Auto-advancing build version chip in top-right corner
 
 **Timestamp:** 2026-05-27T12:49:45Z

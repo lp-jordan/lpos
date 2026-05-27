@@ -14458,15 +14458,17 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: rgba(255, 255, 255, 0.28);
 }
 
-/* ── Version tag (top-right build chip) ──────────────────────────────────── */
+/* ── Version tag (top-left build chip) ───────────────────────────────────── */
 
-/* Sits above the row of round buttons (notif-bell, user-menu, storage-gear)
-   which live at top:20px. Auto-advances on every git commit; click to copy
-   the full SHA so we can `git checkout` to the exact build a user was on. */
+/* Lives in the top-left corner above the breadcrumb bar (which starts at
+   top:20px, left:32px). Clear of the centered navbar pill and the notif-bell
+   / user-menu / storage-gear stack on the right.
+   Auto-advances on every git commit; click to copy the full SHA so we can
+   `git checkout` to the exact build a user was on. */
 .version-tag {
   position: fixed;
   top: 4px;
-  right: 8px;
+  left: 8px;
   z-index: 70;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10px;

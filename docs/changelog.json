@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-27T12:54:33Z",
+    "title": "Move version chip from top-right to top-left",
+    "summary": "Relocated the build version chip from `right: 8px` to `left: 8px` in `.version-tag` so it no longer competes visually with the notif-bell, user-menu, and storage-gear cluster on the right. Top-left at `top: 4px` sits above the breadcrumb bar (which starts at `top: 20px left: 32px`) and clear of the centered navbar pill — the only fully open corner of the shell."
+  },
+  {
     "timestamp": "2026-05-27T12:49:45Z",
     "title": "Auto-advancing build version chip in top-right corner",
     "summary": "Added a tiny fixed-position chip in the top-right corner showing `v.<commit-count> · <short-sha>`. The commit count auto-advances on every git commit (and therefore every push); clicking the chip copies the full SHA so we can `git checkout` to the exact build a user reported a bug against — directly addressing the recent need to recover lost code. Implementation reads git via `execSync` once at server start in `lib/version.ts`, caches the result, passes it from the server `layout.tsx` to `AppShell` as a prop, and renders via `components/shell/VersionTag.tsx`. A `*` suffix appears when the running tree had uncommitted changes at boot."
