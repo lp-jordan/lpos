@@ -24,7 +24,7 @@ export async function PUT(req: NextRequest) {
   const deny = await requireRole(req, 'admin');
   if (deny) return deny;
 
-  let body: Partial<{ syncDirs: string[]; retainDays: number; syncHour: number }>;
+  let body: Partial<{ syncDirs: string[]; retainDays: number; syncHour: number; paused: boolean }>;
   try {
     body = await req.json();
   } catch {
@@ -32,12 +32,13 @@ export async function PUT(req: NextRequest) {
   }
 
   // Light validation — store layer also sanitises/clamps.
-  const patch: Partial<{ syncDirs: string[]; retainDays: number; syncHour: number }> = {};
+  const patch: Partial<{ syncDirs: string[]; retainDays: number; syncHour: number; paused: boolean }> = {};
   if (Array.isArray(body.syncDirs)) {
     patch.syncDirs = body.syncDirs.filter((v): v is string => typeof v === 'string');
   }
-  if (typeof body.retainDays === 'number') patch.retainDays = body.retainDays;
-  if (typeof body.syncHour   === 'number') patch.syncHour   = body.syncHour;
+  if (typeof body.retainDays === 'number')  patch.retainDays = body.retainDays;
+  if (typeof body.syncHour   === 'number')  patch.syncHour   = body.syncHour;
+  if (typeof body.paused     === 'boolean') patch.paused     = body.paused;
 
   const config = setB2SyncConfig(patch);
   return NextResponse.json({ config });

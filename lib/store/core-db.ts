@@ -718,6 +718,15 @@ function runMigrations(db: DatabaseSync): void {
     // Column already exists
   }
 
+  // v19: paused flag on b2_sync_config — admin pause toggle for nightly cold-
+  // storage sync. When 1, tick() returns early; manual Sync Now still works
+  // (admin opt-in override). Defaults to 0.
+  try {
+    db.exec(`ALTER TABLE b2_sync_config ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.

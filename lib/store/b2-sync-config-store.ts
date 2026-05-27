@@ -15,6 +15,7 @@ export interface B2SyncConfig {
   syncDirs:   string[];   // absolute paths to walk + upload
   retainDays: number;     // delete bucket objects older than this
   syncHour:   number;     // 0–23, wall-clock hour for the daily run
+  paused:     boolean;    // admin pause toggle — nightly tick is a no-op while true
   updatedAt:  string;     // ISO 8601, last write
 }
 
@@ -22,6 +23,7 @@ interface DbRow {
   sync_dirs:   string;
   retain_days: number;
   sync_hour:   number;
+  paused:      number;
   updated_at:  string;
 }
 
@@ -29,6 +31,7 @@ const DEFAULTS: B2SyncConfig = {
   syncDirs:   [],
   retainDays: 30,
   syncHour:   2,
+  paused:     false,
   updatedAt:  '1970-01-01T00:00:00.000Z',
 };
 
@@ -47,13 +50,14 @@ function rowToConfig(row: DbRow): B2SyncConfig {
     syncDirs:   parseDirs(row.sync_dirs),
     retainDays: row.retain_days,
     syncHour:   row.sync_hour,
+    paused:     row.paused === 1,
     updatedAt:  row.updated_at,
   };
 }
 
 export function getB2SyncConfig(): B2SyncConfig {
   const row = getCoreDb()
-    .prepare(`SELECT sync_dirs, retain_days, sync_hour, updated_at FROM b2_sync_config WHERE config_id = 1`)
+    .prepare(`SELECT sync_dirs, retain_days, sync_hour, paused, updated_at FROM b2_sync_config WHERE config_id = 1`)
     .get() as DbRow | undefined;
   if (!row) return { ...DEFAULTS };
   return rowToConfig(row);
@@ -69,20 +73,22 @@ export function setB2SyncConfig(patch: Partial<B2SyncConfig>): B2SyncConfig {
     syncDirs:   patch.syncDirs   !== undefined ? sanitizeDirs(patch.syncDirs)         : current.syncDirs,
     retainDays: patch.retainDays !== undefined ? clampInt(patch.retainDays, 1, 3650)  : current.retainDays,
     syncHour:   patch.syncHour   !== undefined ? clampInt(patch.syncHour,   0, 23)    : current.syncHour,
+    paused:     patch.paused     !== undefined ? Boolean(patch.paused)                : current.paused,
     updatedAt:  new Date().toISOString(),
   };
 
   getCoreDb()
     .prepare(`
-      INSERT INTO b2_sync_config (config_id, sync_dirs, retain_days, sync_hour, updated_at)
-      VALUES (1, ?, ?, ?, ?)
+      INSERT INTO b2_sync_config (config_id, sync_dirs, retain_days, sync_hour, paused, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
       ON CONFLICT(config_id) DO UPDATE SET
         sync_dirs   = excluded.sync_dirs,
         retain_days = excluded.retain_days,
         sync_hour   = excluded.sync_hour,
+        paused      = excluded.paused,
         updated_at  = excluded.updated_at
     `)
-    .run(JSON.stringify(next.syncDirs), next.retainDays, next.syncHour, next.updatedAt);
+    .run(JSON.stringify(next.syncDirs), next.retainDays, next.syncHour, next.paused ? 1 : 0, next.updatedAt);
 
   return next;
 }

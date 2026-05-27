@@ -123,20 +123,27 @@ export interface B2SyncRunResult {
 
 /** Returned by getStatus() — includes live state layered over last run. */
 export interface B2SyncStatus {
-  configured:   boolean;
-  running:      boolean;
-  nextRunHour:  number;
-  syncDirs:     string[];
-  retainDays:   number;
-  lastRun:      B2SyncRunResult | null;
+  configured:       boolean;
+  running:          boolean;
+  paused:           boolean;
+  cancelRequested:  boolean;
+  nextRunHour:      number;
+  syncDirs:         string[];
+  retainDays:       number;
+  lastRun:          B2SyncRunResult | null;
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class B2MediaSyncService {
-  private timer:       ReturnType<typeof setInterval> | null = null;
-  private lastRunDate: string | null = null;
-  private isRunning    = false;
+  private timer:           ReturnType<typeof setInterval> | null = null;
+  private lastRunDate:     string | null = null;
+  private isRunning        = false;
+  private cancelRequested  = false;
+  // Reference to the upload currently in flight so cancelCurrentRun() can
+  // call .abort() on it — that fires AbortMultipartUploadCommand and the
+  // awaiting upload.done() rejects with AbortError.
+  private currentUpload:   Upload | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -165,8 +172,9 @@ export class B2MediaSyncService {
   // ── Scheduling ─────────────────────────────────────────────────────────────
 
   private tick(): void {
-    const cfg   = getB2SyncConfig();
-    if (cfg.syncDirs.length === 0) return;        // nothing to do yet
+    const cfg = getB2SyncConfig();
+    if (cfg.paused)                  return;      // admin has paused nightly runs
+    if (cfg.syncDirs.length === 0)   return;      // nothing to do yet
     const now   = new Date();
     const today = now.toISOString().slice(0, 10);
     if (now.getHours() === cfg.syncHour && this.lastRunDate !== today) {
@@ -183,7 +191,8 @@ export class B2MediaSyncService {
       return this.loadLastRun() ?? this.emptyResult();
     }
 
-    this.isRunning = true;
+    this.isRunning       = true;
+    this.cancelRequested = false;
     const runStart  = new Date();
     const timestamp = runStart.toISOString();
     const cfg       = getB2SyncConfig();
@@ -194,6 +203,7 @@ export class B2MediaSyncService {
     console.log(`[B2MediaSync] starting sync — ${dirs.length} source dir(s), retain ${cfg.retainDays} days`);
 
     let uploaded = 0, skipped = 0, failed = 0;
+    let cancelled = false;
     const errors: B2SyncError[] = [];
 
     try {
@@ -219,11 +229,14 @@ export class B2MediaSyncService {
       bootstrapUntracked(b2Objects, timestamp);
 
       // 3. Walk each source directory
-      for (const srcDir of dirs) {
+      outer: for (const srcDir of dirs) {
+        if (this.cancelRequested) { cancelled = true; break; }
         const topPrefix  = path.basename(srcDir) + '/'; // e.g. "Projects/"
         const localFiles = await collectFiles(srcDir);
 
         for (const absPath of localFiles) {
+          if (this.cancelRequested) { cancelled = true; break outer; }
+
           const relPath = path.relative(srcDir, absPath).replace(/\\/g, '/');
           const key     = topPrefix + relPath;
 
@@ -243,7 +256,9 @@ export class B2MediaSyncService {
             continue;
           }
 
-          // Upload — @aws-sdk/lib-storage handles multipart automatically
+          // Upload — @aws-sdk/lib-storage handles multipart automatically.
+          // Reference is stashed on `this.currentUpload` so cancelCurrentRun()
+          // can call .abort() to cleanly cancel an in-flight multipart upload.
           try {
             const upload = new Upload({
               client,
@@ -257,11 +272,15 @@ export class B2MediaSyncService {
               partSize:          100 * 1024 * 1024,  // 100 MB per part
               leavePartsOnError: false,
             });
+            this.currentUpload = upload;
             await upload.done();
+            this.currentUpload = null;
             uploaded++;
             upsertSeen(key, stat.size, timestamp);
             console.log(`[B2MediaSync] uploaded ${key} (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
           } catch (err) {
+            this.currentUpload = null;
+            if (this.cancelRequested) { cancelled = true; break outer; }
             errors.push({ key, error: (err as Error).message });
             failed++;
             console.error(`[B2MediaSync] failed ${key}: ${(err as Error).message}`);
@@ -272,29 +291,37 @@ export class B2MediaSyncService {
       console.error(`[B2MediaSync] fatal sync error: ${(err as Error).message}`);
     }
 
-    // 4. Anything in the tracking table that wasn't touched this run is now
-    //    missing — stamp missing_since on every such row (idempotent: skips
-    //    rows that already have it).
-    const newlyMissing = markMissingNotSeenSince(timestamp);
+    // 4–6 only run on a clean (non-cancelled) walk. If the operator cancelled
+    // mid-run, we'd otherwise mark every unvisited file as missing — wrong,
+    // since we never finished checking source. Skip downstream steps and
+    // return a partial result.
+    let newlyMissing = 0;
+    let deleted      = 0;
+    if (!cancelled) {
+      // 4. Anything in the tracking table that wasn't touched this run is now
+      //    missing — stamp missing_since on every such row (idempotent: skips
+      //    rows that already have it).
+      newlyMissing = markMissingNotSeenSince(timestamp);
 
-    // 5. Retention sweep — actually delete B2 objects whose missing_since
-    //    has aged past retainDays.
-    const queued = listQueuedForDeletion(cfg.retainDays, runStart);
-    let deleted = 0;
-    for (const obj of queued) {
-      try {
-        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.key }));
-        markDeleted(obj.key, timestamp);
-        deleted++;
-        console.log(`[B2MediaSync] retired ${obj.key} (missing since ${obj.missingSince})`);
-      } catch (err) {
-        errors.push({ key: obj.key, error: `delete failed: ${(err as Error).message}` });
-        console.warn(`[B2MediaSync] delete failed ${obj.key}: ${(err as Error).message}`);
+      // 5. Retention sweep — actually delete B2 objects whose missing_since
+      //    has aged past retainDays.
+      const queued = listQueuedForDeletion(cfg.retainDays, runStart);
+      for (const obj of queued) {
+        if (this.cancelRequested) { cancelled = true; break; }
+        try {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.key }));
+          markDeleted(obj.key, timestamp);
+          deleted++;
+          console.log(`[B2MediaSync] retired ${obj.key} (missing since ${obj.missingSince})`);
+        } catch (err) {
+          errors.push({ key: obj.key, error: `delete failed: ${(err as Error).message}` });
+          console.warn(`[B2MediaSync] delete failed ${obj.key}: ${(err as Error).message}`);
+        }
       }
-    }
 
-    // 6. Audit-history sweep — pure SQL bookkeeping, no B2 calls
-    pruneAudit(runStart);
+      // 6. Audit-history sweep — pure SQL bookkeeping, no B2 calls
+      pruneAudit(runStart);
+    }
 
     const stats = getColdStorageStats(cfg.retainDays, runStart);
 
@@ -302,10 +329,36 @@ export class B2MediaSyncService {
       timestamp, dirs, uploaded, skipped, failed, newlyMissing, deleted, errors, stats,
     };
 
-    this.isRunning = false;
+    this.isRunning       = false;
+    this.cancelRequested = false;
+    this.currentUpload   = null;
     this.saveLastRun(result);
-    console.log(`[B2MediaSync] done — ${uploaded} up, ${skipped} skip, ${failed} fail, ${newlyMissing} newly missing, ${deleted} retired`);
+    if (cancelled) {
+      console.log(`[B2MediaSync] CANCELLED — ${uploaded} uploaded before cancel; skipped markMissing + sweep`);
+    } else {
+      console.log(`[B2MediaSync] done — ${uploaded} up, ${skipped} skip, ${failed} fail, ${newlyMissing} newly missing, ${deleted} retired`);
+    }
     return result;
+  }
+
+  /**
+   * Signal the current run to stop. Aborts any in-flight multipart upload
+   * via the AWS SDK's Upload.abort() (which sends AbortMultipartUploadCommand
+   * to B2 and rejects the awaiting upload.done()). On cancellation we DO NOT
+   * run step 4 (markMissingNotSeenSince) or step 5 (delete sweep) — those
+   * would incorrectly mark unvisited files as missing.
+   */
+  async cancelCurrentRun(): Promise<boolean> {
+    if (!this.isRunning) return false;
+    this.cancelRequested = true;
+    const u = this.currentUpload;
+    if (u) {
+      try {
+        await u.abort();
+      } catch { /* abort errors are best-effort */ }
+    }
+    console.log('[B2MediaSync] cancel requested');
+    return true;
   }
 
   // ── Status ─────────────────────────────────────────────────────────────────
@@ -313,12 +366,14 @@ export class B2MediaSyncService {
   getStatus(): B2SyncStatus {
     const cfg = getB2SyncConfig();
     return {
-      configured:  isB2MediaConfigured(),
-      running:     this.isRunning,
-      nextRunHour: cfg.syncHour,
-      syncDirs:    cfg.syncDirs,
-      retainDays:  cfg.retainDays,
-      lastRun:     this.loadLastRun(),
+      configured:      isB2MediaConfigured(),
+      running:         this.isRunning,
+      paused:          cfg.paused,
+      cancelRequested: this.cancelRequested,
+      nextRunHour:     cfg.syncHour,
+      syncDirs:        cfg.syncDirs,
+      retainDays:      cfg.retainDays,
+      lastRun:         this.loadLastRun(),
     };
   }
 

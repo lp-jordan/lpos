@@ -17644,6 +17644,41 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cold-storage-dot--ok      { background: #4ade80; box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
 .cold-storage-dot--running { background: #fbbf24; animation: cold-storage-pulse 1.5s ease-in-out infinite; }
 .cold-storage-dot--error   { background: #f87171; box-shadow: 0 0 8px rgba(248, 113, 113, 0.5); }
+.cold-storage-dot--paused  { background: #94a3b8; box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.3) inset; }
+
+.cold-storage-cancel-btn,
+.cold-storage-pause-btn,
+.cold-storage-resume-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+.cold-storage-cancel-btn {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #fca5a5;
+}
+.cold-storage-cancel-btn:hover:not(:disabled) { background: rgba(248, 113, 113, 0.22); }
+
+.cold-storage-pause-btn {
+  background: rgba(251, 191, 36, 0.10);
+  border: 1px solid rgba(251, 191, 36, 0.30);
+  color: #fcd34d;
+}
+.cold-storage-pause-btn:hover:not(:disabled) { background: rgba(251, 191, 36, 0.18); }
+
+.cold-storage-resume-btn {
+  background: rgba(74, 222, 128, 0.10);
+  border: 1px solid rgba(74, 222, 128, 0.30);
+  color: #86efac;
+}
+.cold-storage-resume-btn:hover:not(:disabled) { background: rgba(74, 222, 128, 0.18); }
+
+.cold-storage-cancel-btn:disabled,
+.cold-storage-pause-btn:disabled,
+.cold-storage-resume-btn:disabled { opacity: 0.55; cursor: default; }
 
 @keyframes cold-storage-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

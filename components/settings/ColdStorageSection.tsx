@@ -33,18 +33,21 @@ interface SyncRunResult {
 }
 
 interface SyncStatus {
-  configured:  boolean;
-  running:     boolean;
-  nextRunHour: number;
-  syncDirs:    string[];
-  retainDays:  number;
-  lastRun:     SyncRunResult | null;
+  configured:      boolean;
+  running:         boolean;
+  paused:          boolean;
+  cancelRequested: boolean;
+  nextRunHour:     number;
+  syncDirs:        string[];
+  retainDays:      number;
+  lastRun:         SyncRunResult | null;
 }
 
 interface Config {
   syncDirs:   string[];
   retainDays: number;
   syncHour:   number;
+  paused:     boolean;
   updatedAt:  string;
 }
 
@@ -108,6 +111,8 @@ export function ColdStorageSection() {
 
   const [triggering, setTriggering] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [pausing,    setPausing]    = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -178,6 +183,47 @@ export function ColdStorageSection() {
     }
   }
 
+  async function cancelNow() {
+    if (!confirm('Cancel the in-progress sync?\n\nAny upload currently in flight will be aborted. Files already uploaded this run stay uploaded — but the missing-file detection and retention sweep will NOT run this cycle (skipped to avoid mis-flagging unvisited files as missing).')) return;
+    setCancelling(true);
+    setError(null);
+    setTriggerMsg(null);
+    try {
+      const res = await fetch('/api/admin/cold-storage/cancel', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Cancel failed');
+      }
+      setTriggerMsg('Cancel signalled — sync will exit shortly.');
+      setData((prev) => prev ? { ...prev, status: { ...prev.status, cancelRequested: true } } : prev);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function togglePause(next: boolean) {
+    setPausing(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/b2-sync-config', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ paused: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Pause toggle failed');
+      }
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPausing(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="storage-settings-card">
@@ -201,12 +247,15 @@ export function ColdStorageSection() {
   const { status, stats, queuedForDeletion, missingWithinRetention } = data;
   const credsOk = status.configured;
 
-  // Status dot — idle | running | recent-ok | recent-error
+  // Status dot — paused trumps everything; otherwise idle | running | recent-ok | recent-error
   let dotClass = 'cold-storage-dot--idle';
   let dotLabel = 'Idle';
-  if (status.running) {
+  if (status.paused) {
+    dotClass = 'cold-storage-dot--paused';
+    dotLabel = 'Paused — nightly runs disabled';
+  } else if (status.running) {
     dotClass = 'cold-storage-dot--running';
-    dotLabel = 'Running…';
+    dotLabel = status.cancelRequested ? 'Cancelling…' : 'Running…';
   } else if (status.lastRun) {
     if (status.lastRun.failed > 0 || status.lastRun.errors.length > 0) {
       dotClass = 'cold-storage-dot--error';
@@ -364,6 +413,27 @@ export function ColdStorageSection() {
           disabled={triggering || status.running || !credsOk || status.syncDirs.length === 0}
         >
           {status.running ? 'Running…' : triggering ? 'Triggering…' : 'Sync Now'}
+        </button>
+        {status.running && (
+          <button
+            type="button"
+            className="cold-storage-cancel-btn"
+            onClick={cancelNow}
+            disabled={cancelling || status.cancelRequested}
+          >
+            {status.cancelRequested ? 'Cancelling…' : cancelling ? 'Cancelling…' : 'Cancel run'}
+          </button>
+        )}
+        <button
+          type="button"
+          className={status.paused ? 'cold-storage-resume-btn' : 'cold-storage-pause-btn'}
+          onClick={() => togglePause(!status.paused)}
+          disabled={pausing}
+          title={status.paused
+            ? 'Resume the nightly schedule'
+            : 'Skip nightly runs until resumed — manual Sync Now still works'}
+        >
+          {pausing ? '…' : (status.paused ? 'Resume schedule' : 'Pause schedule')}
         </button>
         {savedAt && (
           <span className="storage-settings-muted" style={{ fontSize: '0.85em' }}>
