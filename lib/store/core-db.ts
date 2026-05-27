@@ -348,6 +348,25 @@ function initSchema(db: DatabaseSync): void {
       sync_hour   INTEGER NOT NULL DEFAULT 2,  -- 0–23
       updated_at  TEXT NOT NULL
     );
+
+    -- Raw-footage cold-storage tracking — one row per object that has ever been
+    -- uploaded to B2. Drives the retention model: an object is only deleted
+    -- from B2 after it has been missing from every source dir for retain_days
+    -- consecutive nights. missing_since is NULL while the source file is
+    -- present; gets set on the first sync that can't find it locally; gets
+    -- cleared again if the source file reappears within the retention window.
+    -- deleted_at is set when the B2 object is finally removed (kept around as
+    -- audit history; pruned by an opportunistic sweep after 90 days).
+    CREATE TABLE IF NOT EXISTS b2_cold_storage_objects (
+      key            TEXT PRIMARY KEY,
+      size           INTEGER NOT NULL,
+      uploaded_at    TEXT NOT NULL,
+      last_seen_at   TEXT NOT NULL,
+      missing_since  TEXT,
+      deleted_at     TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cold_storage_missing ON b2_cold_storage_objects(missing_since) WHERE missing_since IS NOT NULL AND deleted_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_cold_storage_active  ON b2_cold_storage_objects(deleted_at) WHERE deleted_at IS NULL;
   `);
 }
 

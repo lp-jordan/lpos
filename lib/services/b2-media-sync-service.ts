@@ -1,21 +1,39 @@
 /**
- * B2MediaSyncService
+ * B2MediaSyncService — Raw Footage Cold Storage
  *
- * Nightly incremental sync of local footage/media directories to a direct
- * Backblaze B2 bucket (individual S3 objects — not HyperBackup format).
+ * Nightly cold-storage sync of local footage/media directories to a direct
+ * Backblaze B2 bucket (individual S3 objects). NOT an LPOS application backup —
+ * this is peace-of-mind cold storage for raw footage on active projects.
+ *
+ * Retention model (disappearance tracking):
+ *   - Every night, walk each configured source directory and reconcile against
+ *     the B2 bucket via a per-object tracking table (b2_cold_storage_objects).
+ *   - File present in source: upsertSeen() — record last_seen_at = now,
+ *     CLEAR missing_since if previously set (re-appearance resets the clock).
+ *   - File missing from source: markMissing() — sets missing_since = now ONLY
+ *     if it isn't already set. Subsequent nights don't reset it.
+ *   - File missing for ≥ retainDays consecutive nights: delete from B2,
+ *     stamp deleted_at on the tracking row (kept for audit, pruned at 90d).
+ *
+ * What this does NOT do:
+ *   - It does not delete a B2 object just because its upload date is old.
+ *     A file that's been in source for 6 months stays in cold storage
+ *     for the full 6 months. Retention is measured from disappearance, not
+ *     from upload.
  *
  * Sync strategy:
- *   1. List all existing B2 objects and build a size-indexed map.
- *   2. Walk each configured source directory recursively.
- *   3. Upload any file missing from B2 or whose local size differs.
- *   4. After uploads, sweep objects older than retainDays.
- *
- * Size comparison is the incremental check — media files don't change
- * silently, so matching size means the upload is current.
- *
- * Uploads use @aws-sdk/lib-storage's Upload class which automatically
- * splits files into multipart chunks for large files (100 MB parts,
- * 4 concurrent). Suitable for multi-GB raw footage.
+ *   1. List B2 objects → b2Map: { key → size }.
+ *   2. Bootstrap any B2 object not yet tracked (e.g. uploaded before this
+ *      service existed, or out-of-band) — INSERT OR IGNORE with last_seen_at
+ *      pinned to epoch so it gets marked missing this run unless source
+ *      visit confirms it.
+ *   3. Walk each source dir; for each file:
+ *        size matches B2 → skip upload, upsertSeen
+ *        otherwise → upload (multipart via lib-storage), upsertSeen
+ *   4. markMissingNotSeenSince(runStart) — single UPDATE; any tracked row
+ *      whose last_seen_at predates this run gets missing_since stamped.
+ *   5. listQueuedForDeletion(retainDays) → DELETE from B2 → markDeleted.
+ *   6. pruneAudit() — opportunistic delete of deleted_at rows older than 90d.
  *
  * Schedule:
  *   Polls once per minute. Fires when the wall-clock hour matches the
@@ -24,13 +42,12 @@
  * Credentials (Doppler env vars — required):
  *   B2_MEDIA_ENDPOINT          — S3-compatible URL (e.g. https://s3.us-west-004.backblazeb2.com)
  *   B2_MEDIA_KEY_ID            — Application Key ID
- *   B2_MEDIA_APPLICATION_KEY   — Application Key
+ *   B2_MEDIA_APPLICATION_KEY   — Application Key (the secret)
  *   B2_MEDIA_BUCKET            — bucket name
  *
- * Operational knobs (admin-tunable via Settings → B2 Media Sync, stored in
- * lpos-core.sqlite via b2-sync-config-store):
+ * Operational knobs (admin-tunable, stored in b2_sync_config):
  *   syncDirs                   — absolute paths to walk and upload
- *   retainDays                 — days to keep before sweeping
+ *   retainDays                 — consecutive nights missing before deletion
  *   syncHour                   — wall-clock hour (0–23) for the daily run
  *
  * Service reads these on every poll, so admin edits take effect within ~1
@@ -43,12 +60,22 @@ import path from 'node:path';
 import { S3Client, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getB2SyncConfig } from '@/lib/store/b2-sync-config-store';
+import { getCoreDb } from '@/lib/store/core-db';
+import {
+  upsertSeen,
+  markDeleted,
+  listQueuedForDeletion,
+  getColdStorageStats,
+  pruneAudit,
+  type ColdStorageStats,
+} from '@/lib/store/b2-cold-storage-store';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const DATA_DIR    = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const STATUS_FILE = path.join(DATA_DIR, 'b2-media-sync-status.json');
 const POLL_MS     = 60_000; // check every minute
+const EPOCH_ISO   = '1970-01-01T00:00:00.000Z';
 
 export function isB2MediaConfigured(): boolean {
   return !!(
@@ -83,22 +110,25 @@ export interface B2SyncError {
 
 /** Persisted after each run — summary only, not per-file success list. */
 export interface B2SyncRunResult {
-  timestamp: string;
-  dirs:      string[];
-  uploaded:  number;
-  skipped:   number;
-  failed:    number;
-  swept:     number;
-  errors:    B2SyncError[];
+  timestamp:    string;
+  dirs:         string[];
+  uploaded:     number;
+  skipped:      number;
+  failed:       number;
+  newlyMissing: number;   // files marked missing for the first time this run
+  deleted:      number;   // B2 objects retired this run (retainDays elapsed)
+  errors:       B2SyncError[];
+  stats:        ColdStorageStats; // snapshot at end of run
 }
 
 /** Returned by getStatus() — includes live state layered over last run. */
 export interface B2SyncStatus {
-  configured:  boolean;
-  running:     boolean;
-  nextRunHour: number;
-  syncDirs:    string[];
-  lastRun:     B2SyncRunResult | null;
+  configured:   boolean;
+  running:      boolean;
+  nextRunHour:  number;
+  syncDirs:     string[];
+  retainDays:   number;
+  lastRun:      B2SyncRunResult | null;
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -117,10 +147,11 @@ export class B2MediaSyncService {
     }
 
     // We always start the timer once creds are present — sync_dirs can be
-    // edited in admin settings at any time and the next tick picks it up.
+    // edited in admin settings (or the server app) at any time and the next
+    // tick picks it up.
     const cfg = getB2SyncConfig();
     if (cfg.syncDirs.length === 0) {
-      console.log('[B2MediaSync] no sync dirs configured yet (set them in Settings → B2 Media Sync); polling will pick up changes');
+      console.log('[B2MediaSync] no source dirs configured yet — polling will pick up changes');
     } else {
       console.log(`[B2MediaSync] starting — sync hour ${cfg.syncHour}, retain ${cfg.retainDays} days, dirs: ${cfg.syncDirs.join(', ')}`);
     }
@@ -153,19 +184,20 @@ export class B2MediaSyncService {
     }
 
     this.isRunning = true;
-    const timestamp = new Date().toISOString();
+    const runStart  = new Date();
+    const timestamp = runStart.toISOString();
     const cfg       = getB2SyncConfig();
     const dirs      = cfg.syncDirs;
     const client    = makeClient();
     const bucket    = getBucket();
 
-    console.log(`[B2MediaSync] starting sync — ${dirs.length} dir(s)`);
+    console.log(`[B2MediaSync] starting sync — ${dirs.length} source dir(s), retain ${cfg.retainDays} days`);
 
     let uploaded = 0, skipped = 0, failed = 0;
     const errors: B2SyncError[] = [];
 
     try {
-      // 1. Build a key→size map of every existing B2 object (O(1) lookup later)
+      // 1. Build a key→size map of every existing B2 object
       const b2Objects = new Map<string, number>();
       let token: string | undefined;
       do {
@@ -181,7 +213,12 @@ export class B2MediaSyncService {
 
       console.log(`[B2MediaSync] ${b2Objects.size} existing object(s) in bucket`);
 
-      // 2. Walk each source directory
+      // 2. Bootstrap: any B2 object not yet tracked gets a row with
+      //    last_seen_at pinned to epoch. Step 4 will mark them missing unless
+      //    the source-walk in step 3 visits them first.
+      bootstrapUntracked(b2Objects, timestamp);
+
+      // 3. Walk each source directory
       for (const srcDir of dirs) {
         const topPrefix  = path.basename(srcDir) + '/'; // e.g. "Projects/"
         const localFiles = await collectFiles(srcDir);
@@ -199,9 +236,10 @@ export class B2MediaSyncService {
             continue;
           }
 
-          // Skip if B2 already has this file at the same size
+          // Skip upload if B2 already has this file at the same size
           if (b2Objects.has(key) && b2Objects.get(key) === stat.size) {
             skipped++;
+            upsertSeen(key, stat.size, timestamp);
             continue;
           }
 
@@ -215,12 +253,13 @@ export class B2MediaSyncService {
                 Body:        fs.createReadStream(absPath),
                 ContentType: 'application/octet-stream',
               },
-              queueSize:         4,                // 4 concurrent parts
-              partSize:          100 * 1024 * 1024, // 100 MB per part
+              queueSize:         4,                  // 4 concurrent parts
+              partSize:          100 * 1024 * 1024,  // 100 MB per part
               leavePartsOnError: false,
             });
             await upload.done();
             uploaded++;
+            upsertSeen(key, stat.size, timestamp);
             console.log(`[B2MediaSync] uploaded ${key} (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
           } catch (err) {
             errors.push({ key, error: (err as Error).message });
@@ -233,45 +272,40 @@ export class B2MediaSyncService {
       console.error(`[B2MediaSync] fatal sync error: ${(err as Error).message}`);
     }
 
-    // 3. Retention sweep — uses the same cfg snapshot taken at start of run
-    const swept = await this.sweep(client, bucket, cfg.retainDays);
+    // 4. Anything in the tracking table that wasn't touched this run is now
+    //    missing — stamp missing_since on every such row (idempotent: skips
+    //    rows that already have it).
+    const newlyMissing = markMissingNotSeenSince(timestamp);
+
+    // 5. Retention sweep — actually delete B2 objects whose missing_since
+    //    has aged past retainDays.
+    const queued = listQueuedForDeletion(cfg.retainDays, runStart);
+    let deleted = 0;
+    for (const obj of queued) {
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.key }));
+        markDeleted(obj.key, timestamp);
+        deleted++;
+        console.log(`[B2MediaSync] retired ${obj.key} (missing since ${obj.missingSince})`);
+      } catch (err) {
+        errors.push({ key: obj.key, error: `delete failed: ${(err as Error).message}` });
+        console.warn(`[B2MediaSync] delete failed ${obj.key}: ${(err as Error).message}`);
+      }
+    }
+
+    // 6. Audit-history sweep — pure SQL bookkeeping, no B2 calls
+    pruneAudit(runStart);
+
+    const stats = getColdStorageStats(cfg.retainDays, runStart);
 
     const result: B2SyncRunResult = {
-      timestamp, dirs, uploaded, skipped, failed, swept, errors,
+      timestamp, dirs, uploaded, skipped, failed, newlyMissing, deleted, errors, stats,
     };
 
     this.isRunning = false;
     this.saveLastRun(result);
-    console.log(`[B2MediaSync] done — ${uploaded} uploaded, ${skipped} skipped, ${failed} failed, ${swept} swept`);
+    console.log(`[B2MediaSync] done — ${uploaded} up, ${skipped} skip, ${failed} fail, ${newlyMissing} newly missing, ${deleted} retired`);
     return result;
-  }
-
-  // ── Retention sweep ────────────────────────────────────────────────────────
-
-  private async sweep(client: S3Client, bucket: string, retainDays: number): Promise<number> {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - retainDays);
-    let swept = 0;
-    try {
-      let token: string | undefined;
-      do {
-        const res = await client.send(new ListObjectsV2Command({
-          Bucket:            bucket,
-          ContinuationToken: token,
-        }));
-        for (const obj of res.Contents ?? []) {
-          if (obj.Key && obj.LastModified && obj.LastModified < cutoff) {
-            await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }));
-            swept++;
-            console.log(`[B2MediaSync] swept ${obj.Key}`);
-          }
-        }
-        token = res.IsTruncated ? res.NextContinuationToken : undefined;
-      } while (token);
-    } catch (err) {
-      console.warn(`[B2MediaSync] sweep error: ${(err as Error).message}`);
-    }
-    return swept;
   }
 
   // ── Status ─────────────────────────────────────────────────────────────────
@@ -283,6 +317,7 @@ export class B2MediaSyncService {
       running:     this.isRunning,
       nextRunHour: cfg.syncHour,
       syncDirs:    cfg.syncDirs,
+      retainDays:  cfg.retainDays,
       lastRun:     this.loadLastRun(),
     };
   }
@@ -307,10 +342,15 @@ export class B2MediaSyncService {
 
   private emptyResult(): B2SyncRunResult {
     return {
-      timestamp: new Date().toISOString(),
-      dirs:      [],
-      uploaded:  0, skipped: 0, failed: 0, swept: 0,
-      errors:    [],
+      timestamp:    new Date().toISOString(),
+      dirs:         [],
+      uploaded:     0, skipped: 0, failed: 0,
+      newlyMissing: 0, deleted: 0,
+      errors:       [],
+      stats:        {
+        activeObjects: 0, activeBytes: 0, missingObjects: 0,
+        queuedForDelete: 0, deletedHistory: 0,
+      },
     };
   }
 }
@@ -337,4 +377,42 @@ async function collectFiles(dir: string): Promise<string[]> {
   }
   await walk(dir);
   return results;
+}
+
+/**
+ * Insert a tracking row for any B2 object we haven't seen before. last_seen_at
+ * is pinned to the epoch so that step 4 (markMissingNotSeenSince) will stamp
+ * missing_since for any of these that the source-walk doesn't visit.
+ * INSERT OR IGNORE is intentional — existing rows are left alone (their state
+ * is whatever previous syncs established).
+ */
+function bootstrapUntracked(b2Objects: Map<string, number>, runStart: string): void {
+  const stmt = getCoreDb().prepare(`
+    INSERT OR IGNORE INTO b2_cold_storage_objects
+      (key, size, uploaded_at, last_seen_at, missing_since, deleted_at)
+    VALUES (?, ?, ?, ?, NULL, NULL)
+  `);
+  for (const [key, size] of b2Objects) {
+    stmt.run(key, size, runStart, EPOCH_ISO);
+  }
+}
+
+/**
+ * Stamp missing_since on every active tracking row whose last_seen_at predates
+ * the current run. Idempotent — rows that already have missing_since set are
+ * not touched (we don't reset the clock just because another night confirmed
+ * the file is still gone).
+ * Returns the count of rows newly stamped this run.
+ */
+function markMissingNotSeenSince(runStart: string): number {
+  const res = getCoreDb()
+    .prepare(`
+      UPDATE b2_cold_storage_objects
+         SET missing_since = ?
+       WHERE deleted_at IS NULL
+         AND missing_since IS NULL
+         AND last_seen_at < ?
+    `)
+    .run(runStart, runStart);
+  return Number(res.changes ?? 0);
 }

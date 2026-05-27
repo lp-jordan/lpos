@@ -15,7 +15,6 @@ import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel
 import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
-import { B2SyncConfigCard } from '@/components/settings/B2SyncConfigCard';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -65,7 +64,6 @@ export default async function SettingsPage() {
       )}
 
       {role === 'admin' && <EpTokensPanel />}
-      {role === 'admin' && <B2SyncConfigCard />}
       {role === 'admin' && <StorageMapCard />}
       {role === 'admin' && <WhatsNewTestCard />}
       {role === 'admin' && <LpReleasesCard />}

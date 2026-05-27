@@ -17650,3 +17650,201 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   white-space: nowrap;
   font-family: var(--font-mono, monospace);
 }
+
+/* ── Cold storage section ─────────────────────────────────────────────────── */
+
+.cold-storage-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+}
+.cold-storage-dot--idle    { background: rgba(255, 255, 255, 0.25); }
+.cold-storage-dot--ok      { background: #4ade80; box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
+.cold-storage-dot--running { background: #fbbf24; animation: cold-storage-pulse 1.5s ease-in-out infinite; }
+.cold-storage-dot--error   { background: #f87171; box-shadow: 0 0 8px rgba(248, 113, 113, 0.5); }
+
+@keyframes cold-storage-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(1.2); }
+}
+
+.cold-storage-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cold-storage-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cold-storage-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+.cold-storage-stats strong {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.cold-storage-lastrun {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cold-storage-table-wrap {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cold-storage-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 0.85em;
+}
+
+.cold-storage-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.cold-storage-key {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cold-storage-meta {
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.cold-storage-meta--warn {
+  color: #fbbf24;
+}
+
+.cold-storage-browser {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cold-storage-browser-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.cold-storage-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.cold-storage-crumb {
+  background: transparent;
+  border: none;
+  color: var(--foreground);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+.cold-storage-crumb:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.cold-storage-crumb:disabled {
+  color: var(--muted-foreground);
+  cursor: default;
+}
+
+.cold-storage-crumb-sep {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  padding: 0 2px;
+}
+
+.cold-storage-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.cold-storage-browser-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.cold-storage-browser-folder {
+  background: transparent;
+  border: none;
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  padding: 0;
+  font-weight: 500;
+}
+.cold-storage-browser-folder:hover {
+  text-decoration: underline;
+}
+
+.cold-storage-browser-file {
+  color: var(--foreground);
+}
+
+.cold-storage-delete-btn {
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #fca5a5;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8em;
+}
+.cold-storage-delete-btn:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.2);
+}
+.cold-storage-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
