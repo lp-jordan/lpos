@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "doppler run -- cross-env NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx server.ts",
-    "build": "next build",
+    "build": "doppler run -- next build",
     "start": "doppler run -- cross-env NODE_ENV=production NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx server.ts",
     "lint": "next lint",
     "migrate:legacy-media": "tsx scripts/migrate-legacy-media.ts",
