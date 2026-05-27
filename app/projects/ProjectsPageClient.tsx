@@ -215,30 +215,51 @@ export function ProjectsPageClient({
 
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
-  const [clientSort, setClientSort] = useState<SortMode>('alpha');
+  // Default sort = 'activity' (most-recent first). User can flip to 'alpha';
+  // their choice is persisted in URL (for shareable links) and in localStorage
+  // (so it survives nav-link round-trips to a bare /projects URL).
+  const [clientSort, setClientSort] = useState<SortMode>('activity');
   const [showArchived, setShowArchived] = useState(false);
 
-  // URL persistence
+  // URL + localStorage persistence. URL wins on mount; localStorage is the
+  // fallback so prefs survive navigation back to a clean /projects URL.
   const didRestoreRef = useRef(false);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     const v = p.get('view') as ViewMode | null;
+    const so = p.get('sort') as SortMode | null;
     const q = p.get('q');
     const ar = p.get('archived');
-    if (v  && ['card', 'list'].includes(v)) setViewMode(v);
-    if (q  != null)                         setSearch(q);
-    if (ar === '1')                         setShowArchived(true);
+    let lsView: ViewMode | null = null;
+    let lsSort: SortMode | null = null;
+    try {
+      const sv = window.localStorage.getItem('lpos:projects:view');
+      if (sv === 'card' || sv === 'list') lsView = sv;
+      const ss = window.localStorage.getItem('lpos:projects:clientSort');
+      if (ss === 'alpha' || ss === 'activity') lsSort = ss;
+    } catch { /* localStorage may be blocked */ }
+    if      (v  && ['card', 'list'].includes(v))       setViewMode(v);
+    else if (lsView)                                   setViewMode(lsView);
+    if      (so && ['alpha', 'activity'].includes(so)) setClientSort(so);
+    else if (lsSort)                                   setClientSort(lsSort);
+    if (q  != null)                                    setSearch(q);
+    if (ar === '1')                                    setShowArchived(true);
     didRestoreRef.current = true;
   }, []);
   useEffect(() => {
     if (!didRestoreRef.current) return;
     const p = new URLSearchParams();
-    if (viewMode !== 'card') p.set('view', viewMode);
-    if (search)              p.set('q', search);
-    if (showArchived)        p.set('archived', '1');
+    if (viewMode   !== 'card')     p.set('view',     viewMode);
+    if (clientSort !== 'activity') p.set('sort',     clientSort);
+    if (search)                    p.set('q',        search);
+    if (showArchived)              p.set('archived', '1');
     const qs = p.toString();
     router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
-  }, [viewMode, search, showArchived]);
+    try {
+      window.localStorage.setItem('lpos:projects:view',       viewMode);
+      window.localStorage.setItem('lpos:projects:clientSort', clientSort);
+    } catch { /* ignore */ }
+  }, [viewMode, clientSort, search, showArchived]);
 
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());

@@ -329,9 +329,16 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
 
   const personMenu = useContextMenu<Prospect>();
 
-  // ── Persist filters in URL ─────────────────────────────────────────────────
+  // ── Persist filters in URL + localStorage ──────────────────────────────────
+  //
+  // URL persistence makes a filter combo shareable / reloadable. localStorage
+  // makes it survive a nav-link round-trip back to a clean /people URL (the
+  // top-bar "People" link, the home tile, the Back button on a person detail
+  // page — none of those carry query params). Precedence on mount:
+  // URL param > localStorage > default. Both are kept in sync on every change.
+  // `search` and `showArchived` stay URL-only on purpose — they're transient.
 
-  // On mount: restore any filter state saved in the URL.
+  // On mount: restore filter state from URL, falling back to localStorage.
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     const t = p.get('tab')    as TabFilter   | null;
@@ -341,17 +348,39 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
     const en = p.get('entity') as EntityFilter | null;
     const q = p.get('q');
     const ar = p.get('archived');
-    if (t  && ['prospects','active','all'].includes(t))                          setTab(t);
-    if (so && ['updated','name','value','newest','billing'].includes(so))        setSort(so);
-    if (v  && ['card','list'].includes(v))                                      setViewMode(v);
-    if (sc && ['all','mine','others'].includes(sc))                             setScope(sc);
-    if (en && ['all','individual','organization'].includes(en))                 setEntityFilter(en);
-    if (q  != null)                                                             setSearch(q);
-    if (ar === '1')                                                             setShowArchived(true);
+    let lsTab:    TabFilter    | null = null;
+    let lsSort:   SortMode     | null = null;
+    let lsView:   ViewMode     | null = null;
+    let lsScope:  ScopeFilter  | null = null;
+    let lsEntity: EntityFilter | null = null;
+    try {
+      const x = window.localStorage.getItem('lpos:people:tab');
+      if (x && ['prospects','active','all'].includes(x))                     lsTab    = x as TabFilter;
+      const y = window.localStorage.getItem('lpos:people:sort');
+      if (y && ['updated','name','value','newest','billing'].includes(y))    lsSort   = y as SortMode;
+      const z = window.localStorage.getItem('lpos:people:view');
+      if (z === 'card' || z === 'list')                                       lsView   = z;
+      const w = window.localStorage.getItem('lpos:people:scope');
+      if (w && ['all','mine','others'].includes(w))                          lsScope  = w as ScopeFilter;
+      const u = window.localStorage.getItem('lpos:people:entity');
+      if (u && ['all','individual','organization'].includes(u))              lsEntity = u as EntityFilter;
+    } catch { /* localStorage may be blocked */ }
+    if      (t  && ['prospects','active','all'].includes(t))                   setTab(t);
+    else if (lsTab)                                                            setTab(lsTab);
+    if      (so && ['updated','name','value','newest','billing'].includes(so)) setSort(so);
+    else if (lsSort)                                                           setSort(lsSort);
+    if      (v  && ['card','list'].includes(v))                                setViewMode(v);
+    else if (lsView)                                                           setViewMode(lsView);
+    if      (sc && ['all','mine','others'].includes(sc))                       setScope(sc);
+    else if (lsScope)                                                          setScope(lsScope);
+    if      (en && ['all','individual','organization'].includes(en))           setEntityFilter(en);
+    else if (lsEntity)                                                         setEntityFilter(lsEntity);
+    if (q  != null)                                                            setSearch(q);
+    if (ar === '1')                                                            setShowArchived(true);
     didRestoreRef.current = true;
   }, []);
 
-  // After restore: keep URL in sync whenever filters change.
+  // After restore: keep URL + localStorage in sync whenever filters change.
   useEffect(() => {
     if (!didRestoreRef.current) return;
     const p = new URLSearchParams();
@@ -364,6 +393,13 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
     if (showArchived)                 p.set('archived','1');
     const qs = p.toString();
     router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
+    try {
+      window.localStorage.setItem('lpos:people:tab',    tab);
+      window.localStorage.setItem('lpos:people:sort',   sort);
+      window.localStorage.setItem('lpos:people:view',   viewMode);
+      window.localStorage.setItem('lpos:people:scope',  scope);
+      window.localStorage.setItem('lpos:people:entity', entityFilter);
+    } catch { /* ignore */ }
   }, [tab, sort, viewMode, scope, entityFilter, search, showArchived]);
 
   // Close filter popover on outside click
