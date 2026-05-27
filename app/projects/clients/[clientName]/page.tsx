@@ -3,6 +3,7 @@ import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-a
 import { getUserById, toUserSummary, getAllUsers } from '@/lib/store/user-store';
 import { getProjectStore, getClientOwnerStore } from '@/lib/services/container';
 import { getClientStats } from '@/lib/services/client-stats';
+import { getLatestActivityByProject } from '@/lib/store/activity-db';
 import { ProjectsPageClient } from '../../ProjectsPageClient';
 import type { UserSummary } from '@/lib/models/user';
 
@@ -24,6 +25,10 @@ export default async function ClientProjectsPage({
   const { getClientStore } = await import('@/lib/services/container');
   const promotedClients = getClientStore().getAll().map((c) => c.name);
 
+  const latestActivity = Object.fromEntries(
+    getLatestActivityByProject(projects.map((p) => p.projectId)),
+  );
+
   return (
     <ProjectsPageClient
       key={clientName}
@@ -33,6 +38,7 @@ export default async function ClientProjectsPage({
       initialStats={stats}
       initialCurrentUser={currentUser}
       initialPromotedClients={promotedClients}
+      initialLatestActivity={latestActivity}
       activeClient={clientName}
     />
   );

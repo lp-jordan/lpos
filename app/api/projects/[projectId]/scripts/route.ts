@@ -14,6 +14,7 @@ import {
 } from '@/lib/store/scripts-registry';
 import { extractAndSave } from '@/lib/services/script-extractor';
 import { pushScriptToDrive } from '@/lib/services/drive-script-sync';
+import { recordActivity, systemActor } from '@/lib/services/activity-monitor-service';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -73,6 +74,22 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     const finalPath = path.join(dir, `${script.scriptId}${ext}`);
     fs.renameSync(tmpPath, finalPath);
     patchScript(projectId, script.scriptId, { filePath: finalPath });
+
+    // Emit activity event so the "Most Recent Activity" client sort picks this up.
+    recordActivity({
+      ...systemActor('LPOS'),
+      occurred_at:     new Date().toISOString(),
+      event_type:      'script.uploaded',
+      lifecycle_phase: 'created',
+      source_kind:     'api',
+      visibility:      'user_timeline',
+      title:           `Script uploaded: ${script.name}`,
+      summary:         `${originalFilename} was uploaded to ${project.name}`,
+      client_id:       project.clientName || null,
+      project_id:      projectId,
+      details_json:    { scriptId: script.scriptId, originalFilename, fileSize },
+      search_text:     `${originalFilename} ${project.name} ${project.clientName ?? ''}`.trim(),
+    });
 
     // Kick off extraction and Drive push in background
     void extractAndSave(projectId, script.scriptId, finalPath, ext);

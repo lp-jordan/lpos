@@ -182,6 +182,15 @@ interface ProjectsPageClientProps {
   initialStats: Record<string, ClientStats>;
   initialCurrentUser: UserSummary | null;
   initialPromotedClients: string[];
+  /**
+   * Map of `projectId → latest occurred_at` ISO timestamp, derived from the
+   * activity_events table. Drives the "Most Recent Activity" client sort so
+   * EVERY recorded event type counts (uploads, scripts, photos, deliveries,
+   * Cloudflare ready, comments, etc.) — single source of truth.
+   * Projects with no events recorded simply won't appear in the map; we fall
+   * back to `project.updatedAt` for those.
+   */
+  initialLatestActivity?: Record<string, string>;
   /** When set, render the per-client drill-in for this client. Driven by URL: /projects/clients/[clientName]. */
   activeClient?: string | null;
 }
@@ -193,6 +202,7 @@ export function ProjectsPageClient({
   initialStats,
   initialCurrentUser,
   initialPromotedClients,
+  initialLatestActivity = {},
   activeClient = null,
 }: ProjectsPageClientProps) {
   const router = useRouter();
@@ -272,12 +282,18 @@ export function ProjectsPageClient({
     !search || c.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Latest updatedAt across each client's active projects
+  // Latest activity per client. Prefer the activity_events-derived timestamp
+  // (single source of truth — counts every event type, comments included);
+  // fall back to project.updatedAt for projects with no events recorded yet.
+  // ISO timestamps from activity_events compare lexicographically; updatedAt
+  // is a display label (e.g. "May 27") so it only matters as a tiebreaker for
+  // brand-new projects with no events.
   const clientLatestActivity: Record<string, string> = {};
   for (const p of activeProjects) {
-    if (!p.updatedAt) continue;
+    const ts = initialLatestActivity[p.projectId] ?? p.updatedAt ?? '';
+    if (!ts) continue;
     const cur = clientLatestActivity[p.clientName];
-    if (!cur || p.updatedAt > cur) clientLatestActivity[p.clientName] = p.updatedAt;
+    if (!cur || ts > cur) clientLatestActivity[p.clientName] = ts;
   }
 
   // Apply sort

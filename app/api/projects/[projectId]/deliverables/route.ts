@@ -13,6 +13,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole, getSession } from '@/lib/services/api-auth';
 import { listDeliverablesForProject } from '@/lib/store/deliverable-store';
 import { createDeliverableForAssets } from '@/lib/services/deliverable-publish';
+import { getProjectStore } from '@/lib/services/container';
+import { getUserById } from '@/lib/store/user-store';
+import { recordActivity } from '@/lib/services/activity-monitor-service';
 import type { DeliverableSettings } from '@/lib/models/deliverable';
 
 type Params = { params: Promise<{ projectId: string }> };
@@ -58,6 +61,36 @@ export async function POST(req: NextRequest, { params }: Params) {
       expiresAt: body.expiresAt ?? null,
       settings: body.settings,
     });
+
+    // Emit activity event so the "Most Recent Activity" client sort picks this up.
+    try {
+      const project = getProjectStore().getById(projectId);
+      const actor   = getUserById(session.userId);
+      const includedCount = assetIds.length - (result.skippedAssetIds?.length ?? 0);
+      recordActivity({
+        actor_type:    'user',
+        actor_id:      session.userId,
+        actor_display: actor?.name ?? actor?.email ?? null,
+        occurred_at:     new Date().toISOString(),
+        event_type:      'delivery.created',
+        lifecycle_phase: 'created',
+        source_kind:     'api',
+        visibility:      'user_timeline',
+        title:           `Review link created: ${name}`,
+        summary:         project
+          ? `${actor?.name ?? 'A user'} created a review link with ${includedCount} asset${includedCount === 1 ? '' : 's'} in ${project.name}`
+          : `${actor?.name ?? 'A user'} created a review link with ${includedCount} asset${includedCount === 1 ? '' : 's'}`,
+        client_id:       project?.clientName || null,
+        project_id:      projectId,
+        details_json:    {
+          deliverableId:  result.deliverable.deliverableId,
+          assetCount:     includedCount,
+          skippedCount:   result.skippedAssetIds?.length ?? 0,
+        },
+        search_text:     `${name} ${project?.name ?? ''} ${project?.clientName ?? ''}`.trim(),
+      });
+    } catch { /* never let activity recording block the response */ }
+
     return NextResponse.json(
       {
         deliverable: result.deliverable,

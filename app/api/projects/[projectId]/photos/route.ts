@@ -9,6 +9,7 @@ import { listPhotos, registerPhoto } from '@/lib/store/photo-registry';
 import { resolveProjectPhotosStorageDir } from '@/lib/services/storage-volume-service';
 import { extractCaptureDate } from '@/lib/services/photo-image-service';
 import { PHOTO_EXTENSIONS, guessPhotoMime, type PhotoAsset } from '@/lib/models/photo-asset';
+import { recordActivity, systemActor } from '@/lib/services/activity-monitor-service';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
@@ -99,6 +100,27 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       if (failed && failed.status === 'rejected') {
         resolve(NextResponse.json({ error: (failed.reason as Error).message, uploads }, { status: 500 }));
         return;
+      }
+      // Emit one activity event per successfully-registered photo so the client
+      // "Most Recent Activity" sort sees them. One event per file gives a richer
+      // timeline than a single batched event would.
+      for (const photo of uploads) {
+        try {
+          recordActivity({
+            ...systemActor('LPOS'),
+            occurred_at:     new Date().toISOString(),
+            event_type:      'photo.uploaded',
+            lifecycle_phase: 'created',
+            source_kind:     'api',
+            visibility:      'user_timeline',
+            title:           `Photo uploaded: ${photo.originalFilename}`,
+            summary:         `${photo.originalFilename} was uploaded to ${project.name}`,
+            client_id:       project.clientName || null,
+            project_id:      projectId,
+            details_json:    { photoId: photo.photoId, originalFilename: photo.originalFilename, fileSize: photo.fileSize },
+            search_text:     `${photo.originalFilename} ${project.name} ${project.clientName ?? ''}`.trim(),
+          });
+        } catch { /* never let activity recording block the response */ }
       }
       resolve(NextResponse.json({ uploads }, { status: 201 }));
     });

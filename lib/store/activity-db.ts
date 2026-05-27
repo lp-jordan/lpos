@@ -144,3 +144,30 @@ export function resetActivityDbForTests(): void {
   globalThis.__lpos_activity_db?.close();
   globalThis.__lpos_activity_db = undefined;
 }
+
+/**
+ * Returns the most-recent `occurred_at` per project for the given project IDs.
+ * Drives the client-list "Most Recent Activity" sort. Cheap — uses the existing
+ * `idx_activity_events_project_id (project_id, occurred_at DESC)` index, so the
+ * MAX is effectively a single index seek per project.
+ *
+ * Projects with zero events recorded simply won't appear in the map; callers
+ * should fall back to `projects.updated_at` for those.
+ */
+export function getLatestActivityByProject(projectIds: string[]): Map<string, string> {
+  const result = new Map<string, string>();
+  if (projectIds.length === 0) return result;
+  const placeholders = projectIds.map(() => '?').join(',');
+  const rows = getActivityDb()
+    .prepare(
+      `SELECT project_id, MAX(occurred_at) AS latest
+       FROM activity_events
+       WHERE project_id IN (${placeholders})
+       GROUP BY project_id`,
+    )
+    .all(...projectIds) as Array<{ project_id: string; latest: string | null }>;
+  for (const row of rows) {
+    if (row.project_id && row.latest) result.set(row.project_id, row.latest);
+  }
+  return result;
+}
