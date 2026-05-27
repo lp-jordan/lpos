@@ -30,6 +30,7 @@ import { formatTimecode } from '@/lib/utils/time';
 type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
 import { DeliverableModal } from '@/components/projects/DeliverableModal';
+import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
 
 // ── Theater mode error boundary ────────────────────────────────────────────
 // VideoTheaterMode renders untrusted comment text and does live DOM mutations
@@ -308,9 +309,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [lpResetting, setLpResetting] = useState(false);
 
   const [cfEmbedCopied,    setCfEmbedCopied]    = useState(false);
-  const [cfThumbFrame,     setCfThumbFrame]     = useState(24);
-  const [cfThumbApplying,  setCfThumbApplying]  = useState(false);
-  const [cfThumbError,     setCfThumbError]     = useState<string | null>(null);
+  const [showThumbModal,   setShowThumbModal]   = useState(false);
   const [cfResetConfirm,   setCfResetConfirm]   = useState(false);
 
   async function handlePushToLeaderPass() {
@@ -361,26 +360,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     navigator.clipboard.writeText(url).catch(() => {});
     setCfEmbedCopied(true);
     setTimeout(() => setCfEmbedCopied(false), 2000);
-  }
-
-  async function handleApplyCfThumb() {
-    if (!asset) return;
-    setCfThumbError(null);
-    setCfThumbApplying(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/cloudflare`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ thumbnailFrameNumber: cfThumbFrame }),
-      });
-      const data = await res.json() as { error?: string };
-      if (!res.ok) setCfThumbError(data.error ?? 'Failed to apply thumbnail frame');
-      else onUpdated();
-    } catch {
-      setCfThumbError('Network error — could not apply thumbnail frame');
-    } finally {
-      setCfThumbApplying(false);
-    }
   }
 
   // Phase E: reads from the new /deliverables endpoint and shape-maps to the
@@ -1164,7 +1143,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       </button>
                     )}
 
-                    {/* ── Thumbnail preview + frame setter ── */}
+                    {/* ── Thumbnail preview + custom-image uploader ── */}
                     {isReady && posterPreviewUrl && (
                       <div className="mad-cf-thumb-inline-row">
                         <span className="mad-cf-thumb-inline-label">Thumbnail</span>
@@ -1172,25 +1151,15 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           <img className="mad-cf-thumb-preview-img" src={posterPreviewUrl} alt="Current poster" />
                         </a>
                         <div className="mad-cf-thumb-setter">
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            className="mad-cf-thumb-input"
-                            value={cfThumbFrame}
-                            onChange={(e) => setCfThumbFrame(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                            title="Frame number to use as thumbnail"
-                          />
                           <button
                             type="button"
                             className="mad-action-btn"
-                            onClick={handleApplyCfThumb}
-                            disabled={cfThumbApplying}
+                            onClick={() => setShowThumbModal(true)}
+                            title="Upload a custom thumbnail image (JPG or PNG)"
                           >
-                            {cfThumbApplying ? 'Applying…' : 'Apply'}
+                            Replace…
                           </button>
                         </div>
-                        {cfThumbError && <span className="mad-cf-thumb-error">{cfThumbError}</span>}
                       </div>
                     )}
 
@@ -1424,6 +1393,18 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
             // so this fetch will see the new row.
             void fetchShareLinks(asset.assetId);
           }}
+        />
+      )}
+
+      {/* Per-asset custom thumbnail uploader — reuses the batch modal with a 1-item assetIds array.
+          The endpoint POSTs the image to Cloudflare Images and patches asset.cloudflare.posterUrl,
+          which is what posterPreviewUrl above reads from. */}
+      {showThumbModal && asset && (
+        <BatchSetThumbnailModal
+          projectId={projectId}
+          assetIds={[asset.assetId]}
+          onClose={() => setShowThumbModal(false)}
+          onDone={() => { setShowThumbModal(false); onUpdated(); }}
         />
       )}
     </>

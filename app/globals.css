@@ -3590,11 +3590,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   gap: 4px;
   margin-left: auto;
 }
-.mad-cf-thumb-error {
-  width: 100%;
-  font-size: 0.75rem;
-  color: #e07070;
-}
 
 /* ── Confirmation modal ── */
 .mad-confirm-overlay {
@@ -5301,21 +5296,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   color: var(--muted-soft);
   white-space: nowrap;
 }
-.mad-cf-thumb-input {
-  width: 64px;
-  font-size: 0.8rem;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text);
-}
-.mad-cf-thumb-error {
-  font-size: 0.73rem;
-  color: var(--error, #e05);
-  width: 100%;
-}
-
 /* Modal extras */
 .modal-section-header {
   border-top: 1px solid var(--line);

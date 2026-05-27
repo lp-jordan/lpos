@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
-import { getUploadQueueService, getProjectStore } from '@/lib/services/container';
+import { getUploadQueueService } from '@/lib/services/container';
 import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
 import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
@@ -225,11 +225,12 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     console.log(`[leaderpass] Cloudflare asset ready for ${assetId}; uid=${ready.uid}`);
 
     // Set thumbnail frame — probe fps fresh since it may not have been stored at ingest.
-    // Use per-project configured frame number as the target, falling back to the global default.
+    // Hardcoded to CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME (24); the per-project override was retired
+    // because users overwhelmingly replace the auto-thumbnail with a custom image from the
+    // sidebar uploader (BatchSetThumbnailModal → Cloudflare Images → asset.cloudflare.posterUrl).
     if (asset.filePath) {
       try {
-        const project = getProjectStore().getById(projectId);
-        const targetFrame = project?.cloudflareDefaults?.thumbnailFrameNumber ?? CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME;
+        const targetFrame = CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME;
         const { fps, duration } = await probeMediaInfo(asset.filePath);
         const effectiveDuration = asset.duration ?? duration;
         const pct = (fps != null && fps > 0 && effectiveDuration != null && effectiveDuration > 0)
