@@ -171,3 +171,33 @@ export function getLatestActivityByProject(projectIds: string[]): Map<string, st
   }
   return result;
 }
+
+/**
+ * Returns the most-recent comment `occurred_at` per asset for the given project.
+ * Drives the MediaTab "Latest comments" sort. Restricted to Frame.io comment
+ * event types (top-level and replies) so non-comment activity doesn't bleed in.
+ * Uses the `idx_activity_events_asset_id (asset_id, occurred_at DESC)` index;
+ * the `event_type` filter and `project_id` predicate are evaluated against the
+ * narrow per-asset rowset.
+ *
+ * Assets with zero comment events simply won't appear in the map; callers
+ * should treat them as "no comments" and sort them last.
+ */
+export function getLatestCommentByAssetForProject(projectId: string): Map<string, string> {
+  const result = new Map<string, string>();
+  if (!projectId) return result;
+  const rows = getActivityDb()
+    .prepare(
+      `SELECT asset_id, MAX(occurred_at) AS latest
+       FROM activity_events
+       WHERE project_id = ?
+         AND asset_id IS NOT NULL
+         AND event_type IN ('frameio.comment.created', 'frameio.comment.reply.created')
+       GROUP BY asset_id`,
+    )
+    .all(projectId) as Array<{ asset_id: string | null; latest: string | null }>;
+  for (const row of rows) {
+    if (row.asset_id && row.latest) result.set(row.asset_id, row.latest);
+  }
+  return result;
+}

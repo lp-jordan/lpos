@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectStore, getIngestQueueService } from '@/lib/services/container';
 import { readRegistry, migrateLooseFiles } from '@/lib/store/media-registry';
+import { getLatestCommentByAssetForProject } from '@/lib/store/activity-db';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { finalizeUploadedAsset } from '@/lib/services/media-finalization';
@@ -23,7 +24,14 @@ export async function GET(
     const { projectId } = await params;
     migrateLooseFiles(projectId);
     const assets = readRegistry(projectId);
-    return NextResponse.json({ assets });
+    // Derived map: { assetId → ISO of most-recent Frame.io comment / reply }.
+    // Drives the MediaTab "Latest comments" sort. Single source of truth is
+    // activity_events; not denormalised onto the asset to avoid double-write
+    // drift. Assets with no comments simply won't be keyed in the map.
+    const latestCommentMap = getLatestCommentByAssetForProject(projectId);
+    const latestComments: Record<string, string> = {};
+    for (const [assetId, ts] of latestCommentMap) latestComments[assetId] = ts;
+    return NextResponse.json({ assets, latestComments });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

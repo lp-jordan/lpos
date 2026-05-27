@@ -45,7 +45,7 @@ function formatDate(iso: string): string {
   catch { return iso; }
 }
 
-type SortField = 'name' | 'date' | 'size' | 'duration';
+type SortField = 'name' | 'date' | 'size' | 'duration' | 'comments';
 type SortDir = 'asc' | 'desc';
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
@@ -53,6 +53,7 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: 'date',     label: 'Date uploaded' },
   { value: 'size',     label: 'Size' },
   { value: 'duration', label: 'Duration' },
+  { value: 'comments', label: 'Latest comments' },
 ];
 
 function formatDuration(seconds: number | null): string {
@@ -64,8 +65,30 @@ function formatDuration(seconds: number | null): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function sortAssets(assets: MediaAsset[], field: SortField, dir: SortDir): MediaAsset[] {
+function sortAssets(
+  assets: MediaAsset[],
+  field: SortField,
+  dir: SortDir,
+  latestComments: Record<string, string> = {},
+): MediaAsset[] {
   const sorted = [...assets].sort((a, b) => {
+    // 'comments' uses a nulls-last comparator — assets that have never been
+    // commented on always sink to the bottom regardless of dir, so they don't
+    // leap to the top when the user flips asc/desc. Among commented assets the
+    // direction toggle still works as expected.
+    if (field === 'comments') {
+      const ta = latestComments[a.assetId];
+      const tb = latestComments[b.assetId];
+      if (!ta && !tb) {
+        // Tiebreak by name so order is stable when nothing has comments.
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+      }
+      if (!ta) return 1;   // a sinks
+      if (!tb) return -1;  // b sinks
+      const cmp = new Date(ta).getTime() - new Date(tb).getTime();
+      return dir === 'asc' ? cmp : -cmp;
+    }
+
     let cmp = 0;
     switch (field) {
       case 'name':
@@ -444,6 +467,11 @@ export function MediaTab({
   onGoToTranscript?: (jobId: string) => void;
 }) {
   const [assets,          setAssets]          = useState<MediaAsset[]>([]);
+  // Map: assetId → ISO of most-recent Frame.io comment / reply for this project.
+  // Derived from activity_events server-side and shipped alongside assets so
+  // there's no second round-trip. Drives the "Latest comments" sort. Assets
+  // with no comments simply aren't keyed and sink to the bottom of that sort.
+  const [latestComments,  setLatestComments]  = useState<Record<string, string>>({});
   const [loading,         setLoading]         = useState(true);
   const [viewMode,        setViewMode]        = useState<'list' | 'card'>('list');
   const [search,          setSearch]          = useState('');
@@ -521,7 +549,7 @@ const { openMenu } = useContextMenu();
     try {
       const res  = await fetch(`/api/projects/${projectId}/media`);
       if (!res.ok) return;
-      const data = await res.json() as { assets: MediaAsset[] };
+      const data = await res.json() as { assets: MediaAsset[]; latestComments?: Record<string, string> };
 
       const nextCommentCounts = new Map<string, number>();
       data.assets.forEach((asset) => {
@@ -548,6 +576,7 @@ const { openMenu } = useContextMenu();
       commentCountsRef.current = nextCommentCounts;
       hasCommentBaselineRef.current = true;
       setAssets(data.assets);
+      setLatestComments(data.latestComments ?? {});
       // Keep selectedAsset in sync
       setSelectedAsset((prev) => prev ? (data.assets.find((a) => a.assetId === prev.assetId) ?? null) : null);
     } catch { /* ignore */ }
@@ -1236,7 +1265,7 @@ const { openMenu } = useContextMenu();
   // re-shuffled mid-render whenever any active upload's percentage advanced.
   // queuedAt is set once when the ingest job is created and never changes, so
   // the order within the active group is stable for the lifetime of the upload.
-  const _baseSorted = sortAssets(filtered, sortField, sortDir);
+  const _baseSorted = sortAssets(filtered, sortField, sortDir, latestComments);
   const sorted = activeIngestByFilename.size === 0 ? _baseSorted : (() => {
     const active: MediaAsset[] = [];
     const rest: MediaAsset[] = [];
