@@ -13492,6 +13492,13 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: #b49ee0;
 }
 
+/* ── Delete button ──────────────────────────────────────────────────────── */
+.ca-asset-btn--danger:hover {
+  background: rgba(224,112,112,0.1);
+  border-color: rgba(224,112,112,0.6);
+  color: #e07070;
+}
+
 /* ── Previewable rows ───────────────────────────────────────────────────── */
 .ca-asset-row--previewable {
   cursor: pointer;

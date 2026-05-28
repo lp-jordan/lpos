@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { io } from 'socket.io-client';
 import { AssetPreviewPanel, isPreviewable } from '@/components/projects/AssetPreviewPanel';
 import { LinkGroupManagementModal } from '@/components/projects/LinkGroupManagementModal';
+import { ConfirmModal } from '@/components/shared/ConfirmModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -289,6 +290,18 @@ function ExternalLinkIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
 // ── Rename input ──────────────────────────────────────────────────────────────
 
 function RenameInput({
@@ -372,6 +385,8 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
   const [showMoveModal,  setShowMoveModal]  = useState(false);
   const [moving,         setMoving]         = useState(false);
   const [dragOverId,     setDragOverId]     = useState<string | null>(null);
+  const [deleteTarget,   setDeleteTarget]   = useState<DriveAsset | null>(null);
+  const [deleteError,    setDeleteError]    = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -490,6 +505,42 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
       // Revert on failure
       void load();
     }
+  }
+
+  // ── Delete ──────────────────────────────────────────────────────────────────
+
+  async function handleDelete(asset: DriveAsset) {
+    setDeleteError(null);
+    const res = await fetch(`/api/projects/${projectId}/assets/${asset.entityId}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      // Leave the modal open with an inline error so the user can retry.
+      setDeleteError(data.error ?? 'Delete failed');
+      return;
+    }
+    // Drop the asset (and, for a folder, its whole subtree) from the local view —
+    // mirrors the index purge the server just did, at any nesting depth.
+    setItems((prev) => {
+      const removeFileIds = new Set<string>([asset.driveFileId]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const i of prev) {
+          if (i.isFolder && i.parentDriveId && removeFileIds.has(i.parentDriveId) && !removeFileIds.has(i.driveFileId)) {
+            removeFileIds.add(i.driveFileId);
+            grew = true;
+          }
+        }
+      }
+      return prev.filter((i) =>
+        i.entityId !== asset.entityId &&
+        !(i.parentDriveId && removeFileIds.has(i.parentDriveId)),
+      );
+    });
+    setSelectedIds((prev) => { const next = new Set(prev); next.delete(asset.entityId); return next; });
+    setDeleteTarget(null);
   }
 
   // ── Download ────────────────────────────────────────────────────────────────
@@ -1153,6 +1204,14 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
                   >
                     <DownloadIcon />
                   </button>
+                  <button
+                    type="button"
+                    className="ca-asset-btn ca-asset-btn--danger"
+                    title={node.isFolder ? 'Delete folder' : 'Delete'}
+                    onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleteTarget(node); }}
+                  >
+                    <TrashIcon />
+                  </button>
                 </div>
               </div>
             );
@@ -1232,6 +1291,20 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
             </div>
           </div>
         </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title={deleteTarget.isFolder ? 'Delete folder?' : 'Delete asset?'}
+          body={deleteTarget.isFolder
+            ? `"${deleteTarget.name}" and everything inside it will be moved to the Google Drive trash, where it's recoverable for about 30 days.`
+            : `"${deleteTarget.name}" will be moved to the Google Drive trash, where it's recoverable for about 30 days.`}
+          confirmLabel="Move to Trash"
+          danger
+          error={deleteError}
+          onConfirm={() => handleDelete(deleteTarget)}
+          onClose={() => { setDeleteTarget(null); setDeleteError(null); }}
+        />
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 /**
  * PATCH /api/projects/[projectId]/assets/[assetId]  — rename
- * DELETE /api/projects/[projectId]/assets/[assetId] — remove from LPOS index (not Drive)
+ * DELETE /api/projects/[projectId]/assets/[assetId] — trash in Drive + drop from LPOS index
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -8,10 +8,12 @@ import { requireRole } from '@/lib/services/api-auth';
 import { getProjectStore } from '@/lib/services/container';
 import {
   getDriveAssetsByProject,
+  getDriveAssetsByParent,
   renameDriveAsset,
   deleteDriveAssetByEntityId,
+  type DriveAsset,
 } from '@/lib/store/drive-sync-db';
-import { getDriveClient } from '@/lib/services/drive-client';
+import { getDriveClient, trashFile } from '@/lib/services/drive-client';
 import { getCanonicalMediaAsset } from '@/lib/store/canonical-asset-store';
 import { renameFrameioFile } from '@/lib/services/frameio';
 
@@ -72,7 +74,21 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   }
 }
 
-// ── DELETE — remove from LPOS index ──────────────────────────────────────────
+// ── DELETE — trash in Drive + drop from LPOS index ───────────────────────────
+
+/**
+ * Recursively remove an asset's index rows. For a folder, Drive trashes the
+ * whole subtree, so the descendant rows must be purged too — otherwise they
+ * linger as orphans until the next scan.
+ */
+function purgeIndexSubtree(asset: DriveAsset): void {
+  if (asset.isFolder) {
+    for (const child of getDriveAssetsByParent(asset.driveFileId)) {
+      purgeIndexSubtree(child);
+    }
+  }
+  deleteDriveAssetByEntityId(asset.entityId);
+}
 
 export async function DELETE(req: NextRequest, { params }: Ctx) {
   const authError = await requireRole(req, 'user');
@@ -86,6 +102,20 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   const asset = all.find((a) => a.entityId === assetId && a.entityType === 'asset');
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
 
-  deleteDriveAssetByEntityId(assetId);
+  // Drive is the source of truth for assets, so the delete must reach Drive —
+  // otherwise the next scan re-indexes the file and the deletion silently reverts.
+  // Trash (not permanent delete) keeps it recoverable from Drive Trash (~30 days).
+  try {
+    await trashFile(asset.driveFileId);
+  } catch (err) {
+    console.error('[assets/delete] Drive trash failed:', err);
+    return NextResponse.json(
+      { error: 'Could not remove the file from Google Drive: ' + (err as Error).message },
+      { status: 502 },
+    );
+  }
+
+  // Drive trash succeeded — now it's safe to drop the index row(s).
+  purgeIndexSubtree(asset);
   return NextResponse.json({ ok: true });
 }

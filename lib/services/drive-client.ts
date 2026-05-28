@@ -278,13 +278,30 @@ export async function copyFile(
 }
 
 /**
- * Delete a file or folder by ID. Deleting a folder also removes all its contents.
+ * Permanently delete a file or folder by ID. Deleting a folder also removes all
+ * its contents. NOT recoverable — prefer trashFile for user-initiated deletes.
  */
 export async function deleteFile(fileId: string): Promise<void> {
   const drive = getDriveClient();
   await driveCall(() => drive.files.delete({
     ...SHARED_DRIVE_PARAMS,
     fileId,
+  }));
+}
+
+/**
+ * Move a file or folder to the Drive trash (recoverable for ~30 days). Trashing
+ * a folder trashes its whole subtree. Use this for user-initiated deletions so a
+ * mistake is recoverable. Trashed items are excluded from listChildren (which
+ * queries trashed = false), so they won't be re-indexed by the asset scan.
+ */
+export async function trashFile(fileId: string): Promise<void> {
+  const drive = getDriveClient();
+  await driveCall(() => drive.files.update({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+    requestBody: { trashed: true },
+    fields: 'id',
   }));
 }
 
