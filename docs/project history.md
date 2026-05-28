@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-05-28 — Fix: checked-off Frame.io comment resets moments later
+
+**Timestamp:** 2026-05-28T20:53:13Z
+
+**Prompt:** Hey random but when I "check off" a comment in lpos it resets moments later
+
+**Summary:** Fixed a race where marking a Frame.io comment complete (the checkbox in the media detail panel / theater mode) would optimistically check, then visibly un-check itself a beat later. Made the optimistic toggle "sticky until confirmed" and extended the guard to theater-mode toggles.
+
+**Files changed:**
+- `components/media/MediaDetailPanel.tsx`
+
+**Implementation summary:** Frame.io comments have no local DB copy — the `completed` flag lives only in Frame.io. The toggle flow was: optimistic UI flip + record a guard in `pendingTogglesRef` + `PATCH`; on PATCH resolve, the `finally` block deleted the guard immediately. But the PATCH is exactly what makes Frame.io fire its `comment.completed` webhook, which the server relays as a `frameio:comments:refresh` Socket.io push, triggering `fetchComments()` a beat *later*. Frame.io's read API briefly lags its own webhook (read-after-write), so that refetch returns the pre-toggle `completed: false` — and by then the guard was already gone, so it clobbered the optimistic value. Theater-mode toggles never populated the guard at all, so they were fully exposed.
+  - `fetchComments` now keeps masking with the optimistic value and only drops the guard once a fetched comment's `completed` matches the pending value (i.e. Frame.io has propagated the write).
+  - `handleToggleComplete` no longer clears the guard on success (only on failure, alongside the revert) — confirmation is delegated to `fetchComments`.
+  - The theater-mode `onCommentCompleted` callback now records the guard too, so toggles made in theater mode get the same protection.
+
+**Decision rationale:** "Sticky until a refetch confirms Frame.io agrees" is robust to arbitrary read-after-write lag without an arbitrary timeout, and self-clears so genuine external changes still flow through once Frame.io is consistent. A fixed grace-period timer was rejected because it breaks if Frame.io is slower than the timeout.
+
+**Alternatives considered:**
+- **Fixed N-second grace period before clearing the guard** — fragile; still resets if Frame.io lag exceeds N.
+- **Persisting `completed` in a local SQLite mirror** — larger change and introduces a second source of truth to reconcile; unnecessary for a display race.
+- **`cache: 'no-store'` on the comments GET** — not the cause; Next 15.2 doesn't cache `fetch` by default, so the data cache was already out of the picture.
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` → exit 0, 0 errors.
+
+**Assumptions / follow-ups:**
+- Assumes a Frame.io PATCH returning 200 means the write persisted; the guard stays sticky until a refetch confirms, so a comment deleted while a toggle is pending leaves a harmless orphaned entry in the in-memory guard map (bounded by comment count, cleared on panel close).
+- Pre-existing uncommitted change to `components/tasks/TaskBoard.tsx` was left untouched and out of this commit.
+
+---
+
 ## 2026-05-27 — Move version chip from top-right to top-left
 
 **Timestamp:** 2026-05-27T12:54:33Z

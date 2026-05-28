@@ -412,8 +412,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [replyingToId,      setReplyingToId]      = useState<string | null>(null);
   const [replyText,         setReplyText]         = useState('');
   const [replyPosting,      setReplyPosting]      = useState(false);
-  // Tracks optimistic toggle state during in-flight PATCHes so the 30s poll
-  // cannot overwrite a check/uncheck that hasn't been confirmed yet.
+  // Holds an optimistic completed-toggle until a refetch confirms Frame.io has
+  // caught up. The webhook echo (comment.completed) arrives a beat *after* our
+  // PATCH resolves, and Frame.io's read API briefly lags its own webhook, so a
+  // refetch in that window returns the pre-toggle value. We keep masking with
+  // the optimistic value until a fetched comment's `completed` matches it —
+  // only then is the write known to have propagated, so we drop the guard.
   const pendingTogglesRef = useRef<Map<string, boolean>>(new Map());
 
   const fetchComments = useCallback(async () => {
@@ -423,9 +427,15 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
       const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`);
       const data = await res.json() as { comments?: CommentRow[]; error?: string };
       if (data.comments) {
+        const pending = pendingTogglesRef.current;
         setComments(data.comments.map(c => {
-          const pending = pendingTogglesRef.current.get(c.id);
-          return pending !== undefined ? { ...c, completed: pending } : c;
+          const want = pending.get(c.id);
+          if (want === undefined) return c;
+          if (c.completed === want) {        // Frame.io caught up → stop masking
+            pending.delete(c.id);
+            return c;
+          }
+          return { ...c, completed: want };  // still lagging → keep our value
         }));
       }
     } catch { /* ignore */ } finally {
@@ -546,10 +556,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
         },
       );
       if (!res.ok) throw new Error('server error');
+      // Leave the guard in place on success — fetchComments clears it once
+      // Frame.io's read reflects the toggle. Clearing it here would re-expose
+      // the optimistic value to the webhook echo that lands moments later.
     } catch {
-      setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed: !completed } : c));
-    } finally {
       pendingTogglesRef.current.delete(commentId);
+      setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed: !completed } : c));
     }
   }
 
@@ -577,9 +589,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
             seekTarget={theaterSeekTarget}
             onClose={() => setTheaterSrc(null)}
             onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
-            onCommentCompleted={(id, completed) =>
-              setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c))
-            }
+            onCommentCompleted={(id, completed) => {
+              // Theater mode toggles via its own PATCH (already succeeded here);
+              // record the guard so the webhook echo can't reset it before
+              // Frame.io's read catches up. fetchComments clears it on confirm.
+              pendingTogglesRef.current.set(id, completed);
+              setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c));
+            }}
             onReplyPosted={(reply, parentId) =>
               setComments(prev => prev.map(c =>
                 c.id === parentId ? { ...c, replies: [...(c.replies ?? []), reply] } : c,

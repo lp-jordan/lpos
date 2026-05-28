@@ -63,6 +63,36 @@ All versioning failures are non-fatal (logged as warnings) to avoid blocking the
 
 ---
 
+## Frame.io Comment Sync
+
+### What it does
+Shows Frame.io review comments in the media detail panel and theater mode, and lets operators post, reply, edit, delete, and **check off (mark complete)** comments. Comments are NOT mirrored in a local DB — Frame.io is the single source of truth. LPOS only stores side metadata locally: comment author names (`comment-authors-store`) and the parent links for replies posted as fake top-level comments (`comment-replies-store`).
+
+### Key files
+| File | Role |
+|------|------|
+| `lib/services/frameio.ts` | `getComments` / `postComment` / `postReply` / `updateComment` / `deleteComment` / `toggleCommentCompleted` (Frame.io V4 API) |
+| `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts` | GET/POST/PATCH/DELETE proxy to Frame.io + author/reply metadata enrichment |
+| `app/api/webhooks/frameio/route.ts` | Verifies Frame.io HMAC webhooks; emits Socket.io `frameio:comments:refresh` for any comment event |
+| `components/media/MediaDetailPanel.tsx` | Owns the comment list state, refresh subscription, and the completed-toggle optimistic guard |
+| `components/media/VideoTheaterMode.tsx` | Theater-mode comment UI; toggles via its own PATCH and reports back to the panel via `onCommentCompleted` |
+
+### How it refreshes (inputs → outputs)
+- **On open / 5-min fallback poll:** `fetchComments()` GETs the full list from Frame.io.
+- **Real-time:** any Frame.io comment event (`created/updated/completed/uncompleted/deleted`) hits the webhook, which pushes `frameio:comments:refresh` over Socket.io; the panel re-fetches only if the event's `projectId`/`assetId` matches the open asset.
+
+### Completed-toggle optimistic guard
+The "check off" flag lives only in Frame.io, and a user's PATCH is exactly what makes Frame.io fire its `comment.completed` webhook — which relays back as a refresh a beat later. Frame.io's read API briefly lags its own webhook (read-after-write), so a refetch in that window returns the pre-toggle value. To stop the checkbox visibly resetting moments after a click:
+- `handleToggleComplete` records the desired value in `pendingTogglesRef` and flips the UI optimistically. On success it **keeps** the guard (clearing it on failure alongside a revert).
+- `fetchComments` masks each comment with its pending value and **only drops the guard once the fetched `completed` matches it** — i.e. Frame.io has propagated the write. After that, genuine external changes flow through normally.
+- Theater-mode toggles register the same guard via the panel's `onCommentCompleted` callback.
+
+### Current status / known gaps
+- Working; the sticky guard tolerates arbitrary Frame.io read-after-write lag without a fixed timeout.
+- A comment deleted while its toggle is still pending leaves a harmless orphaned entry in the in-memory guard map (bounded by comment count, cleared on panel close).
+
+---
+
 ## LeaderPass / Cloudflare Stream Pipeline
 
 ### Key files

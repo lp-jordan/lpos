@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-28T20:53:13Z",
+    "title": "Fix: checked-off Frame.io comment resets moments later",
+    "summary": "Fixed a race where marking a Frame.io comment complete would optimistically check, then un-check itself moments later. The completed flag lives only in Frame.io; the user's PATCH triggers Frame.io's comment.completed webhook, which relays back as a comment-list refresh, but Frame.io's read API briefly lags its own webhook so the refetch returns the stale pre-toggle value. The optimistic guard (pendingTogglesRef) was cleared the instant the PATCH resolved — right before the echo landed — so it no longer masked the stale read; theater-mode toggles never set the guard at all. Now the optimistic value is sticky until a refetch confirms Frame.io has caught up (guard cleared only when a fetched comment's completed matches the pending value), the toggle handler keeps the guard on success, and theater-mode toggles register the guard too."
+  },
+  {
     "timestamp": "2026-05-27T12:54:33Z",
     "title": "Move version chip from top-right to top-left",
     "summary": "Relocated the build version chip from `right: 8px` to `left: 8px` in `.version-tag` so it no longer competes visually with the notif-bell, user-menu, and storage-gear cluster on the right. Top-left at `top: 4px` sits above the breadcrumb bar (which starts at `top: 20px left: 32px`) and clear of the centered navbar pill — the only fully open corner of the shell."
