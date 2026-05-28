@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   DndContext,
   DragOverlay,
@@ -34,6 +34,7 @@ interface Props {
 
 export function TaskBoard({ initialTasks, allProjects, users, currentUserId, commentCounts: initialCommentCounts }: Readonly<Props>) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(initialCommentCounts);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -63,14 +64,66 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   const [renamingTaskId, setRenamingTaskId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  // A clicked task notification deep-links here with ?task=<id>. We stash the id until
+  // the task is actually in state (the scope=all refetch may still be loading a task
+  // the current user doesn't own), then the resolve effect opens it.
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  // Guards the persist effect from clobbering stored prefs with defaults before the
+  // restore effect has run (mirrors ProjectsPageClient).
+  const didRestoreRef = useRef(false);
 
-  // On mount, read ?task= param, trigger highlight, then clean the URL.
+  // Retain the user's last tab (Editing/Platform) and scope (Mine/Others/All) across
+  // sessions, mirroring the platformView persistence above. localStorage-only (no URL)
+  // so it never collides with the ?task= deep-link param. SSR-safe: the initial render
+  // uses the static defaults; stored values apply post-hydration.
   useEffect(() => {
-    const taskId = new URLSearchParams(window.location.search).get('task');
-    if (!taskId) return;
-    setHighlightedId(taskId);
+    try {
+      const t = window.localStorage.getItem('lpos:tasks:taskType');
+      if (t === 'editing' || t === 'platform') setActiveTaskType(t);
+      const s = window.localStorage.getItem('lpos:tasks:scope');
+      if (s === 'mine' || s === 'others' || s === 'all') setViewScope(s);
+    } catch { /* localStorage may be blocked */ }
+    didRestoreRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (!didRestoreRef.current) return;
+    try {
+      window.localStorage.setItem('lpos:tasks:taskType', activeTaskType);
+      window.localStorage.setItem('lpos:tasks:scope', viewScope);
+    } catch { /* ignore */ }
+  }, [activeTaskType, viewScope]);
+
+  // Deep-link in: read ?task= via useSearchParams (not a one-shot window.location read)
+  // so it also fires when we're *already* on /dashboard and the param arrives via a soft
+  // navigation. Stash the id and clean the URL; the resolve effect below does the rest.
+  const deepLinkTaskId = searchParams.get('task');
+  useEffect(() => {
+    if (!deepLinkTaskId) return;
+    setPendingTaskId(deepLinkTaskId);
     router.replace('/dashboard', { scroll: false } as Parameters<typeof router.replace>[1]);
-  }, [router]);
+  }, [deepLinkTaskId, router]);
+
+  // Resolve a pending deep-link once its task is loaded: switch to the task's tab, widen
+  // the scope if the task wouldn't otherwise be visible, open the detail modal, and
+  // highlight the card so it's framed once the modal is closed.
+  useEffect(() => {
+    if (!pendingTaskId) return;
+    const task = tasks.find((t) => t.taskId === pendingTaskId);
+    if (!task) return; // wait for the scope=all refetch to bring it in
+    if (task.taskType !== activeTaskType) {
+      setActiveTaskType(task.taskType);
+      setPhaseAnimKey((k) => k + 1);
+      setDoneCollapsed(true);
+    }
+    const visibleUnderScope =
+      viewScope === 'all' ||
+      (viewScope === 'mine'   &&  task.assignedTo.includes(currentUserId)) ||
+      (viewScope === 'others' && !task.assignedTo.includes(currentUserId));
+    if (!visibleUnderScope) setViewScope('all');
+    setSelectedTaskId(task.taskId);
+    setHighlightedId(task.taskId);
+    setPendingTaskId(null);
+  }, [pendingTaskId, tasks, activeTaskType, viewScope, currentUserId]);
 
   useEffect(() => {
     if (!highlightedId) return;
