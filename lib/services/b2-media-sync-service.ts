@@ -5,15 +5,20 @@
  * Backblaze B2 bucket (individual S3 objects). NOT an LPOS application backup —
  * this is peace-of-mind cold storage for raw footage on active projects.
  *
- * Retention model (disappearance tracking):
+ * Retention model (disappearance tracking, admin-approved deletion):
  *   - Every night, walk each configured source directory and reconcile against
  *     the B2 bucket via a per-object tracking table (b2_cold_storage_objects).
  *   - File present in source: upsertSeen() — record last_seen_at = now,
  *     CLEAR missing_since if previously set (re-appearance resets the clock).
  *   - File missing from source: markMissing() — sets missing_since = now ONLY
  *     if it isn't already set. Subsequent nights don't reset it.
- *   - File missing for ≥ retainDays consecutive nights: delete from B2,
- *     stamp deleted_at on the tracking row (kept for audit, pruned at 90d).
+ *   - File missing for ≥ retainDays consecutive nights: appears in the
+ *     "awaiting review" list in /settings/storage. Deletion is NOT automatic.
+ *     An admin must Approve (calls DELETE /api/admin/cold-storage/objects?key=
+ *     which removes from B2 and stamps deleted_at) or Spare (clears
+ *     missing_since, restarting retention if still gone). When the pending
+ *     count transitions from 0 → >0 across a sync, a Slack DM goes to every
+ *     admin email so they know there's a decision to make.
  *
  * What this does NOT do:
  *   - It does not delete a B2 object just because its upload date is old.
@@ -32,7 +37,8 @@
  *        otherwise → upload (multipart via lib-storage), upsertSeen
  *   4. markMissingNotSeenSince(runStart) — single UPDATE; any tracked row
  *      whose last_seen_at predates this run gets missing_since stamped.
- *   5. listQueuedForDeletion(retainDays) → DELETE from B2 → markDeleted.
+ *   5. (No automatic deletion.) Compute pendingApproval count from stats. If
+ *      it went from 0 → >0 since the last persisted run, DM admins via Slack.
  *   6. pruneAudit() — opportunistic delete of deleted_at rows older than 90d.
  *
  * Schedule:
@@ -57,18 +63,18 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { S3Client, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getB2SyncConfig } from '@/lib/store/b2-sync-config-store';
 import { getCoreDb } from '@/lib/store/core-db';
 import {
   upsertSeen,
-  markDeleted,
-  listQueuedForDeletion,
   getColdStorageStats,
   pruneAudit,
   type ColdStorageStats,
 } from '@/lib/store/b2-cold-storage-store';
+import { getAdmins } from '@/lib/store/admin-store';
+import { sendSlackColdStorageReviewDm } from '@/lib/services/slack-service';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -296,34 +302,28 @@ export class B2MediaSyncService {
     // since we never finished checking source. Skip downstream steps and
     // return a partial result.
     let newlyMissing = 0;
-    let deleted      = 0;
+    // `deleted` is always 0 from runSync now — admin approval is the only
+    // path to actual B2 deletion. Kept in the result struct for compat with
+    // older persisted status JSON files; the field still counts sync-driven
+    // deletions, which is 0 going forward.
+    const deleted = 0;
     if (!cancelled) {
       // 4. Anything in the tracking table that wasn't touched this run is now
       //    missing — stamp missing_since on every such row (idempotent: skips
       //    rows that already have it).
       newlyMissing = markMissingNotSeenSince(timestamp);
 
-      // 5. Retention sweep — actually delete B2 objects whose missing_since
-      //    has aged past retainDays.
-      const queued = listQueuedForDeletion(cfg.retainDays, runStart);
-      for (const obj of queued) {
-        if (this.cancelRequested) { cancelled = true; break; }
-        try {
-          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.key }));
-          markDeleted(obj.key, timestamp);
-          deleted++;
-          console.log(`[B2MediaSync] retired ${obj.key} (missing since ${obj.missingSince})`);
-        } catch (err) {
-          errors.push({ key: obj.key, error: `delete failed: ${(err as Error).message}` });
-          console.warn(`[B2MediaSync] delete failed ${obj.key}: ${(err as Error).message}`);
-        }
-      }
+      // 5. (No automatic deletion.) The pending-review list — entries whose
+      //    missing_since aged past retainDays — is exposed in the admin UI
+      //    where an operator must explicitly Approve (delete) or Spare each.
+      //    See sendReviewNotificationIfNeeded() below for the transition DM.
 
       // 6. Audit-history sweep — pure SQL bookkeeping, no B2 calls
       pruneAudit(runStart);
     }
 
     const stats = getColdStorageStats(cfg.retainDays, runStart);
+    const previousPending = this.loadLastRun()?.stats.queuedForDelete ?? 0;
 
     const result: B2SyncRunResult = {
       timestamp, dirs, uploaded, skipped, failed, newlyMissing, deleted, errors, stats,
@@ -333,12 +333,40 @@ export class B2MediaSyncService {
     this.cancelRequested = false;
     this.currentUpload   = null;
     this.saveLastRun(result);
+
+    // Fire admin notification if the pending-review count just transitioned
+    // from 0 → >0. Fire-and-forget; failures here don't poison the sync.
+    if (!cancelled && previousPending === 0 && stats.queuedForDelete > 0) {
+      void this.notifyAdminsOfPendingReview(stats.queuedForDelete);
+    }
+
     if (cancelled) {
-      console.log(`[B2MediaSync] CANCELLED — ${uploaded} uploaded before cancel; skipped markMissing + sweep`);
+      console.log(`[B2MediaSync] CANCELLED — ${uploaded} uploaded before cancel; skipped markMissing`);
     } else {
-      console.log(`[B2MediaSync] done — ${uploaded} up, ${skipped} skip, ${failed} fail, ${newlyMissing} newly missing, ${deleted} retired`);
+      console.log(`[B2MediaSync] done — ${uploaded} up, ${skipped} skip, ${failed} fail, ${newlyMissing} newly missing, ${stats.queuedForDelete} awaiting review`);
     }
     return result;
+  }
+
+  /**
+   * DM every admin to let them know there are files awaiting review.
+   * Only called when the pending count transitioned from 0 → >0 across a
+   * sync, so admins don't get hammered with a daily reminder for the same
+   * pending items. Once they Approve or Spare the last one (count → 0), the
+   * next batch that appears will trigger a fresh notification.
+   */
+  private async notifyAdminsOfPendingReview(count: number): Promise<void> {
+    try {
+      const emails = getAdmins();
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? null;
+      const href = baseUrl ? `${baseUrl.replace(/\/$/, '')}/settings/storage` : null;
+      for (const email of emails) {
+        await sendSlackColdStorageReviewDm({ email, pendingCount: count, href });
+      }
+      console.log(`[B2MediaSync] DM'd ${emails.length} admin(s) about ${count} pending review item(s)`);
+    } catch (err) {
+      console.warn(`[B2MediaSync] notification failed: ${(err as Error).message}`);
+    }
   }
 
   /**

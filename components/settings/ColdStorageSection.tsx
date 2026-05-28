@@ -113,6 +113,8 @@ export function ColdStorageSection() {
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [pausing,    setPausing]    = useState(false);
+  const [reviewBusy,     setReviewBusy]     = useState<string | null>(null); // per-row key being acted on
+  const [approveAllBusy, setApproveAllBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -200,6 +202,66 @@ export function ColdStorageSection() {
       setError((err as Error).message);
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function approveOne(key: string) {
+    if (!confirm(`Delete from B2:\n\n${key}\n\nThis is final — once deleted, the cold-storage copy is gone. The source file is already missing locally.`)) return;
+    setReviewBusy(key);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/cold-storage/objects?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Approve failed');
+      }
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReviewBusy(null);
+    }
+  }
+
+  async function spareOne(key: string) {
+    setReviewBusy(key);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/cold-storage/spare?key=${encodeURIComponent(key)}`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Spare failed');
+      }
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setReviewBusy(null);
+    }
+  }
+
+  async function approveAll() {
+    if (!data) return;
+    const count = data.queuedForDeletion.length;
+    if (count === 0) return;
+    if (!confirm(`Delete all ${count} files from B2?\n\nThis is final — once deleted, the cold-storage copies are gone. All source files are already missing locally.`)) return;
+    setApproveAllBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/cold-storage/approve-all', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Approve-all failed');
+      }
+      const result = await res.json() as { approved: number; deleted: number; errors: Array<{ key: string; error: string }> };
+      await load();
+      if (result.errors.length > 0) {
+        setError(`Approved ${result.deleted}/${result.approved}; ${result.errors.length} failed`);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApproveAllBusy(false);
     }
   }
 
@@ -306,11 +368,11 @@ export function ColdStorageSection() {
           <span className="storage-settings-muted">file{stats.missingObjects === 1 ? '' : 's'}</span>
         </div>
         <div>
-          <span className="cold-storage-stat-label">Queued for deletion</span>
+          <span className="cold-storage-stat-label">Awaiting your review</span>
           <strong style={{ color: stats.queuedForDelete > 0 ? '#ffb4ab' : undefined }}>
             {stats.queuedForDelete.toLocaleString()}
           </strong>
-          <span className="storage-settings-muted">retention elapsed</span>
+          <span className="storage-settings-muted">approve or spare</span>
         </div>
         <div>
           <span className="cold-storage-stat-label">Deleted (90-day history)</span>
@@ -476,24 +538,55 @@ export function ColdStorageSection() {
         </div>
       )}
 
-      {/* Queued + missing tables */}
+      {/* Awaiting review (formerly "Queued for deletion") + missing tables */}
       {queuedForDeletion.length > 0 && (
         <div className="cold-storage-table-wrap">
-          <h3 className="storage-settings-section-title" style={{ fontSize: '1em' }}>
-            Queued for deletion ({queuedForDeletion.length})
-          </h3>
-          <p className="storage-settings-muted" style={{ fontSize: '0.85em' }}>
-            Retention has elapsed — next sync will delete these from B2. Restore the source file
-            before the next run to cancel.
-          </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h3 className="storage-settings-section-title" style={{ fontSize: '1em' }}>
+                Awaiting your review ({queuedForDeletion.length})
+              </h3>
+              <p className="storage-settings-muted" style={{ fontSize: '0.85em' }}>
+                Retention has elapsed — these files are no longer in source. Nothing happens
+                automatically: <strong>Approve</strong> to delete from B2, or <strong>Spare</strong>
+                to keep the backup for another <code>{status.retainDays}</code>-day window.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="cold-storage-approve-all-btn"
+              onClick={() => void approveAll()}
+              disabled={approveAllBusy}
+            >
+              {approveAllBusy ? 'Approving…' : `Approve all (${queuedForDeletion.length})`}
+            </button>
+          </div>
           <div className="cold-storage-table">
             {queuedForDeletion.slice(0, 50).map((obj) => (
-              <div key={obj.key} className="cold-storage-row">
+              <div key={obj.key} className="cold-storage-review-row">
                 <code className="cold-storage-key">{obj.key}</code>
                 <span className="cold-storage-meta">{bytesToHuman(obj.size)}</span>
                 <span className="cold-storage-meta cold-storage-meta--warn">
                   missing since {obj.missingSince ? new Date(obj.missingSince).toLocaleDateString() : '—'}
                 </span>
+                <div className="cold-storage-review-actions">
+                  <button
+                    type="button"
+                    className="cold-storage-approve-btn"
+                    onClick={() => void approveOne(obj.key)}
+                    disabled={reviewBusy === obj.key}
+                  >
+                    {reviewBusy === obj.key ? '…' : 'Approve delete'}
+                  </button>
+                  <button
+                    type="button"
+                    className="cold-storage-spare-btn"
+                    onClick={() => void spareOne(obj.key)}
+                    disabled={reviewBusy === obj.key}
+                  >
+                    Spare
+                  </button>
+                </div>
               </div>
             ))}
             {queuedForDeletion.length > 50 && (

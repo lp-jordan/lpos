@@ -123,6 +123,28 @@ export async function sendSlackDeliveryExpiredDm(input: {
   await postDm(slackUserId, lines.join('\n'));
 }
 
+export async function sendSlackColdStorageReviewDm(input: {
+  email: string;
+  pendingCount: number;
+  href: string | null;
+}): Promise<void> {
+  if (!TOKEN)              return;
+  if (input.pendingCount <= 0) return;
+
+  const slackUserId = await lookupSlackUserId(input.email);
+  if (!slackUserId) return;
+
+  const noun = input.pendingCount === 1 ? 'file' : 'files';
+  const lines: string[] = [
+    ':snowflake: *Cold storage: review required*',
+    `${input.pendingCount} ${noun} have aged past the retention window and are awaiting your approval before LPOS removes them from B2.`,
+    'Open the storage page to Approve or Spare each one — nothing will be deleted automatically.',
+  ];
+  if (input.href) lines.push(`<${input.href}|Review pending deletions →>`);
+
+  await postDm(slackUserId, lines.join('\n'));
+}
+
 async function postDm(slackUserId: string, text: string): Promise<void> {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',

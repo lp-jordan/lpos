@@ -113,6 +113,25 @@ export function markDeleted(key: string, asOf: string): void {
 }
 
 /**
+ * "Spare" a row — clear its missing_since so it leaves the awaiting-review
+ * queue. The admin uses this to say "I don't want to delete this one (yet)."
+ * If the source file is still gone, the next sync's markMissing pass will
+ * stamp missing_since = now, restarting the retention clock for another
+ * retainDays. Equivalent to a re-appearance, but the operator chose it
+ * explicitly without the file actually coming back to source.
+ */
+export function spareObject(key: string): void {
+  getCoreDb()
+    .prepare(`
+      UPDATE b2_cold_storage_objects
+         SET missing_since = NULL
+       WHERE key = ?
+         AND deleted_at IS NULL
+    `)
+    .run(key);
+}
+
+/**
  * Objects whose missing_since is older than retainDays and which haven't
  * been deleted yet. The sweep step deletes these from B2, then calls
  * markDeleted for each.
