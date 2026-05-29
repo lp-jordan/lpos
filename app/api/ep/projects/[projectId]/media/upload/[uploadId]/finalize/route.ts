@@ -115,45 +115,52 @@ export async function POST(
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
+  // EditPanel uploads carry their sign-off from the pre-export confirm screen, so
+  // an EP-token upload must NEVER bounce to "awaiting confirmation" in the LPOS
+  // IngestTray. If LPOS flags a version candidate, auto-register the upload as a
+  // new version of that asset (re-finalize with the candidate's id). The
+  // version_confirmation_required path returns before any registration/rename, so
+  // the temp file is intact and re-finalizing is safe.
+  if (result.outcome === 'version_confirmation_required') {
+    const candidateId = result.existingAsset.assetId;
+    try {
+      result = await finalizeUploadedAsset({
+        projectId,
+        project,
+        filename: session.filename,
+        tempPath: session.temp_path,
+        mediaDir,
+        preComputedHash,
+        replaceAssetId: candidateId,
+        jobId: session.job_id,
+        actor,
+      });
+    } catch (err) {
+      const msg = (err as Error).message;
+      ingestQueue?.fail(session.job_id, `Finalization error: ${msg}`);
+      try { if (fs.existsSync(session.temp_path)) fs.unlinkSync(session.temp_path); } catch { /* ignore */ }
+      return NextResponse.json({ error: msg }, { status: 500 });
+    }
+  }
+
   const now = new Date().toISOString();
 
+  // Byte-identical to the current version — nothing to register. Treat as a clean
+  // no-op (not a failure) so EditPanel marks the file handled rather than failed.
   if (result.outcome === 'duplicate') {
     try { fs.unlinkSync(session.temp_path); } catch { /* already gone */ }
-    db.prepare("UPDATE upload_sessions SET status = 'cancelled', updated_at = ? WHERE upload_id = ?")
+    db.prepare("UPDATE upload_sessions SET status = 'finalized', updated_at = ? WHERE upload_id = ?")
       .run(now, uploadId);
-    ingestQueue?.fail(session.job_id, 'Duplicate version');
-    return NextResponse.json({
-      error: `This file already matches the current version of ${result.asset.name}.`,
-      code: 'duplicate_version',
-      existingAsset: result.asset,
-    }, { status: 409 });
+    ingestQueue?.complete(session.job_id);
+    return NextResponse.json({ asset: result.asset, code: 'no_change_needed' });
   }
 
-  if (result.outcome === 'version_confirmation_required') {
-    // Hold temp file — operator confirms or declines via the LPOS IngestTray.
-    db.prepare(`
-      UPDATE upload_sessions
-      SET status = 'awaiting_confirmation', version_meta_json = ?, updated_at = ?
-      WHERE upload_id = ?
-    `).run(
-      JSON.stringify({
-        existingAsset: result.existingAsset,
-        currentVersionNumber: result.currentVersionNumber,
-      }),
-      now,
-      uploadId,
-    );
-    ingestQueue?.setAwaitingConfirmation(session.job_id);
-    return NextResponse.json({
-      error: `This looks like a new version of ${result.existingAsset.name}. Confirm in LPOS to replace the existing pipeline asset.`,
-      code: 'version_confirmation_required',
-      existingAsset: result.existingAsset,
-      currentVersionNumber: result.currentVersionNumber,
-      uploadId,
-    }, { status: 409 });
+  if (result.outcome !== 'registered') {
+    ingestQueue?.fail(session.job_id, 'Unexpected finalization outcome');
+    return NextResponse.json({ error: 'Unexpected finalization outcome' }, { status: 500 });
   }
 
-  // Registered successfully.
+  // Registered — a brand-new asset or a new version of an existing one.
   db.prepare("UPDATE upload_sessions SET status = 'finalized', updated_at = ? WHERE upload_id = ?")
     .run(now, uploadId);
   getProjectStore().touch(projectId);
