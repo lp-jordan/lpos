@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-05-28 — Right-align comment "Reply" button + reply-mechanism recap
+
+**Timestamp:** 2026-05-28T21:00:00Z
+
+**Prompt:** While you're in there, remind me how replies are set up to work? We had to tweak those. Also - we need to right align the "reply" button and notify the user who made the comment that is being replied to.
+
+**Summary:** Right-aligned the per-comment "Reply" trigger in both the media detail panel and theater mode. Recapped (analysis, no code) how the reply workaround functions. The "notify the original commenter" request was NOT implemented in this entry — it requires a new persistent notification category and a product decision, so it was deferred pending user input (see follow-ups).
+
+**Files changed:**
+- `app/globals.css` — `.mad-reply-btn` and `.vt-cp-reply-btn`: added `display: block; width: fit-content; margin-left: auto;` to right-align the trigger under each comment.
+
+**Implementation summary:** Both comment containers (`.mad-comment`, `.vt-cp-comment`) are block-level, so the inline reply trigger sat bottom-left. `margin-left: auto` on a `fit-content` block pushes it to the right edge without touching the container layout. The in-compose "Reply"/"Cancel" action rows were already right-aligned via `justify-content: flex-end`, so only the collapsed trigger needed changing.
+
+**Reply mechanism recap (no code change):** Frame.io V4 has no reply-creation endpoint. `postReply` (`lib/services/frameio.ts`) posts a top-level comment prefixed `"Reply to above: "` so Frame.io reviewers see context, then the route layer records `replyId → parentId` in `data/projects/{projectId}/comment-replies.json` (`comment-replies-store.ts`). On GET, the comments route filters out comments whose IDs are in that map, strips the prefix, and injects them into their parent's `replies[]` array to rebuild the thread. Author display names are stored separately in `comment-authors-store.ts` (`commentId → { name, userId }`) since the Frame.io account author is the LPOS service account, not the human.
+
+**Decision rationale:** `margin-left: auto` on a fit-content block is the minimal, layout-safe way to right-align a single child in a block container — no flex conversion of the parent, no risk to the surrounding comment chrome.
+
+**Commands/tests run:** CSS-only; no compile. Visual reasoning from existing fixed/flow selectors.
+
+**Assumptions / follow-ups:**
+- **Notify-on-reply deferred:** the persistent, user-targeted notification system (task/prospect/delivery) has no media-comment category, and the "pipeline" notif tab is client-only/ephemeral. Adding reply notifications means a new notification category (model + core-db table + service + socket event + GET/mark-read routes + NotifBell section + hook). It can only target the parent commenter when that comment was authored from within LPOS (an LPOS `userId` exists in `comment-authors-store`); replies to external Frame.io reviewers have no in-app recipient. Awaiting user decision on scope/surface before building.
+
+---
+
 ## 2026-05-28 — Fix: checked-off Frame.io comment resets moments later
 
 **Timestamp:** 2026-05-28T20:53:13Z

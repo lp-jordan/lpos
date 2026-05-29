@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-28T21:00:00Z",
+    "title": "Right-align comment \"Reply\" button",
+    "summary": "Right-aligned the per-comment Reply trigger in both the media detail panel (.mad-reply-btn) and theater mode (.vt-cp-reply-btn) by giving each a fit-content block with margin-left:auto, so it sits at the right edge under each comment instead of bottom-left. CSS-only; the in-compose Reply/Cancel rows were already right-aligned. Reply mechanism unchanged: Frame.io has no reply endpoint, so LPOS posts a 'Reply to above:' top-level comment and reconstructs threads from a local replyId→parentId map."
+  },
+  {
     "timestamp": "2026-05-28T20:53:13Z",
     "title": "Fix: checked-off Frame.io comment resets moments later",
     "summary": "Fixed a race where marking a Frame.io comment complete would optimistically check, then un-check itself moments later. The completed flag lives only in Frame.io; the user's PATCH triggers Frame.io's comment.completed webhook, which relays back as a comment-list refresh, but Frame.io's read API briefly lags its own webhook so the refetch returns the stale pre-toggle value. The optimistic guard (pendingTogglesRef) was cleared the instant the PATCH resolved — right before the echo landed — so it no longer masked the stale read; theater-mode toggles never set the guard at all. Now the optimistic value is sticky until a refetch confirms Frame.io has caught up (guard cleared only when a fetched comment's completed matches the pending value), the toggle handler keeps the guard on success, and theater-mode toggles register the guard too."

@@ -14581,7 +14581,9 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   font-size: 0.68rem;
   color: rgba(255, 255, 255, 0.25);
   cursor: pointer;
-  text-align: left;
+  display: block;
+  width: fit-content;
+  margin-left: auto;   /* right-align under the comment */
   transition: color 130ms ease;
 }
 .vt-cp-reply-btn:hover { color: rgba(255, 255, 255, 0.6); }
@@ -14676,6 +14678,9 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   opacity: 0;
   transition: opacity 130ms ease;
   padding: 2px 0;
+  display: block;
+  width: fit-content;
+  margin-left: auto;   /* right-align under the comment */
 }
 .mad-comment:hover .mad-reply-btn { opacity: 1; }
 .mad-reply-compose { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
