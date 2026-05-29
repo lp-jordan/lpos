@@ -19,6 +19,8 @@ function isPublicPath(pathname: string): boolean {
   if (pathname === '/guest-pin') return true;
   if (pathname.startsWith('/api/auth/')) return true;
   if (pathname.startsWith('/api/ep/')) return true;  // machine-to-machine auth via X-EP-Secret
+  if (pathname === '/ep-update') return true;             // EditPanel download page (users may lack LPOS logins)
+  if (pathname === '/api/ep-updates/version') return true; // low-sensitivity version metadata
   if (pathname.startsWith('/_next/')) return true;
   if (pathname === '/favicon.ico') return true;
   if (/\.[a-zA-Z0-9]+$/.test(pathname)) return true;

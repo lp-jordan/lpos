@@ -55,6 +55,7 @@ import { PromotionQueueService } from './promotion-queue-service';
 import { PromotionProcessor } from './promotion-processor';
 import { PresenceService } from './presence-service';
 import { LpReleaseService } from './lp-release-service';
+import { EpReleaseService } from './ep-release-service';
 import { BackupService } from './backup-service';
 import { B2MediaSyncService } from './b2-media-sync-service';
 import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
@@ -108,6 +109,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_lpReleaseService: LpReleaseService | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_epReleaseService: EpReleaseService | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_backupService: BackupService | undefined;
   // eslint-disable-next-line no-var
   var __lpos_b2MediaSyncService: B2MediaSyncService | undefined;
@@ -150,6 +153,7 @@ let driveWatcherService: DriveWatcherService | null = null;
 let promotionQueueService: PromotionQueueService | null = null;
 let presenceService: PresenceService | null = null;
 let lpReleaseService: LpReleaseService | null = null;
+let epReleaseService: EpReleaseService | null = null;
 let backupService: BackupService | null = null;
 let b2MediaSyncService: B2MediaSyncService | null = null;
 let cloudflareOrphanReconciler: CloudflareOrphanReconciler | null = null;
@@ -250,6 +254,10 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   globalThis.__lpos_lpReleaseService = lpReleaseService;
   lpReleaseService.start();
 
+  epReleaseService = new EpReleaseService(io);
+  globalThis.__lpos_epReleaseService = epReleaseService;
+  epReleaseService.start();
+
   backupService = new BackupService();
   backupService.start();
   globalThis.__lpos_backupService = backupService;
@@ -311,6 +319,7 @@ export async function stopServices(): Promise<void> {
   uploadQueueService?.stop();
   driveWatcherService?.stop();
   lpReleaseService?.stop();
+  epReleaseService?.stop();
   backupService?.stop();
   b2MediaSyncService?.stop();
   cloudflareOrphanReconciler?.stop();
@@ -507,6 +516,10 @@ export function getPresenceService(): PresenceService {
 
 export function getLpReleaseService(): LpReleaseService | null {
   return globalThis.__lpos_lpReleaseService ?? lpReleaseService ?? null;
+}
+
+export function getEpReleaseService(): EpReleaseService | null {
+  return globalThis.__lpos_epReleaseService ?? epReleaseService ?? null;
 }
 
 export function getBackupService(): BackupService | null {
