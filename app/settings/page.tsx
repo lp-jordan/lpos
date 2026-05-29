@@ -11,6 +11,7 @@ import { SlackUsersCard } from '@/components/settings/SlackUsersCard';
 import { ConsoleAlertsCard } from '@/components/settings/ConsoleAlertsCard';
 import { LpReleasesCard } from '@/components/settings/LpReleasesCard';
 import { EpReleasesCard } from '@/components/settings/EpReleasesCard';
+import { EditpanelAccessPanel } from '@/components/settings/EditpanelAccessPanel';
 import { WhatsNewTestCard } from '@/components/settings/WhatsNewTestCard';
 import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel';
 import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
@@ -69,6 +70,7 @@ export default async function SettingsPage() {
       {role === 'admin' && <WhatsNewTestCard />}
       {role === 'admin' && <LpReleasesCard />}
       {role === 'admin' && <EpReleasesCard />}
+      {role === 'admin' && <EditpanelAccessPanel />}
       {role === 'admin' && <ActiveClientsCard />}
       {role === 'admin' && <SlackTestCard />}
       {role === 'admin' && <ConsoleAlertsCard />}

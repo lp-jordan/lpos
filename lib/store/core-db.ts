@@ -223,6 +223,12 @@ function initSchema(db: DatabaseSync): void {
       granted_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS editpanel_access (
+      user_id    TEXT PRIMARY KEY,
+      granted_by TEXT NOT NULL,
+      granted_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS prospects (
       prospect_id TEXT PRIMARY KEY,
       company     TEXT NOT NULL,

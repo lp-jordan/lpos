@@ -51,15 +51,34 @@ function StorageGear({ home = false }: { home?: boolean }) {
   );
 }
 
+function EditpanelButton({ home = false }: { home?: boolean }) {
+  return (
+    <Link
+      href="/ep-update"
+      className={`editpanel-dl-btn${home ? ' editpanel-dl-btn--home' : ''}`}
+      aria-label="Download EditPanel"
+      title="EditPanel — download the latest build"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M3 9h18" />
+        <path d="M9 9v11" />
+      </svg>
+    </Link>
+  );
+}
+
 export function AppShell({
   children,
   currentUser,
   hasProspects = false,
+  epDownload = false,
   version,
 }: Readonly<{
   children: React.ReactNode;
   currentUser: UserSummary | null;
   hasProspects?: boolean;
+  epDownload?: boolean;
   version: AppVersion;
 }>) {
   const pathname = usePathname();
@@ -82,6 +101,7 @@ export function AppShell({
               {currentUser && !isGuest && <NotifBell />}
               {currentUser && !isGuest && <UserMenu user={currentUser} />}
               {currentUser && !isGuest && <WishListButton currentUser={currentUser} home />}
+              {currentUser && !isGuest && epDownload && <EditpanelButton home />}
               {isGuest && <GuestSignOutButton />}
               {!isGuest && <StorageGear home />}
               {!isGuest && <TrayGroup />}

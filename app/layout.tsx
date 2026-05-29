@@ -6,6 +6,7 @@ import { ServiceWorkerRegistrar } from '@/components/shell/ServiceWorkerRegistra
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById, toUserSummary } from '@/lib/store/user-store';
 import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
+import { hasEditpanelAccess } from '@/lib/store/editpanel-access-store';
 import { getAppVersion } from '@/lib/version';
 
 export const metadata: Metadata = {
@@ -26,13 +27,16 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const hasProspects  = session
     ? hasProspectsAccess(session.userId, session.role === 'admin')
     : false;
+  const epDownload    = session
+    ? hasEditpanelAccess(session.userId, session.role === 'admin')
+    : false;
   const version = getAppVersion();
 
   return (
     <html lang="en">
       <body>
         <ServiceWorkerRegistrar />
-        <AppShell currentUser={currentUser} hasProspects={hasProspects} version={version}>{children}</AppShell>
+        <AppShell currentUser={currentUser} hasProspects={hasProspects} epDownload={epDownload} version={version}>{children}</AppShell>
       </body>
     </html>
   );
