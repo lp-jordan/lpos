@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-29T14:36:23Z",
+    "title": "Decouple attachment serving from Prospects access",
+    "summary": "Fixed a bug where users without Prospects access couldn't open attachments on ordinary tasks. The shared attachment download endpoint (/api/attachment) serves both task-comment and prospect-update attachments but unconditionally required Prospects access, returning a 403 for everyone else. It now authorizes by the attachment's key prefix: task attachments (attachments/tasks/<id>/…) require only a valid session, matching how task-comment uploads are gated, while prospect attachments (attachments/<prospectId>/…) still require Prospects access. Keys are minted server-side so the prefix is a trusted discriminator; the R2 storage service, upload routes, data model, and frontend were already domain-correct and unchanged."
+  },
+  {
     "timestamp": "2026-05-29T00:00:00Z",
     "title": "Notify original commenter when their comment gets a reply",
     "summary": "Added a new persistent notification category for media-comment replies, mirroring the existing Task/Prospect/Delivery notification slices. When a reply lands on a comment that was authored inside LPOS, the original commenter now gets a bell notification under a new 'Comments' tab — persisted in a comment_notifications table, pushed live via Socket.io ('comment:notification') plus best-effort web-push, and deep-linking to /projects/{id}?assetId={asset}. New model/store/service/hook/API routes were added and the reply POST handler resolves the parent author from comment-authors-store, firing only when an LPOS userId exists (external Frame.io reviewers have no in-app recipient) and skipping self-replies. The notif panel was widened to fit a 5th tab without clipping. Reply mechanism itself is unchanged."

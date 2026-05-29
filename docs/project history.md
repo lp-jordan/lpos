@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-05-29 — Decouple attachment serving from Prospects access
+
+**Timestamp:** 2026-05-29T14:36:23Z
+
+**Prompt:** "Hey is the task attachment logic being served through the prospects system? Users without access to prospects are not able to see attachments in tasks, even if the task has nothing to do with prospects." → after diagnosis, user chose to keep one shared attachment system and make its authorization context-aware ("Ok let's do option a").
+
+**Summary:** Confirmed the bug and fixed it. The shared attachment download endpoint (`/api/attachment`) serves both task-comment and prospect-update attachments but unconditionally required Prospects access, so users without Prospects access got a 403 when opening attachments on ordinary tasks. Changed the endpoint to authorize by the attachment's key prefix: task attachments now require only a valid session (matching task-comment uploads), while prospect attachments still require Prospects access.
+
+**Files changed:**
+- `app/api/attachment/route.ts`
+- `docs/README.md` (new Attachments section)
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- Moved key validation ahead of the auth check, then branched: `key.startsWith('attachments/tasks/')` → `getSession` (401 if no session); otherwise → `requireProspectsAccess` (unchanged behaviour for prospect attachments).
+- Keys are minted server-side on upload (`attachments/tasks/<taskId>/…` vs `attachments/<prospectId>/…`), so the prefix is a trusted discriminator. The existing `attachments/` prefix + `..` validation is retained.
+- No changes to the R2 service (`lib/services/r2-attachments.ts`), the upload routes, the data model, or the frontend — they were already domain-correct.
+
+**Decision rationale:** Chose Option A (single shared attachment system, context-aware auth) over duplicating the attachment system per domain. The storage layer (`r2-attachments.ts`) and the serve endpoint were already shared and prospects-agnostic except for one hardcoded auth call; the only defect was applying the prospects gate to all downloads. Prefix-based dispatch is an ~8-line change in one file, keeps a single endpoint, and avoids a second copy of the serve logic. Duplication would have added route surface and a second place to fix future attachment bugs while still sharing the R2 client anyway.
+
+**Alternatives considered:**
+- Duplicate the attachment system per domain — rejected: more surface, divergent code paths, still shares the R2 client.
+- Resource-nested download routes (`/api/tasks/[taskId]/…/attachment`, `/api/prospects/[prospectId]/…/attachment`) to enable per-resource ACLs — deferred: the app has no per-resource membership checks anywhere yet; noted as the upgrade path in `docs/README.md`.
+
+**Commands/tests run:** Code review only; no automated suite run.
+
+**Assumptions / follow-ups:**
+- Downloads still have no per-resource ACL: any authenticated user can fetch any task-attachment key, and any Prospects-enabled user can fetch any prospect-attachment key. This matches how uploads currently authorize. Tightening would require the resource-nested routes noted above.
+- Repo had unrelated in-flight changes (`lib/services/drive-watcher-service.ts`, `lib/services/drive-sync/`, an assets route) at the time; these were left untouched and excluded from the commit via targeted `git add`.
+
+---
+
 ## 2026-05-29 — Notify original commenter when their comment gets a reply
 
 **Timestamp:** 2026-05-29T00:00:00Z

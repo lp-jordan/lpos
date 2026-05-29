@@ -17,8 +17,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import fs   from 'node:fs';
-import path from 'node:path';
 import type { Server as SocketIOServer } from 'socket.io';
 
 import {
@@ -27,7 +25,6 @@ import {
   getChanges,
   getStartPageToken,
   getFileMetadata,
-  downloadFile,
   listChildren,
 } from './drive-client';
 import {
@@ -50,14 +47,13 @@ import {
   upsertOrphanedFolder,
   getOrphanedFolderByDriveId,
 } from '@/lib/store/drive-sync-db';
-import {
-  registerScript,
-  patchScript,
-  scriptsDir,
-} from '@/lib/store/scripts-registry';
-import { extractAndSave } from './script-extractor';
 import { pushAllExistingTranscripts } from './drive-transcript-sync';
 import { getProjectStore } from '@/lib/services/container';
+import {
+  getAdapterByFolderType,
+  handleDriveDelete,
+  type SyncEngineContext,
+} from './drive-sync';
 
 const RENEWAL_CHECK_INTERVAL_MS = 20 * 60 * 1000; // 20 min
 const RENEWAL_THRESHOLD_MS      = 25 * 60 * 1000; // renew if < 25 min left
@@ -87,6 +83,11 @@ export class DriveWatcherService {
     const result = this._writeQueue.then(fn);
     this._writeQueue = result.then(() => {}, () => {});
     return result;
+  }
+
+  /** Runtime handles passed to sync-engine adapters. */
+  private engineCtx(): SyncEngineContext {
+    return { io: this.io, driveId: this.driveId };
   }
 
   constructor(private io: SocketIOServer) {
@@ -166,7 +167,13 @@ export class DriveWatcherService {
         updateChannelPageToken(channel.channelId, newPageToken);
 
         for (const change of changes) {
-          if (change.removed || change.file?.trashed) continue;
+          if (change.removed || change.file?.trashed) {
+            // Mirror Drive deletions into LPOS — only for files LPOS actually
+            // synced (handleDriveDelete ignores unknown IDs), and only on these
+            // explicit removed/trashed events (never inferred from absence).
+            if (change.fileId) await handleDriveDelete(change.fileId, this.engineCtx());
+            continue;
+          }
           if (!change.fileId || !change.file) continue;
 
           if (change.file.mimeType === FOLDER_MIME) {
@@ -442,127 +449,15 @@ export class DriveWatcherService {
       return;
     }
 
-    // New file — route by folder type
-    if (ctx.folderType === 'scripts') {
-      await this.pullScriptFromDrive(fileId, fileName, mimeType, webViewLink ?? '', fileSize, modifiedAt, parentId, ctx);
-    } else if (ctx.folderType === 'assets') {
-      await this.pullAssetFromDrive(fileId, fileName, mimeType, webViewLink ?? '', fileSize, modifiedAt, parentId, ctx);
-    }
-    // transcripts + workbooks: future phases
-  }
-
-  // ── Script pull ─────────────────────────────────────────────────────────────
-
-  private async pullScriptFromDrive(
-    fileId:      string,
-    fileName:    string,
-    mimeType:    string,
-    webViewLink: string,
-    fileSize:    number | null,
-    modifiedAt:  string | null,
-    parentId:    string,
-    ctx:         FolderContext,
-  ): Promise<void> {
-    const ext = path.extname(fileName).toLowerCase();
-    const allowed = new Set(['.docx', '.pdf', '.txt', '.doc']);
-    if (!allowed.has(ext)) return;
-
-    try {
-      const buffer = await downloadFile(fileId);
-      const dir    = scriptsDir(ctx.projectId);
-      fs.mkdirSync(dir, { recursive: true });
-
-      const script = registerScript({
-        projectId:        ctx.projectId,
-        name:             path.basename(fileName, ext),
-        originalFilename: fileName,
-        filePath:         '',
-        fileSize:         buffer.length,
-        mimeType,
-      });
-
-      const finalPath = path.join(dir, `${script.scriptId}${ext}`);
-      fs.writeFileSync(finalPath, buffer);
-
-      patchScript(ctx.projectId, script.scriptId, {
-        filePath:        finalPath,
-        driveFileId:     fileId,
-        driveWebViewUrl: webViewLink,
-        driveSource:     true,
-      });
-
-      upsertDriveAsset({
-        entityType:    'script',
-        entityId:      script.scriptId,
-        projectId:     ctx.projectId,
-        driveFileId:   fileId,
-        driveFolderId: parentId,
-        name:          fileName,
-        mimeType,
-        webViewLink,
-        isFolder:      false,
-        parentDriveId: parentId,
-        localPath:     finalPath,
-        fileSize:      fileSize ?? undefined,
-        modifiedAt:    modifiedAt ?? undefined,
-      });
-
-      void extractAndSave(ctx.projectId, script.scriptId, finalPath, ext);
-
-      this.io.emit('drive:file-synced', {
-        entityType: 'script',
-        entityId:   script.scriptId,
-        projectId:  ctx.projectId,
-        name:       fileName,
-      });
-
-      console.log(`[drive-watcher] pulled script: ${fileName} → ${ctx.projectName}`);
-    } catch (err) {
-      console.error(`[drive-watcher] failed to pull script ${fileId}:`, err);
-    }
-  }
-
-  // ── Asset pull (metadata only — no local cache) ─────────────────────────────
-
-  private async pullAssetFromDrive(
-    fileId:      string,
-    fileName:    string,
-    mimeType:    string,
-    webViewLink: string,
-    fileSize:    number | null,
-    modifiedAt:  string | null,
-    parentId:    string,
-    ctx:         FolderContext,
-  ): Promise<void> {
-    try {
-      const entityId = randomUUID();
-
-      upsertDriveAsset({
-        entityType:    'asset',
-        entityId,
-        projectId:     ctx.projectId,
-        driveFileId:   fileId,
-        driveFolderId: parentId,
-        name:          fileName,
-        mimeType,
-        webViewLink,
-        isFolder:      false,
-        parentDriveId: parentId,
-        fileSize:      fileSize ?? undefined,
-        modifiedAt:    modifiedAt ?? undefined,
-      });
-
-      this.io.emit('drive:file-synced', {
-        entityType: 'asset',
-        entityId,
-        projectId:  ctx.projectId,
-        name:       fileName,
-      });
-
-      getProjectStore().touch(ctx.projectId);
-      console.log(`[drive-watcher] indexed asset: ${fileName} → ${ctx.projectName}`);
-    } catch (err) {
-      console.error(`[drive-watcher] failed to index asset ${fileId}:`, err);
+    // New file — delegate to the folder-type adapter (create/pull).
+    // transcripts + workbooks have no adapter yet (future phases) → ignored.
+    const adapter = getAdapterByFolderType(ctx.folderType);
+    if (adapter) {
+      await adapter.onDrivePull(
+        { fileId, name: fileName, mimeType, webViewLink, fileSize, modifiedAt, parentId },
+        ctx,
+        this.engineCtx(),
+      );
     }
   }
 

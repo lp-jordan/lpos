@@ -160,6 +160,38 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 ### Credential rotation
 See `docs/credential-rotation-runbook.md` for step-by-step rotation of all secrets.
 
+## Attachments
+
+File attachments on **task comments** and **prospect updates**. Both contexts share one storage backend and one serving endpoint; only the authorization differs.
+
+### What it does
+Lets users attach files (≤ 10 MB) to task comments and prospect updates. Files are stored in a Cloudflare R2 bucket and served back through a single download endpoint. Images and PDFs render inline; everything else downloads.
+
+### Key files and entry points
+- `lib/services/r2-attachments.ts` — generic, domain-agnostic R2 helpers (`uploadAttachment` / `fetchAttachment` / `deleteAttachment`). No knowledge of tasks or prospects.
+- `app/api/attachment/route.ts` — shared **GET** serve/download endpoint for all attachments.
+- `app/api/tasks/[taskId]/comments/attachments/route.ts` — **POST** upload for task comments.
+- `app/api/prospects/[prospectId]/updates/attachments/route.ts` — **POST** upload for prospect updates.
+- `components/tasks/CommentThread.tsx` — renders task-comment attachment chips/images.
+- `components/prospects/UpdatesLog.tsx` — renders prospect-update attachment chips/images.
+
+### Data flow (inputs → outputs)
+1. Upload (multipart `file`) → domain route validates session/access + parent existence, mints a key, calls `uploadAttachment`, returns `{ key, name, mime, size }`.
+2. The `{ key, name, mime, size }` record is persisted in the parent's `attachments` JSON column (`task_comments.attachments` / `prospect_updates.attachments`).
+3. Render → frontend links to `/api/attachment?key=<key>`.
+4. Download → the serve endpoint authorizes, then streams bytes from R2.
+
+### Key namespacing & authorization
+Keys are minted server-side, so the key prefix is a trusted discriminator for the serve endpoint:
+- `attachments/tasks/<taskId>/…` — **task** attachments → require only a valid session (matches task-comment uploads, which are not gated on Prospects).
+- `attachments/<prospectId>/…` — **prospect** attachments → require Prospects access (`requireProspectsAccess`).
+
+The serve endpoint validates the key (`attachments/` prefix, no `..`), then branches on the `attachments/tasks/` prefix to pick the right auth check.
+
+### Current status / known gaps
+- No per-resource ACL on downloads: any authenticated user can fetch any task-attachment key, and any Prospects-enabled user can fetch any prospect-attachment key. There is no "can this user see *this specific* task/prospect" check — this matches how uploads currently authorize. Tightening would mean moving downloads to resource-nested routes (`/api/tasks/[taskId]/…/attachment`).
+- Orphaned objects are reaped by a 60-day R2 lifecycle rule rather than synchronous deletes.
+
 ## Responsive Layout & Mobile
 
 How the app adapts between desktop and phone-sized screens.

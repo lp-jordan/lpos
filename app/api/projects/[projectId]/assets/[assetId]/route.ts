@@ -8,12 +8,10 @@ import { requireRole } from '@/lib/services/api-auth';
 import { getProjectStore } from '@/lib/services/container';
 import {
   getDriveAssetsByProject,
-  getDriveAssetsByParent,
   renameDriveAsset,
-  deleteDriveAssetByEntityId,
-  type DriveAsset,
 } from '@/lib/store/drive-sync-db';
 import { getDriveClient, trashFile } from '@/lib/services/drive-client';
+import { purgeDriveAssetSubtree } from '@/lib/services/drive-sync';
 import { getCanonicalMediaAsset } from '@/lib/store/canonical-asset-store';
 import { renameFrameioFile } from '@/lib/services/frameio';
 
@@ -76,20 +74,6 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 // ── DELETE — trash in Drive + drop from LPOS index ───────────────────────────
 
-/**
- * Recursively remove an asset's index rows. For a folder, Drive trashes the
- * whole subtree, so the descendant rows must be purged too — otherwise they
- * linger as orphans until the next scan.
- */
-function purgeIndexSubtree(asset: DriveAsset): void {
-  if (asset.isFolder) {
-    for (const child of getDriveAssetsByParent(asset.driveFileId)) {
-      purgeIndexSubtree(child);
-    }
-  }
-  deleteDriveAssetByEntityId(asset.entityId);
-}
-
 export async function DELETE(req: NextRequest, { params }: Ctx) {
   const authError = await requireRole(req, 'user');
   if (authError) return authError;
@@ -116,6 +100,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   }
 
   // Drive trash succeeded — now it's safe to drop the index row(s).
-  purgeIndexSubtree(asset);
+  purgeDriveAssetSubtree(asset);
   return NextResponse.json({ ok: true });
 }
