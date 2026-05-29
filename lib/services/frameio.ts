@@ -386,7 +386,11 @@ export async function uploadAsset(
     {
       method: 'POST',
       body:   JSON.stringify({
-        data: { name, file_size: fileSize },
+        // media_type MUST be sent here: Frame.io signs each presigned upload_url
+        // with this value as the S3 Content-Type. The PUT below sends the same
+        // mimeType as Content-Type; if they differ (or media_type is omitted and
+        // Frame.io defaults it), S3 rejects every part with 403 SignatureDoesNotMatch.
+        data: { name, file_size: fileSize, media_type: mimeType },
       }),
     },
   );
@@ -470,7 +474,16 @@ export async function uploadAsset(
           });
 
           if (putRes.ok) return;
-          lastError = new Error(`S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}`);
+          // Capture S3's error XML so the cause is visible: <Code> is the verdict —
+          // SignatureDoesNotMatch (header/Content-Type mismatch), AccessDenied or
+          // "Request has expired" (URL expiry), RequestTimeTooSkewed (clock drift).
+          const s3Body = await putRes.text().catch(() => '');
+          const s3Code = s3Body.match(/<Code>([^<]+)<\/Code>/)?.[1] ?? '';
+          lastError = new Error(
+            `S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}` +
+            (s3Code ? ` [${s3Code}]` : '') +
+            (s3Body ? ` — ${s3Body.replace(/\s+/g, ' ').slice(0, 300)}` : ''),
+          );
         } catch (err) {
           lastError = err;
         }
