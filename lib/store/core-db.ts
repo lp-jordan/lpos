@@ -321,6 +321,25 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_delivery_notifs_user_read ON delivery_notifications(user_id, read);
 
+    -- Media-asset (Frame.io) comment notifications. One row per reply landing
+    -- on a comment the recipient authored from within LPOS. asset_name/snippet
+    -- are display snapshots; deep-link target is /projects/{id}?assetId={asset}.
+    CREATE TABLE IF NOT EXISTS comment_notifications (
+      notif_id     TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      type         TEXT NOT NULL,
+      project_id   TEXT NOT NULL,
+      asset_id     TEXT NOT NULL,
+      asset_name   TEXT NOT NULL,
+      comment_id   TEXT NOT NULL,
+      from_user_id TEXT,
+      from_name    TEXT,
+      snippet      TEXT,
+      read         INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_comment_notifs_user_read ON comment_notifications(user_id, read);
+
     -- EditPanel auth tokens: one row per (user, machine) approval, minted via the
     -- /ep/link approval flow. Raw token is only ever returned at mint time and
     -- stored in editpanel's local config; the DB only sees its sha256 hash.

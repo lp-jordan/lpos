@@ -36,6 +36,7 @@ import { TaskStore } from '@/lib/store/task-store';
 import { ProspectStore } from '@/lib/store/prospect-store';
 import { ClientStore } from '@/lib/store/client-store';
 import { ProspectNotificationStore } from '@/lib/store/prospect-notification-store';
+import { CommentNotificationStore } from '@/lib/store/comment-notification-store';
 import { TaskCommentStore } from '@/lib/store/task-comment-store';
 import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
@@ -120,6 +121,8 @@ declare global {
   var __lpos_clientStore: ClientStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_prospectNotificationStore: ProspectNotificationStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_commentNotificationStore: CommentNotificationStore | undefined;
 }
 
 // ── Module-local singletons (fast path when module is shared) ─────────────
@@ -153,6 +156,7 @@ let cloudflareOrphanReconciler: CloudflareOrphanReconciler | null = null;
 let prospectStore: ProspectStore | null = null;
 let clientStore: ClientStore | null = null;
 let prospectNotificationStore: ProspectNotificationStore | null = null;
+let commentNotificationStore: CommentNotificationStore | null = null;
 
 // ── Init (called once from server.ts) ─────────────────────────────────────
 
@@ -539,4 +543,12 @@ export function getProspectNotificationStore(): ProspectNotificationStore {
   prospectNotificationStore = new ProspectNotificationStore();
   globalThis.__lpos_prospectNotificationStore = prospectNotificationStore;
   return prospectNotificationStore;
+}
+
+export function getCommentNotificationStore(): CommentNotificationStore {
+  if (globalThis.__lpos_commentNotificationStore) return globalThis.__lpos_commentNotificationStore;
+  if (commentNotificationStore) return commentNotificationStore;
+  commentNotificationStore = new CommentNotificationStore();
+  globalThis.__lpos_commentNotificationStore = commentNotificationStore;
+  return commentNotificationStore;
 }

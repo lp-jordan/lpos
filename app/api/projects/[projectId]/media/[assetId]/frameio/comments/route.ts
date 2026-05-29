@@ -14,6 +14,7 @@ import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-a
 import { getUserById } from '@/lib/store/user-store';
 import { getCommentAuthor, setCommentAuthor, removeCommentAuthor } from '@/lib/store/comment-authors-store';
 import { getAllReplyParents, setReplyParent, removeReplyParent } from '@/lib/store/comment-replies-store';
+import { notifyCommentReply } from '@/lib/services/comment-notification-service';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -103,6 +104,24 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       setReplyParent(projectId, reply.id, body.parentId);
       if (lposUser) setCommentAuthor(projectId, reply.id, { name: lposUser.name, userId: lposUser.id });
       patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
+
+      // Notify the original commenter — only when the parent was authored inside
+      // LPOS (we have their userId). External Frame.io reviewers have no in-app
+      // recipient. Skip self-replies. Best-effort; never blocks the response.
+      const parentAuthor = getCommentAuthor(projectId, body.parentId);
+      if (parentAuthor?.userId && parentAuthor.userId !== session?.userId) {
+        void notifyCommentReply({
+          userId:     parentAuthor.userId,
+          projectId,
+          assetId,
+          assetName:  asset.name || asset.originalFilename,
+          commentId:  body.parentId,
+          fromUserId: session?.userId,
+          fromName:   lposUser?.name,
+          snippet:    body.text.trim().slice(0, 140),
+        }).catch(() => {});
+      }
+
       const namedReply = lposUser ? { ...reply, authorName: lposUser.name } : reply;
       return NextResponse.json({ reply: namedReply, parentId: body.parentId }, { status: 201 });
     }

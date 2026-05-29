@@ -76,10 +76,21 @@ Shows Frame.io review comments in the media detail panel and theater mode, and l
 | `app/api/webhooks/frameio/route.ts` | Verifies Frame.io HMAC webhooks; emits Socket.io `frameio:comments:refresh` for any comment event |
 | `components/media/MediaDetailPanel.tsx` | Owns the comment list state, refresh subscription, and the completed-toggle optimistic guard |
 | `components/media/VideoTheaterMode.tsx` | Theater-mode comment UI; toggles via its own PATCH and reports back to the panel via `onCommentCompleted` |
+| `lib/services/comment-notification-service.ts` | `notifyCommentReply` — persists + emits `comment:notification` + web-push when a reply lands on an LPOS-authored comment |
+| `lib/store/comment-notification-store.ts` | `comment_notifications` CRUD (per-user list, unread count, mark read/all-read) |
+| `app/api/notifications/comments/route.ts` + `[notifId]/route.ts` | Per-user GET list/unread + mark-all-read; per-notif mark-read |
+| `hooks/useCommentNotifications.ts` + `components/shell/NotifBell.tsx` | Comments tab in the notif bell (live via Socket.io, deep-links to the asset) |
+
+### Replies (Frame.io has no reply endpoint)
+Frame.io V4 can't create replies, so `postReply` posts a **top-level** comment prefixed `"Reply to above: "` (reviewers still see context in Frame.io) and records `replyId → parentId` in `data/projects/{id}/comment-replies.json` (`comment-replies-store`). On GET, the route filters out any comment whose ID is in that map, strips the prefix, and injects it into its parent's `replies[]` array to rebuild the thread.
 
 ### How it refreshes (inputs → outputs)
 - **On open / 5-min fallback poll:** `fetchComments()` GETs the full list from Frame.io.
 - **Real-time:** any Frame.io comment event (`created/updated/completed/uncompleted/deleted`) hits the webhook, which pushes `frameio:comments:refresh` over Socket.io; the panel re-fetches only if the event's `projectId`/`assetId` matches the open asset.
+
+### Reply notifications (Comments tab in the notif bell)
+When a reply lands on a comment, the POST route notifies the original commenter via `notifyCommentReply` (`comment-notification-service`) → persists to `comment_notifications` (core-db) → emits Socket.io `comment:notification` to `user:{userId}` + best-effort web-push. The notif bell's **Comments** tab (`useCommentNotifications` → `/api/notifications/comments`) shows them; clicking deep-links to `/projects/{id}?assetId={asset}`. This is its own notification category alongside Tasks/Prospects/Deliveries (the "Pipeline" tab is unrelated — client-only, ephemeral).
+- **Constraint:** only fires when the parent comment was authored *inside LPOS* (we have the author's `userId` in `comment-authors-store`). Replies to external Frame.io reviewers have no in-app recipient and notify no one. Self-replies are skipped.
 
 ### Completed-toggle optimistic guard
 The "check off" flag lives only in Frame.io, and a user's PATCH is exactly what makes Frame.io fire its `comment.completed` webhook — which relays back as a refresh a beat later. Frame.io's read API briefly lags its own webhook (read-after-write), so a refetch in that window returns the pre-toggle value. To stop the checkbox visibly resetting moments after a click:
@@ -90,6 +101,7 @@ The "check off" flag lives only in Frame.io, and a user's PATCH is exactly what 
 ### Current status / known gaps
 - Working; the sticky guard tolerates arbitrary Frame.io read-after-write lag without a fixed timeout.
 - A comment deleted while its toggle is still pending leaves a harmless orphaned entry in the in-memory guard map (bounded by comment count, cleared on panel close).
+- Reply notifications cover only LPOS-authored parent comments (external Frame.io reviewers can't be notified in-app). No notification yet for *new top-level* comments left in LPOS — only replies.
 
 ---
 

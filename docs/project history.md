@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-29 — Notify original commenter when their comment gets a reply
+
+**Timestamp:** 2026-05-29T00:00:00Z
+
+**Prompt:** (continuation of) "…notify the user who made the comment that is being replied to." Follow-up answers: surface = persistent **bell notification**; external Frame.io reviewers = **skip (LPOS authors only)**.
+
+**Summary:** Built a new persistent notification category — "comment" reply notifications — mirroring the existing Prospect notification vertical slice. When a reply is posted to a comment that was authored from within LPOS, the original commenter gets a bell notification (live via Socket.io + web-push) that deep-links to the asset.
+
+**Files changed:**
+- `lib/models/comment-notification.ts` *(new)* — `CommentNotification` model, type `'reply'`.
+- `lib/store/core-db.ts` — added `comment_notifications` table + `idx_comment_notifs_user_read` index (idempotent `CREATE … IF NOT EXISTS`, created on next boot).
+- `lib/store/comment-notification-store.ts` *(new)* — CRUD store (getForUser / getUnreadCount / create / markRead / markAllRead).
+- `lib/services/container.ts` — import, global decl, module singleton, `getCommentNotificationStore()`.
+- `lib/services/comment-notification-service.ts` *(new)* — `notifyCommentReply(...)`: persist → emit `comment:notification` to `user:{userId}` → best-effort web-push.
+- `app/api/notifications/comments/route.ts` *(new)* — GET list + unread; PATCH `markAllRead`.
+- `app/api/notifications/comments/[notifId]/route.ts` *(new)* — PATCH mark single read.
+- `hooks/useCommentNotifications.ts` *(new)* — fetch + Socket.io subscription + markAllRead.
+- `components/shell/NotifBell.tsx` — new **Comments** tab (item component, tab order/label, hook wiring, totals, mark-read, deep-link to `/projects/{id}?assetId={asset}`).
+- `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts` — reply branch now calls `notifyCommentReply` for the parent's LPOS author.
+- `app/globals.css` — `.notif-panel` widened to `min(380px, calc(100vw - 24px))` to fit a 5th tab without clipping on desktop or overflowing phones; `.notif-tab` gets `min-width: 0` + tighter padding.
+
+**Implementation summary:** There was no media-comment notification channel — the persistent, user-targeted system is the Task/Prospect/Delivery trio (core-db table + store + service emitting a Socket.io event + per-user GET/mark-read routes + NotifBell tab + hook), while the "Pipeline" bell tab is client-only/ephemeral (wrong tool). So this adds a parallel "comment" category in the exact Prospect shape. The recipient is resolved from `comment-authors-store` (`getCommentAuthor(projectId, parentId)` → `{ name, userId }`), which only has a `userId` when the parent was posted inside LPOS; the call is guarded on `parentAuthor?.userId && parentAuthor.userId !== session?.userId` so external-reviewer parents and self-replies notify no one. The notify call is fire-and-forget (`void …catch(() => {})`) so it never blocks or fails the reply POST. Deep-link reuses the established `?assetId=` param that `ProjectDetail.tsx` already consumes to open the media detail panel.
+
+**Decision rationale:** Mirroring the Prospect slice keeps the new category consistent with the three existing ones (same socket-room convention, same read-state model, same bell UX) and minimises surprise. A new category (vs. shoehorning into Task notifications) avoids a bogus `taskId`/`/dashboard?task=` deep-link and keeps the Comments feed cleanly separable. Widening the panel + `min-width:0` was required because the tab bar was sized for exactly 4 equal flex tabs in a 320px `overflow:hidden` panel — a 5th would have clipped.
+
+**Alternatives considered:**
+- **Reuse Task notifications** — rejected; type/fields and deep-link are task-shaped.
+- **Toast-only / Pipeline tab** — rejected per user choice (needs to persist + survive reload + be cross-device).
+- **Notify project team/admins for external-reviewer comments** — rejected per user choice (LPOS authors only).
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` → exit 0, 0 errors. (`next lint` not run — repo has no flat ESLint config and the wrapper drops into interactive setup; new files mirror the existing prospect-notification files verbatim in structure.)
+
+**Assumptions / follow-ups:**
+- `comment_notifications` is created on the **next server boot** via the idempotent schema exec; until the server restarts, the GET route would error on the missing table (caught client-side as empty). Restart picks it up.
+- Notifications fire for **replies only**, not new top-level comments left in LPOS. Could extend later (e.g. notify a project's team on any new comment).
+- A reply posted with no session (if that path is ever hit) still notifies the LPOS parent author, which is the desired behaviour.
+
+---
+
 ## 2026-05-28 — Right-align comment "Reply" button + reply-mechanism recap
 
 **Timestamp:** 2026-05-28T21:00:00Z

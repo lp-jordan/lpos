@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-05-29T00:00:00Z",
+    "title": "Notify original commenter when their comment gets a reply",
+    "summary": "Added a new persistent notification category for media-comment replies, mirroring the existing Task/Prospect/Delivery notification slices. When a reply lands on a comment that was authored inside LPOS, the original commenter now gets a bell notification under a new 'Comments' tab — persisted in a comment_notifications table, pushed live via Socket.io ('comment:notification') plus best-effort web-push, and deep-linking to /projects/{id}?assetId={asset}. New model/store/service/hook/API routes were added and the reply POST handler resolves the parent author from comment-authors-store, firing only when an LPOS userId exists (external Frame.io reviewers have no in-app recipient) and skipping self-replies. The notif panel was widened to fit a 5th tab without clipping. Reply mechanism itself is unchanged."
+  },
+  {
     "timestamp": "2026-05-28T21:00:00Z",
     "title": "Right-align comment \"Reply\" button",
     "summary": "Right-aligned the per-comment Reply trigger in both the media detail panel (.mad-reply-btn) and theater mode (.vt-cp-reply-btn) by giving each a fit-content block with margin-left:auto, so it sits at the right edge under each comment instead of bottom-left. CSS-only; the in-compose Reply/Cancel rows were already right-aligned. Reply mechanism unchanged: Frame.io has no reply endpoint, so LPOS posts a 'Reply to above:' top-level comment and reconstructs threads from a local replyId→parentId map."

@@ -1178,7 +1178,8 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   position: absolute;
   top: calc(100% + 12px);
   right: 0;
-  width: 320px;
+  /* Fits 5 tabs on desktop; never wider than the viewport on phones. */
+  width: min(380px, calc(100vw - 24px));
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 18px;
   background: rgba(12, 16, 22, 0.96);
@@ -1195,11 +1196,12 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 
 .notif-tab {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 10px 6px;
+  padding: 10px 4px;
   border: none;
   background: none;
   font: inherit;

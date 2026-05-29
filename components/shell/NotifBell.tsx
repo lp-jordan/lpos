@@ -6,19 +6,21 @@ import { useToast } from '@/contexts/ToastContext';
 import { useTaskNotifications } from '@/hooks/useTaskNotifications';
 import { useProspectNotifications } from '@/hooks/useProspectNotifications';
 import { useDeliveryNotifications } from '@/hooks/useDeliveryNotifications';
+import { useCommentNotifications } from '@/hooks/useCommentNotifications';
 import type { NotificationRecord } from '@/contexts/ToastContext';
 import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notification';
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
 import type { DeliveryNotification } from '@/lib/models/delivery-notification';
+import type { CommentNotification } from '@/lib/models/comment-notification';
 
-type NotifTab = 'tasks' | 'prospects' | 'deliveries' | 'pipeline';
+type NotifTab = 'tasks' | 'prospects' | 'deliveries' | 'pipeline' | 'comments';
 
 const TAB_STORAGE_KEY = 'lpos-notif-tab';
 
 function getInitialTab(): NotifTab {
   if (typeof window === 'undefined') return 'tasks';
   const stored = localStorage.getItem(TAB_STORAGE_KEY);
-  if (stored === 'tasks' || stored === 'prospects' || stored === 'deliveries' || stored === 'pipeline') {
+  if (stored === 'tasks' || stored === 'prospects' || stored === 'deliveries' || stored === 'pipeline' || stored === 'comments') {
     return stored;
   }
   return 'tasks';
@@ -118,11 +120,33 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
   );
 }
 
-const TAB_ORDER: NotifTab[] = ['pipeline', 'deliveries', 'tasks', 'prospects'];
+function CommentNotifItem({ notif, onClick }: { notif: CommentNotification; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+      onClick={onClick}
+      role="menuitem"
+    >
+      <div className="notif-task-type">Reply to your comment</div>
+      <div className="notif-task-title">{notif.assetName}</div>
+      {notif.snippet && (
+        <div className="notif-task-from">&ldquo;{notif.snippet}&rdquo;</div>
+      )}
+      {notif.fromName && (
+        <div className="notif-task-from">by {notif.fromName}</div>
+      )}
+      <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+    </button>
+  );
+}
+
+const TAB_ORDER: NotifTab[] = ['pipeline', 'deliveries', 'tasks', 'comments', 'prospects'];
 const TAB_LABEL: Record<NotifTab, string> = {
   pipeline: 'Pipeline',
   deliveries: 'Deliveries',
   tasks: 'Tasks',
+  comments: 'Comments',
   prospects: 'People',
 };
 
@@ -135,20 +159,23 @@ export function NotifBell() {
   const { notifications: taskNotifs,     unreadCount: taskUnread,     markAllRead: markTasksRead     } = useTaskNotifications();
   const { notifications: prospectNotifs, unreadCount: prospectUnread, markAllRead: markProspectsRead } = useProspectNotifications();
   const { notifications: deliveryNotifs, unreadCount: deliveryUnread, markAllRead: markDeliveriesRead } = useDeliveryNotifications();
+  const { notifications: commentNotifs,  unreadCount: commentUnread,  markAllRead: markCommentsRead   } = useCommentNotifications();
 
-  const totalUnread = pipelineUnread + taskUnread + prospectUnread + deliveryUnread;
+  const totalUnread = pipelineUnread + taskUnread + prospectUnread + deliveryUnread + commentUnread;
 
   const unreadByTab: Record<NotifTab, number> = {
     tasks: taskUnread,
     prospects: prospectUnread,
     deliveries: deliveryUnread,
     pipeline: pipelineUnread,
+    comments: commentUnread,
   };
 
   function markTabRead(tab: NotifTab) {
     if (tab === 'tasks') markTasksRead();
     else if (tab === 'prospects') markProspectsRead();
     else if (tab === 'deliveries') markDeliveriesRead();
+    else if (tab === 'comments') markCommentsRead();
     else markPipelineRead();
   }
 
@@ -268,6 +295,21 @@ export function NotifBell() {
                       notif={notif}
                       onClick={() => {
                         router.push(`/prospects/${notif.prospectId}`);
+                        setOpen(false);
+                      }}
+                    />
+                  ))
+            )}
+
+            {activeTab === 'comments' && (
+              commentNotifs.length === 0
+                ? <div className="notif-empty">No comment notifications</div>
+                : commentNotifs.slice(0, 10).map((notif) => (
+                    <CommentNotifItem
+                      key={notif.notifId}
+                      notif={notif}
+                      onClick={() => {
+                        router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
                         setOpen(false);
                       }}
                     />
