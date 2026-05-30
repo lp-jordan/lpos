@@ -476,12 +476,20 @@ export async function uploadAsset(
           // Capture S3's error XML so the cause is visible: <Code> is the verdict —
           // SignatureDoesNotMatch (header/Content-Type mismatch), AccessDenied or
           // "Request has expired" (URL expiry), RequestTimeTooSkewed (clock drift).
-          const s3Body = await putRes.text().catch(() => '');
-          const s3Code = s3Body.match(/<Code>([^<]+)<\/Code>/)?.[1] ?? '';
+          // Also extract X-Amz-SignedHeaders from the presigned URL itself — it's the
+          // single most diagnostic value for SignatureDoesNotMatch, telling us exactly
+          // which headers Frame.io signed for so we can compare against what we send.
+          const s3Body    = await putRes.text().catch(() => '');
+          const s3Code    = s3Body.match(/<Code>([^<]+)<\/Code>/)?.[1] ?? '';
+          const signedHdr = (() => {
+            try { return new URL(url).searchParams.get('X-Amz-SignedHeaders') ?? ''; }
+            catch { return ''; }
+          })();
           lastError = new Error(
             `S3 PUT part ${partNum}/${parts.length} failed: ${putRes.status}` +
-            (s3Code ? ` [${s3Code}]` : '') +
-            (s3Body ? ` — ${s3Body.replace(/\s+/g, ' ').slice(0, 300)}` : ''),
+            (s3Code    ? ` [${s3Code}]` : '') +
+            (signedHdr ? ` SignedHeaders=[${signedHdr}]` : '') +
+            (s3Body    ? ` — ${s3Body.replace(/\s+/g, ' ').slice(0, 2500)}` : ''),
           );
         } catch (err) {
           lastError = err;
