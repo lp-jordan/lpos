@@ -108,6 +108,19 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
     let   uploadSize  = fileSize;
     let   uploadName  = filename;
 
+    // Frame.io derives the file's media_type from the name extension at create
+    // time (POST .../files/local_upload) and signs each presigned upload_url with
+    // that value as the S3 Content-Type. An extension-less display name (e.g.
+    // `asset.name = "LeaderPass Homepage Video"`) makes Frame.io default to
+    // image/jpeg → the file is permanently categorized as an image and video
+    // playback breaks (LPOS's /frameio-stream then returns image_full_xxxx.jpg).
+    // Borrow the real extension from originalFilename when the display name has
+    // none, so Frame.io guesses correctly from the start.
+    if (!/\.[A-Za-z0-9]{1,5}$/.test(uploadName)) {
+      const ext = (asset.originalFilename || asset.filePath || '').match(/\.[A-Za-z0-9]{1,5}$/)?.[0] ?? '';
+      if (ext) uploadName = uploadName + ext;
+    }
+
     if (fileSize >= COMPRESS_THRESHOLD_BYTES) {
       console.log(`[frameio] "${filename}" is ${(fileSize / 1e9).toFixed(2)} GB — compressing before upload`);
       queue?.setCompressing(jobId!, 0);
