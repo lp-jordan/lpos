@@ -399,6 +399,11 @@ export async function uploadAsset(
       id:          string;
       upload_urls: { url: string; size: number }[];
       player_url?: string | null;
+      // Frame.io's server-determined media type for this file. REQUIRED in the
+      // FileWithUploadUrls response schema (per V4 OpenAPI), and used by Frame.io
+      // when signing each presigned upload_url — Content-Type must match this
+      // exact value on the PUT or S3 returns 403 SignatureDoesNotMatch.
+      media_type?: string;
     };
     errors?: { message?: string }[];
     message?: string;
@@ -420,6 +425,16 @@ export async function uploadAsset(
 
   const fileId     = fileRecord.id;
   const uploadUrls = fileRecord.upload_urls;   // [{ url, size }]
+
+  // Frame.io signs each presigned upload_url with the server-determined media_type
+  // as the S3 Content-Type. We must PUT with EXACTLY this value or S3 rejects every
+  // part with 403 SignatureDoesNotMatch. The caller's mimeType is a hint that may
+  // not match what Frame.io chose (e.g. caller defaults to video/mp4 but the file
+  // name has a .mov extension that Frame.io maps to video/quicktime).
+  const signedContentType = fileRecord.media_type || mimeType;
+  if (fileRecord.media_type && fileRecord.media_type !== mimeType) {
+    console.log(`[frameio-v4] signed Content-Type = "${fileRecord.media_type}" (caller passed "${mimeType}")`);
+  }
 
   console.log(`[frameio-v4] file ${fileId} created, ${uploadUrls.length} upload part(s)`);
 
@@ -466,7 +481,10 @@ export async function uploadAsset(
             duplex:  'half',
             body:    webStream,
             headers: {
-              'Content-Type':   mimeType,
+              // signedContentType is the value Frame.io signed into each presigned
+              // upload_url; sending anything else fails with 403 SignatureDoesNotMatch
+              // because content-type is in SignedHeaders. See extraction above.
+              'Content-Type':   signedContentType,
               'Content-Length': String(size),
               'x-amz-acl':      'private',
             },
