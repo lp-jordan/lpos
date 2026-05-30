@@ -386,11 +386,10 @@ export async function uploadAsset(
     {
       method: 'POST',
       body:   JSON.stringify({
-        // media_type MUST be sent here: Frame.io signs each presigned upload_url
-        // with this value as the S3 Content-Type. The PUT below sends the same
-        // mimeType as Content-Type; if they differ (or media_type is omitted and
-        // Frame.io defaults it), S3 rejects every part with 403 SignatureDoesNotMatch.
-        data: { name, file_size: fileSize, media_type: mimeType },
+        // FileCreateLocalUploadParamsData accepts ONLY { name, file_size } per the
+        // V4 OpenAPI spec (docs/frameio-v4-openapi.json). media_type is a *response*
+        // field (server-derived) and is rejected as "Unexpected field" if posted here.
+        data: { name, file_size: fileSize },
       }),
     },
   );
