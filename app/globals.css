@@ -15695,6 +15695,40 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .handoff-entry-route { flex: 1; }
 .handoff-entry-route strong { font-weight: 600; }
 .handoff-entry-note { color: var(--muted); font-size: 0.84rem; line-height: 1.4; padding-left: 30px; white-space: pre-wrap; }
+.handoff-entry-actions { display: flex; gap: 8px; padding-left: 30px; }
+.handoff-ack-btn {
+  background: rgba(99,102,241,0.18);
+  border: 1px solid rgba(99,102,241,0.45);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.handoff-ack-btn:hover { background: rgba(99,102,241,0.30); border-color: rgba(99,102,241,0.65); }
+.handoff-ack-btn:active { background: rgba(99,102,241,0.40); }
+
+.comment-item--handoff-ack { padding: 0; }
+.handoff-ack-entry {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 0.78rem;
+  gap: 8px;
+  padding: 4px 6px 4px 30px;
+}
+.handoff-ack-entry strong { color: var(--text); font-weight: 600; }
+.handoff-ack-icon {
+  align-items: center;
+  color: #10b981;
+  display: inline-flex;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+.handoff-ack-entry .comment-time { margin-left: auto; }
 
 /* Handoff modal */
 .handoff-overlay { z-index: 1100; }

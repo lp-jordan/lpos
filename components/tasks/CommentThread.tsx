@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import type {
   TaskComment,
   TaskCommentAttachment,
   HandoffCommentMetadata,
+  HandoffAckCommentMetadata,
 } from '@/lib/models/task-comment';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from '@/components/dashboard/MentionTextarea';
@@ -213,6 +214,27 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
   const userMap = new Map(users.map((u) => [u.id, u]));
   const hasUploading = pending.some((p) => p.uploading);
 
+  // Build a set of handoff_ids that already have an acknowledgement comment in
+  // this thread — so we can hide the "Acknowledge" button on handoff entries
+  // that have already been acked. Cheap because we already iterate comments
+  // for rendering; a Set lookup is O(1) per handoff entry.
+  const ackedHandoffIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of comments) {
+      if (c.kind !== 'handoff_ack') continue;
+      const meta = c.metadata as HandoffAckCommentMetadata | undefined;
+      if (meta?.handoffId) s.add(meta.handoffId);
+    }
+    return s;
+  }, [comments]);
+
+  const acknowledgeHandoff = useCallback(async (handoffId: string) => {
+    const res = await fetch(`/api/tasks/${taskId}/handoff/${handoffId}/acknowledge`, { method: 'POST' });
+    if (!res.ok) return;
+    const data = await res.json() as { comment?: TaskComment };
+    if (data.comment) setComments((prev) => [...prev, data.comment!]);
+  }, [taskId]);
+
   useEffect(() => {
     setLoading(true);
     setComments([]);
@@ -331,6 +353,13 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
             const toNames   = (meta?.toUserIds ?? [])
               .map((uid) => userMap.get(uid)?.name.split(' ')[0] ?? '…')
               .join(', ') || '—';
+            const handoffId = meta?.handoffId ?? '';
+            const isTargetAndNotMe =
+              !!meta &&
+              meta.toUserIds.includes(currentUserId) &&
+              meta.fromUserId !== currentUserId;
+            const alreadyAcked = handoffId ? ackedHandoffIds.has(handoffId) : true;
+            const showAckButton = isTargetAndNotMe && !alreadyAcked;
             return (
               <div key={c.commentId} className="comment-item comment-item--handoff">
                 <div className="handoff-entry">
@@ -349,6 +378,34 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
                   {c.body && c.body !== '.' && (
                     <div className="handoff-entry-note">{renderBody(c.body)}</div>
                   )}
+                  {showAckButton && (
+                    <div className="handoff-entry-actions">
+                      <button
+                        type="button"
+                        className="handoff-ack-btn"
+                        onClick={() => void acknowledgeHandoff(handoffId)}
+                        title="Acknowledge — tells the handoff-er you saw it. Doesn't complete the handoff."
+                      >
+                        Acknowledge
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          }
+          if (c.kind === 'handoff_ack') {
+            const author = userMap.get(c.authorId);
+            return (
+              <div key={c.commentId} className="comment-item comment-item--handoff-ack">
+                <div className="handoff-ack-entry">
+                  <span className="handoff-ack-icon" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                  <span><strong>{author?.name.split(' ')[0] ?? 'Someone'}</strong> acknowledged the handoff</span>
+                  <span className="comment-time">{relativeTime(c.createdAt)}</span>
                 </div>
               </div>
             );
