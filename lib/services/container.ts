@@ -40,6 +40,7 @@ import { CommentNotificationStore } from '@/lib/store/comment-notification-store
 import { TaskCommentStore } from '@/lib/store/task-comment-store';
 import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
+import { TaskHandoffStore } from '@/lib/store/task-handoff-store';
 import { DeliveryNotificationStore } from '@/lib/store/delivery-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
@@ -86,6 +87,8 @@ declare global {
   var __lpos_taskCategoryStore: TaskCategoryStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_taskNotificationStore: TaskNotificationStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_taskHandoffStore: TaskHandoffStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_deliveryNotificationStore: DeliveryNotificationStore | undefined;
   // eslint-disable-next-line no-var
@@ -145,6 +148,7 @@ let taskStore: TaskStore | null = null;
 let taskCommentStore: TaskCommentStore | null = null;
 let taskCategoryStore: TaskCategoryStore | null = null;
 let taskNotificationStore: TaskNotificationStore | null = null;
+let taskHandoffStore: TaskHandoffStore | null = null;
 let deliveryNotificationStore: DeliveryNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
@@ -494,6 +498,14 @@ export function getTaskNotificationStore(): TaskNotificationStore {
   taskNotificationStore = new TaskNotificationStore();
   globalThis.__lpos_taskNotificationStore = taskNotificationStore;
   return taskNotificationStore;
+}
+
+export function getTaskHandoffStore(): TaskHandoffStore {
+  if (globalThis.__lpos_taskHandoffStore) return globalThis.__lpos_taskHandoffStore;
+  if (taskHandoffStore) return taskHandoffStore;
+  taskHandoffStore = new TaskHandoffStore();
+  globalThis.__lpos_taskHandoffStore = taskHandoffStore;
+  return taskHandoffStore;
 }
 
 export function getDeliveryNotificationStore(): DeliveryNotificationStore {

@@ -7,6 +7,7 @@ import { TASK_TYPE_CONFIGS, getTaskTypeConfig } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
 import type { TaskCategory } from '@/lib/models/task-category';
 import { CommentThread } from './CommentThread';
+import { HandoffModal } from './HandoffModal';
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
   { value: 'urgent', label: 'Urgent' },
@@ -48,6 +49,10 @@ export function TaskDetailModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  // Bumped after a successful handoff so the embedded CommentThread re-fetches
+  // its list and the new kind='handoff' entry shows up without a full page reload.
+  const [commentReloadKey, setCommentReloadKey] = useState(0);
   const assigneeRef = useRef<HTMLDivElement>(null);
 
   const taskTypeConfig = getTaskTypeConfig(taskType);
@@ -324,13 +329,51 @@ export function TaskDetailModal({
                   ))}
                 </div>
               )}
+              {/* Handoff is intentionally always-available — the user decides when
+                  they're done with their part, not the status. Disabled only when
+                  there's no one currently assigned (nothing to hand off from). */}
+              <button
+                type="button"
+                className="task-handoff-btn"
+                onClick={() => setHandoffOpen(true)}
+                disabled={assigneeIds.length === 0}
+                title={assigneeIds.length === 0
+                  ? 'Assign someone first before handing off.'
+                  : 'Hand this task off to someone else'}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M5 12h14" />
+                  <path d="M13 6l6 6-6 6" />
+                </svg>
+                <span>Hand off</span>
+              </button>
             </div>
           </div>
 
           {/* Updates (formerly Notes + Comments) — single chronological thread */}
-          <CommentThread taskId={task.taskId} currentUserId={currentUserId} users={users} />
+          <CommentThread
+            key={`${task.taskId}-${commentReloadKey}`}
+            taskId={task.taskId}
+            currentUserId={currentUserId}
+            users={users}
+          />
         </div>
       </div>
+
+      {handoffOpen && (
+        <HandoffModal
+          task={task}
+          users={users}
+          currentUserId={currentUserId}
+          onClose={() => setHandoffOpen(false)}
+          onDone={({ task: nextTask }) => {
+            setHandoffOpen(false);
+            setAssigneeIds(nextTask.assignedTo);
+            setCommentReloadKey((k) => k + 1);
+            onUpdated(nextTask);
+          }}
+        />
+      )}
     </div>
   );
 }

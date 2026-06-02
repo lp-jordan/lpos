@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { TaskComment, TaskCommentAttachment } from '@/lib/models/task-comment';
+import type { TaskComment, TaskCommentAttachment, TaskCommentKind } from '@/lib/models/task-comment';
 import { getCoreDb, withTransaction } from './core-db';
 
 interface CommentRow {
@@ -9,12 +9,18 @@ interface CommentRow {
   author_id:   string;
   created_at:  string;
   edited_at:   string | null;
-  attachments: string; // JSON
+  attachments: string;          // JSON
+  kind:        string;          // 'comment' | 'handoff' | 'handoff_ack'
+  metadata:    string | null;   // JSON or null
 }
 
 function rowToComment(row: CommentRow, mentions: string[]): TaskComment {
   let attachments: TaskCommentAttachment[] = [];
   try { attachments = JSON.parse(row.attachments || '[]') as TaskCommentAttachment[]; } catch { /* */ }
+  let metadata: TaskComment['metadata'];
+  if (row.metadata) {
+    try { metadata = JSON.parse(row.metadata) as TaskComment['metadata']; } catch { metadata = undefined; }
+  }
   return {
     commentId:   row.comment_id,
     taskId:      row.task_id,
@@ -24,6 +30,8 @@ function rowToComment(row: CommentRow, mentions: string[]): TaskComment {
     createdAt:   row.created_at,
     editedAt:    row.edited_at ?? undefined,
     attachments,
+    kind:        (row.kind ?? 'comment') as TaskCommentKind,
+    metadata,
   };
 }
 
@@ -69,9 +77,16 @@ export class TaskCommentStore {
     authorId:    string;
     mentions:    string[];
     attachments?: TaskCommentAttachment[];
+    /** Defaults to 'comment' for plain user updates. Use 'handoff' / 'handoff_ack'
+     *  when writing typed system entries from the handoff endpoints. */
+    kind?:       TaskCommentKind;
+    /** Structured payload (shape depends on `kind`); ignored when kind='comment'. */
+    metadata?:   Record<string, unknown>;
   }): TaskComment {
     const db          = getCoreDb();
     const attachments = input.attachments ?? [];
+    const kind        = input.kind ?? 'comment';
+    const metadata    = input.metadata && Object.keys(input.metadata).length > 0 ? input.metadata : undefined;
     const comment: TaskComment = {
       commentId:   randomUUID(),
       taskId:      input.taskId,
@@ -80,12 +95,23 @@ export class TaskCommentStore {
       mentions:    input.mentions,
       createdAt:   new Date().toISOString(),
       attachments,
+      kind,
+      metadata,
     };
     withTransaction(db, () => {
       db.prepare(
-        `INSERT INTO task_comments (comment_id, task_id, body, author_id, created_at, attachments)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(comment.commentId, comment.taskId, comment.body, comment.authorId, comment.createdAt, JSON.stringify(attachments));
+        `INSERT INTO task_comments (comment_id, task_id, body, author_id, created_at, attachments, kind, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        comment.commentId,
+        comment.taskId,
+        comment.body,
+        comment.authorId,
+        comment.createdAt,
+        JSON.stringify(attachments),
+        kind,
+        metadata ? JSON.stringify(metadata) : null,
+      );
       for (const userId of comment.mentions) {
         db.prepare(
           'INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?, ?)',

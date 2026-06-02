@@ -40,10 +40,13 @@ async function lookupSlackUserId(email: string): Promise<string | null> {
 }
 
 const LABELS: Record<TaskNotifType, (fromName?: string) => string> = {
-  assigned:       (from) => `You were assigned a task${from ? ` by ${from}` : ''}`,
-  mentioned:      (from) => `${from ?? 'Someone'} mentioned you in a task`,
-  status_changed: ()     => 'A task you\'re on has been updated',
-  commented:      (from) => `${from ?? 'Someone'} commented on a task`,
+  assigned:             (from) => `You were assigned a task${from ? ` by ${from}` : ''}`,
+  mentioned:            (from) => `${from ?? 'Someone'} mentioned you in a task`,
+  status_changed:       ()     => 'A task you\'re on has been updated',
+  commented:            (from) => `${from ?? 'Someone'} commented on a task`,
+  handoff:              (from) => `${from ?? 'Someone'} handed off a task to you`,
+  handoff_acknowledged: (from) => `${from ?? 'Someone'} acknowledged your handoff`,
+  handoff_stale:        ()     => 'A handoff to you has been idle — please take a look',
 };
 
 export async function sendSlackTaskDm(input: {

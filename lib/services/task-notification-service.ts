@@ -90,6 +90,9 @@ export async function notifyTaskEvent(input: {
       mentioned: 'You were mentioned in a task',
       status_changed: 'A task status changed',
       commented: 'New comment on a task',
+      handoff: 'A task was handed off to you',
+      handoff_acknowledged: 'Your handoff was acknowledged',
+      handoff_stale: 'A handoff to you needs attention',
     };
     const payload = JSON.stringify({
       title: label[input.type],

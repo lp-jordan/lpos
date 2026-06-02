@@ -44,10 +44,13 @@ function relativeTime(iso: string): string {
 }
 
 const TASK_NOTIF_LABEL: Record<TaskNotifType, string> = {
-  assigned: 'Assigned to you',
-  mentioned: 'Mentioned you',
-  status_changed: 'Status changed',
-  commented: 'New comment',
+  assigned:             'Assigned to you',
+  mentioned:            'Mentioned you',
+  status_changed:       'Status changed',
+  commented:            'New comment',
+  handoff:              'Handed off to you',
+  handoff_acknowledged: 'Handoff acknowledged',
+  handoff_stale:        'Handoff needs attention',
 };
 
 const PROSPECT_NOTIF_LABEL: Record<ProspectNotifType, string> = {

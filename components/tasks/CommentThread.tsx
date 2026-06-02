@@ -1,7 +1,11 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import type { TaskComment, TaskCommentAttachment } from '@/lib/models/task-comment';
+import type {
+  TaskComment,
+  TaskCommentAttachment,
+  HandoffCommentMetadata,
+} from '@/lib/models/task-comment';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from '@/components/dashboard/MentionTextarea';
 
@@ -316,6 +320,39 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
         )}
         {comments.map((c) => {
           const author = userMap.get(c.authorId);
+          // Handoff entries render as a distinct callout, not the usual avatar+body
+          // row, so they read as system events (chain-of-custody marker) rather
+          // than ordinary chatter. handoff_ack will follow the same pattern in
+          // Phase 4. The note itself is stored in `body`; metadata carries the
+          // routing details (from → to).
+          if (c.kind === 'handoff') {
+            const meta = c.metadata as HandoffCommentMetadata | undefined;
+            const fromName  = userMap.get(meta?.fromUserId ?? c.authorId)?.name ?? 'Someone';
+            const toNames   = (meta?.toUserIds ?? [])
+              .map((uid) => userMap.get(uid)?.name.split(' ')[0] ?? '…')
+              .join(', ') || '—';
+            return (
+              <div key={c.commentId} className="comment-item comment-item--handoff">
+                <div className="handoff-entry">
+                  <div className="handoff-entry-header">
+                    <span className="handoff-entry-icon" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 12h14" />
+                        <path d="M13 6l6 6-6 6" />
+                      </svg>
+                    </span>
+                    <span className="handoff-entry-route">
+                      <strong>{fromName}</strong> handed off to <strong>{toNames}</strong>
+                    </span>
+                    <span className="comment-time">{relativeTime(c.createdAt)}</span>
+                  </div>
+                  {c.body && c.body !== '.' && (
+                    <div className="handoff-entry-note">{renderBody(c.body)}</div>
+                  )}
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={c.commentId} className="comment-item">
               <div className="comment-author-col">
@@ -325,7 +362,7 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
                 <div className="comment-meta">
                   <span className="comment-author-name">{author?.name ?? 'Unknown'}</span>
                   <span className="comment-time">{relativeTime(c.createdAt)}</span>
-                  {c.authorId === currentUserId && (
+                  {c.authorId === currentUserId && c.kind === 'comment' && (
                     <button
                       type="button"
                       className="comment-delete-btn"
