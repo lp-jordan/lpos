@@ -60,6 +60,8 @@ import { EpReleaseService } from './ep-release-service';
 import { BackupService } from './backup-service';
 import { B2MediaSyncService } from './b2-media-sync-service';
 import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
+import { getMonitorRegistry } from './monitor-registry';
+import { HandoffStaleMonitor } from './monitors/handoff-stale-monitor';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -274,6 +276,15 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   cloudflareOrphanReconciler.start();
   globalThis.__lpos_cloudflareOrphanReconciler = cloudflareOrphanReconciler;
 
+  // MonitorRegistry — the foundation seam for the planned LPOS-wide "traffic
+  // controller" (see workspace memory project_brain_agent). New background
+  // watchers register here instead of spinning their own setInterval, which
+  // gives us one place for admin enable/disable, status, and error isolation.
+  // First consumer: HandoffStaleMonitor (re-pings idle task handoffs).
+  const monitors = getMonitorRegistry();
+  monitors.register(new HandoffStaleMonitor());
+  monitors.startAll();
+
   await Promise.all([
     slateService.start(),
     transcripterService.start(),
@@ -327,6 +338,7 @@ export async function stopServices(): Promise<void> {
   backupService?.stop();
   b2MediaSyncService?.stop();
   cloudflareOrphanReconciler?.stop();
+  getMonitorRegistry().stopAll();
   wledService?.stop();
   await Promise.all([
     slateService?.stop(),
