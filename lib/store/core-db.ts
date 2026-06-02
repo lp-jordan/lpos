@@ -134,15 +134,19 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_deliverable_assets_asset ON deliverable_assets(asset_id);
 
     CREATE TABLE IF NOT EXISTS task_comments (
-      comment_id TEXT PRIMARY KEY,
-      task_id    TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
-      body       TEXT NOT NULL,
-      author_id  TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      edited_at  TEXT
+      comment_id  TEXT PRIMARY KEY,
+      task_id     TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+      body        TEXT NOT NULL,
+      author_id   TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      edited_at   TEXT,
+      kind        TEXT NOT NULL DEFAULT 'comment',
+      metadata    TEXT,
+      attachments TEXT NOT NULL DEFAULT '[]'
     );
     CREATE INDEX IF NOT EXISTS idx_task_comments_task   ON task_comments(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_comments_author ON task_comments(author_id);
+    CREATE INDEX IF NOT EXISTS idx_task_comments_kind   ON task_comments(task_id, kind);
 
     CREATE TABLE IF NOT EXISTS task_categories (
       category_id TEXT PRIMARY KEY,
@@ -392,6 +396,44 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_cold_storage_missing ON b2_cold_storage_objects(missing_since) WHERE missing_since IS NOT NULL AND deleted_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_cold_storage_active  ON b2_cold_storage_objects(deleted_at) WHERE deleted_at IS NULL;
+
+    -- Task handoffs — explicit chain-of-custody events tracked separately from
+    -- task_comments so the stale-activity monitor can do a cheap partial-indexed
+    -- sweep without scanning the (large) comments table. The companion comment
+    -- row in task_comments (kind='handoff') is the human-readable artifact;
+    -- this row is the machine-readable monitor state. See docs for the
+    -- "completed" semantics — only real activity by a target assignee
+    -- (status_change | comment) flips completed_at; ack resets next_check_at
+    -- but does NOT complete the handoff.
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      handoff_id        TEXT PRIMARY KEY,
+      task_id           TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+      from_user_id      TEXT NOT NULL,
+      to_user_ids       TEXT NOT NULL,          -- JSON array of user IDs
+      prior_assignees   TEXT NOT NULL,          -- JSON array, for audit
+      note              TEXT NOT NULL,
+      created_at        TEXT NOT NULL,
+      ack_at            TEXT,
+      ack_user_id       TEXT,
+      completed_at      TEXT,
+      completed_reason  TEXT,                   -- 'status_change' | 'comment' | 'next_handoff' | 'manual'
+      next_check_at     TEXT,                   -- NULL once completed
+      last_alert_at     TEXT,
+      alert_count       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON task_handoffs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_handoffs_pending ON task_handoffs(next_check_at) WHERE completed_at IS NULL;
+
+    -- Generic operational-knob KV (per workspace memory feedback_doppler_vs_admin_settings:
+    -- knobs go in SQLite, not Doppler — credentials stay in Doppler). Values
+    -- are JSON-encoded so the same table holds numbers, strings, booleans, and
+    -- small arrays/objects. Used by MonitorRegistry monitors for their per-
+    -- monitor thresholds + enable toggles.
+    CREATE TABLE IF NOT EXISTS lpos_settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -750,6 +792,62 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`ALTER TABLE b2_sync_config ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`);
   } catch {
     // Column already exists
+  }
+
+  // v20: Task handoff feature — kind+metadata on task_comments (so handoff
+  // entries are typed alongside regular comments), task_handoffs table (machine-
+  // readable monitor state, separate from the comment thread so the stale-
+  // activity monitor can use a partial index), and lpos_settings KV for the
+  // MonitorRegistry's per-monitor knobs.
+  try {
+    db.exec(`ALTER TABLE task_comments ADD COLUMN kind TEXT NOT NULL DEFAULT 'comment'`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE task_comments ADD COLUMN metadata TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_task_comments_kind ON task_comments(task_id, kind)`);
+  } catch {
+    // Index create is idempotent on its own; defensively wrapped for symmetry
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_handoffs (
+        handoff_id        TEXT PRIMARY KEY,
+        task_id           TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+        from_user_id      TEXT NOT NULL,
+        to_user_ids       TEXT NOT NULL,
+        prior_assignees   TEXT NOT NULL,
+        note              TEXT NOT NULL,
+        created_at        TEXT NOT NULL,
+        ack_at            TEXT,
+        ack_user_id       TEXT,
+        completed_at      TEXT,
+        completed_reason  TEXT,
+        next_check_at     TEXT,
+        last_alert_at     TEXT,
+        alert_count       INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON task_handoffs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_handoffs_pending ON task_handoffs(next_check_at) WHERE completed_at IS NULL;
+    `);
+  } catch (err) {
+    console.warn('[core-db v20] task_handoffs create skipped:', (err as Error).message);
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS lpos_settings (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  } catch (err) {
+    console.warn('[core-db v20] lpos_settings create skipped:', (err as Error).message);
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
