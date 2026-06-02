@@ -146,7 +146,12 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_task_comments_task   ON task_comments(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_comments_author ON task_comments(author_id);
-    CREATE INDEX IF NOT EXISTS idx_task_comments_kind   ON task_comments(task_id, kind);
+    -- NOTE: idx_task_comments_kind is created in runMigrations v20 AFTER the
+    -- ALTER TABLE that adds the kind column. Putting the index here would
+    -- fire BEFORE the ALTER on existing DBs (CREATE TABLE IF NOT EXISTS is a
+    -- no-op, so the kind column would not exist yet) and crash startup with
+    -- "no such column: kind". Fresh DBs still get the index -- runMigrations
+    -- runs immediately after initSchema in getCoreDb().
 
     CREATE TABLE IF NOT EXISTS task_categories (
       category_id TEXT PRIMARY KEY,
