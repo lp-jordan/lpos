@@ -973,3 +973,25 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Assumptions / follow-ups:**
 - If files > 2 GB are regularly uploaded and need to be sent to Frame.io without compression, verify that the `COMPRESS_THRESHOLD_BYTES` (1.9 GB) in `frameio-compress.ts` is still correct.
 - The 95% cap in ingest progress (`Math.min(95, ...)`) is intentional — it leaves headroom for post-stream processing. No change needed there.
+
+---
+
+## 2026-05-30 — Frame.io upload fix: use server-determined media_type from create response as PUT Content-Type
+
+**Timestamp:** 2026-05-30T17:24:33Z
+
+**User prompt (verbatim):** Pasted the new diagnostic output from the failing upload, including `SignedHeaders=[content-type;host;x-amz-acl]` and S3's full `<CanonicalRequest>` block showing `content-type:video/mp4` as the value sent. Full multi-line log with parts 1–4/35 failing identically, each with `SignatureDoesNotMatch`, ending in `[frameio] upload failed: S3 PUT part 2/35 failed: 403 [SignatureDoesNotMatch] ...`.
+
+**Response summary:** The diagnostic (commit 9c72abd) pinpointed it: Frame.io signs each presigned upload_url with `SignedHeaders=content-type;host;x-amz-acl`, meaning the `Content-Type` value sent on the PUT must EXACTLY equal what Frame.io signed for — not just any plausible MIME for the file. The caller (`frameio-upload.ts`) was passing `asset.mimeType ?? 'video/mp4'`, which is a hint that can diverge from what Frame.io actually chose: Frame.io derives the file's media type (likely from the `name` extension passed in the create call), the asset's stored mimeType can be wrong or stale, and the fallback `'video/mp4'` is wrong outright for any non-mp4 file. Either way we ship a Content-Type ≠ what Frame.io signed → 403 on every part. **Fix**: read the `media_type` field from the `local_upload` create response (it's a *required* field on `FileWithUploadUrls` per the V4 OpenAPI spec — Frame.io always returns the server-chosen media type) and use that exact value as the PUT's Content-Type. This guarantees equality by construction regardless of how Frame.io derives it; we don't need to mirror their algorithm. Caller's `mimeType` argument is retained as a fallback in case `media_type` is somehow missing. Added a one-line log when the two differ, so future investigations can see at a glance which file types tend to diverge.
+
+**Files changed:**
+- `lpos-dashboard/lib/services/frameio.ts` — (1) added `media_type?: string` to the `createBody.data` type; (2) after extracting `fileId`/`uploadUrls`, extract `signedContentType = fileRecord.media_type || mimeType` and log if they differ; (3) PUT now sends `Content-Type: signedContentType` instead of `Content-Type: mimeType`.
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** Use Frame.io's authoritative value rather than try to predict it. The alternative (derive Content-Type locally from the file extension via a mime-lookup) duplicates Frame.io's logic and would silently drift the moment they change their mapping or add a new extension. Reading the value from the response is one line, has zero failure modes (the field is required per spec), and is self-correcting forever. The `|| mimeType` fallback keeps the old behaviour on the impossible edge case of a server response missing `media_type`. Kept the diagnostic logging from 9c72abd in place — if anything still goes wrong, the next failure will name it precisely.
+
+**Alternatives considered:** (a) Derive Content-Type from `uploadName`'s extension via a mime-types lookup — rejected for the duplication-of-logic reason above. (b) Hardcode `Content-Type: application/octet-stream` — would only work if Frame.io defaults to that, which the spec doesn't promise; brittle. (c) Skip `Content-Type` entirely (Frame.io's spec only mandates `x-amz-acl: private` on the PUT) — rejected; `SignedHeaders` includes `content-type`, so the header must be present and must match. (d) Add a retry that flips Content-Type on mismatch — needless given the deterministic fix is available.
+
+**Commands run:** `npx tsc --noEmit` → exit 0 (no type errors). No build/test run (server lifecycle is user-managed).
+
+**Assumptions / follow-ups:** Assumes `media_type` is always present in the create response (V4 OpenAPI says `required`). Restart LPOS and retry the upload; the `[frameio-v4] signed Content-Type = "<X>" (caller passed "<Y>")` log will be useful if there's still any mismatch (very unlikely). If parts continue to 403 with `SignatureDoesNotMatch`, the next thing to investigate is whether undici fetch is silently adding a `Transfer-Encoding: chunked` header that isn't in `SignedHeaders`. lpos-dashboard committed (not pushed).
