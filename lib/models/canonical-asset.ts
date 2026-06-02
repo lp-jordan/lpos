@@ -39,7 +39,10 @@ export interface CanonicalEditorialLink {
   resolve_project_id: string | null;
   resolve_timeline_name: string | null;
   resolve_timeline_unique_id: string | null;
+  resolve_timeline_start_timecode: string | null;
+  resolve_timeline_fps: number | null;
   editpanel_task_id: string | null;
+  rendered_from_machine: string | null;
   registered_by: string | null;
   registered_at: string | null;
   writeback_status: CanonicalWritebackStatus;

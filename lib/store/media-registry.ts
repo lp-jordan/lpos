@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   CloudflareStreamInfo,
+  EditpanelRenderInfo,
   FrameIOInfo,
   LeaderPassInfo,
   MediaAsset,
@@ -42,6 +43,10 @@ export interface RegisterInput {
   existingAssetId?: string;
   /** Pre-computed SHA256 hash — avoids a second full-file read during registration. */
   preComputedHash?: string | null;
+  /** Editpanel render provenance — when present, an editorial_links row ties this
+   *  asset back to a Resolve timeline. See EditpanelRenderInfo. Null for browser
+   *  uploads. Phase 5c.1 (2026-06-02). */
+  editpanelRender?: EditpanelRenderInfo | null;
 }
 
 export function registerAsset(input: RegisterInput): MediaAsset {

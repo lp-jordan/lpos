@@ -210,6 +210,29 @@ export function defaultSardius(): SardiusInfo {
 
 export type StorageType = 'uploaded' | 'registered';
 
+/**
+ * Editpanel render provenance for an asset that was rendered + uploaded by
+ * editpanel (Phase 5c.1 — comment-marker tether).
+ *
+ * Captured at upload finalize; persisted as a row in the `editorial_links`
+ * table joined to this asset. Null for assets uploaded via the browser, legacy
+ * imports, or any non-editpanel source.
+ *
+ * `timelineUid` is the stable tether key (Resolve `Timeline.GetUniqueId()`) —
+ * rename-safe, survives save/reopen + Resolve restart, but does NOT survive
+ * .drt export+reimport or timeline duplicate (those genuinely are new
+ * timelines).
+ */
+export interface EditpanelRenderInfo {
+  timelineUid: string;
+  timelineName: string;
+  timelineStartTimecode: string;
+  timelineFps: number;
+  resolveProjectName: string;
+  renderedAt: string;
+  renderedFromMachine: string | null;
+}
+
 export interface MediaAsset {
   assetId: string;
   projectId: string;
@@ -229,4 +252,5 @@ export interface MediaAsset {
   cloudflare: CloudflareStreamInfo;
   leaderpass: LeaderPassInfo;
   sardius: SardiusInfo;
+  editpanelRender: EditpanelRenderInfo | null;
 }

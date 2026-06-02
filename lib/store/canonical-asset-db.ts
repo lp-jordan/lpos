@@ -42,7 +42,10 @@ function initSchema(db: DatabaseSync): void {
       resolve_project_id TEXT,
       resolve_timeline_name TEXT,
       resolve_timeline_unique_id TEXT,
+      resolve_timeline_start_timecode TEXT,
+      resolve_timeline_fps REAL,
       editpanel_task_id TEXT,
+      rendered_from_machine TEXT,
       registered_by TEXT,
       registered_at TEXT,
       writeback_status TEXT NOT NULL DEFAULT 'not_attempted',
@@ -51,6 +54,10 @@ function initSchema(db: DatabaseSync): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_editorial_links_asset_id ON editorial_links(asset_id);
+    CREATE INDEX IF NOT EXISTS idx_editorial_links_timeline_uid
+      ON editorial_links(resolve_timeline_unique_id, registered_at DESC);
 
     CREATE TABLE IF NOT EXISTS asset_versions (
       asset_version_id TEXT PRIMARY KEY,
@@ -189,6 +196,21 @@ function migrateSchema(db: DatabaseSync): void {
   const orphanCols = db.prepare("PRAGMA table_info('cloudflare_orphans')").all() as Array<{ name: string }>;
   if (orphanCols.length > 0 && !orphanCols.some((c) => c.name === 'name_when_orphaned')) {
     db.exec('ALTER TABLE cloudflare_orphans ADD COLUMN name_when_orphaned TEXT');
+  }
+  // editorial_links: render-metadata columns added 5c.1 (2026-06-02) for editpanel
+  // comment-marker tether. Persist timeline TC + fps + render-host so marker
+  // placement can be recomputed without re-querying Resolve.
+  const editLinkCols = db.prepare("PRAGMA table_info('editorial_links')").all() as Array<{ name: string }>;
+  if (editLinkCols.length > 0) {
+    if (!editLinkCols.some((c) => c.name === 'resolve_timeline_start_timecode')) {
+      db.exec('ALTER TABLE editorial_links ADD COLUMN resolve_timeline_start_timecode TEXT');
+    }
+    if (!editLinkCols.some((c) => c.name === 'resolve_timeline_fps')) {
+      db.exec('ALTER TABLE editorial_links ADD COLUMN resolve_timeline_fps REAL');
+    }
+    if (!editLinkCols.some((c) => c.name === 'rendered_from_machine')) {
+      db.exec('ALTER TABLE editorial_links ADD COLUMN rendered_from_machine TEXT');
+    }
   }
 }
 

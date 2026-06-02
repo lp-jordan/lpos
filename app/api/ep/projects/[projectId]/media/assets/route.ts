@@ -6,9 +6,14 @@ import { requireEpToken } from '@/lib/services/ep-auth';
 /**
  * GET /api/ep/projects/:projectId/media/assets  (X-EP-Token)
  *
- * Lightweight list of a project's media-registry assets (id + names), used by
- * EditPanel's pre-export version-conflict check. Intentionally minimal — not the
- * full MediaAsset payload.
+ * Lightweight list of a project's media-registry assets, used by EditPanel's
+ * pre-export version-conflict check AND (Phase 5c.3 — comment-marker pull) as
+ * the asset-discovery source for the timeline↔asset tether.
+ *
+ * Each asset includes `editpanelRender` when it was rendered + uploaded via
+ * editpanel — null otherwise (browser uploads, legacy imports). The orchestrator
+ * filters by `editpanelRender !== null` and groups by `editpanelRender.timelineUid`
+ * to identify which timelines have current uploads.
  */
 export async function GET(
   req: NextRequest,
@@ -25,6 +30,7 @@ export async function GET(
     assetId: a.assetId,
     name: a.name,
     originalFilename: a.originalFilename,
+    editpanelRender: a.editpanelRender,
   }));
 
   return NextResponse.json({ assets });

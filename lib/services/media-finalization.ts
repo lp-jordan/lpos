@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ActivityActor } from '@/lib/models/activity';
-import type { MediaAsset } from '@/lib/models/media-asset';
+import type { EditpanelRenderInfo, MediaAsset } from '@/lib/models/media-asset';
 import type { Project } from '@/lib/models/project';
 import { registerAsset, patchAsset, getAsset } from '@/lib/store/media-registry';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
@@ -35,6 +35,10 @@ export interface FinalizeInput {
   replaceAssetId?: string;
   jobId?:          string;
   actor:           ActivityActor;
+  /** Editpanel render provenance — set only when this finalize was triggered by
+   *  an editpanel-rendered upload. Persisted to editorial_links via the registry
+   *  layer. Phase 5c.1 (2026-06-02). */
+  editpanelRender?: EditpanelRenderInfo | null;
 }
 
 export type FinalizeResult =
@@ -45,7 +49,7 @@ export type FinalizeResult =
 export async function finalizeUploadedAsset(input: FinalizeInput): Promise<FinalizeResult> {
   const {
     projectId, project, filename, tempPath, mediaDir,
-    preComputedHash, replaceAssetId, jobId, actor,
+    preComputedHash, replaceAssetId, jobId, actor, editpanelRender,
   } = input;
 
   const ingestQueue = getIngestQueue();
@@ -98,6 +102,7 @@ export async function finalizeUploadedAsset(input: FinalizeInput): Promise<Final
     storageType: 'uploaded',
     existingAssetId: replaceAssetId,
     preComputedHash,
+    editpanelRender: editpanelRender ?? null,
   });
 
   // ── Rename temp → stable ────────────────────────────────────────────────────

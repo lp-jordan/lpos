@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import type { ActivityActor } from '@/lib/models/activity';
+import type { EditpanelRenderInfo } from '@/lib/models/media-asset';
 import { getProjectStore, getIngestQueueService } from '@/lib/services/container';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { getIngestQueueDb } from '@/lib/store/ingest-queue-db';
@@ -30,6 +31,56 @@ interface UploadSessionRow {
   status: string;
 }
 
+/**
+ * Parse the optional `renderMeta` field from the finalize request body.
+ *
+ * Returns:
+ *  - `EditpanelRenderInfo` when body present + renderMeta valid → persisted to editorial_links
+ *  - `null` when body is missing/empty OR renderMeta not present → browser uploads, old editpanel clients
+ *  - throws on present-but-malformed renderMeta → caller returns 400 (loud failure for editpanel bugs)
+ *
+ * Lenient on absence (old clients keep working), strict on shape (new clients can't silently corrupt the tether).
+ */
+async function parseRenderMeta(req: NextRequest): Promise<EditpanelRenderInfo | null> {
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return null; // empty / invalid JSON body → treat as no renderMeta
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const renderMeta = (raw as { renderMeta?: unknown }).renderMeta;
+  if (renderMeta === undefined || renderMeta === null) return null;
+  if (typeof renderMeta !== 'object') {
+    throw new Error('renderMeta must be an object');
+  }
+  const m = renderMeta as Record<string, unknown>;
+  const requiredString = (key: string): string => {
+    const v = m[key];
+    if (typeof v !== 'string' || !v.trim()) {
+      throw new Error(`renderMeta.${key} must be a non-empty string`);
+    }
+    return v;
+  };
+  const fps = m.timelineFps;
+  if (typeof fps !== 'number' || !Number.isFinite(fps) || fps <= 0) {
+    throw new Error('renderMeta.timelineFps must be a positive number');
+  }
+  const renderedFromMachine = m.renderedFromMachine;
+  if (renderedFromMachine !== null && renderedFromMachine !== undefined && typeof renderedFromMachine !== 'string') {
+    throw new Error('renderMeta.renderedFromMachine must be a string or null');
+  }
+  return {
+    timelineUid: requiredString('timelineUid'),
+    timelineName: requiredString('timelineName'),
+    timelineStartTimecode: requiredString('timelineStartTimecode'),
+    timelineFps: fps,
+    resolveProjectName: requiredString('resolveProjectName'),
+    renderedAt: requiredString('renderedAt'),
+    renderedFromMachine: (renderedFromMachine as string | null | undefined) ?? null,
+  };
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string; uploadId: string }> },
@@ -38,6 +89,17 @@ export async function POST(
   if (auth instanceof NextResponse) return auth;
 
   const { projectId, uploadId } = await params;
+
+  // Parse optional renderMeta from the body BEFORE doing any other work — bad body
+  // is a client bug and should 400 loudly rather than failing mid-finalize. Note:
+  // req.json() consumes the body, so this must happen before any other read.
+  let editpanelRender: EditpanelRenderInfo | null;
+  try {
+    editpanelRender = await parseRenderMeta(req);
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+  }
+
   const db = getIngestQueueDb();
 
   const session = db.prepare(
@@ -107,6 +169,7 @@ export async function POST(
       replaceAssetId: session.replace_asset_id ?? undefined,
       jobId: session.job_id,
       actor,
+      editpanelRender,
     });
   } catch (err) {
     const msg = (err as Error).message;
@@ -134,6 +197,7 @@ export async function POST(
         replaceAssetId: candidateId,
         jobId: session.job_id,
         actor,
+        editpanelRender,
       });
     } catch (err) {
       const msg = (err as Error).message;

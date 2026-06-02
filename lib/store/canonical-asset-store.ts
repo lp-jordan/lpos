@@ -8,11 +8,13 @@ import type {
   CanonicalAssetVersion,
   CanonicalDistributionProvider,
   CanonicalDistributionRecord,
+  CanonicalEditorialLink,
   CanonicalMediaFile,
   CanonicalTranscriptionJob,
 } from '@/lib/models/canonical-asset';
 import type {
   CloudflareStreamInfo,
+  EditpanelRenderInfo,
   FrameIOInfo,
   LeaderPassInfo,
   MediaAsset,
@@ -45,6 +47,12 @@ export interface CanonicalRegisterInput {
   existingAssetId?: string;
   /** Pre-computed SHA256 hash (avoids a second full-file read during registration). */
   preComputedHash?: string | null;
+  /**
+   * Editpanel render provenance — when present, an editorial_links row is created
+   * alongside the asset (or version) tying it back to a Resolve timeline.
+   * Phase 5c.1 (2026-06-02). See EditpanelRenderInfo for field semantics.
+   */
+  editpanelRender?: EditpanelRenderInfo | null;
 }
 
 export interface CanonicalAssetPatch {
@@ -66,6 +74,7 @@ type VersionRow = Row & CanonicalAssetVersion;
 type MediaFileRow = Row & CanonicalMediaFile;
 type DistributionRow = Row & CanonicalDistributionRecord;
 type TranscriptionRow = Row & CanonicalTranscriptionJob;
+type EditorialLinkRow = Row & CanonicalEditorialLink;
 type Row = Record<string, unknown>;
 type SqlParams = Record<string, string | number | null>;
 
@@ -75,6 +84,7 @@ type AssetBundle = {
   mediaFiles: MediaFileRow[];
   distributions: DistributionRow[];
   transcriptions: TranscriptionRow[];
+  editorialLinks: EditorialLinkRow[];
 };
 
 export interface CanonicalVersionCandidate {
@@ -185,6 +195,40 @@ function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | n
   );
 }
 
+/** Latest editorial link for an asset (most-recent editpanel render). Null when this
+ *  asset was uploaded via the browser, legacy import, or any non-editpanel source. */
+function pickLatestEditorialLink(bundle: AssetBundle): EditorialLinkRow | null {
+  // editorialLinks already returned ordered by registered_at DESC.
+  return bundle.editorialLinks[0] ?? null;
+}
+
+/** Convert an editorial_links row to the editpanelRender projection shape. Returns
+ *  null when any of the required fields are missing — a partial row means the link
+ *  came from somewhere other than the 5c.1 finalize path and shouldn't drive marker
+ *  placement (the orchestrator filters by `editpanelRender !== null`). */
+function editorialLinkToProjection(row: EditorialLinkRow | null): EditpanelRenderInfo | null {
+  if (!row) return null;
+  if (
+    !row.resolve_timeline_unique_id
+    || !row.resolve_timeline_name
+    || !row.resolve_timeline_start_timecode
+    || row.resolve_timeline_fps === null
+    || !row.resolve_project_name
+    || !row.registered_at
+  ) {
+    return null;
+  }
+  return {
+    timelineUid: row.resolve_timeline_unique_id,
+    timelineName: row.resolve_timeline_name,
+    timelineStartTimecode: row.resolve_timeline_start_timecode,
+    timelineFps: row.resolve_timeline_fps,
+    resolveProjectName: row.resolve_project_name,
+    renderedAt: row.registered_at,
+    renderedFromMachine: row.rendered_from_machine,
+  };
+}
+
 /** Async (non-blocking) SHA256 hash using streams. Use this in request handlers. */
 export async function computeFileHashAsync(filePath: string | null): Promise<string | null> {
   if (!filePath || !fs.existsSync(filePath)) return null;
@@ -274,8 +318,15 @@ function rowToAssetBundle(assetId: string): AssetBundle | null {
        ORDER BY updated_at DESC, created_at DESC`,
     ).all(...versionIds) as TranscriptionRow[]
     : [];
+  // editorial_links are keyed by asset_id (not asset_version_id) — one link per
+  // editpanel render of any version of this asset. Latest-first so projection
+  // surfaces the most recent render's metadata.
+  const editorialLinks = db.prepare(
+    `SELECT * FROM editorial_links WHERE asset_id = ?
+     ORDER BY registered_at DESC, created_at DESC`,
+  ).all(assetId) as EditorialLinkRow[];
 
-  return { asset, versions, mediaFiles, distributions, transcriptions };
+  return { asset, versions, mediaFiles, distributions, transcriptions, editorialLinks };
 }
 
 function bundleToProjection(bundle: AssetBundle): MediaAsset {
@@ -375,6 +426,7 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
       uploadedAt: sardius?.published_at ?? sardiusMeta.uploadedAt ?? null,
       lastError: sardius?.last_error ?? sardiusMeta.lastError ?? null,
     },
+    editpanelRender: editorialLinkToProjection(pickLatestEditorialLink(bundle)),
   };
 }
 
@@ -447,6 +499,63 @@ function insertTranscription(transcription: CanonicalTranscriptionJob): void {
       @created_at, @updated_at
     )
   `).run(transcription as unknown as SqlParams);
+}
+
+function insertEditorialLink(link: CanonicalEditorialLink): void {
+  const db = getCanonicalAssetDb();
+  db.prepare(`
+    INSERT INTO editorial_links (
+      editorial_link_id, asset_id, resolve_project_name, resolve_project_id,
+      resolve_timeline_name, resolve_timeline_unique_id,
+      resolve_timeline_start_timecode, resolve_timeline_fps,
+      editpanel_task_id, rendered_from_machine, registered_by, registered_at,
+      writeback_status, writeback_error, last_confirmed_at,
+      created_at, updated_at
+    ) VALUES (
+      @editorial_link_id, @asset_id, @resolve_project_name, @resolve_project_id,
+      @resolve_timeline_name, @resolve_timeline_unique_id,
+      @resolve_timeline_start_timecode, @resolve_timeline_fps,
+      @editpanel_task_id, @rendered_from_machine, @registered_by, @registered_at,
+      @writeback_status, @writeback_error, @last_confirmed_at,
+      @created_at, @updated_at
+    )
+  `).run(link as unknown as SqlParams);
+}
+
+/**
+ * Insert an editorial_links row for an editpanel-rendered upload. Builds a fully-
+ * populated row from the EditpanelRenderInfo shape; idempotency lives at the caller
+ * (only invoked from registerCanonicalMediaAsset's editpanel-finalize path).
+ *
+ * Each call creates a NEW row — re-rendering the same timeline from editpanel
+ * produces a new asset version AND a new editorial_links row, so the latest-by-
+ * registered_at sort in rowToAssetBundle picks up the current cut's metadata.
+ */
+function persistEditpanelRender(
+  assetId: string,
+  render: EditpanelRenderInfo,
+  registeredBy: string | null,
+  timestamp: string,
+): void {
+  insertEditorialLink({
+    editorial_link_id: randomUUID(),
+    asset_id: assetId,
+    resolve_project_name: render.resolveProjectName,
+    resolve_project_id: null,
+    resolve_timeline_name: render.timelineName,
+    resolve_timeline_unique_id: render.timelineUid,
+    resolve_timeline_start_timecode: render.timelineStartTimecode,
+    resolve_timeline_fps: render.timelineFps,
+    editpanel_task_id: null,
+    rendered_from_machine: render.renderedFromMachine,
+    registered_by: registeredBy,
+    registered_at: render.renderedAt || timestamp,
+    writeback_status: 'not_attempted',
+    writeback_error: null,
+    last_confirmed_at: null,
+    created_at: timestamp,
+    updated_at: timestamp,
+  });
 }
 
 function importLegacyAsset(projectId: string, legacyAsset: MediaAsset): void {
@@ -903,6 +1012,11 @@ export function registerCanonicalMediaAsset(input: CanonicalRegisterInput): Medi
     });
 
     db.prepare('UPDATE assets SET updated_at = ? WHERE asset_id = ?').run(timestamp, assetId);
+
+    if (input.editpanelRender) {
+      persistEditpanelRender(assetId, input.editpanelRender, null, timestamp);
+    }
+
     return getCanonicalMediaAsset(input.projectId, assetId)!;
   }
 
@@ -964,6 +1078,10 @@ export function registerCanonicalMediaAsset(input: CanonicalRegisterInput): Medi
     created_at: timestamp,
     updated_at: timestamp,
   });
+
+  if (input.editpanelRender) {
+    persistEditpanelRender(assetId, input.editpanelRender, null, timestamp);
+  }
 
   return getCanonicalMediaAsset(input.projectId, assetId)!;
 }
