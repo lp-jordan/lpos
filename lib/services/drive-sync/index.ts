@@ -30,6 +30,7 @@ ensureRegistered();
 
 export { getAdapterByFolderType, getAdapterByEntityType } from './registry';
 export { purgeDriveAssetSubtree } from './adapters/assets';
+export { softDeleteLocalFile } from './local-trash';
 export type {
   FolderType,
   FolderContext,
