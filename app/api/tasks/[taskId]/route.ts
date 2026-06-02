@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskStore } from '@/lib/services/container';
+import { getTaskStore, getTaskHandoffStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
@@ -70,6 +70,12 @@ export async function PATCH(
           return notifyTaskEvent({ userId: uid, type: 'status_changed', taskId, taskTitle: updated.description, fromUserId: session.userId, fromName: actorName });
         }),
     );
+
+    // Activity-completes-handoff: a status change by a current target assignee
+    // counts as the new owner engaging, which silences any pending handoff
+    // alarm on this task. The store helper no-ops when the actor isn't a
+    // target, so no need to gate the call.
+    getTaskHandoffStore().completeOnActivity(taskId, session.userId, 'status_change');
   }
 
   // Notify newly added assignees

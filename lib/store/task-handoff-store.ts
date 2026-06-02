@@ -208,4 +208,27 @@ export class TaskHandoffStore {
     if (result.changes === 0) return null;
     return this.getById(handoffId);
   }
+
+  /**
+   * Activity-completes-handoff: if the given actor is a target of the task's
+   * pending handoff, mark that handoff completed with the given reason.
+   *
+   * Per locked design (workspace memory feedback): the alarm only silences on
+   * real activity by a target assignee — comments + status changes count, ack
+   * does not (the ack endpoint never calls this). Activity by users outside
+   * the target set (handoff-er, an admin, etc.) does not silence the alarm
+   * either — the point is to make sure the actual new owner engages.
+   *
+   * Returns the closed handoff, or null if nothing was eligible.
+   */
+  completeOnActivity(
+    taskId:  string,
+    actorId: string,
+    reason:  'status_change' | 'comment',
+  ): TaskHandoff | null {
+    const pending = this.getPendingForTask(taskId);
+    if (!pending) return null;
+    if (!pending.toUserIds.includes(actorId)) return null;
+    return this.markCompleted(pending.handoffId, reason);
+  }
 }

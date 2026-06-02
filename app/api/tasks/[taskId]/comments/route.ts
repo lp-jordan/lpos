@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskStore, getTaskCommentStore } from '@/lib/services/container';
+import { getTaskStore, getTaskCommentStore, getTaskHandoffStore } from '@/lib/services/container';
 import { getAllUsers } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 
@@ -56,6 +56,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     mentions,
     attachments,
   });
+
+  // Activity-completes-handoff: a regular comment by a current target assignee
+  // silences any pending handoff alarm on this task. Only kind='comment'
+  // comments reach this route (handoff + handoff_ack are written by their own
+  // typed endpoints), so we don't need to inspect the kind here.
+  getTaskHandoffStore().completeOnActivity(taskId, session.userId, 'comment');
 
   // Notify: assignees (except commenter) + @mentioned users
   const actorName = allUsers.find((u) => u.id === session.userId)?.name;
