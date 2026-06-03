@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-06-03 — Audit: "Sort by latest comment" in project media
+
+**Timestamp:** 2026-06-03T00:10:00Z
+
+**Prompt:** "Can we check to ensure the sort by latest comment method in project media is working correctly?"
+
+**Summary:** Read-through of the four paths that make this sort work: (a) the DB query, (b) the API serialization, (c) the webhook ingest that produces the underlying events, and (d) the UI comparator. The core mechanism is correct: indexes are right, asset_id is always set on the events, Map→Record serialization doesn't drop entries, and the comparator's nulls-last + stable-name-tiebreak is intentional design (per the code comment). **Three behavioral issues were found that can make the sort lag or under-report — none are addressed in this entry; they're reported back to the user for a fix decision.**
+
+**Files changed:**
+- `docs/project history.md`, `docs/changelog.json` — audit-only entry; **no code changes**.
+
+**Findings:**
+
+1. **LPOS-authored comments don't update sort until Frame.io webhook echoes them back.** `POST /api/projects/:p/media/:a/frameio/comments` posts to Frame.io and patches local `commentCount` but does NOT write to `activity_events`. The event only appears when the webhook arrives. Effect: sort lags by webhook round-trip time, and is permanently wrong if a webhook is dropped. Fix: insert the activity_event server-side in the POST handler with the same `dedupe_key` the webhook would use, so the eventual webhook delivery dedupes via the unique index. ~15-line change.
+
+2. **Comment edits/completions/deletions don't bump recency.** Webhook handler drops everything except `comment.created` at `webhooks/frameio/route.ts:153`. SQL only includes `frameio.comment.created` and `frameio.comment.reply.created`. This is correct if "latest comment" means "latest comment **created**"; wrong if it means "latest **activity** on a comment thread". Design call — flagged for user decision, not a code bug.
+
+3. **Webhook drops events when `frameio.assetId` no longer matches.** `findAssetByFrameioFileId` walks every project and matches by `asset.frameio.assetId`. If that ID was cleared (e.g. during reset/republish), the webhook logs a warning and drops the event. Edge case, rare in practice, but it's the failure mode where the sort would be silently wrong.
+
+**Decision rationale:** Per the original plan, item 2 was scoped as "audit, pause, report — don't fix anything beyond an obvious defect." None of the three findings is an obvious defect with a single right answer (#1 has a clean fix but should be confirmed; #2 is a design call; #3 is a separate webhook-resilience concern). Reporting back rather than landing speculative fixes.
+
+**Alternatives considered:** Land the issue-1 fix inline as part of the audit — rejected to honor the "pause and ask" plan and let the user weigh issue-2 alongside it.
+
+**Commands/tests run:** Read-only inspection of:
+- `app/api/projects/[projectId]/media/route.ts`
+- `components/projects/MediaTab.tsx`
+- `lib/store/activity-db.ts`
+- `app/api/webhooks/frameio/route.ts`
+- `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts`
+
+**Assumptions / follow-ups:** Awaiting user decision on which of the three findings to fix and how. Likely outcome is at least #1 (instant local activity_events).
+
+---
+
 ## 2026-06-03 — Bulk transcript download streams a zip
 
 **Timestamp:** 2026-06-03T00:05:00Z

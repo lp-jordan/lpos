@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:10:00Z",
+    "title": "Audit: \"Sort by latest comment\" in project media",
+    "summary": "Read-through audit of the sort-by-latest-comment path in MediaTab — the DB query, API serialization, webhook ingest, and UI comparator. Core mechanism is correct (indexes are right, asset_id is always set, Map→Record doesn't drop entries, comparator nulls-last is intentional). Three behavioral issues were surfaced for user decision and NOT fixed in this entry: (1) LPOS-authored comments don't update the sort until the Frame.io webhook echoes back — a webhook delay or drop leaves the sort stale; (2) comment edits/completions/deletions don't bump recency because the webhook handler drops everything except comment.created — this is a design call about what 'latest' means; (3) webhook drops events when the asset's frameio.assetId no longer matches. Audit-only entry — no code changed."
+  },
+  {
     "timestamp": "2026-06-03T00:05:00Z",
     "title": "Bulk transcript download streams a zip",
     "summary": "Rewrote /api/projects/[projectId]/transcripts/download-all from a concatenated plaintext blob to a streamed .zip, one .txt per transcript named by display filename, with collision-safe deduping. Same archiver+PassThrough pattern as photos/download-zip. Preserves a single-transcript fast path: when only one transcript exists, the route streams the single .txt directly with no zip wrapper, per the user's stated rule. Cross-browser/OS safe via standard application/zip + Content-Disposition headers; the existing 'Download all transcripts' button needs no change."
