@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-06-03 — Transcript selection batch bar streams a zip (the actual one users use)
+
+**Timestamp:** 2026-06-03T00:30:00Z
+
+**Prompt:** "Transcript bulk downloads arren't zipping I don't think?" → after probing the route, user clarified: "I selected 3 transcripts from the transcript tab and downloaded from the batch bar. Got 3 single trancsripts".
+
+**Summary:** The earlier "transcripts download-all" fix (`fcbb3c4`) only addressed one of two batch-download paths. The path the user actually uses — the in-list selection batch bar in `components/projects/ProjectDetail.tsx` (`Download TXT` / `Download Timecoded` buttons that appear when transcripts are selected via the checkbox column) — was untouched and still triggered N individual `<a>.click()` events with a 300ms gap between each. Symptom: select 3, get 3 separate save prompts and 3 separate files. Fixed by adding a new `POST /api/projects/[projectId]/transcripts/download-zip` endpoint (selection-driven, accepts `{jobIds, type}`) and rewriting `batchDownload` to POST + save the response blob.
+
+**Verification of the earlier fix:** the `download-all` route was confirmed correct via direct curl against the running server with the `LPOS_LP_TOKEN` machine token — returned `Content-Type: application/zip` and a valid 200KB zip containing 95 files for a transcript-heavy project. Build mtime (13:28:53) preceded the running server's start time (13:29:07) by 14 seconds, confirming the route was live. Audit eliminated server-side defect.
+
+**Files changed:**
+- `app/api/projects/[projectId]/transcripts/download-zip/route.ts` *(new)* — POST endpoint for selection-driven bulk zip. Same archiver+PassThrough+`Readable.toWeb` pattern as `download-all`. Single-file fast path preserves "no zip when only one" rule. Supports `type: 'txt' | 'timecoded-txt'`. Reuses `readTranscriptDownload` and `resolveTranscriptDisplayName` from `lib/transcripts/store.ts`.
+- `components/projects/ProjectDetail.tsx` (`batchDownload`) — rewritten. ≤1 eligible → keep existing direct-link single-file download (no fetch round-trip). ≥2 eligible → `fetch(POST)` to the new zip endpoint, save the response blob via `URL.createObjectURL`, parse `Content-Disposition` for the server-provided filename.
+- `docs/project history.md`, `docs/changelog.json`.
+
+**Implementation summary:**
+- **Naming convention** matches the existing single-file route: `<displayName>.txt` for `txt`, `<displayName>-timecoded.txt` for `timecoded-txt`. Same `sanitizeForFilename` regex `[^a-zA-Z0-9 _\-().]`. Collision-safe via the same `uniqueName(used, name)` helper as the `download-all` and `photos/download-zip` routes.
+- **Skip-missing semantics**: if `readTranscriptDownload` returns `null` for a jobId (e.g. `timecoded-txt` requested on a transcript with no JSON source), that entry is silently dropped from the zip — mirrors the single-file GET route's `null → 404` skip pattern at the per-jobId level. If everything is filtered out → 404 with `{error: 'No matching transcripts found'}`.
+- **Zip outer filename**: `transcripts-<projectName><-timecoded?>.zip`, sanitized. The `-timecoded` suffix distinguishes a TXT bundle from a timecoded bundle when both are requested for the same project.
+- **Client-side**: `fetch(POST).then(res.blob()).then(URL.createObjectURL).then(<a>.click)` — standard pattern. Parses the server's `Content-Disposition` header for the filename so the saved zip is named consistently with the server's choice (the browser falls back to `a.download` otherwise).
+
+**Decision rationale:** Split this out as a new route rather than overloading `download-all` because the two flows have different request shapes (GET-all vs POST-selection) and different naming preferences (timecoded vs all). The 90% shared archiver code is small enough to duplicate; refactoring into a `streamTranscriptsZip` helper can wait until a third caller appears. Single-file fast path on the server preserves the "no zip when only one" rule even if a future caller hits the endpoint with a single jobId.
+
+**Alternatives considered:**
+- Overload `download-all` with a `?jobIds=…` query param — rejected: GET URL-length limits cap real-world selections, and bulk selections fit better in a POST body.
+- Keep the client loop but build the zip in the browser via `JSZip` — rejected: requires a new client dependency, doesn't stream, and re-creates server-side zip code on the client.
+- Server-side helper extraction `streamTranscriptsZip()` shared with `download-all` — deferred per the YAGNI principle until a third zip endpoint shows up.
+
+**Commands/tests run:**
+- Earlier `download-all` route verified via `curl -sI -H "Authorization: Bearer $LPOS_LP_TOKEN" http://localhost:3000/api/projects/<id>/transcripts/download-all` → 200, `application/zip`. Downloaded body confirmed valid zip via `file` + `unzip -l` (95 entries, 205KB).
+- `npx tsc --noEmit -p tsconfig.json` — clean.
+
+**Assumptions / follow-ups:**
+- The fix requires a Next.js rebuild + server restart to pick up the new route (`app/api/.../download-zip/route.ts`) and the client change in `ProjectDetail.tsx`. User runs prod from this tree and manages the server lifecycle.
+- The right-click context menu in `TranscriptOutputList.tsx` still only exposes single-file downloads (intentional — context menu is a per-row action). No batch path from the right-click menu today.
+
+---
+
 ## 2026-06-03 — Decision: defer comment-recency cache; plan full Frame.io-comment decoupling
 
 **Timestamp:** 2026-06-03T00:20:00Z

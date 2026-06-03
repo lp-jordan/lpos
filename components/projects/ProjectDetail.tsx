@@ -232,17 +232,52 @@ function TranscriptsTab({
   async function batchDownload(type: 'txt' | 'timecoded-txt') {
     const entries = displayedTranscripts.filter((e) => selected.has(e.jobId));
     const eligible = type === 'timecoded-txt' ? entries.filter((e) => e.files.json) : entries;
-    for (let i = 0; i < eligible.length; i++) {
-      const entry = eligible[i]!;
+    if (eligible.length === 0) return;
+
+    // Single-file fast path: keep the existing direct-link download. Browser-
+    // native, no fetch round-trip, gets a sensible filename from the server's
+    // Content-Disposition on the GET endpoint.
+    if (eligible.length === 1) {
       const a = document.createElement('a');
-      a.href = getTranscriptFileUrl(entry.jobId, type);
+      a.href = getTranscriptFileUrl(eligible[0]!.jobId, type);
       a.download = '';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      if (i < eligible.length - 1) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      return;
+    }
+
+    // Multi-file: POST the selection to the new zip endpoint and save the
+    // streamed .zip via an object URL. This replaces the old loop that fired
+    // one <a>.click() per selected transcript — that flow surfaced as N
+    // separate download prompts (and the same number of saved files) instead
+    // of one zip, which is what the user expects from a "batch" action.
+    try {
+      const res = await fetch(`/api/projects/${projectId}/transcripts/download-zip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobIds: eligible.map((e) => e.jobId), type }),
+      });
+      if (!res.ok) {
+        console.error('[batchDownload] zip endpoint failed:', res.status, await res.text());
+        return;
       }
+      const blob = await res.blob();
+      // Extract the server-provided filename from Content-Disposition; fall
+      // back to a sensible default if the header is missing or malformed.
+      const cd = res.headers.get('Content-Disposition') ?? '';
+      const match = /filename="([^"]+)"/.exec(cd);
+      const filename = match?.[1] ?? `transcripts-${type === 'timecoded-txt' ? 'timecoded' : 'txt'}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[batchDownload] failed:', err);
     }
   }
 
