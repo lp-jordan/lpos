@@ -1444,11 +1444,33 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   position: fixed;
   top: 20px;
   left: 32px;
-  z-index: 40;
+  /* Sits above every modal/overlay layer in the app (highest current overlay
+   * is .restart-dialog-overlay at z-index: 10000) so the home/back affordances
+   * are never trapped behind a backdrop. New overlays MUST stay strictly below
+   * 10500; if a flow genuinely needs to block navigation (mid-upload, mid-
+   * payment), introduce a `.breadcrumb-bar--locked` modifier rather than
+   * bumping a modal above this. See docs/README.md "Navigation Invariants". */
+  z-index: 10500;
   display: flex;
   align-items: center;
   gap: 0;
   pointer-events: auto;
+  /* Subtle backing so the home + back icons stay legible on any backdrop
+   * the breadcrumb may end up floating above (modals, theater mode, etc.). */
+  padding: 2px 4px;
+  border-radius: 8px;
+  background: rgba(18, 16, 14, 0.42);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* Opt-out modifier: dim + non-interactive when a flow genuinely needs to
+ * prevent the user from leaving (mid-upload, mid-payment, etc.). Documented
+ * in docs/README.md "Navigation Invariants" — preferred over raising a modal
+ * above .breadcrumb-bar's z-index. */
+.breadcrumb-bar--locked {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .breadcrumb-back {

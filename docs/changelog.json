@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:15:00Z",
+    "title": "Breadcrumb/home occlusion guard",
+    "summary": "Forward-looking guard so the top-left breadcrumb (back arrow + home icon) cannot be hidden by a future modal or overlay. Bumped .breadcrumb-bar z-index from 40 to 10500, above the highest currently-used overlay layer (10000). Added a translucent dark backdrop with backdrop-filter: blur(6px) so the icons stay legible when floating over a modal backdrop. Added a drop-in .breadcrumb-bar--locked modifier (dim + non-interactive) as the preferred opt-out for flows that legitimately need to block navigation. Recorded the invariant and an 'adding a new overlay' checklist in docs/README.md."
+  },
+  {
     "timestamp": "2026-06-03T00:10:00Z",
     "title": "Audit: \"Sort by latest comment\" in project media",
     "summary": "Read-through audit of the sort-by-latest-comment path in MediaTab — the DB query, API serialization, webhook ingest, and UI comparator. Core mechanism is correct (indexes are right, asset_id is always set, Map→Record doesn't drop entries, comparator nulls-last is intentional). Three behavioral issues were surfaced for user decision and NOT fixed in this entry: (1) LPOS-authored comments don't update the sort until the Frame.io webhook echoes back — a webhook delay or drop leaves the sort stale; (2) comment edits/completions/deletions don't bump recency because the webhook handler drops everything except comment.created — this is a design call about what 'latest' means; (3) webhook drops events when the asset's frameio.assetId no longer matches. Audit-only entry — no code changed."

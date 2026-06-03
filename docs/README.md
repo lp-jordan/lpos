@@ -219,6 +219,33 @@ Established `max-width` breakpoints, used consistently across the file: **1300, 
 - Mobile fixes are CSS-only and verified by source analysis, not yet on-device (no browser-automation tooling installed; production server is auth-gated).
 - Minor non-blocking whitespace items remain (platform page inline `60vh`, `.activity-strip-item` max-width) — they don't cut content off.
 
+## Navigation Invariants
+
+Rules the shell honors so a user can always escape any view. New UI must not violate these.
+
+### What it does
+The top-left **breadcrumb bar** (`Breadcrumb.tsx`) hosts the back arrow + home icon + path crumbs. The home icon links to `/` and is the universal escape hatch. The bar is rendered on every non-home route by `AppShell` and is always clickable.
+
+### Key files
+| File | Role |
+|------|------|
+| `components/shell/Breadcrumb.tsx` | Renders the back arrow, home `<Link href="/">`, and the path crumbs. Mounted unconditionally on every non-home route. |
+| `components/shell/AppShell.tsx` | Mounts `<Breadcrumb />` inside the `app-inner` shell (every route except `/`, which is itself the home). |
+| `app/globals.css` (`.breadcrumb-bar`) | Position + stacking. `z-index: 10500` deliberately sits above the highest modal/overlay layer (currently 10000). |
+
+### The invariants
+
+1. **Home is always reachable.** The home icon in the top-left breadcrumb bar must remain clickable on every authenticated user-dashboard route. No overlay, modal, drawer, theater mode, or loading state may visually cover or `pointer-events: none` it.
+2. **`z-index` ceiling for overlays is 10000.** The breadcrumb sits at `z-index: 10500`. Any new full-viewport modal, backdrop, or fixed overlay must stay strictly below 10500. If a future flow legitimately needs to *prevent* navigation (mid-upload, mid-payment, mid-checkout), add a `.breadcrumb-bar--locked` modifier on the breadcrumb (which dims it and disables `pointer-events`) — don't bump a modal above it.
+3. **Breadcrumb backdrop is intentional.** The translucent dark background + `backdrop-filter: blur(6px)` on `.breadcrumb-bar` exists so the icons stay legible when the breadcrumb floats over a modal backdrop (e.g. `.vt-backdrop` theater mode, `.mad-confirm-overlay`, `.restart-dialog-overlay`). Don't remove it without replacing with another contrast guarantee.
+4. **Mobile.** No breakpoint hides the breadcrumb. The mobile bottom tab bar (`NavBar`) carries a redundant Home tile as a second escape hatch.
+
+### Adding a new overlay — checklist
+- [ ] Its CSS `z-index` is `< 10500`.
+- [ ] It has its own close affordance (X button, Esc handler, click-outside).
+- [ ] Visually verified that the breadcrumb bar still reads cleanly when this overlay is open (the backdrop blur + tint should handle it).
+- [ ] If the overlay is "blocking" (e.g. mid-upload), the breadcrumb is dimmed via `.breadcrumb-bar--locked` while the operation is in flight — never by raising the overlay above it.
+
 ## Build / Version Tag
 
 ### What it does

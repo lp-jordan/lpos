@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-06-03 — Breadcrumb/home occlusion guard
+
+**Timestamp:** 2026-06-03T00:15:00Z
+
+**Prompt:** "Ensure we never accidentally make the top left home button/breadcrumb inaccessible on a user's dashboard. This would be a UI problem."
+
+**Summary:** Forward-looking guard so the top-left home/back breadcrumb in `AppShell` cannot be hidden by a future modal or overlay. Three changes: (1) bumped `.breadcrumb-bar` z-index from 40 to 10500, above the highest currently-used overlay layer (10000); (2) added a translucent dark backdrop + `backdrop-filter: blur(6px)` so the icons stay legible when the bar floats over a modal backdrop; (3) added a documented `.breadcrumb-bar--locked` opt-out modifier (dim + non-interactive) for the rare case where a flow legitimately needs to prevent navigation. Recorded the invariant + an "adding a new overlay" checklist in `docs/README.md`.
+
+**Files changed:**
+- `app/globals.css` — `.breadcrumb-bar` z-index + backdrop, new `.breadcrumb-bar--locked` modifier.
+- `docs/README.md` — new "Navigation Invariants" section before "Build / Version Tag".
+- `docs/project history.md`, `docs/changelog.json`.
+
+**Implementation summary:**
+- Audit found four current 9999 overlays (`.restart-banner`, `.mad-confirm-overlay`, `.cam-panel--overlay-fs`, `.vt-backdrop`) and one 10000 overlay (`.restart-dialog-overlay`). None of them are flows where "trap the user" is intentional — they all have their own close affordances. Raising the breadcrumb above them gives the user a guaranteed escape hatch without changing those flows' close behavior.
+- z-index headroom: 10500 leaves 500 between the breadcrumb and the highest current overlay, large enough to accommodate future high-stacking elements without immediately needing another bump.
+- Backdrop: `rgba(18, 16, 14, 0.42)` matches the app's dark neutral base; `backdrop-filter: blur(6px)` (+ `-webkit-` prefix) softens whatever's behind it so the home + back icons keep contrast.
+- `.breadcrumb-bar--locked`: drop-in modifier, no consumers today — added so future "blocking" flows have a documented opt-out rather than reaching for a higher z-index modal.
+
+**Decision rationale:** Picked the forward-looking guard (z-index + backdrop + documented invariant) over a targeted fix because the user explicitly chose "no known reproducer" and asked for the general defense. Could not justify a Playwright test for the invariant — no automation harness installed in this repo today — so the invariant is recorded in `docs/README.md` with an "adding a new overlay" checklist for code review.
+
+**Alternatives considered:**
+- **Per-modal escape audit only** (leave breadcrumb at 40, add Esc/X to each overlay) — rejected: requires diligence on every future PR; the z-index bump is structurally enforced.
+- **Add a Playwright/RTL invariant test** — deferred: no test harness for this kind of layout assertion exists in the repo today; introducing one solely for this change is outsized.
+- **Skip the backdrop blur and let the breadcrumb sit visually flush over modal backdrops** — rejected: the icons would wash out against a dark backdrop, which is exactly the failure mode the user described.
+
+**Commands/tests run:** `grep`-based audit of all `z-index: 9999/10000/10500` selectors in `globals.css`. `npx tsc --noEmit -p tsconfig.json` — clean (CSS-only + docs changes).
+
+**Assumptions / follow-ups:**
+- No `.breadcrumb-bar--locked` consumers today. If a future upload/payment flow needs it, the modifier is ready to use.
+- The bump from z-index 40 → 10500 is a large jump that should be invisible in the normal (no-overlay) case: the breadcrumb already sits in dead space at top-left and the new backdrop is subtle. Worth a visual smoke test post-deploy.
+
+---
+
 ## 2026-06-03 — Audit: "Sort by latest comment" in project media
 
 **Timestamp:** 2026-06-03T00:10:00Z
