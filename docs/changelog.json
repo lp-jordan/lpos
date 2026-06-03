@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:00:00Z",
+    "title": "Copy-link button shows checkmark + \"Link copied\"",
+    "summary": "Added in-button visual feedback to the 'Copy link to this asset' button in MediaDetailPanel's sidebar header. On a successful clipboard write the chain icon swaps to a checkmark, a green-tinted 'Link copied' label appears next to it, aria-label/title flip to 'Link copied', and the state resets after 1.8s. Mirrors the per-review-link copy pattern already used elsewhere in the same component. The existing success toast is kept as a redundant signal; the in-button affordance is now the primary cue."
+  },
+  {
     "timestamp": "2026-05-29T14:36:23Z",
     "title": "Decouple attachment serving from Prospects access",
     "summary": "Fixed a bug where users without Prospects access couldn't open attachments on ordinary tasks. The shared attachment download endpoint (/api/attachment) serves both task-comment and prospect-update attachments but unconditionally required Prospects access, returning a 403 for everyone else. It now authorizes by the attachment's key prefix: task attachments (attachments/tasks/<id>/…) require only a valid session, matching how task-comment uploads are gated, while prospect attachments (attachments/<prospectId>/…) still require Prospects access. Keys are minted server-side so the prefix is a trusted discriminator; the R2 storage service, upload routes, data model, and frontend were already domain-correct and unchanged."

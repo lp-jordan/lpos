@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-06-03 — Copy-link button shows checkmark + "Link copied"
+
+**Timestamp:** 2026-06-03T00:00:00Z
+
+**Prompt:** "We need to show visually that the user has copied a direct asset link from the sidebar. Right now, they click the link button and nothing happens. All it would take is making that icon a little check mark with potentially a 'link copied' text"
+
+**Summary:** Added in-button visual feedback to the "Copy link to this asset" button in `MediaDetailPanel`'s header. On a successful clipboard write, the chain icon swaps to a checkmark, a green-tinted "Link copied" label appears next to it, and the button's `aria-label`/`title` switch to "Link copied" for assistive tech. State resets after 1.8s. The toast is kept as a redundant signal; the in-button affordance is now the primary cue.
+
+**Files changed:**
+- `components/media/MediaDetailPanel.tsx`
+- `app/globals.css`
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- New local state `assetLinkCopied: boolean` next to the existing `cfEmbedCopied` pattern (line 311).
+- On successful `navigator.clipboard.writeText`, set `assetLinkCopied=true` and `setTimeout(..., 1800)` to reset, mirroring the `copiedShareId` flow used by the per-review-link rows.
+- Button JSX: ternary renders either the new checkmark SVG + `<span class="mad-copy-link-label">Link copied</span>` or the original chain SVG. `aria-label`/`title` track the state.
+- New CSS rules `.mad-copy-link-btn`, `.mad-copy-link-btn--copied`, `.mad-copy-link-label`: padding/gap for the inline label, success-green color/tint while copied, transition for smooth swap. Uses `var(--success, #4ade80)` so the fallback works if the CSS var isn't defined.
+
+**Decision rationale:** Matches an existing, working pattern in the same file (per-review-link copy buttons at lines 749-761) rather than introducing a new mechanism. Toast was kept as belt-and-suspenders — the user's report ("nothing happens") suggests the toast isn't registering for them, but removing it would silently regress for anyone who does rely on it. Failure path (clipboard write rejected) still shows only the error toast and no checkmark, which is correct.
+
+**Alternatives considered:**
+- Pure-toast (status quo) — rejected per the user's request; toast clearly isn't sufficient feedback.
+- Drop the toast entirely — deferred; can remove later if confirmed redundant.
+- Animate the button (pulse) — unnecessary complexity given the checkmark + label is unambiguous.
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` — clean (no MediaDetailPanel-related errors).
+
+**Assumptions / follow-ups:**
+- The 1.8s reset window is matched to the existing `cfEmbedCopied` timing (2s) and `copiedShareId` (2s); slightly faster to feel snappier with the always-visible "Link copied" label.
+
+---
+
 ## 2026-05-29 — Decouple attachment serving from Prospects access
 
 **Timestamp:** 2026-05-29T14:36:23Z

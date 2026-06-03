@@ -4069,6 +4069,25 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 }
 .mad-close-btn:hover { color: var(--text); background: var(--surface-3); }
 
+/* Asset-link copy button — gains a "Link copied" label + green tint for ~1.8s
+ * after a successful clipboard write, then reverts to the chain icon. */
+.mad-copy-link-btn {
+  gap: 5px;
+  padding: 2px 6px;
+  transition: color 0.15s, background 0.15s;
+}
+.mad-copy-link-btn--copied,
+.mad-copy-link-btn--copied:hover {
+  color: var(--success, #4ade80);
+  background: rgba(74, 222, 128, 0.08);
+}
+.mad-copy-link-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 /* Body */
 .mad-body {
   flex: 1;

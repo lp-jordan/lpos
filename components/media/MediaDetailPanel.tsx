@@ -309,6 +309,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [lpResetting, setLpResetting] = useState(false);
 
   const [cfEmbedCopied,    setCfEmbedCopied]    = useState(false);
+  const [assetLinkCopied,  setAssetLinkCopied]  = useState(false);
   const [showThumbModal,   setShowThumbModal]   = useState(false);
   const [cfResetConfirm,   setCfResetConfirm]   = useState(false);
 
@@ -669,23 +670,34 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
               </div>
               <button
                 type="button"
-                className="mad-close-btn"
+                className={`mad-close-btn mad-copy-link-btn${assetLinkCopied ? ' mad-copy-link-btn--copied' : ''}`}
                 onClick={async () => {
                   const url = `${window.location.origin}/projects/${projectId}?assetId=${asset.assetId}`;
                   try {
                     await navigator.clipboard.writeText(url);
+                    setAssetLinkCopied(true);
+                    setTimeout(() => setAssetLinkCopied(false), 1800);
                     toast({ id: `copy-link:${asset.assetId}`, kind: 'publish', tone: 'success', title: 'Link copied', body: 'Share this URL with a teammate to open this asset.' });
                   } catch {
                     toast({ id: `copy-link-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard. Copy manually from the address bar.' });
                   }
                 }}
-                aria-label="Copy link to this asset"
-                title="Copy link to this asset"
+                aria-label={assetLinkCopied ? 'Link copied' : 'Copy link to this asset'}
+                title={assetLinkCopied ? 'Link copied' : 'Copy link to this asset'}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
-                  <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
-                </svg>
+                {assetLinkCopied ? (
+                  <>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    <span className="mad-copy-link-label">Link copied</span>
+                  </>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+                    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+                  </svg>
+                )}
               </button>
               <button type="button" className="mad-close-btn" onClick={onClose} aria-label="Close">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
