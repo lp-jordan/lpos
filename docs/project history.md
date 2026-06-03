@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-06-03 — Bulk transcript download streams a zip
+
+**Timestamp:** 2026-06-03T00:05:00Z
+
+**Prompt:** "We need to batch transcript downloads into a single zip file, no matter the browser or OS. This would be true unless the user is only downloading a single transcript."
+
+**Summary:** Rewrote `/api/projects/[projectId]/transcripts/download-all` from a concatenated plaintext blob (one big `transcripts-<projectId>.txt` with `===` separators) to a streamed `.zip`, one `.txt` per transcript, named after each transcript's display filename. Preserves the user's stated edge case: when exactly one transcript exists, the route falls back to streaming the single `.txt` directly — no zip wrapper. Cross-browser/OS safe via standard `Content-Type: application/zip` and `Content-Disposition: attachment` headers.
+
+**Files changed:**
+- `app/api/projects/[projectId]/transcripts/download-all/route.ts`
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- Same streaming pattern as the existing `photos/download-zip` route: `archiver('zip', { zlib: { level: 6 } })` piped into a `PassThrough`, returned as a web `ReadableStream` via `Readable.toWeb`.
+- Per-entry name: `<sanitized display filename>.txt`, with a `uniqueName(used, name)` helper for collision-safe dedup (mirrors `(1)`, `(2)` suffixes from the photos route).
+- Outer zip filename: `transcripts-<project.name>.zip` (sanitized), with fallback to `projectId` if the name is missing.
+- Single-transcript fast path: streams plaintext directly with `Content-Type: text/plain; charset=utf-8`, filename `<displayName>.txt`.
+- Empty-content guard: if `readTranscriptText` returns empty, the entry's body is `(no content)` (matches prior behavior).
+
+**Decision rationale:** Mirrored the existing photos zip route to avoid introducing a second pattern for the same primitive. Used `archive.append(text, { name })` rather than writing temp files because the transcript content is already in memory and small; this avoids touching the disk and the project transcripts directory layout. The single-transcript fast path preserves direct-download for the common case while making bulk downloads zip-shaped per the user's spec.
+
+**Alternatives considered:**
+- Include all variants per transcript (txt + srt + vtt + json) under a per-transcript subfolder — rejected as scope creep. Today's `download-all` only emitted `.txt`; matching that surface keeps the change minimal. Easy to extend later via a `?include=srt,vtt` query param.
+- Always emit a zip (no single-file fast path) — rejected per the user's explicit "unless only downloading a single transcript" requirement.
+- Keep the concatenated `.txt` as a `?format=txt` option — deferred; no one's asking for it and the zip is strictly more useful.
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` — clean.
+
+**Assumptions / follow-ups:**
+- `archiver` was already a dependency (used by `photos/download-zip`), no install needed.
+- The `TranscriptPageActions` button uses a plain `<a download href=…>`, which keeps working unchanged: the browser respects the `Content-Disposition` filename from the response, so the link no longer "lies" about producing a `.txt` when the server now answers with a `.zip`.
+
+---
+
 ## 2026-06-03 — Copy-link button shows checkmark + "Link copied"
 
 **Timestamp:** 2026-06-03T00:00:00Z

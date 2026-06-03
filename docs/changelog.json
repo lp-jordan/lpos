@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:05:00Z",
+    "title": "Bulk transcript download streams a zip",
+    "summary": "Rewrote /api/projects/[projectId]/transcripts/download-all from a concatenated plaintext blob to a streamed .zip, one .txt per transcript named by display filename, with collision-safe deduping. Same archiver+PassThrough pattern as photos/download-zip. Preserves a single-transcript fast path: when only one transcript exists, the route streams the single .txt directly with no zip wrapper, per the user's stated rule. Cross-browser/OS safe via standard application/zip + Content-Disposition headers; the existing 'Download all transcripts' button needs no change."
+  },
+  {
     "timestamp": "2026-06-03T00:00:00Z",
     "title": "Copy-link button shows checkmark + \"Link copied\"",
     "summary": "Added in-button visual feedback to the 'Copy link to this asset' button in MediaDetailPanel's sidebar header. On a successful clipboard write the chain icon swaps to a checkmark, a green-tinted 'Link copied' label appears next to it, aria-label/title flip to 'Link copied', and the state resets after 1.8s. Mirrors the per-review-link copy pattern already used elsewhere in the same component. The existing success toast is kept as a redundant signal; the in-button affordance is now the primary cue."
