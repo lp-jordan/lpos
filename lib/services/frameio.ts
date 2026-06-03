@@ -1002,7 +1002,30 @@ export async function postComment(
       /does not accept a timestamp parameter/i.test(msg);
     if (!isTimestampUnsupported) throw err;
 
-    console.warn(`[frameio.postComment] file ${fileId} rejected timestamp; retrying without it.`);
+    // Diagnostic: capture what Frame.io actually thinks this file is. Filename
+    // can be `foo.mp4` and our DB can say `video/mp4` while Frame.io's stored
+    // media_type / status / type (file vs version_stack) tell a different story
+    // — that's the only place we can confirm whether the cause is (a) a still-
+    // transcoding file (status !== 'transcoded'), (b) a misclassified media_type
+    // (e.g. image/jpeg from an extensionless upload), or (c) a version-stack
+    // semantic we haven't accounted for. One extra GET only fires on this error.
+    let diag = '';
+    try {
+      const dRes  = await fioFetch(`${BASE_V4}/accounts/${accountId}/files/${fileId}`);
+      const dBody = await dRes.json() as {
+        data?: {
+          name?:       string;
+          media_type?: string;
+          status?:     string;
+          type?:       string;
+          parent_id?:  string | null;
+        };
+      };
+      const d = dBody.data ?? {};
+      diag = ` [Frame.io: name="${d.name ?? '?'}" media_type=${d.media_type ?? '?'} status=${d.status ?? '?'} type=${d.type ?? '?'} parent_id=${d.parent_id ?? 'null'}]`;
+    } catch { /* best-effort — never block the retry */ }
+
+    console.warn(`[frameio.postComment] file ${fileId} rejected timestamp; retrying without it.${diag}`);
     const retryBody: Record<string, unknown> = { text };
     res = await fioFetch(commentsUrl, { method: 'POST', body: JSON.stringify({ data: retryBody }) });
   }
