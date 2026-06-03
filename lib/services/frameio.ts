@@ -983,10 +983,29 @@ export async function postComment(
     if (duration !== null && duration > 0) body.duration = Math.round(duration * 24);
   }
 
-  const res    = await fioFetch(
-    `${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`,
-    { method: 'POST', body: JSON.stringify({ data: body }) },
-  );
+  const commentsUrl = `${BASE_V4}/accounts/${accountId}/files/${fileId}/comments`;
+
+  let res: Response;
+  try {
+    res = await fioFetch(commentsUrl, { method: 'POST', body: JSON.stringify({ data: body }) });
+  } catch (err) {
+    // Frame.io rejects timestamps on non-time-based filetypes ("The asset's
+    // filetype does not accept a timestamp parameter"). Images, PDFs, and
+    // certain audio/container variants fall in this bucket. Strip timestamp
+    // (+ duration) and retry once so a stray scrub position can't sink an
+    // otherwise valid comment. Only this specific 422 is retried — all other
+    // failures (auth, 5xx, network) propagate as before.
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimestampUnsupported =
+      timestamp !== null &&
+      /→\s*422\b/.test(msg) &&
+      /does not accept a timestamp parameter/i.test(msg);
+    if (!isTimestampUnsupported) throw err;
+
+    console.warn(`[frameio.postComment] file ${fileId} rejected timestamp; retrying without it.`);
+    const retryBody: Record<string, unknown> = { text };
+    res = await fioFetch(commentsUrl, { method: 'POST', body: JSON.stringify({ data: retryBody }) });
+  }
   const result = await res.json() as {
     data?: {
       id:           string;
