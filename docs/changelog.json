@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:20:00Z",
+    "title": "Decision: defer comment-recency cache; plan full Frame.io-comment decoupling",
+    "summary": "Confirmed via SQL probe that activity_events has zero frameio.comment.* rows in production — Frame.io webhooks aren't producing local data, which is why the MediaTab 'Latest comments' sort falls through to alphabetical for every pair. A small recency-cache fix was proposed (new asset_comment_recency table + three writers + reader rewrite, ~80 LOC). User chose to defer the small fix and queue the larger refactor: full local comments table in LPOS with bidirectional Frame.io sync during a transition period, then Frame.io becomes optional. Sort fix lands 'for free' once the local comments table exists. Backfill strategy chosen for the future refactor: lazy only — no eager admin backfill, no boot-time backfill. No code changed in this entry; the refactor plan is recorded in project history and in a memory note for future sessions."
+  },
+  {
     "timestamp": "2026-06-03T00:15:00Z",
     "title": "Breadcrumb/home occlusion guard",
     "summary": "Forward-looking guard so the top-left breadcrumb (back arrow + home icon) cannot be hidden by a future modal or overlay. Bumped .breadcrumb-bar z-index from 40 to 10500, above the highest currently-used overlay layer (10000). Added a translucent dark backdrop with backdrop-filter: blur(6px) so the icons stay legible when floating over a modal backdrop. Added a drop-in .breadcrumb-bar--locked modifier (dim + non-interactive) as the preferred opt-out for flows that legitimately need to block navigation. Recorded the invariant and an 'adding a new overlay' checklist in docs/README.md."

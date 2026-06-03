@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-06-03 — Decision: defer comment-recency cache; plan full Frame.io-comment decoupling
+
+**Timestamp:** 2026-06-03T00:20:00Z
+
+**Prompt:** "The actual issue is that it seems latest comments only sorts alphabetically. If possible, we shouldn't rely on frame at all for this - just reference whether or not LPOS has any stored comments and when they were made. This might hint towards a much larger, future change - removing the dependancy on frame for comments in videos."
+
+**Summary:** Confirmed the root cause of the sort defect: `activity_events` in production has **zero `frameio.comment.*` rows** (`sqlite3 data/lpos-activity.sqlite "SELECT COUNT(DISTINCT asset_id) FROM activity_events WHERE event_type IN ('frameio.comment.created','frameio.comment.reply.created');"` → 0). Frame.io webhooks aren't producing local data, so the MediaTab "Latest comments" sort falls through to its alphabetical name tiebreak for every pair — observably "alphabetical only" as the user reported. A small recency-cache fix was proposed (new `asset_comment_recency` table + three writers + reader rewrite, no UI changes, ~80 LOC, lazy backfill). **User chose to defer the small fix and queue the larger refactor** — full Frame.io-comment decoupling. Sort stays broken until that ships. No files changed in this entry.
+
+**Files changed:** `docs/project history.md`, `docs/changelog.json` — planning/decision record only.
+
+**Decision rationale:** User reasoning — they want LPOS unreliant on Frame.io for comments soon, so building a stopgap recency cache that the refactor would obsolete in weeks isn't worth the round-trip. Accepting a few weeks of alphabetical fall-through on the sort is fine. Backfill strategy chosen for when the refactor lands: **lazy only** — no eager admin backfill, no boot-time backfill — recency rebuilds as users browse.
+
+**Planned refactor (for future implementation, not now):**
+
+1. **Local `comments` table** in `lpos-core.sqlite` (or a new `lpos-comments.sqlite`):
+   ```sql
+   CREATE TABLE comments (
+     id              TEXT PRIMARY KEY,    -- LPOS-generated UUID; not Frame.io's ID
+     project_id      TEXT NOT NULL,
+     asset_id        TEXT NOT NULL,
+     parent_id       TEXT,                -- thread reply
+     author_user_id  TEXT,                -- LPOS user; NULL for external Frame.io reviewers
+     author_name     TEXT NOT NULL,       -- denormalised for external authors
+     body            TEXT NOT NULL,
+     video_ts_seconds REAL,
+     completed_at    TEXT,
+     created_at      TEXT NOT NULL,
+     updated_at      TEXT NOT NULL,
+     deleted_at      TEXT,
+     external_frameio_id TEXT,            -- Frame.io comment ID, NULL while standalone
+     external_sync_state TEXT              -- 'pending' | 'pushed' | 'failed' | 'external_only'
+   );
+   ```
+   Index on `(project_id, asset_id, created_at DESC)` to serve the sort directly via `MAX(created_at)` per asset.
+
+2. **Bidirectional Frame.io sync engine** (transition-period only):
+   - LPOS → Frame.io: outbox queue. New/edited/completed/deleted LPOS comments are pushed to Frame.io best-effort with retry. `external_frameio_id` is filled in on first successful push.
+   - Frame.io → LPOS: webhook (`/api/webhooks/frameio`, existing endpoint) writes incoming external comments into the local table with `external_sync_state = 'external_only'`. Periodic reconciliation poll catches dropped webhooks (per-project, e.g. every 5min while a project has an active deliverable).
+   - Conflict policy: `author_user_id IS NOT NULL` → LPOS wins (we authored it). `author_user_id IS NULL` → Frame.io wins (external reviewer).
+
+3. **UI rewrite — `GET /api/projects/:p/media/:a/frameio/comments`**:
+   - Reads from local `comments` table.
+   - The route name `/frameio/comments` is misleading post-refactor; consider renaming to `/comments` and leaving a thin redirect.
+
+4. **Sort fix lands "for free":** the new reader for `getLatestCommentByAssetForProject` queries the local `comments` table directly. No separate recency cache needed; the timestamp column already exists per row.
+
+5. **Decommission path:** once stable for one project lifecycle (~ a few weeks), Frame.io webhooks become optional. Continue posting to Frame.io for external-reviewer visibility, but LPOS is the source of truth. Eventually deprecate `comment-authors.json` + `comment-replies-store` per-project JSON files — both are subsumed by the new table.
+
+**Alternatives considered:**
+- Small recency cache as a stopgap (the rejected option) — would have shipped the sort fix today but is throwaway work once the refactor lands.
+- Land the sort fix AND start the refactor in parallel — rejected: the recency cache file/table would become a stale alt-truth competing with the new comments table during the transition; cleaner to do one move.
+
+**Commands/tests run:** SQL probe of `lpos-activity.sqlite` confirming the empty result; read-through of `comment-authors-store.ts`, `comment-replies-store.ts`, `frameio.ts`, the comments POST route, and the webhook handler.
+
+**Assumptions / follow-ups:**
+- Sort fall-through to alphabetical is accepted as a known issue until the refactor ships. Worth a small UI hint? E.g. greying out the "Latest comments" sort option, or showing a tooltip "(no comment data yet — feature in development)". Open question for the user.
+- Memory `project_local_comments_refactor.md` records this plan for future sessions.
+
+---
+
 ## 2026-06-03 — Breadcrumb/home occlusion guard
 
 **Timestamp:** 2026-06-03T00:15:00Z
