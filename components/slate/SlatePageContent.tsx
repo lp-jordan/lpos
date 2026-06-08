@@ -9,6 +9,7 @@ import { CameraPanel } from '@/components/slate/CameraPanel';
 import { PresentationPanel } from '@/components/studio/PresentationPanel';
 import { SlateModal, ModalType } from '@/components/slate/SlateModal';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
+import { generateRecordingBaseName } from '@/lib/services/atem-utils';
 
 // ── Local timecode / date hooks (client-only, no socket needed) ────────────
 
@@ -141,6 +142,30 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
     slate.deleteNotes([...selected]);
     setSelected(new Set());
     setBatchMode(false);
+  }
+
+  function exportNotesCsv() {
+    if (slate.notes.length === 0) return;
+    const escape = (v: string) => {
+      const s = v ?? '';
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = [
+      ['Timestamp', 'Code', 'Note'].join(','),
+      ...slate.notes.map((n) => [escape(n.timestamp), escape(n.code), escape(n.note)].join(',')),
+    ];
+    // BOM keeps Excel happy on Windows for any unicode in notes
+    const csv = '﻿' + rows.join('\r\n') + '\r\n';
+    const baseName = currentProject
+      ? generateRecordingBaseName(currentProject.name, new Date(), currentProject.clientName)
+      : `slate_notes_${new Date().toISOString().slice(0, 10)}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${baseName}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleCodeChange(value: string) {
@@ -391,7 +416,14 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
               <button className="sl-btn-ghost" type="button" onClick={() => setBatchMode((v) => !v)}>
                 {batchMode ? 'Exit Select' : 'Select'}
               </button>
-              <button className="sl-btn-ghost" type="button">Export CSV</button>
+              <button
+                className="sl-btn-ghost"
+                type="button"
+                onClick={exportNotesCsv}
+                disabled={slate.notes.length === 0}
+              >
+                Export CSV
+              </button>
             </div>
 
             {logVisible && (
