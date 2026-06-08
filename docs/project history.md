@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-06-03 — Platform list column headers: larger + free-floating
+
+**Timestamp:** 2026-06-03T00:45:00Z
+
+**Prompt:** "Lets also slightly increase the size of the top level category headers (description, client, person, status, and priority) so that they stand out as such and ditch the blue bar behind them. It makes more sense to have them free floating where they are."
+
+**Summary:** Tweaked `.platform-list-cols` (the row of column labels above the platform list): bumped font-size from `0.72rem` to `0.85rem` so they read clearly as column headers, and removed the bar chrome — `background`, `border-bottom`, `position: sticky`, `top: 0`, and `z-index: 2` are all gone. Headers now sit in normal document flow with no surface behind them; uppercase + letter-spacing + 600 weight remain as the typographic cues that they're labels, not data.
+
+**Files changed:**
+- `app/globals.css` — only `.platform-list-cols` ruleset.
+- `docs/project history.md`, `docs/changelog.json`.
+
+**Implementation summary:**
+- Dropped `background: var(--surface, #1a1a1a)` (the "blue bar" the user described — `--surface` resolves to the dark neutral panel color in this theme), `border-bottom: 1px solid var(--line)`, and the sticky positioning (`position: sticky; top: 0; z-index: 2`). Free-floating in flow.
+- Font-size 0.72rem → 0.85rem. Modest bump — enough to register as a header without dominating the rows.
+- Padding adjusted from `10px 16px` to `12px 16px 8px` so headers sit a touch lower from the page chrome and tighter against the first group below them (no border to separate them anymore).
+- Grid template, gap, casing, weight, letter-spacing all unchanged — alignment with the row content stays pixel-identical.
+
+**Decision rationale:** The user's "free floating" cue strongly implied dropping sticky too — keeping it sticky without a background would look ugly on scroll (transparent labels overlapping group headers). The 0.85rem size is a calibrated middle: 0.72 → 0.85 is a noticeable jump (~18%) but still smaller than body text (1rem), preserving the visual hierarchy where category group headers (1rem, 600 weight) remain the dominant tier above the column labels.
+
+**Alternatives considered:**
+- Keep sticky, add subtle bottom shadow on scroll instead of a full bar — rejected: still adds chrome, contradicting the "free floating" direction.
+- Bump to 0.9rem or larger — rejected: would compete with the category group header for visual dominance.
+- Drop uppercase styling to match a more modern aesthetic — rejected: the user only asked to remove the bar and resize, not redesign. The uppercase + letter-spacing combo is exactly what reads as "these are column labels."
+
+**Commands/tests run:** CSS-only change; no typecheck needed.
+
+**Assumptions / follow-ups:**
+- Requires Next.js rebuild for the CSS bundle to update.
+- If the user later wants the headers to follow the scroll without the bar, we could re-add `position: sticky` with `background: linear-gradient(180deg, var(--surface) 80%, transparent)` for a fade-out — but that's a different design call than what was asked.
+
+---
+
 ## 2026-06-03 — Drag handles to reorder platform categories (any user)
 
 **Timestamp:** 2026-06-03T00:40:00Z

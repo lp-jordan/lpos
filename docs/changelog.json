@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:45:00Z",
+    "title": "Platform list column headers: larger + free-floating",
+    "summary": "Tweaked the .platform-list-cols header row in the platform list view. Font-size bumped from 0.72rem to 0.85rem so the labels (Description, Client, Person, Status, Priority) read clearly as column headers. Removed the bar chrome that sat behind them: dropped background, border-bottom, position: sticky, top:0, and z-index:2. Headers now sit in normal document flow with no surface behind them — free-floating, uppercase + letter-spacing + 600 weight remain as the typographic cues that they're labels. Grid template, gap, casing, weight, and letter-spacing unchanged so alignment with row content stays pixel-identical."
+  },
+  {
     "timestamp": "2026-06-03T00:40:00Z",
     "title": "Drag handles to reorder platform categories (any user)",
     "summary": "Added a per-category grip-icon drag handle on the left edge of every live category group in PlatformListView. Any signed-in (non-guest) user can grab a handle and drag the category up or down; the new order persists immediately via the existing POST /api/task-categories/reorder endpoint, whose auth gate dropped from admin to user (create/rename/delete remain admin-only). Task-into-category drag (the existing feature) keeps working unchanged — the two drag flows coexist in the same DndContext and are disambiguated by active.id prefix. DroppableCategoryGroup → SortableCategoryGroup using @dnd-kit/sortable (already a project dep). Only live categories are sortable; orphan/uncategorized groups stay pinned at the end and remain droppable for task drops. Optimistic reorder with rollback on POST failure. New CSS for the handle, the dragging visual, and the category drag-overlay ghost."

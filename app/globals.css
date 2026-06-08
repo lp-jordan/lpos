@@ -16707,18 +16707,15 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   font-size: 0.88rem;
 }
 
-/* Sticky column headers above the whole list */
+/* Free-floating column headers above the list. No background, no border, no
+ * sticky behavior — they sit in flow, slightly larger than before so they
+ * register as column labels without needing a bar to anchor them. */
 .platform-list-cols {
   display: grid;
   grid-template-columns: 18px minmax(0, 2.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.6fr);
   gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
-  background: var(--surface, #1a1a1a);
-  z-index: 2;
-  font-size: 0.72rem;
+  padding: 12px 16px 8px;
+  font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
