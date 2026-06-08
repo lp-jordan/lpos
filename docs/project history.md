@@ -2,6 +2,47 @@
 
 ---
 
+## 2026-06-03 — Version chip → hybrid semver (`major.minor.<auto-patch>`)
+
+**Timestamp:** 2026-06-03T00:50:00Z
+
+**Prompt:** "Should we convert LPOS version convention to something more akin to 1.0.1, 1.1.9, 1.3.5, etc? Rn, it's like v78 and jumps by a ton each time I update and rebuild it." → Confirmed: Option A (Hybrid: 1.0.<auto-patch>).
+
+**Summary:** Converted the top-left version chip from `v.<commit-count> · <short-sha>` (e.g. `v.78 · a1b2c3d`) to a hybrid semver scheme `<major>.<minor>.<patch> · <short-sha>` (e.g. `0.1.77 · a1b2c3d`). `major.minor` come from `package.json.version` and are bumped manually when something user-noticeable ships; `patch` is auto-computed at server start as the number of commits since the last commit that changed the `"version":` line in `package.json`. Bumping minor in `package.json` (and committing it) resets patch to 0 because the bump commit becomes the new anchor. Cannot forget to bump — patch always advances.
+
+**Files changed:**
+- `lib/version.ts` — rewrote `readGit()` to read `package.json.version`, parse `major.minor`, and compute `patch` via `git log -1 --format=%H -G '^[ \t]*"version":' -- package.json` followed by `git rev-list --count <anchor>..HEAD`. Added `major`, `minor`, `patch` fields to `AppVersion`. Kept `count` (total commit count) for backwards compatibility / forensics. Display string changed.
+- `docs/README.md` — rewrote the "Build / Version Tag" section to describe the new scheme + bumping checklist; updated the dirty-marker example.
+- `docs/project history.md`, `docs/changelog.json`.
+
+**Implementation summary:**
+- **Anchor lookup uses `git log -G`.** The regex `^[ \t]*"version":` matches only the diff hunks that *changed* the version line of `package.json` (not surrounding context, not deps that happen to mention versions). Unrelated package.json edits (adding deps, changing scripts) don't reset the patch.
+- **`git rev-list --count <anchor>..HEAD`** counts commits strictly *after* the anchor. When the anchor IS HEAD (you just bumped + committed), patch = 0. The very next commit lands as patch = 1.
+- **Runtime validated** before commit: `node --import tsx --eval "require('./lib/version.ts').getAppVersion()"` returns `0.1.77* · 1a3dd50` against the current repo state (anchor at commit `0c62fea`, 77 commits since, `package.json.version` = `0.1.0`, dirty tree from an untracked Windows-pathed file). After this commit lands the next boot reads `0.1.78`.
+- **VersionTag component unchanged.** It consumes only `version.display`, `.sha`, `.branch`, `.date`, `.dirty` — all preserved. No other callers consume `.count` directly.
+- **No `v.` prefix on display.** The old format used `v.78`; semver convention is bare-number `0.1.77`. The chip in the UI no longer starts with a `v.`.
+
+**Decision rationale:** Hybrid wins over pure-semver because it preserves the "can't forget to bump" virtue of the old commit-count system while adding semantic prefix for noticeable milestones. Manual semver alone would require a discipline / changelog process LPOS doesn't have today; the auto-patch sidesteps that entirely. Cosmetic-only relabel (Option C) would not have addressed the "jumps by a ton" complaint — auto-patch only jumps if you've been making lots of commits *since the last minor bump*, which is exactly when "lots of work has accumulated" is *accurate* and the displayed number is meaningful.
+
+**Alternatives considered:**
+- **Pure semver from `package.json`** (Option B) — rejected: forgettable. After 10 commits with no manual bump, the displayed version is unchanged and stale. The SHA next to it disambiguates, but the version number stops being informative.
+- **CalVer (e.g. `2026.06.03`)** — not offered: doesn't convey what changed, only when. The current commit-count scheme has the same problem; switching to CalVer doesn't fix the user's stated concern.
+- **Tag-anchored patch (read latest annotated git tag, count from there)** — rejected: requires tagging discipline LPOS doesn't have. The package.json field is already an existing surface; piggy-backing on it costs nothing.
+- **Per-file `.version-anchor` companion** — rejected: extra file to keep in sync with `package.json.version`. The `-G` regex against `package.json` itself is simpler and uses no extra storage.
+
+**Commands/tests run:**
+- `npx tsc --noEmit -p tsconfig.json` — clean.
+- Runtime: `node --import tsx --eval "const v = require('./lib/version.ts').getAppVersion(); console.log(v.display)"` → `0.1.77* · 1a3dd50`. Validated `major/minor/patch` fields all populate correctly.
+- Anchor math: `git log -1 --format=%H -G '^[ \t]*"version":' -- package.json` → `0c62fea…`. `git rev-list --count 0c62fea..HEAD` → 77. Matches the displayed patch.
+
+**Assumptions / follow-ups:**
+- Requires a Next.js rebuild + server restart for the new display to appear.
+- If `package.json` is ever moved/renamed in git history, the anchor lookup may walk past the rename point. Unlikely concern for LPOS; not a problem today.
+- If we ever introduce a second top-level `"version":` field in `package.json` (highly unlikely — `npm` enforces uniqueness), the regex would still anchor correctly because both lines living in one file would both match the same diff.
+- Editpanel has its own separate version scheme (per `editpanel_build_release.md` memory) — untouched.
+
+---
+
 ## 2026-06-03 — Platform list column headers: larger + free-floating
 
 **Timestamp:** 2026-06-03T00:45:00Z

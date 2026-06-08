@@ -1,20 +1,35 @@
 /**
- * App version — read from git at server start, cached for the process lifetime.
+ * App version — read from git + package.json at server start, cached for the
+ * process lifetime.
  *
- * The displayed string is `v.<commit-count> · <short-sha>`. Commit count is
- * monotonic (auto-advances every commit, and therefore every push), and the
- * SHA makes it trivial to `git checkout <sha>` if we ever need to recover
- * lost code from the exact build a user was on.
+ * Scheme: **hybrid semver**. `major.minor` is read from `package.json.version`
+ * (you bump it manually when something user-noticeable ships). `patch` is the
+ * number of commits since the last commit that modified the version field in
+ * `package.json` — auto-incrementing, so a build is always uniquely identifiable
+ * even without manual bookkeeping.
  *
- * Reads happen once at module load via `execSync`. A subsequent server
- * restart picks up new commits; we never re-shell-out per request.
+ * Display: `<major>.<minor>.<patch>[*] · <short-sha>`, e.g. `0.1.12 · a1b2c3d`.
+ * (Asterisk if the working tree was dirty at server start.)
+ *
+ * When you bump `major.minor` in `package.json`, the patch resets to 0 at the
+ * commit that changed it. The next commit gets patch = 1, and so on.
+ *
+ * Reads happen once at module load via `execSync`. A subsequent server restart
+ * picks up new commits; we never re-shell-out per request.
  */
 import { execSync, type ExecSyncOptionsWithStringEncoding } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 export interface AppVersion {
-  /** Monotonic commit count on HEAD, e.g. 487. 0 if git is unavailable. */
+  /** Total monotonic commit count on HEAD (kept for backwards compatibility / forensics). */
   count: number;
+  /** Major component from package.json.version. */
+  major: number;
+  /** Minor component from package.json.version. */
+  minor: number;
+  /** Auto-computed patch: commits since the last bump of package.json.version. */
+  patch: number;
   /** Full 40-char SHA, or 'unknown'. */
   sha: string;
   /** 7-char short SHA — what we render in the UI. */
@@ -25,8 +40,56 @@ export interface AppVersion {
   dirty: boolean;
   /** ISO date of the HEAD commit, or '' if unavailable. */
   date: string;
-  /** Pre-formatted display string, e.g. "v.487 · a1b2c3d". */
+  /** Pre-formatted display string, e.g. "0.1.12 · a1b2c3d". */
   display: string;
+}
+
+/** Read package.json.version → [major, minor]. Falls back to [0,0] if absent
+ *  or unparseable. We deliberately ignore the patch from package.json — patch
+ *  is auto-computed from git history below. */
+function readPackageMajorMinor(repoRoot: string): { major: number; minor: number } {
+  try {
+    const raw = fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8');
+    const pkg = JSON.parse(raw) as { version?: string };
+    const parts = (pkg.version ?? '0.0.0').split('.');
+    const major = parseInt(parts[0] ?? '0', 10);
+    const minor = parseInt(parts[1] ?? '0', 10);
+    return {
+      major: Number.isFinite(major) ? major : 0,
+      minor: Number.isFinite(minor) ? minor : 0,
+    };
+  } catch {
+    return { major: 0, minor: 0 };
+  }
+}
+
+/** Count commits since the last commit that changed the `"version":` line in
+ *  package.json. `-G` matches changes whose patch contains the regex, so
+ *  unrelated package.json edits (deps, scripts, etc.) don't reset the patch.
+ *  Returns the total commit count as a fallback when no version-touching
+ *  commit is reachable from HEAD. */
+function computePatch(opts: ExecSyncOptionsWithStringEncoding): number {
+  try {
+    const anchorSha = execSync(
+      'git log -1 --format=%H -G \'^[ \\t]*"version":\' -- package.json',
+      opts,
+    ).trim();
+    if (!anchorSha) {
+      // No version-bump commit found in history — patch is just total count.
+      const total = parseInt(execSync('git rev-list --count HEAD', opts).trim(), 10);
+      return Number.isFinite(total) ? total : 0;
+    }
+    // Count commits AFTER the anchor (exclusive). If anchor === HEAD, this
+    // returns 0, which is exactly what we want for "just bumped, no commits
+    // past it yet".
+    const since = parseInt(
+      execSync(`git rev-list --count ${anchorSha}..HEAD`, opts).trim(),
+      10,
+    );
+    return Number.isFinite(since) ? since : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function readGit(): AppVersion {
@@ -53,24 +116,34 @@ function readGit(): AppVersion {
     } catch {
       // status can fail in a freshly-shipped tree; treat as clean.
     }
+
+    const { major, minor } = readPackageMajorMinor(cwd);
+    const patch = computePatch(opts);
+
     return {
       count: Number.isFinite(count) ? count : 0,
+      major,
+      minor,
+      patch,
       sha,
       shaShort,
       branch,
       dirty,
       date,
-      display: `v.${count}${dirty ? '*' : ''} · ${shaShort}`,
+      display: `${major}.${minor}.${patch}${dirty ? '*' : ''} · ${shaShort}`,
     };
   } catch {
     return {
       count: 0,
+      major: 0,
+      minor: 0,
+      patch: 0,
       sha: 'unknown',
       shaShort: 'unknown',
       branch: 'unknown',
       dirty: false,
       date: '',
-      display: 'v.dev',
+      display: 'dev',
     };
   }
 }

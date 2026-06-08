@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:50:00Z",
+    "title": "Version chip → hybrid semver (major.minor.<auto-patch>)",
+    "summary": "Converted the top-left version chip from v.<commit-count> (e.g. v.78 · a1b2c3d) to a hybrid semver scheme <major>.<minor>.<patch> (e.g. 0.1.77 · a1b2c3d). major.minor come from package.json.version and are bumped manually when something user-noticeable ships; patch is auto-computed at server start as commits since the last commit that changed the \"version\": line in package.json. Bumping minor in package.json resets patch to 0 because the bump commit becomes the new anchor. Cannot forget to bump — patch always advances. lib/version.ts rewritten; major/minor/patch added to AppVersion; VersionTag component unchanged (only consumes display/sha/branch/date/dirty). docs/README.md Build / Version Tag section rewritten with the new scheme + bumping checklist. Runtime validated against the live repo before commit: 0.1.77* · 1a3dd50 (anchor at 0c62fea, 77 commits since, 0.1.0 in package.json)."
+  },
+  {
     "timestamp": "2026-06-03T00:45:00Z",
     "title": "Platform list column headers: larger + free-floating",
     "summary": "Tweaked the .platform-list-cols header row in the platform list view. Font-size bumped from 0.72rem to 0.85rem so the labels (Description, Client, Person, Status, Priority) read clearly as column headers. Removed the bar chrome that sat behind them: dropped background, border-bottom, position: sticky, top:0, and z-index:2. Headers now sit in normal document flow with no surface behind them — free-floating, uppercase + letter-spacing + 600 weight remain as the typographic cues that they're labels. Grid template, gap, casing, weight, and letter-spacing unchanged so alignment with row content stays pixel-identical."

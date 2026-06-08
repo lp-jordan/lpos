@@ -249,7 +249,17 @@ The top-left **breadcrumb bar** (`Breadcrumb.tsx`) hosts the back arrow + home i
 ## Build / Version Tag
 
 ### What it does
-Displays a tiny build identifier in the very top-left corner of every page (`v.<commit-count> · <short-sha>`). The commit count auto-advances every git commit (and therefore every push); the short SHA pinpoints the exact build. Clicking the chip copies the full 40-char SHA so we can `git checkout <sha>` to recover the precise code state — useful when chasing user-reported regressions or recovering lost code.
+Displays a tiny build identifier in the very top-left corner of every page: `<major>.<minor>.<patch> · <short-sha>` (e.g. `0.1.77 · 1a3dd50`). `major.minor` come from `package.json.version` and are bumped manually when something user-noticeable ships. `patch` auto-increments as commits land on top of the last version-field bump — no manual bookkeeping required. The short SHA pinpoints the exact build. Clicking the chip copies the full 40-char SHA so we can `git checkout <sha>` to recover the precise code state — useful when chasing user-reported regressions or recovering lost code.
+
+### Scheme: hybrid semver
+- **Major / Minor.** Edit the `version` field in `package.json` (e.g. `0.1.0` → `0.2.0`) and commit. The patch resets to 0 at that commit because the version-field-change commit becomes the new anchor.
+- **Patch.** Auto-computed at server start as the number of commits since the last commit whose diff contained the `"version":` line in `package.json`. (`git log -1 --format=%H -G '^[ \t]*"version":' -- package.json` finds the anchor; `git rev-list --count <anchor>..HEAD` is the patch.)
+- **You cannot forget to bump.** Patch advances automatically on every commit. Only major/minor require human attention, and only when *you* think something deserves a minor/major bump.
+
+### Bumping minor or major — checklist
+1. Edit `package.json`: change the `version` field (e.g. `0.1.0` → `0.2.0`).
+2. Commit the change (e.g. `LPOS_COMMIT_OK=1 git commit -m "Bump version to 0.2.0"`).
+3. After the next server restart the chip reads `0.2.0 · <sha>`. Subsequent commits become `0.2.1`, `0.2.2`, …
 
 ### Key files
 | File | Role |
@@ -264,4 +274,4 @@ Displays a tiny build identifier in the very top-left corner of every page (`v.<
 On server restart. The git lookup runs once at module load (cached in a module-level variable). After a `git commit` and `git pull` the next `npm start` cycle picks up the new count and SHA.
 
 ### Dirty marker
-If the working tree had uncommitted changes when the server started, an asterisk appears (`v.28* · 7755ccb`) — a hint that the running build doesn't match a tagged commit.
+If the working tree had uncommitted changes when the server started, an asterisk appears (`0.1.28* · 7755ccb`) — a hint that the running build doesn't match a tagged commit.
