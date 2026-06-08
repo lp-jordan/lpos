@@ -105,17 +105,23 @@ export class UploadQueueService {
   }
 
   complete(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job || TERMINAL_STATUSES.has(job.status)) return;
     const completedAt = new Date().toISOString();
     this.patch(jobId, { status: 'done', progress: 100, detail: undefined, error: undefined, completedAt });
     updateUploadJobStatus(jobId, 'done', completedAt);
   }
 
   fail(jobId: string, error: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job || TERMINAL_STATUSES.has(job.status)) return;
     this.patch(jobId, { status: 'failed', error, detail: undefined, completedAt: new Date().toISOString() });
     updateUploadJobStatus(jobId, 'failed');
   }
 
   cancel(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (job && TERMINAL_STATUSES.has(job.status)) return;
     this.cancelledIds.add(jobId);
     this.patch(jobId, { status: 'cancelled', detail: undefined, error: undefined, completedAt: new Date().toISOString() });
     updateUploadJobStatus(jobId, 'cancelled');
@@ -132,6 +138,12 @@ export class UploadQueueService {
   private patch(jobId: string, update: Partial<UploadJob>): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
+    // Once a job is in a terminal state, additional updates are no-ops. This
+    // stops background work that didn't notice an auto-fail (e.g. an
+    // uploadToR2 still in flight when the sweep fires) from resurrecting the
+    // job by calling setProgress, which would put the in-memory state out of
+    // sync with the persistent record.
+    if (TERMINAL_STATUSES.has(job.status)) return;
     Object.assign(job, update, { updatedAt: new Date().toISOString() });
     this.broadcast();
   }

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-08T19:25:00Z",
+    "title": "Delivery uploads heartbeat during multi-GB R2 transfers (no more 3-min false-fail)",
+    "summary": "Delivery POST job auto-failed mid-upload because uploadToR2 ran for >3 min on multi-GB raw interview files (14–20 GB) while never emitting a setProgress call to refresh updatedAt — the queue's 3-min stale sweep killed the job even though bytes were actively streaming to R2. Fix: wire the AWS SDK Upload's httpUploadProgress event through uploadToR2 as an optional onProgress callback, then in the delivery route compute per-file progress bands (Phase A: 1..56 split N ways; Phase C: per-proxy band within 68..98) and emit setProgress on each tick with real bytes-uploaded text ('Uploading file 1 of 5: foo.mp4 — 2.3 GB / 16.9 GB'). Wrap transcodeProxy in a 60s queue.heartbeat interval since ffmpeg has no JS-side callbacks. Secondary fix: UploadQueueService.patch() now no-ops on terminal jobs, and fail/complete/cancel early-bail when already terminal — prevents a background IIFE that didn't notice the auto-fail from resurrecting the in-memory job state via late setProgress calls."
+  },
+  {
     "timestamp": "2026-06-03T00:55:00Z",
     "title": "Comment reply date right-justified (parity with main comments)",
     "summary": "Comment replies in the asset sidebar rendered author and date as bare inline spans inside a non-flex parent, gluing them together (e.g. 'Jordan JohnsonJun 8, 2:53 PM'). Main comments don't have this problem because they wrap author/date in a .mad-comment-header flex container, which combines with the existing .mad-comment-date { margin-left: auto } rule to right-justify the date. Fix: wrap the reply's author + date spans in the same .mad-comment-header div the main comment uses. Zero new CSS — existing rules handle it once the parent becomes a flex container. Single JSX edit in components/media/MediaDetailPanel.tsx."

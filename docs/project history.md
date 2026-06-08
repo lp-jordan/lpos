@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-06-08 — Delivery uploads heartbeat during multi-GB R2 transfers (no more 3-min false-fail)
+
+**Timestamp:** 2026-06-08T19:25:00Z
+
+**Prompt:** "[upload-queue] auto-failing stale job 83943667-93a7-4ba0-af84-4c519f4fe4a9 (Jacquelyn Full Interviews) — status=uploading limit=3min  Somebody is trying to creare a delivery link"
+
+**Response summary:** Diagnosed the auto-fail as a missing heartbeat during long single-file uploads. The "Jacquelyn Full Interviews" delivery covered 14–20 GB raw interview files (confirmed in `media_files`). The `UploadQueueService` sweep auto-fails any non-`processing` job whose `updatedAt` is older than 3 min — but the Phase A loop in `app/api/projects/[projectId]/delivery/route.ts` only called `setProgress` *between* files, never *during* a single `uploadToR2` call. So multi-GB uploads (which take 5–20+ min apiece) timed out mid-flight while bytes were actively streaming to R2. The pattern existed already (`lib/services/leaderpass-publish.ts:215` heartbeats during the Cloudflare encode wait), the delivery route just didn't use it.
+
+**Files changed:**
+- `app/api/projects/[projectId]/delivery/route.ts` — `uploadToR2` now accepts an optional `onProgress(loaded)` callback wired to the AWS SDK `Upload`'s `httpUploadProgress` event; Phase A and Phase C upload calls compute a per-file progress band and emit `setProgress` with real bytes-uploaded text ("Uploading file 1 of 5: foo.mp4 — 2.3 GB / 16.9 GB") on each tick. Phase C wraps `transcodeProxy` in a 60s `setInterval(queue.heartbeat, ...)` since ffmpeg runs for minutes with no JS-side callback. Small `humanBytes` helper inlined.
+- `lib/services/upload-queue-service.ts` — `patch()` now early-returns when the job is in a terminal status (`done`/`failed`/`cancelled`), and `fail`/`complete`/`cancel` also early-bail before touching the DB if the job is already terminal. This fixes a secondary state-flap bug where a `setProgress` call from a background IIFE that didn't notice the auto-fail would resurrect the in-memory job back to `uploading` while the persistent record stayed `failed`.
+
+**Implementation summary:** The AWS SDK's `Upload` class from `@aws-sdk/lib-storage` already emits `httpUploadProgress` events on every multipart part upload (verified against `node_modules/@aws-sdk/lib-storage/dist-types/Upload.d.ts:46` and `types.d.ts:3` — `Progress.loaded?: number`). Plumbing that through to `queue.setProgress` gives both heartbeat refresh *and* visible byte-progress for the user with no polling. `setProgress` calls `patch()` which refreshes `updatedAt`, so the 3-min sweep sees regular activity. The terminal-state guard in `patch()` is the right place because all the public mutators (`setProgress`/`setCompressing`/`setProcessing`/`complete`/`fail`/`cancel`) route through it — a single check covers them all. The explicit early-bail in `fail`/`complete`/`cancel` covers the additional DB write that those methods do outside of `patch`, so DB and memory stay in sync.
+
+**Decision rationale:**
+- **`httpUploadProgress` over a blind heartbeat interval:** Same wall-clock cost, but the user sees real bytes-uploaded ("2.3 GB / 16.9 GB") instead of staring at "Uploading file 1 of 5…" for 15 min. Mirrors what every other progress UI in the app does.
+- **Per-file progress band (1..56 split N ways) instead of a single rolling counter:** Keeps the existing phase percentages (Phase A 1–56, register 58–62, Phase B implicit, Phase C 68–98) intact so the UI's progress bar doesn't go backwards.
+- **Heartbeat for ffmpeg, real progress for R2:** Parsing ffmpeg's stderr for time-progress would be 30 lines and brittle; a 60s heartbeat is enough since the sweep only requires <3 min between updates.
+- **Patch-level terminal guard:** Centralized in the one private method all mutators route through. Alternative was per-method guards on the six public mutators — more code, easier to miss one.
+
+**Alternatives considered:**
+- Bumping `UPLOAD_TIMEOUT_MS` from 3 min to e.g. 30 min — band-aid that masks the real issue (no progress emitted during long ops) and would still falsely fail on slow links. Rejected.
+- Only the heartbeat interval (no real byte progress) — works for the sweep but worse UX. Rejected since `httpUploadProgress` is free.
+- Disabling the sweep entirely — too aggressive; the sweep does catch genuinely abandoned jobs in other code paths.
+
+**Commands/checks:**
+- `npx tsc --noEmit -p tsconfig.json` — clean.
+- Verified AWS SDK Progress signature against `node_modules/@aws-sdk/lib-storage/dist-types/{Upload,types}.d.ts`.
+- Verified the asset sizes in `lpos-canonical-assets.sqlite` (14–20 GB `*Full_Interview.mp4` files in the affected project).
+- Verified the failed jobs in `lpos-ingest-queue.sqlite.upload_job_records` (two attempts at `Jacquelyn Full Interviews`, both auto-failed by sweep).
+
+**Assumptions / follow-ups:**
+- R2 multipart upload uses default `@aws-sdk/lib-storage` chunking, which emits `httpUploadProgress` per part — typically every few seconds for multi-GB files. Comfortably under the 3-min threshold.
+- Did not modify the in-flight failed jobs in the DB; the user can retry the delivery and it should now succeed.
+- The two stuck Jacquelyn jobs (`83943667…` and `17c9880f…`) may still have background IIFEs running and could eventually finish uploading + register the delivery link successfully on the ingest side, even though the queue UI shows `failed`. If a duplicate delivery shows up on retry, the user can delete one. Not worth chasing — the new uploads will report progress correctly.
+
+---
+
 ## 2026-06-03 — Comment reply date right-justified (parity with main comments)
 
 **Timestamp:** 2026-06-03T00:55:00Z

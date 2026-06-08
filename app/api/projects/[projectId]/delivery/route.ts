@@ -156,13 +156,23 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         const mimeType = asset.mimeType ?? mimeForExt(ext)
         const r2Key    = `delivery/${token}/${filename}`
 
-        queue.setProgress(
-          jobId,
-          Math.round((i / total) * 55) + 1,
-          `Uploading file ${i + 1} of ${total}…`,
-        )
+        // Phase A occupies progress 1..56. Each file gets a band; httpUploadProgress
+        // ticks within the band so the user sees bytes-uploaded and the queue sweep
+        // sees regular updates (multi-GB originals routinely take >3 min apiece).
+        const bandStart = Math.round((i       / total) * 55) + 1
+        const bandEnd   = Math.round(((i + 1) / total) * 55) + 1
+        const bandSpan  = Math.max(1, bandEnd - bandStart)
 
-        await uploadToR2({ key: r2Key, filePath, mimeType })
+        queue.setProgress(jobId, bandStart, `Uploading file ${i + 1} of ${total}: ${filename}…`)
+
+        await uploadToR2({ key: r2Key, filePath, mimeType }, (loaded) => {
+          const frac = fileSize > 0 ? Math.min(1, loaded / fileSize) : 0
+          queue.setProgress(
+            jobId,
+            Math.min(bandEnd, bandStart + Math.round(bandSpan * frac)),
+            `Uploading file ${i + 1} of ${total}: ${filename} — ${humanBytes(loaded)} / ${humanBytes(fileSize)}`,
+          )
+        })
 
         let thumbnailUrl: string | undefined
         let thumbnailR2Key: string | undefined
@@ -304,8 +314,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         console.log(`[delivery:${token}] starting proxy ${i + 1}/${videoTotal}: ${filename} → ${tmpPath}`)
         queue.setProgress(jobId, pctStart, `Transcoding proxy ${i + 1} of ${videoTotal}: ${filename}…`)
 
+        // ffmpeg runs for minutes with no JS-side callbacks — heartbeat so the
+        // upload-queue sweep doesn't auto-fail the job while transcoding.
+        const ffmpegHeartbeat = setInterval(() => queue.heartbeat(jobId), 60_000)
         try {
-          await transcodeProxy(asset.filePath!, tmpPath, jobId)
+          try {
+            await transcodeProxy(asset.filePath!, tmpPath, jobId)
+          } finally {
+            clearInterval(ffmpegHeartbeat)
+          }
           console.log(`[delivery:${token}] proxy transcode done: ${filename}`)
 
           if (queue.isCancelled(jobId)) {
@@ -314,10 +331,21 @@ export async function POST(req: NextRequest, { params }: Ctx) {
             return
           }
 
-          queue.setProgress(jobId, pctStart + Math.round(30 / videoTotal * 0.5), `Uploading proxy ${i + 1} of ${videoTotal}…`)
-
           const proxySize = fs.statSync(tmpPath).size
-          await uploadToR2({ key: proxyR2Key, filePath: tmpPath, mimeType: 'video/mp4' })
+          const proxyBandStart = pctStart + Math.round((30 / videoTotal) * 0.5)
+          const proxyBandEnd   = 68 + Math.round(((i + 1) / videoTotal) * 30)
+          const proxyBandSpan  = Math.max(1, proxyBandEnd - proxyBandStart)
+
+          queue.setProgress(jobId, proxyBandStart, `Uploading proxy ${i + 1} of ${videoTotal}…`)
+
+          await uploadToR2({ key: proxyR2Key, filePath: tmpPath, mimeType: 'video/mp4' }, (loaded) => {
+            const frac = proxySize > 0 ? Math.min(1, loaded / proxySize) : 0
+            queue.setProgress(
+              jobId,
+              Math.min(proxyBandEnd, proxyBandStart + Math.round(proxyBandSpan * frac)),
+              `Uploading proxy ${i + 1} of ${videoTotal}: ${humanBytes(loaded)} / ${humanBytes(proxySize)}`,
+            )
+          })
           fs.rmSync(tmpPath, { force: true })
           console.log(`[delivery:${token}] proxy uploaded to R2: ${proxyR2Key} (${proxySize} bytes)`)
 
@@ -415,7 +443,10 @@ function isVideo(mimeType: string, ext: string): boolean {
   return ['.mp4', '.mov', '.avi', '.mkv', '.mxf', '.webm', '.m4v', '.mts'].includes(ext)
 }
 
-async function uploadToR2({ key, filePath, mimeType }: { key: string; filePath: string; mimeType: string }): Promise<void> {
+async function uploadToR2(
+  { key, filePath, mimeType }: { key: string; filePath: string; mimeType: string },
+  onProgress?: (loadedBytes: number) => void,
+): Promise<void> {
   const upload = new Upload({
     client: s3,
     params: {
@@ -425,7 +456,21 @@ async function uploadToR2({ key, filePath, mimeType }: { key: string; filePath: 
       ContentType: mimeType,
     },
   })
+  if (onProgress) {
+    upload.on('httpUploadProgress', (p) => {
+      if (typeof p.loaded === 'number') onProgress(p.loaded)
+    })
+  }
   await upload.done()
+}
+
+function humanBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
 function sanitize(name: string): string {
