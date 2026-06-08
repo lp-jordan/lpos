@@ -7,11 +7,17 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  useDroppable,
   useDraggable,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '@/lib/models/task';
 import { getStatusLabel, getStatusColor } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
@@ -110,7 +116,26 @@ function assignCategoryColors(groups: Group[]): Map<string, string> {
 }
 
 // Prefix added to droppable IDs so they don't collide with task IDs (UUIDs).
+// Note: a single ID is used for BOTH the task→category drop target AND the
+// category-reorder sortable item on the same group element (`useSortable`
+// internally combines `useDraggable` + `useDroppable`). The drag-end handler
+// disambiguates by the `active.id`'s shape: a raw UUID = task drag; a CAT_DROP_
+// PREFIX-prefixed ID = category reorder.
 const CAT_DROP_PREFIX = 'cat::';
+
+/** Minimal shape we need from a category to render + reorder. The store-side
+ *  `TaskCategory` has more fields; we only carry id + label in component state. */
+interface CategoryEntry { categoryId: string; label: string; }
+
+/** Synthetic IDs for the starter fallback so the SortableContext has *some*
+ *  identity per row when the API hasn't responded yet. Reorder is disabled
+ *  in that state (we have no real IDs to POST). */
+function starterToEntries(): CategoryEntry[] {
+  return STARTER_PLATFORM_CATEGORIES.map((label, i) => ({
+    categoryId: `__starter:${i}`,
+    label,
+  }));
+}
 
 export function PlatformListView({
   tasks,
@@ -121,8 +146,12 @@ export function PlatformListView({
   onCategoryChange,
 }: Readonly<Props>) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [categories, setCategories] = useState<string[]>(STARTER_PLATFORM_CATEGORIES);
+  const [categories, setCategories] = useState<CategoryEntry[]>(starterToEntries);
+  /** True once the API populated real category IDs; gates the reorder POST. */
+  const [hasRealIds, setHasRealIds] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [draggingCategoryLabel, setDraggingCategoryLabel] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
 
   // Live category list from the admin-managed store. The admin's sort order
   // dictates the group order in this view. Falls back to the F2 hardcoded list
@@ -134,8 +163,13 @@ export function PlatformListView({
         const res = await fetch('/api/task-categories');
         if (!res.ok) return;
         const data = await res.json() as { categories?: TaskCategory[] };
-        const labels = (data.categories ?? []).map((c) => c.label).filter(Boolean);
-        if (!cancelled && labels.length > 0) setCategories(labels);
+        const entries = (data.categories ?? [])
+          .filter((c) => c.label)
+          .map((c) => ({ categoryId: c.categoryId, label: c.label }));
+        if (!cancelled && entries.length > 0) {
+          setCategories(entries);
+          setHasRealIds(true);
+        }
       } catch {
         // keep the fallback
       }
@@ -147,7 +181,7 @@ export function PlatformListView({
     const byLabel = new Map<string, Task[]>();
     const uncategorized: Task[] = [];
 
-    for (const cat of categories) byLabel.set(cat, []);
+    for (const cat of categories) byLabel.set(cat.label, []);
     for (const task of tasks) {
       if (!task.category) {
         uncategorized.push(task);
@@ -159,12 +193,13 @@ export function PlatformListView({
     }
 
     const ordered: Group[] = [];
+    const knownLabels = new Set(categories.map((c) => c.label));
     for (const cat of categories) {
-      ordered.push({ label: cat, tasks: byLabel.get(cat) ?? [], isOrphan: false });
+      ordered.push({ label: cat.label, tasks: byLabel.get(cat.label) ?? [], isOrphan: false });
     }
     // Orphan categories (label exists on a task but not in the admin list)
     for (const [label, taskList] of byLabel) {
-      if (categories.includes(label)) continue;
+      if (knownLabels.has(label)) continue;
       ordered.push({ label, tasks: taskList, isOrphan: true });
     }
     if (uncategorized.length > 0) {
@@ -172,6 +207,15 @@ export function PlatformListView({
     }
     return ordered;
   }, [tasks, categories]);
+
+  /** SortableContext needs a stable, ordered ID list for the live (non-orphan)
+   *  categories — the orphan/uncategorized groups stay pinned at the end and
+   *  are NOT included in the sortable set (you can't drag an orphan into the
+   *  ordering store because it has no real categoryId). */
+  const sortableIds = useMemo(
+    () => categories.map((c) => `${CAT_DROP_PREFIX}${c.label}`),
+    [categories],
+  );
 
   // Compute the category→color map once per groups change. This is what makes
   // the "no color used twice" guarantee work: collision resolution needs to
@@ -196,17 +240,77 @@ export function PlatformListView({
   }
 
   function handleDragStart(event: DragStartEvent) {
-    setDraggingTaskId(event.active.id as string);
+    const id = event.active.id as string;
+    if (id.startsWith(CAT_DROP_PREFIX)) {
+      setDraggingCategoryLabel(id.slice(CAT_DROP_PREFIX.length));
+    } else {
+      setDraggingTaskId(id);
+    }
+  }
+
+  /** Persist a new category order to the server. Optimistic — local state is
+   *  already updated before we call this. Rolls back from the server response
+   *  on failure (the server's reorder helper is the source of truth). */
+  async function persistCategoryOrder(next: CategoryEntry[]) {
+    if (!hasRealIds) return;  // starter fallback has no real IDs to POST
+    setReorderError(null);
+    try {
+      const res = await fetch('/api/task-categories/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderedIds: next.map((c) => c.categoryId) }),
+      });
+      const data = await res.json() as { categories?: TaskCategory[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? 'Failed to reorder.');
+      if (data.categories) {
+        setCategories(
+          data.categories
+            .filter((c) => c.label)
+            .map((c) => ({ categoryId: c.categoryId, label: c.label })),
+        );
+      }
+    } catch (err) {
+      setReorderError((err as Error).message);
+      // Roll back to whatever the server says is authoritative.
+      try {
+        const res = await fetch('/api/task-categories');
+        if (res.ok) {
+          const data = await res.json() as { categories?: TaskCategory[] };
+          const entries = (data.categories ?? [])
+            .filter((c) => c.label)
+            .map((c) => ({ categoryId: c.categoryId, label: c.label }));
+          if (entries.length > 0) setCategories(entries);
+        }
+      } catch { /* keep optimistic state if rollback fetch also fails */ }
+    }
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setDraggingTaskId(null);
+    setDraggingCategoryLabel(null);
     const { active, over } = event;
     if (!over) return;
-    const overId = over.id as string;
+    const activeId = active.id as string;
+    const overId   = over.id as string;
+
+    // ── Category reorder ────────────────────────────────────────────────────
+    if (activeId.startsWith(CAT_DROP_PREFIX)) {
+      if (!overId.startsWith(CAT_DROP_PREFIX) || activeId === overId) return;
+      const activeLabel = activeId.slice(CAT_DROP_PREFIX.length);
+      const overLabel   = overId.slice(CAT_DROP_PREFIX.length);
+      const oldIdx = categories.findIndex((c) => c.label === activeLabel);
+      const newIdx = categories.findIndex((c) => c.label === overLabel);
+      if (oldIdx === -1 || newIdx === -1) return;
+      const next = arrayMove(categories, oldIdx, newIdx);
+      setCategories(next);            // optimistic
+      void persistCategoryOrder(next);
+      return;
+    }
+
+    // ── Task → category drop (existing) ─────────────────────────────────────
     if (!overId.startsWith(CAT_DROP_PREFIX)) return;
     const newCategory = overId.slice(CAT_DROP_PREFIX.length);
-    const task = tasks.find((t) => t.taskId === (active.id as string));
+    const task = tasks.find((t) => t.taskId === activeId);
     if (!task || task.category === newCategory) return;
     onCategoryChange(task.taskId, newCategory);
   }
@@ -214,6 +318,10 @@ export function PlatformListView({
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="platform-list">
+        {reorderError && (
+          <p className="platform-list-reorder-error" role="alert">{reorderError}</p>
+        )}
+
         <div className="platform-list-cols" role="row">
           <div className="platform-list-col platform-list-col--handle" aria-hidden="true" />
           <div className="platform-list-col platform-list-col--desc">Description</div>
@@ -227,14 +335,38 @@ export function PlatformListView({
           <p className="platform-list-empty">No platform tasks yet.</p>
         )}
 
-        {groups.map((group) => {
+        {/* SortableContext only covers the live (non-orphan) categories — they
+         *  are the rows the user can reorder. Orphan + Uncategorized groups
+         *  render after the context, pinned in place. */}
+        <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+          {groups.filter((g) => !g.isOrphan).map((group) => {
+            const isCollapsed = collapsed.has(group.label);
+            const color = categoryColors.get(group.label) ?? ORPHAN_COLOR;
+            const colorFaint = `${color}22`;
+            return (
+              <SortableCategoryGroup
+                key={group.label}
+                group={group}
+                color={color}
+                colorFaint={colorFaint}
+                isCollapsed={isCollapsed}
+                onToggleCollapse={() => toggleCollapse(group.label)}
+                users={users}
+                highlightTaskId={highlightTaskId}
+                onSelectTask={onSelectTask}
+                onCardContextMenu={onCardContextMenu}
+                reorderable={hasRealIds}
+              />
+            );
+          })}
+        </SortableContext>
+
+        {groups.filter((g) => g.isOrphan).map((group) => {
           const isCollapsed = collapsed.has(group.label);
           const color = categoryColors.get(group.label) ?? ORPHAN_COLOR;
-          // Append two hex chars to the 6-char hex to control alpha at the CSS
-          // layer without needing color-mix() — works in every browser.
-          const colorFaint = `${color}22`; // ~13% opacity tint
+          const colorFaint = `${color}22`;
           return (
-            <DroppableCategoryGroup
+            <SortableCategoryGroup
               key={group.label}
               group={group}
               color={color}
@@ -245,6 +377,7 @@ export function PlatformListView({
               highlightTaskId={highlightTaskId}
               onSelectTask={onSelectTask}
               onCardContextMenu={onCardContextMenu}
+              reorderable={false}
             />
           );
         })}
@@ -256,12 +389,17 @@ export function PlatformListView({
             {draggingTask.description}
           </div>
         )}
+        {draggingCategoryLabel && (
+          <div className="platform-list-drag-overlay platform-list-drag-overlay--category">
+            {draggingCategoryLabel}
+          </div>
+        )}
       </DragOverlay>
     </DndContext>
   );
 }
 
-function DroppableCategoryGroup({
+function SortableCategoryGroup({
   group,
   color,
   colorFaint,
@@ -271,6 +409,7 @@ function DroppableCategoryGroup({
   highlightTaskId,
   onSelectTask,
   onCardContextMenu,
+  reorderable,
 }: Readonly<{
   group: Group;
   color: string;
@@ -281,15 +420,67 @@ function DroppableCategoryGroup({
   highlightTaskId: string | null;
   onSelectTask: (taskId: string) => void;
   onCardContextMenu: (e: React.MouseEvent, taskId: string) => void;
+  /** When false (orphan/uncategorized, or starter-fallback state without real
+   *  IDs), the left-side drag handle is hidden — but the group remains a
+   *  droppable target for task→category drops. */
+  reorderable: boolean;
 }>) {
-  const { setNodeRef, isOver } = useDroppable({ id: `${CAT_DROP_PREFIX}${group.label}` });
+  // `useSortable` provides both the draggable activator (for the handle) and
+  // the droppable target (for both task drops AND category-reorder hover). The
+  // disambiguation between "task landed here" vs "category landed here" happens
+  // in handleDragEnd via active.id's prefix.
+  const {
+    setNodeRef,
+    attributes,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({
+    id: `${CAT_DROP_PREFIX}${group.label}`,
+    disabled: !reorderable,  // orphans/starter-fallback aren't reorderable, but they still receive drops via isOver
+  });
+
+  const style: React.CSSProperties = {
+    '--cat-color': color,
+    '--cat-color-faint': colorFaint,
+    transform: CSS.Transform.toString(transform),
+    transition,
+  } as React.CSSProperties;
 
   return (
     <div
       ref={setNodeRef}
-      className={`platform-list-group${isOver ? ' platform-list-group--drag-over' : ''}`}
-      style={{ '--cat-color': color, '--cat-color-faint': colorFaint } as React.CSSProperties}
+      className={[
+        'platform-list-group',
+        isOver        ? 'platform-list-group--drag-over' : '',
+        isDragging    ? 'platform-list-group--reordering' : '',
+      ].filter(Boolean).join(' ')}
+      style={style}
     >
+      <div className="platform-list-group-header-wrap">
+        {reorderable && (
+          <div
+            className="platform-list-group-drag-handle"
+            {...attributes}
+            {...listeners}
+            // Stop click bubbling so grabbing the handle doesn't toggle the
+            // collapse state of the underlying header button.
+            onClick={(e) => e.stopPropagation()}
+            title="Drag to reorder category"
+            aria-label={`Drag to reorder ${group.label}`}
+          >
+            <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
+              <circle cx="2" cy="2"  r="1.5"/>
+              <circle cx="8" cy="2"  r="1.5"/>
+              <circle cx="2" cy="7"  r="1.5"/>
+              <circle cx="8" cy="7"  r="1.5"/>
+              <circle cx="2" cy="12" r="1.5"/>
+              <circle cx="8" cy="12" r="1.5"/>
+            </svg>
+          </div>
+        )}
       <button
         type="button"
         className="platform-list-group-header"
@@ -303,6 +494,7 @@ function DroppableCategoryGroup({
         </span>
         <span className="platform-list-group-count">{group.tasks.length}</span>
       </button>
+      </div>
 
       {!isCollapsed && group.tasks.length === 0 && (
         <div className="platform-list-group-empty">No tasks in this category.</div>

@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-06-03 — Drag handles to reorder platform categories (any user)
+
+**Timestamp:** 2026-06-03T00:40:00Z
+
+**Prompt:** "Can we quickly add a drag/drop handle on the left side of each platform category to allow at-will reordering by any user?"
+
+**Summary:** Added a per-category grip-icon drag handle on the left edge of every live category group in `PlatformListView`. Any signed-in (non-guest) user can grab a handle and drag the category up or down to change the global order; the new order persists immediately via the existing `POST /api/task-categories/reorder` endpoint, whose auth gate was dropped from `admin` to `user`. Tasks-into-categories drag (the existing feature) keeps working unchanged — the two drag flows coexist in the same `DndContext` and are disambiguated in `handleDragEnd` by the `active.id` prefix.
+
+**Files changed:**
+- `app/api/task-categories/reorder/route.ts` — `requireRole(req, 'admin')` → `requireRole(req, 'user')`, plus a comment explaining the rationale.
+- `components/tasks/PlatformListView.tsx` — main edit:
+  - State shape changed from `categories: string[]` to `categories: CategoryEntry[]` (keeps `categoryId` alongside the label).
+  - New `hasRealIds` flag tracks whether the live API populated the state (the starter fallback has no real IDs, so reorder is disabled in that state).
+  - `DroppableCategoryGroup` replaced by `SortableCategoryGroup`, which uses `useSortable` from `@dnd-kit/sortable` (single ID = both draggable item AND droppable target on the same DOM node).
+  - `SortableContext` wraps the live (non-orphan) categories; orphans + "Uncategorized" render after the context, pinned in place — they remain droppable for task drops but aren't reorderable themselves.
+  - `handleDragEnd` now dispatches by `active.id` prefix: `CAT_DROP_PREFIX::Label` → category reorder (arrayMove + optimistic state + POST); raw UUID → existing task→category drop.
+  - On reorder POST failure, the local state rolls back to the server's authoritative `GET /api/task-categories` response; a transient inline error message renders above the list.
+  - New `DragOverlay` variant `.platform-list-drag-overlay--category` shows a ghost of the category label being dragged.
+- `app/globals.css` — new rules: `.platform-list-group-header-wrap` (flex row for handle + header), `.platform-list-group-drag-handle` (left-side grip, opacity-on-hover mirroring the task-row handle), `.platform-list-group--reordering` (dim while being dragged), `.platform-list-drag-overlay--category` (bolder ghost with the category color stripe), `.platform-list-reorder-error` (subtle inline error surface).
+
+**Implementation summary:**
+- **ID disambiguation:** the same `CAT_DROP_PREFIX` (`cat::`) is now used for both the existing task-drop target and the new category-sortable item. `useSortable` internally combines `useDraggable` + `useDroppable` under one ID, which is what we want — a single category group is both "things land here" (for task drops) and "this can be moved" (for category reorder). The shared `handleDragEnd` figures out which one just happened from `active.id`'s shape.
+- **Sortable scope:** only the live (non-orphan, real-categoryId) categories are inside the `SortableContext`. Orphans and the synthetic "Uncategorized" bucket render after the context and are deliberately not reorderable — there's no `categoryId` to send to the reorder endpoint, and pinning them at the end matches their semantic role (these are leftover labels, not first-class categories).
+- **Handle-only activation:** `attributes` + `listeners` from `useSortable` are spread on the small grip `div` only — not the whole header or the group. Clicking the header still toggles collapse; only grabbing the grip starts a category drag. `onClick={e => e.stopPropagation()}` on the handle prevents the click from bubbling into the header's collapse toggle.
+- **Auth gate:** `requireRole(req, 'user')` matches the spirit of the request ("any user"). Guests stay blocked (they have a tightly-restricted allow-list anyway). Create/rename/delete on the sibling routes are still `admin`-only — reordering is cosmetic, the destructive operations stay gated.
+- **Optimistic update + rollback:** local state is reordered immediately via `arrayMove(categories, oldIdx, newIdx)`; the POST happens in the background; on failure, the component fetches `GET /api/task-categories` to restore the authoritative state and surfaces a small inline error.
+- **Fallback safety:** when the API hasn't responded yet, the component still renders with `STARTER_PLATFORM_CATEGORIES`. In that state `hasRealIds` is false → drag handles are hidden → no reorder attempt is made.
+
+**Decision rationale:** Reused the in-tree `@dnd-kit/sortable` (already a dep, already used elsewhere) rather than adding a new dnd library. Reused the existing reorder endpoint rather than building a per-user view-order store; the user asked for "at-will reordering" without qualifying "per user", so global reorder is the simplest interpretation that matches the wording. Per-user view order can be layered on later if users start fighting over the global order — would land as a per-user JSON store keyed by user id, hydrated client-side after the global fetch.
+
+**Alternatives considered:**
+- Per-user view order via localStorage / per-user DB column — rejected as scope creep for the "quickly add" framing. Easy to add later if shared-order proves contentious.
+- Up/Down arrow buttons on each group instead of a drag handle — rejected: the user asked for drag/drop specifically, and the @dnd-kit infrastructure is already wired for task drag in the same view.
+- Make orphan groups also reorderable — rejected: they have no real `categoryId` to send to the reorder endpoint. Pinning them at the end matches their leftover/legacy status.
+- Keep the gate as admin and add a separate "anyone can reorder" endpoint — rejected: the existing endpoint already does exactly the right thing; the gate change is a one-line, low-blast-radius edit.
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` — clean.
+
+**Assumptions / follow-ups:**
+- Requires a Next.js rebuild + server restart for the route change + the bundled component change to take effect.
+- If the user later wants per-user category order (so one user's drag doesn't reorder it for the rest of the team), the path is: add a `user_category_order` table or per-user JSON store; client hydrates from it post-API-fetch; reorder POST writes the per-user store rather than the shared one. The current shared-order implementation can coexist as a default starting point.
+- The drag handle is hidden until the group is hovered (`opacity: 0` → `0.5` on `:hover`) to keep the header chrome clean. If users miss the affordance, we can pin it visible.
+
+---
+
 ## 2026-06-03 — Transcript selection batch bar streams a zip (the actual one users use)
 
 **Timestamp:** 2026-06-03T00:30:00Z

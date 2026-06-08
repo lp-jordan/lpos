@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:40:00Z",
+    "title": "Drag handles to reorder platform categories (any user)",
+    "summary": "Added a per-category grip-icon drag handle on the left edge of every live category group in PlatformListView. Any signed-in (non-guest) user can grab a handle and drag the category up or down; the new order persists immediately via the existing POST /api/task-categories/reorder endpoint, whose auth gate dropped from admin to user (create/rename/delete remain admin-only). Task-into-category drag (the existing feature) keeps working unchanged — the two drag flows coexist in the same DndContext and are disambiguated by active.id prefix. DroppableCategoryGroup → SortableCategoryGroup using @dnd-kit/sortable (already a project dep). Only live categories are sortable; orphan/uncategorized groups stay pinned at the end and remain droppable for task drops. Optimistic reorder with rollback on POST failure. New CSS for the handle, the dragging visual, and the category drag-overlay ghost."
+  },
+  {
     "timestamp": "2026-06-03T00:30:00Z",
     "title": "Transcript selection batch bar streams a zip (the actual one users use)",
     "summary": "Followup to the earlier transcripts-zip fix. The 'Download all transcripts' button (server-side `download-all` route) was already correct — verified end-to-end via curl against the running server, returns a valid 95-file zip. But the path users actually use — the in-list selection batch bar in components/projects/ProjectDetail.tsx (Download TXT / Download Timecoded buttons that appear when transcripts are checkbox-selected) — was untouched and still triggered N individual <a>.click() events with 300ms gaps between each. Symptom: select 3, get 3 separate files. Fixed by adding POST /api/projects/[projectId]/transcripts/download-zip (selection-driven, accepts {jobIds, type}) and rewriting batchDownload to POST + save the response blob. Single-file fast path preserved on both server and client per the original 'no zip when only one' rule. Same archiver+PassThrough+Readable.toWeb pattern as the existing download-all and photos/download-zip routes."

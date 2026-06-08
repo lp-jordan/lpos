@@ -16860,6 +16860,82 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .platform-list-drag-handle:hover { opacity: 0.85 !important; }
 .platform-list-drag-handle:active { cursor: grabbing; }
 
+/* ── Category drag handle (any user can reorder) ─────────────────────────────
+ * Sits to the left of the category header button. Same grip glyph as the row
+ * drag handle, slightly more prominent (categories are heavier units of work,
+ * so the affordance should be visible on group hover without searching for it).
+ * `platform-list-group-header-wrap` makes the handle and the header button
+ * share a row inside the group container. */
+.platform-list-group-header-wrap {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+/* Header button takes the remaining row width next to the (optional) handle. */
+.platform-list-group-header-wrap .platform-list-group-header {
+  flex: 1;
+  min-width: 0;
+}
+.platform-list-group-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  cursor: grab;
+  color: var(--text-soft);
+  opacity: 0;
+  transition: opacity 120ms, background 100ms;
+  touch-action: none;
+  user-select: none;
+  /* Soft horizontal wash that matches the header's left-edge color so the
+   * handle reads as part of the category band rather than a foreign chip. */
+  background: linear-gradient(90deg, var(--cat-color-faint, transparent), transparent 90%);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.platform-list-group:hover .platform-list-group-drag-handle { opacity: 0.5; }
+.platform-list-group-drag-handle:hover { opacity: 0.95 !important; background: rgba(255,255,255,0.06); }
+.platform-list-group-drag-handle:active { cursor: grabbing; }
+
+/* Collapsed header drops its own bottom border (see .platform-list-group-header
+ * [aria-expanded="false"] above). Match that here so the handle doesn't leave
+ * a stray underline below a collapsed group. */
+.platform-list-group-header[aria-expanded="false"] + * .platform-list-group-drag-handle,
+.platform-list-group:has(.platform-list-group-header[aria-expanded="false"]) .platform-list-group-drag-handle {
+  border-bottom: none;
+}
+
+/* Dragging visual for the category itself (the group being reordered). */
+.platform-list-group--reordering {
+  opacity: 0.4;
+}
+
+/* Floating ghost shown via DragOverlay while reordering a category. Differs
+ * from the row-drag overlay: bolder, carries the category color stripe so it
+ * reads as "this whole group is moving" instead of "a single row is moving". */
+.platform-list-drag-overlay--category {
+  background: var(--surface, #1a1a1a);
+  border: 1px solid rgba(255,255,255,0.22);
+  border-left: 3px solid var(--cat-color, rgba(255,255,255,0.4));
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+}
+
+/* Inline error surface when the reorder POST fails. Subtle so it doesn't
+ * shout — the optimistic state has already rolled back. */
+.platform-list-reorder-error {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  color: rgba(255, 180, 180, 0.92);
+  background: rgba(180, 60, 60, 0.12);
+  border: 1px solid rgba(180, 60, 60, 0.3);
+  border-radius: 6px;
+}
+
 /* Drop zone highlight: brighten the category group when a task hovers over it. */
 .platform-list-group--drag-over {
   border-left-color: var(--cat-color, rgba(255,255,255,0.4));
