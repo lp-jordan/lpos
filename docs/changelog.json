@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-03T00:55:00Z",
+    "title": "Comment reply date right-justified (parity with main comments)",
+    "summary": "Comment replies in the asset sidebar rendered author and date as bare inline spans inside a non-flex parent, gluing them together (e.g. 'Jordan JohnsonJun 8, 2:53 PM'). Main comments don't have this problem because they wrap author/date in a .mad-comment-header flex container, which combines with the existing .mad-comment-date { margin-left: auto } rule to right-justify the date. Fix: wrap the reply's author + date spans in the same .mad-comment-header div the main comment uses. Zero new CSS — existing rules handle it once the parent becomes a flex container. Single JSX edit in components/media/MediaDetailPanel.tsx."
+  },
+  {
     "timestamp": "2026-06-03T00:50:00Z",
     "title": "Version chip → hybrid semver (major.minor.<auto-patch>)",
     "summary": "Converted the top-left version chip from v.<commit-count> (e.g. v.78 · a1b2c3d) to a hybrid semver scheme <major>.<minor>.<patch> (e.g. 0.1.77 · a1b2c3d). major.minor come from package.json.version and are bumped manually when something user-noticeable ships; patch is auto-computed at server start as commits since the last commit that changed the \"version\": line in package.json. Bumping minor in package.json resets patch to 0 because the bump commit becomes the new anchor. Cannot forget to bump — patch always advances. lib/version.ts rewritten; major/minor/patch added to AppVersion; VersionTag component unchanged (only consumes display/sha/branch/date/dirty). docs/README.md Build / Version Tag section rewritten with the new scheme + bumping checklist. Runtime validated against the live repo before commit: 0.1.77* · 1a3dd50 (anchor at 0c62fea, 77 commits since, 0.1.0 in package.json)."

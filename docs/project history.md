@@ -2,6 +2,54 @@
 
 ---
 
+## 2026-06-03 — Comment reply date right-justified (parity with main comments)
+
+**Timestamp:** 2026-06-03T00:55:00Z
+
+**Prompt:** "Jordan JohnsonJun 8, 2:53 PM\n\nThat is how a comment reply is formatted - the date and time need to be right justified like main comments."
+
+**Summary:** Comment replies in the asset sidebar rendered author and date as adjacent inline spans with no gap, gluing them together ("Jordan JohnsonJun 8, 2:53 PM"). Main comments don't have this problem because they wrap their author/date row in a `.mad-comment-header` flex container that combines with the existing `.mad-comment-date { margin-left: auto }` rule to push the date to the right edge. Replies skipped the wrapper and laid the spans out as bare inline siblings. Fix: wrap the reply's author + date in the same `.mad-comment-header` div the main comment uses. Zero new CSS — the existing `margin-left: auto` rule handles right-justify automatically once the parent is a flex container.
+
+**Files changed:**
+- `components/media/MediaDetailPanel.tsx` — added `<div className="mad-comment-header">` wrapper around the reply's `.mad-comment-author` + `.mad-comment-date` spans (around line 1037).
+- `docs/project history.md`, `docs/changelog.json`.
+
+**Implementation summary:**
+- Pre-fix JSX (simplified):
+  ```jsx
+  <div className="mad-comment-reply">
+    <span className="mad-comment-author">{r.authorName}</span>
+    <span className="mad-comment-date">{date}</span>
+    <p className="mad-comment-text">{r.text}</p>
+  </div>
+  ```
+- Post-fix JSX:
+  ```jsx
+  <div className="mad-comment-reply">
+    <div className="mad-comment-header">
+      <span className="mad-comment-author">{r.authorName}</span>
+      <span className="mad-comment-date">{date}</span>
+    </div>
+    <p className="mad-comment-text">{r.text}</p>
+  </div>
+  ```
+- `.mad-comment-header` rule (line 4951 in `app/globals.css`): `display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap`. Combined with `.mad-comment-date { margin-left: auto }` at line 4991, this pushes the date to the right edge inside any header it sits in. Now applies to replies for free.
+
+**Decision rationale:** Reused the existing main-comment header class rather than introducing a new `.mad-comment-reply-header` modifier. Both flows want the same visual: author name on the left, date on the right, single-row flex wrap. If replies later want different chrome (smaller avatar, different padding, etc.) we can add a `.mad-comment-reply .mad-comment-header` descendant selector then; for now nothing diverges.
+
+**Alternatives considered:**
+- New CSS rule on `.mad-comment-reply` itself to make it a flex container — rejected: the `<p class="mad-comment-text">` child would then also become a flex child, requiring an additional `flex-basis: 100%` hack to force it onto its own row. Wrapping is cleaner.
+- Add a separator (` · `) between author and date — rejected: doesn't match the user's request ("right justified like main comments") and would still leave them on the left edge.
+- Inline `style={{ display: 'flex', ... }}` on the reply div — rejected: ad-hoc styling diverges from the CSS-class pattern the rest of the panel uses.
+
+**Commands/tests run:** `npx tsc --noEmit -p tsconfig.json` — clean.
+
+**Assumptions / follow-ups:**
+- The `VideoTheaterMode` comment panel renders reply author + text but does NOT render a reply date today (`vt-cp-reply` only has author + text). If we ever add a date there, the same flex-header wrap pattern applies.
+- Requires Next.js rebuild for the JSX change to apply.
+
+---
+
 ## 2026-06-03 — Version chip → hybrid semver (`major.minor.<auto-patch>`)
 
 **Timestamp:** 2026-06-03T00:50:00Z

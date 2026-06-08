@@ -1036,8 +1036,15 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                             <div className="mad-comment-replies">
                               {(c.replies ?? []).map((r) => (
                                 <div key={r.id} className="mad-comment-reply">
-                                  <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
-                                  <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
+                                  {/* Reuse the same flex header layout as top-level comments
+                                   * so the date sits right-justified via the existing
+                                   * `.mad-comment-date { margin-left: auto }` rule. Without
+                                   * this wrapper the spans rendered as bare inline siblings,
+                                   * gluing the date against the author name. */}
+                                  <div className="mad-comment-header">
+                                    <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
+                                    <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
+                                  </div>
                                   <p className="mad-comment-text">{r.text}</p>
                                 </div>
                               ))}
