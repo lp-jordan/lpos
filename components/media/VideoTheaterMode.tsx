@@ -409,6 +409,10 @@ export function VideoTheaterMode({
                   ) : (
                     <span className="vt-cp-general">General</span>
                   )}
+                  {c.authorAvatar
+                    ? <img src={c.authorAvatar} alt="" className="vt-cp-avatar" />
+                    : <div className="vt-cp-avatar vt-cp-avatar--placeholder">{(c.authorName || '?')[0]}</div>
+                  }
                   <span className="vt-cp-author">{c.authorName || 'Frame.io'}</span>
                   {(c as FrameIOComment & { mirrorAbandoned?: boolean }).mirrorAbandoned && (
                     <span
@@ -438,7 +442,13 @@ export function VideoTheaterMode({
                   <div className="vt-cp-replies">
                     {(c.replies ?? []).map(r => (
                       <div key={r.id} className="vt-cp-reply">
-                        <span className="vt-cp-reply-author">{r.authorName || 'Frame.io'}</span>
+                        <div className="vt-cp-reply-head">
+                          {r.authorAvatar
+                            ? <img src={r.authorAvatar} alt="" className="vt-cp-avatar vt-cp-avatar--reply" />
+                            : <div className="vt-cp-avatar vt-cp-avatar--reply vt-cp-avatar--placeholder">{(r.authorName || '?')[0]}</div>
+                          }
+                          <span className="vt-cp-reply-author">{r.authorName || 'Frame.io'}</span>
+                        </div>
                         <p className="vt-cp-text">{r.text}</p>
                       </div>
                     ))}

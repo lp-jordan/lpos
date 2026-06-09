@@ -414,6 +414,17 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [replyText,         setReplyText]         = useState('');
   const [replyPosting,      setReplyPosting]      = useState(false);
 
+  // Sidebar compose state — mirrors theater-mode's compose box so users can
+  // leave timed top-level comments without entering theater. Focus pauses the
+  // sidebar video and snaps the timestamp to the nearest NDF frame boundary
+  // (same math the theater compose uses); blur leaves the timestamp pinned so
+  // the user can scrub elsewhere without losing their attached time.
+  const [composeText,    setComposeText]    = useState('');
+  const [composeTime,    setComposeTime]    = useState(0);
+  const [composePosting, setComposePosting] = useState(false);
+  const [composeError,   setComposeError]   = useState<string | null>(null);
+  const composeInputRef = useRef<HTMLInputElement>(null);
+
   // Phase 3: version cycler. The panel always opens on the latest version
   // (the asset's "current" version per the legacy contract). Users can
   // click chips at the top of the comment section to view older versions'
@@ -588,6 +599,40 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
       }
     } catch { /* ignore */ } finally {
       setReplyPosting(false);
+    }
+  }
+
+  // Sidebar compose — mirrors VideoTheaterMode.handlePostComment. POSTs a
+  // top-level comment with the (NDF-quantized) timestamp captured at focus.
+  // Optimistically appends to the local list so it appears immediately even
+  // though Frame.io won't have mirrored yet.
+  async function handlePostComment() {
+    if (!asset || !composeText.trim() || !asset.frameio.assetId) return;
+    setComposePosting(true);
+    setComposeError(null);
+    try {
+      const res  = await fetch(
+        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            text:      composeText.trim(),
+            timestamp: composeTime,
+          }),
+        },
+      );
+      const data = await res.json() as { comment?: CommentRow; error?: string };
+      if (!res.ok) { setComposeError(data.error ?? 'Failed to post'); return; }
+      if (data.comment) {
+        setComments(prev => [...prev, data.comment!]);
+        setComposeText('');
+        setComposeError(null);
+      }
+    } catch {
+      setComposeError('Network error');
+    } finally {
+      setComposePosting(false);
     }
   }
 
@@ -1149,6 +1194,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                    * this wrapper the spans rendered as bare inline siblings,
                                    * gluing the date against the author name. */}
                                   <div className="mad-comment-header">
+                                    {r.authorAvatar
+                                      ? <img src={r.authorAvatar} alt="" className="mad-comment-avatar" />
+                                      : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{(r.authorName || '?')[0]}</div>
+                                    }
                                     <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
                                     <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
                                   </div>
@@ -1187,6 +1236,50 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       ))}
                     </div>
                   )}
+
+                  {/* ── Sidebar compose footer ──
+                       Mirrors VideoTheaterMode's compose block. Focus pauses
+                       the sidebar video and snaps the attached timestamp to
+                       the nearest NDF frame boundary. Sits at the end of the
+                       comments section (NOT sticky) so it scrolls with the
+                       surrounding panel content. */}
+                  <div className="mad-comment-compose">
+                    <div className="mad-comment-compose-ts">
+                      @ {formatTimecode(composeTime)}
+                    </div>
+                    <div className="mad-comment-compose-row">
+                      <input
+                        ref={composeInputRef}
+                        className="mad-comment-compose-input"
+                        placeholder="Add a timed comment…"
+                        value={composeText}
+                        onFocus={() => {
+                          const v = sidebarVideoRef.current;
+                          if (!v) return;
+                          // Round to nearest NDF frame boundary (real seconds → frame → NDF seconds)
+                          setComposeTime(Math.round(v.currentTime * 24000 / 1001) / 24);
+                          if (!v.paused) v.pause();
+                        }}
+                        onChange={e => setComposeText(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handlePostComment(); }
+                          if (e.key === 'Escape') { setComposeText(''); setComposeError(null); (e.target as HTMLInputElement).blur(); }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="mad-comment-compose-send"
+                        onClick={() => void handlePostComment()}
+                        disabled={composePosting || !composeText.trim()}
+                        aria-label="Post comment"
+                      >
+                        {composePosting ? '…' : (
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        )}
+                      </button>
+                    </div>
+                    {composeError && <span className="mad-compose-err">{composeError}</span>}
+                  </div>
                 </div>
               )}
 

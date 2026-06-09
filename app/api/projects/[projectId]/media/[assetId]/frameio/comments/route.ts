@@ -74,24 +74,31 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       resolvedAssetVersionId,
     );
 
-    // Resolve author names: LPOS users get their current display name from
-    // user-store (so a renamed user shows the new name); external Frame.io
-    // reviewers keep their author_external_name; canEdit + fromFrame flags
-    // match today's contract so the renderer doesn't change.
+    // Resolve author names + avatars: LPOS users get their current display
+    // name and avatar from user-store (so a renamed/re-pictured user shows
+    // the new value); external Frame.io reviewers keep their snapshot
+    // (author_external_name + Frame.io avatar URL on the comment). canEdit +
+    // fromFrame flags match today's contract so the renderer doesn't change.
     const named = comments.map((c) => {
       const lookup = rowLookup.get(c.id);
       const lposUser = lookup?.authorUserId ? getUserById(lookup.authorUserId) : null;
-      const authorName = lposUser?.name ?? c.authorName;
-      const canEdit    = !!(lposUser && session && lposUser.id === session.userId);
+      const authorName   = lposUser?.name ?? c.authorName;
+      const authorAvatar = lposUser?.avatarUrl ?? c.authorAvatar;
+      const canEdit      = !!(lposUser && session && lposUser.id === session.userId);
       return {
         ...c,
         authorName,
+        authorAvatar,
         canEdit,
         fromFrame: !lookup?.authorUserId,
         replies: c.replies.map((r) => {
           const rLookup = rowLookup.get(r.id);
           const rUser = rLookup?.authorUserId ? getUserById(rLookup.authorUserId) : null;
-          return { ...r, authorName: rUser?.name ?? r.authorName };
+          return {
+            ...r,
+            authorName:   rUser?.name ?? r.authorName,
+            authorAvatar: rUser?.avatarUrl ?? r.authorAvatar,
+          };
         }),
       };
     });
@@ -196,7 +203,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         id:           reply.commentId,
         text:         reply.body,
         authorName:   lposUser?.name ?? reply.authorExternalName ?? '',
-        authorAvatar: reply.authorAvatarUrl,
+        // Prefer the live user-store avatar so the row shows a real picture
+        // even though insert never snapshots author_avatar_url for LPOS users.
+        authorAvatar: lposUser?.avatarUrl ?? reply.authorAvatarUrl,
         createdAt:    reply.createdAt,
       };
       return NextResponse.json({
@@ -229,7 +238,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       timestamp:       comment.timestampSeconds,
       duration:        comment.durationSeconds,
       authorName:      lposUser?.name ?? comment.authorExternalName ?? '',
-      authorAvatar:    comment.authorAvatarUrl,
+      // See reply branch above — live user-store avatar wins over the row's
+      // (NULL for LPOS-authored comments since insert doesn't snapshot it).
+      authorAvatar:    lposUser?.avatarUrl ?? comment.authorAvatarUrl,
       createdAt:       comment.createdAt,
       completed:       comment.completed,
       replies:         [] as Array<unknown>,

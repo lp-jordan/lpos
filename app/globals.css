@@ -5136,8 +5136,68 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   display: flex; flex-direction: column; gap: 0.4rem;
 }
 .mad-comment-reply   { padding-left: 0.75rem; border-left: 2px solid var(--surface-3); }
+
+/* Sidebar compose footer — pinned at the bottom of the comments section so
+   users can leave a timed top-level comment without opening theater mode.
+   Mirrors the layout of .vt-cp-compose (theater) so the two feel identical. */
 .mad-comment-compose {
-  display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--surface-3);
+}
+.mad-comment-compose-ts {
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #dbaf5f);
+  opacity: 0.75;
+  letter-spacing: 0.03em;
+}
+.mad-comment-compose-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mad-comment-compose-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2, rgba(255,255,255,0.05));
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8rem;
+  padding: 5px 8px;
+  height: 30px;
+  outline: none;
+  transition: border-color 150ms ease;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.mad-comment-compose-input:focus { border-color: var(--accent); }
+.mad-comment-compose-send {
+  background: none;
+  border: 1px solid rgba(219, 175, 95, 0.35);
+  border-radius: 4px;
+  color: var(--accent, #dbaf5f);
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.mad-comment-compose-send:hover:not(:disabled) {
+  background: rgba(219, 175, 95, 0.15);
+  border-color: rgba(219, 175, 95, 0.65);
+}
+.mad-comment-compose-send:disabled { opacity: 0.3; cursor: default; }
+.mad-compose-err {
+  font-size: 0.7rem;
+  color: #f87171;
 }
 .mad-compose-footer {
   display: flex; gap: 8px; justify-content: flex-end; align-items: center;
@@ -14571,6 +14631,22 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: rgba(255,255,255,0.3);
   flex-shrink: 0;
 }
+/* Author avatar (theater) — mirrors .mad-comment-avatar (sidebar) but sized
+   slightly tighter to fit the denser dark-mode comment rows. The --reply
+   modifier shrinks it further inside the indented replies column. */
+.vt-cp-avatar {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.vt-cp-avatar--reply { width: 14px; height: 14px; }
+.vt-cp-avatar--placeholder {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(219, 175, 95, 0.25);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.6rem; font-weight: 700;
+}
 .vt-cp-author {
   font-size: 0.72rem;
   font-weight: 600;
@@ -14743,6 +14819,11 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   gap: 5px;
 }
 .vt-cp-reply { display: flex; flex-direction: column; gap: 2px; }
+.vt-cp-reply-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .vt-cp-reply-author {
   font-size: 0.68rem;
   font-weight: 600;
