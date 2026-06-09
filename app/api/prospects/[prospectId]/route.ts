@@ -45,7 +45,18 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const before = store.getById(prospectId)!;
   const patch: Parameters<typeof store.update>[1] = {};
 
-  const str = (k: string) => typeof body[k] === 'string' ? (body[k] as string) || null : undefined;
+  // Treat both `null` and `""` as "clear this field". Returning `undefined`
+  // means the caller didn't mention the field, so the patch leaves it alone.
+  // Without the `null` branch, frontends that send `{ prospectStage: null }`
+  // (e.g. the inline stage picker on the person detail page) would silently
+  // no-op — the DB wouldn't update, the UI would re-render with the old value,
+  // and the field would appear to "revert" to its last set stage.
+  const str = (k: string) => {
+    const v = body[k];
+    if (v === null) return null;
+    if (typeof v === 'string') return v || null;
+    return undefined;
+  };
   const num = (k: string) => typeof body[k] === 'number' ? (body[k] as number) : (body[k] === null ? null : undefined);
 
   if (typeof body.company  === 'string') {
@@ -61,7 +72,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (str('referredBy')           !== undefined) patch.referredBy           = str('referredBy')!;
   if (str('prospectStage')        !== undefined) patch.prospectStage        = str('prospectStage')!;
   if (body.entityType === 'individual' || body.entityType === 'organization') patch.entityType = body.entityType;
-  if (str('status')               !== undefined) patch.status               = body.status as never;
+  // status is non-nullable — check the body directly instead of going through
+  // str() so a stray `{ status: null }` can't NULL out the column.
+  if (typeof body.status === 'string') patch.status = body.status as never;
   if (str('accountModel')         !== undefined) patch.accountModel         = str('accountModel')!;
   if (str('revenueType')          !== undefined) patch.revenueType          = str('revenueType')!;
   if (str('expansionPotential')   !== undefined) patch.expansionPotential   = str('expansionPotential')!;

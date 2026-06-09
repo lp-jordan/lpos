@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-06-09 — People prospect-stage "No stage" silently reverts — PATCH route's `str()` helper ignored `null`
+
+**Timestamp:** 2026-06-09T22:05:00Z
+
+**User prompt (verbatim):**
+> Changing the Stage for a people entry back to Not Set doesn't save. It reverts to the last set stage
+
+**Response summary:** Traced the bug to the prospects PATCH route's field-coercion helper. The inline `ProspectStageBadge` on the person detail page sends `{ prospectStage: value || null }` when the user picks the empty "No stage" option, so the request body becomes `{ prospectStage: null }`. The route's `str()` helper at `app/api/prospects/[prospectId]/route.ts:48` only handled string inputs — `typeof null === 'object'`, so it returned `undefined`, the field got dropped from the patch, the DB never updated, and the page re-rendered with the stale value (the "reverts to last set stage" symptom). Updated `str()` to treat `null` as an explicit clear (mirroring how `""` and the existing `num()` helper already behave) and hardened the `status` check to use a direct `typeof body.status === 'string'` test so the new `null` branch can't accidentally NULL out the non-nullable `status` column.
+
+**Files changed:**
+- `app/api/prospects/[prospectId]/route.ts` — `str()` helper now returns `null` when the body field is `null` (was `undefined`), so clear-via-null PATCHes apply. `status` check switched from `str('status') !== undefined` to `typeof body.status === 'string'` to preserve the non-nullable contract independently of `str()`. Added inline comment explaining the regression class.
+
+**Implementation summary:**
+- One real change of behavior: any of the ~14 `str()`-gated fields (`source`, `referredBy`, `prospectStage`, `accountModel`, `revenueType`, `expansionPotential`, `expectedStartMonth`, `owner`, `startMonth`, `recurringBillingStatus`, `renewalDate`, `firstRecurringBillDate`, `activeServices`, `nextFilmDate`) can now be cleared by sending `null` as well as `""`. Previously only `""` worked and `null` silently no-op'd.
+- The new `str()` is:
+  ```ts
+  const str = (k: string) => {
+    const v = body[k];
+    if (v === null) return null;
+    if (typeof v === 'string') return v || null;
+    return undefined;
+  };
+  ```
+- The `status` field is the only non-nullable string in the patch surface. Without the special-case it would inherit the new "null clears" semantic and a stray `{ status: null }` from any future caller would NULL out the column. Kept it inert by checking `typeof body.status === 'string'` directly — same effective behavior as before this change.
+
+**Decision rationale:**
+- **Fix at the API layer (not the frontend):** The bug surfaces from one specific call site (the inline stage picker) but the underlying contract was inconsistent — `""` cleared, `null` was ignored. The `num()` helper sitting right next to `str()` already handled `null` correctly, so this was clearly an oversight rather than a deliberate asymmetry. Patching the API normalizes the contract for every current and future caller (the in-tree edit-form path at `PersonDetailClient.tsx:333` has the same `value || null` pattern for many fields), instead of leaving a footgun for the next person to step on.
+- **Special-case status instead of widening the str() return type:** `status` is the only non-nullable field that flows through `str()`. A one-line direct `typeof` check is cheaper than threading "nullable vs not" through the helper, and it makes the constraint visible at the call site.
+
+**Alternatives considered:**
+- **Frontend-only fix** — change `prospectStage: value || null` to `prospectStage: value` in `ProspectStageBadge` (and the equivalent at `PersonDetailClient.tsx:333` for every clearable field). Smaller diff but leaves the API contract broken; would silently re-emerge the next time anyone added a clearable field and reached for `null` as the obvious "no value" wire shape.
+- **Reject `null` in the API with a 400** — strict but punishes a reasonable wire shape; the helper is meant to coerce, not validate.
+
+**Commands/checks:**
+- `grep` over `app/`, `components/`, `lib/` for `prospectStage` / `prospect_stage` to enumerate read and write paths.
+- Read `app/people/[personId]/PersonDetailClient.tsx` (badge component) and `app/api/prospects/[prospectId]/route.ts` (PATCH handler) to confirm the call chain.
+- Read `lib/models/prospect.ts` to confirm which fields are nullable (only `status` is not).
+- No automated tests run — single-line helper change with explicit inline comment.
+
+**Assumptions / follow-ups:**
+- The in-tree full edit-form save path at `PersonDetailClient.tsx:333` also uses `field || null` for clearable fields and would have had the same bug for every other clearable field — those are now silently fixed too. Worth a quick manual sanity-check on one of them (e.g. clearing "Owner") if there's any doubt, but the helper change is the only path involved.
+- No project-history entry exists for the original introduction of `prospectStage`, so no cross-link to add.
+
+---
+
 ## 2026-06-09 — Asset move: keep historical activity events at the source
 
 **Timestamp:** 2026-06-09T21:20:00Z
