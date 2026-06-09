@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { Task, TaskPriority } from '@/lib/models/task';
-import type { TaskType } from '@/lib/models/task-phase';
+import type { TaskType, TaskTypeStatus } from '@/lib/models/task-phase';
 import { resolveTaskTypeConfig } from '@/lib/models/task-phase';
 import { STARTER_PLATFORM_CATEGORIES } from '@/lib/models/task-categories';
 import type { UserSummary } from '@/lib/models/user';
@@ -80,11 +80,38 @@ export function NewTaskModal({
     setTimeout(onClose, 140);
   }
 
-  // Pre-Production statuses are DB-backed; usePreprodConfig is a no-op for
-  // editing/platform (resolveTaskTypeConfig ignores the dynamic list for them).
-  // When taskType is null (picker step) the resolve call falls back to a stub
-  // config — submit is disabled until a type is picked anyway.
-  const { statuses: preprodStatuses } = usePreprodConfig();
+  // Pre-Production statuses are DB-backed. PreprodConfigContext is the
+  // dashboard-side fast path; outside that surface (e.g. mounted from the
+  // people-page UpdatesLog) the default context returns []. We lazy-fetch
+  // /api/preprod-board/columns once when the modal is opened with
+  // taskType='preprod' and the context turned up empty — keeps callers from
+  // having to wrap arbitrary trees in PreprodConfigProvider.
+  const { statuses: ctxPreprodStatuses } = usePreprodConfig();
+  const [lazyPreprodStatuses, setLazyPreprodStatuses] = useState<TaskTypeStatus[] | null>(null);
+  const preprodStatuses = ctxPreprodStatuses.length > 0
+    ? ctxPreprodStatuses
+    : (lazyPreprodStatuses ?? []);
+  useEffect(() => {
+    if (taskType !== 'preprod') return;
+    if (ctxPreprodStatuses.length > 0) return;
+    if (lazyPreprodStatuses !== null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/preprod-board/columns');
+        if (!res.ok) return;
+        const data = await res.json() as {
+          columns?: Array<{ slug: string; label: string; color: string }>;
+        };
+        if (cancelled) return;
+        setLazyPreprodStatuses(
+          (data.columns ?? []).map((c) => ({ value: c.slug, label: c.label, color: c.color })),
+        );
+      } catch { /* fall through to disabled-submit state */ }
+    })();
+    return () => { cancelled = true; };
+  }, [taskType, ctxPreprodStatuses.length, lazyPreprodStatuses]);
+
   const taskTypeConfig = taskType
     ? resolveTaskTypeConfig(taskType, preprodStatuses)
     : { value: 'editing' as TaskType, label: '', statuses: [], defaultStatus: '', terminalStatus: '' };

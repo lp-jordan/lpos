@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-06-09 — NewTaskModal lazy-fetches preprod columns when opened outside DashboardClient
+
+**Timestamp:** 2026-06-09T18:55:00Z
+
+**User prompt (verbatim):** None — self-reported follow-up to the people-page task-icon commit (`1c32c47`). The inline UpdatesLog → NewTaskModal flow mounts the modal outside `PreprodConfigProvider`, so `usePreprodConfig()` returns the default `{ statuses: [] }` context and the modal incorrectly trips its "no columns yet" guard for prospects even when the Pre-Production board has columns.
+
+**Response summary:** Added a lazy-fetch fallback in `NewTaskModal` — when `taskType === 'preprod'` and the context statuses are empty, the modal calls `GET /api/preprod-board/columns` once and uses the result. The context path (dashboard surface) still short-circuits the fetch when statuses are already populated. No call-site changes needed.
+
+**Files changed:**
+- `components/dashboard/NewTaskModal.tsx` — added `lazyPreprodStatuses` state + a one-shot `useEffect` that fetches `/api/preprod-board/columns` when (taskType === 'preprod') && (ctx statuses empty) && (not already fetched). `preprodStatuses` derives from context if available, else lazy-fetched, else `[]` (which keeps the "no columns yet" guard active until the fetch resolves). Added `TaskTypeStatus` to the `task-phase` type import.
+
+**Implementation summary:** Defensive: if the modal is mounted under `PreprodConfigProvider` (the dashboard case), `ctxPreprodStatuses.length > 0` is true and the effect early-returns without hitting the API. Outside the provider (people-page UpdatesLog → task icon), the fetch fires once and caches the result in component state. Submit stays disabled with the existing "no columns yet" copy if the API genuinely returns an empty list.
+
+**Decision rationale:** Considered wrapping a higher-level layout (or even root `layout.tsx`) in `PreprodConfigProvider` instead — declined because that would require fetching the column list on every page navigation, including pages that have nothing to do with tasks. The modal-internal lazy fetch keeps the cost paid exactly when needed.
+
+**Alternatives considered:**
+- Wrap `<PersonDetailClient>` in `PreprodConfigProvider` — works but couples two unrelated surfaces; the moment any other surface needs the task icon (project pages, asset pages, etc.) the same wrapper repeats. Modal-side fetch keeps callers free of provider awareness.
+- Pass preprod statuses through as a prop from the people page — would mean fetching server-side in `app/people/[personId]/page.tsx` and threading the value through PersonDetailClient → UpdatesLog → NewTaskModal. The lazy fetch is leaner.
+
+**Commands/checks:** None beyond TypeScript-level changes.
+
+**Assumptions / follow-ups:** If we end up needing this fallback in more places, promote `PreprodConfigProvider` to the app shell instead — but only if we hit 3+ surfaces, per "rule of three" refactor.
+
+---
+
 ## 2026-06-09 — People-page tweaks: Referred by field, prospect stage badge (7-stage funnel), inline task creation
 
 **Timestamp:** 2026-06-09T18:45:00Z
