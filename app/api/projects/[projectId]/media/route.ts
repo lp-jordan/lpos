@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectStore, getIngestQueueService } from '@/lib/services/container';
 import { readRegistry, migrateLooseFiles } from '@/lib/store/media-registry';
-import { getLatestCommentByAssetForProject } from '@/lib/store/activity-db';
+import { getLatestMediaCommentByAssetForProject } from '@/lib/store/media-comment-store';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { finalizeUploadedAsset } from '@/lib/services/media-finalization';
@@ -24,11 +24,16 @@ export async function GET(
     const { projectId } = await params;
     migrateLooseFiles(projectId);
     const assets = readRegistry(projectId);
-    // Derived map: { assetId → ISO of most-recent Frame.io comment / reply }.
-    // Drives the MediaTab "Latest comments" sort. Single source of truth is
-    // activity_events; not denormalised onto the asset to avoid double-write
-    // drift. Assets with no comments simply won't be keyed in the map.
-    const latestCommentMap = getLatestCommentByAssetForProject(projectId);
+    // Derived map: { assetId → ISO of most-recent comment }.
+    // Drives the MediaTab "Latest comments" sort. Phase 1: reads from the
+    // local media_comments table instead of activity_events (the legacy
+    // source was broken in prod because Frame.io webhooks weren't actually
+    // firing, leaving the activity_events table with 0 frameio.comment.*
+    // rows). The local source uses MAX(created_at) across ALL versions of
+    // each asset (locked decision §11 #1) so the sort doesn't go stale
+    // when a newer version supersedes an older one. Assets with no comments
+    // simply won't be keyed in the map.
+    const latestCommentMap = getLatestMediaCommentByAssetForProject(projectId);
     const latestComments: Record<string, string> = {};
     for (const [assetId, ts] of latestCommentMap) latestComments[assetId] = ts;
     return NextResponse.json({ assets, latestComments });

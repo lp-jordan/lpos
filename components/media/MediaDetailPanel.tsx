@@ -473,13 +473,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     return () => { socket.disconnect(); };
   }, [asset?.assetId, asset?.frameio.assetId, projectId, fetchComments]);
 
-  // 5-minute fallback poll — catches any webhook gaps (delivery failures,
-  // comments posted while the panel was closed, etc.).
-  useEffect(() => {
-    if (!asset?.frameio.assetId) return;
-    const id = setInterval(() => { void fetchComments(); }, 5 * 60_000);
-    return () => clearInterval(id);
-  }, [asset?.frameio.assetId, fetchComments]);
+  // Phase 1 (local-comments refactor): the 5-minute fallback poll has been
+  // removed. Reads now hit the local media_comments table (kept fresh by
+  // the webhook handler's shadow capture + the LPOS-side route's dual-
+  // write), so there's no Frame.io round-trip to lag. The existing socket-
+  // refresh listener above (frameio:comments:refresh) is the primary signal
+  // for live updates. See docs/local-comments-refactor-spec.md §8.
 
   async function handleUpdateComment(commentId: string) {
     if (!asset || !editText.trim()) return;

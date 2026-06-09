@@ -9,6 +9,7 @@
     "lint": "next lint",
     "migrate:legacy-media": "tsx scripts/migrate-legacy-media.ts",
     "migrate:json-to-sqlite": "tsx scripts/migrate-json-to-sqlite.ts",
+    "backfill:media-comments": "doppler run -- tsx scripts/backfill-media-comments.ts",
     "prepare:runtime": "node scripts/prepare-lpos-runtime.mjs"
   },
   "dependencies": {

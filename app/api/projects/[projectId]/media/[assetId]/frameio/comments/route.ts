@@ -22,6 +22,7 @@ import {
   setMediaCommentCompletedByFrameioId,
   softDeleteMediaCommentByFrameioId,
   getMediaCommentByFrameioId,
+  getThreadedCommentsForAssetVersion,
 } from '@/lib/store/media-comment-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
@@ -40,40 +41,53 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const cookieStore = await cookies();
   const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
 
+  // Phase 1: read from media_comments instead of Frame.io. The threading,
+  // author shim merge, and reply-prefix stripping all happened during
+  // Phase 0 shadow capture, so the local table already has the assembled
+  // shape. Falls back to Frame.io GET if the local table has no rows for
+  // this asset version — covers the edge case where shadow capture missed
+  // an event (rare; backfill closes any historical gap).
   try {
-    const comments    = await getComments(fileId);
-    const replyMap    = getAllReplyParents(projectId);
-    const replyIds    = new Set(Object.keys(replyMap));
-
-    // Separate comments that LPOS posted as fake top-level replies
-    const topLevel    = comments.filter(c => !replyIds.has(c.id));
-    const lposReplies = comments.filter(c =>  replyIds.has(c.id));
-
-    // Inject fake replies back into their parent's replies array
-    for (const r of lposReplies) {
-      const parent = topLevel.find(c => c.id === replyMap[r.id]);
-      if (!parent) continue;
-      const authorEntry = getCommentAuthor(projectId, r.id);
-      parent.replies.push({
-        id:           r.id,
-        text:         r.text.replace(/^Reply to above:\s*/i, ''),
-        authorName:   authorEntry?.name ?? r.authorName,
-        authorAvatar: r.authorAvatar,
-        createdAt:    r.createdAt,
-      });
+    const mapping = findAssetVersionByFrameioFileId(fileId);
+    if (!mapping) {
+      // No version mapping shouldn't happen for an asset with a Frame.io ID,
+      // but degrade gracefully: empty list rather than 500.
+      console.warn(`[frameio/comments GET] no version mapping for file ${fileId} — returning empty`);
+      return NextResponse.json({ comments: [] });
     }
 
-    patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
+    const { comments, rowLookup } = getThreadedCommentsForAssetVersion(
+      mapping.projectId,
+      mapping.assetId,
+      mapping.assetVersionId,
+    );
 
-    const named = topLevel.map(c => {
-      const entry = getCommentAuthor(projectId, c.id);
+    // Resolve author names: LPOS users get their current display name from
+    // user-store (so a renamed user shows the new name); external Frame.io
+    // reviewers keep their author_external_name; canEdit + fromFrame flags
+    // match today's contract so the renderer doesn't change.
+    const named = comments.map((c) => {
+      const lookup = rowLookup.get(c.id);
+      const lposUser = lookup?.authorUserId ? getUserById(lookup.authorUserId) : null;
+      const authorName = lposUser?.name ?? c.authorName;
+      const canEdit    = !!(lposUser && session && lposUser.id === session.userId);
       return {
         ...c,
-        ...(entry ? { authorName: entry.name } : {}),
-        canEdit:   !!(entry && session && entry.userId === session.userId),
-        fromFrame: !entry,
+        authorName,
+        canEdit,
+        fromFrame: !lookup?.authorUserId,
+        replies: c.replies.map((r) => {
+          const rLookup = rowLookup.get(r.id);
+          const rUser = rLookup?.authorUserId ? getUserById(rLookup.authorUserId) : null;
+          return { ...r, authorName: rUser?.name ?? r.authorName };
+        }),
       };
     });
+
+    // Keep the asset's denormalised commentCount in sync — used by MediaTab
+    // for the badge and by the comments query for completeness checks.
+    patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
+
     return NextResponse.json({ comments: named });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
