@@ -428,8 +428,21 @@ export function useSlate(): SlateState & SlateActions {
     // replaces local state verbatim.
     socket.on('slateTabs', (tabs: SlateTab[]) => setSlateTabs(tabs ?? []));
 
-    // Emitted after a tab deletion that re-homed notes to Unassigned —
-    // simpler than diff-patching individual indices.
+    // Targeted to the socket that triggered the create. Auto-activates the
+    // newly-named tab so the user can start typing notes into it without an
+    // extra click. We also persist it via setActiveSlateTabIdState directly
+    // rather than the callback so we don't read a stale currentProjectId.
+    socket.on('slateTabCreatedAck', (payload: { id?: string }) => {
+      if (!payload?.id) return;
+      setActiveSlateTabIdState(payload.id);
+      // Persistence happens lazily here: we don't know currentProjectId from
+      // inside this socket handler closure without recreating the effect on
+      // every project change. The next setActiveSlateTab call from the UI
+      // (or the next projectLoaded handshake) will reconcile localStorage.
+    });
+
+    // Emitted after a tab deletion or a first-tab auto-Tab-1 migration that
+    // re-homed notes — simpler than diff-patching individual indices.
     socket.on('notesReloaded', (next: SlateNote[]) => setNotes(next));
 
     socket.on('noteAdded', (note: SlateNote) => {

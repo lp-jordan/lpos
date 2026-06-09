@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-06-09 — Follow-up tweaks: conditional Referred-by, prospect/client visual stripe, asset right-click move, + Tab modal, auto-Tab-1, tab delete confirm
+
+**Timestamp:** 2026-06-09T20:55:00Z
+
+**User prompt (verbatim — 6-tweak follow-up to today's batch):**
+> - Only show referred by if there is a value in "source" in people page. Otherwise hide that new field.
+> - Maybe we remove the dedicated prospect badge and instead differentiate the way prospect vs. active client cards look so it's more visual. Thoughts here?
+> - Let's expose Move to Project in the right click menu on an asset as well.
+> - Let's change + day to + Tab in production notes. I'd rather use a custom modal as well, not system default. Let's also move this add button right justified and in-line with the hide log, select, and export csv buttons.
+> - On first new tab creation for a project, let's put all existing notes into a default "Tab 1". So the tabs should then be "All", "Tab 1", "[Newly created & Named Tab]", etc. Understand?
+> - We need a confirmation modal for delete on a tab.
+
+**Response summary:** All six landed in one batch. Replaced the prospect/client text badge with a left-edge color stripe on cards/rows (amber/green/muted). Hid Referred-by when Source is empty (display-time gates on persisted value; edit-time gates on live state so the row appears/disappears as the user changes Source mid-edit). Added Move-to-project to the asset right-click menu — with desktop-style "act on multi-select if the right-clicked asset is part of it, else single-asset" semantics. Renamed "+ Day" to "+ Tab", replaced `window.prompt` with a custom modal, moved the button into the log-controls row right-justified. Server-side auto-creates a "Tab 1" + reassigns existing untagged notes when the first tab is created on a non-empty project (with a one-time targeted ack to the originating socket so it auto-activates the user's freshly-named tab). Replaced the inline ✓/× tab-delete affordance with the shared ConfirmModal.
+
+**Files changed:**
+- `lib/services/slate-service.ts` — `createSlateTab` handler now: (1) detects first-tab + existing-notes case, creates a `Tab 1` row, bulk-assigns every tagless note's `tabId` to it, persists the migrated notes file, and emits an additional `notesReloaded` broadcast so all clients render the migration in one frame; (2) creates the user-named tab as before; (3) emits a targeted `slateTabCreatedAck` to the originating socket carrying the new tab's id so the originator's UI can auto-activate it.
+- `hooks/useSlate.ts` — handles the new `slateTabCreatedAck` event by calling `setActiveSlateTabIdState(payload.id)` directly. Notes about localStorage reconciliation in the comment block (the ack fires from inside a socket effect that doesn't carry the latest `currentProjectId` closure, so the next setActiveSlateTab call from the UI handles persistence). Drive-by comment on the existing `notesReloaded` handler now also documents the first-tab-migration case.
+- `components/slate/SlatePageContent.tsx` —
+  - `ConfirmModal` import added.
+  - New state: `confirmDeleteTab` (id/name pair driving the delete-confirm modal), `showAddTabModal`, `addTabValue`. Removed the old `pendingDeleteTabId` state.
+  - Film-day bar visibility tightened to `slateTabs.length > 0` only (the "+ Tab" entry moved out of the bar, so a no-tabs-yet bar would just be empty). When tabs exist, the bar starts with the synthetic "All" pill.
+  - Inline ✓/× delete flow replaced with a single 🗑 button that opens the shared `ConfirmModal`. Body explains that notes will move back to Unassigned; danger styling; on confirm calls `deleteSlateTab` + clears the active tab if it was the deleted one.
+  - "+ Day" prompt button removed from the bar. New "+ Tab" button added to the `sl-log-controls` row with `marginLeft: 'auto'` so it sits inline with Hide Log / Select / Export CSV but right-justified. Defaults its initial value to `Tab <slateTabs.length + 1>`.
+  - New inline "Add film-day tab" modal: input + Cancel/Add buttons; Enter submits, Escape closes. When `slateTabs.length === 0 && notes.length > 0` it shows a one-line preview note explaining that existing notes will be moved into a new Tab 1 — so the migration isn't a surprise.
+  - New tab-delete `ConfirmModal` mounted at the bottom of the component alongside the existing modals.
+- `components/prospects/NewPersonModal.tsx` — wrapped the Referred-by field in `{source && (…)}` so it only appears once a Source has been picked. Comment explains the rationale (an empty Source means there's nothing for the referrer field to elaborate on).
+- `app/people/[personId]/PersonDetailClient.tsx` —
+  - **Referred-by gating:** wrapped the Referred-by row in both the prospect and active-client branches of `AccountPanel`. Prospect branch gates on `editing ? source : person.source` so the row appears/disappears mid-edit as the user changes Source. Active-client branch gates on the persisted `person.source` (Source isn't editable in that layout).
+  - **Header simplification:** removed the static "Prospect" pill from the prospects branch of the header — only the editable `ProspectStageBadge` remains. The Promote → button already carries the type signal more actionably, and the list-page stripe (see PeoplePageClient) does it for at-a-glance browsing. Dropped the now-unused `STATUS_LABELS` constant.
+- `app/people/PeoplePageClient.tsx` —
+  - **Visual stripe:** replaced the previous `StatusBadge` text-pill component + `STATUS_STYLE` map with a `STATUS_STRIPE` color map (`#f59e0b` / `#5ab95a` / `#777`) and a tiny `stripeBorderStyle(status)` helper that returns `{ borderLeft: '3px solid <color>' }`. Applied to both `PersonCard` and `PersonRow`'s root container style.
+  - **Corner indicator simplified:** card and row no longer render the text badge. Active clients still show the `BillingBadge`; prospects still show the `StageBadge`; inactive shows nothing (the muted stripe says "inactive" by itself).
+- `components/projects/MediaTab.tsx` —
+  - `showMoveModal` state type changed from `boolean` to `{ assetIds: string[] } | null` so the modal can be invoked with either the multi-select set (from the bulk bar) or a single right-clicked asset (from the context menu).
+  - Bulk-bar button now passes `{ assetIds: [...selectedIds] }`.
+  - New context menu entry "Move to project…" with desktop semantics: if the right-clicked asset is in the active selection and the selection > 1, act on the full set; otherwise act on the single asset.
+  - New `IconMove` SVG def (building outline) added next to the existing icon components.
+  - `MoveAssetsModal` invocation now reads `selectedCount` and `selectedAssetIds` from the state object so it works for both flows.
+
+**Implementation summary:**
+- The first-tab auto-Tab-1 migration runs entirely server-side inside the existing `createSlateTab` handler — single round trip, no client awareness of the migration logic needed. The notes file is rewritten in the same handler, the broadcast covers the new tabs + the reassigned notes in two events, and the originating socket gets one extra targeted ack so its UI auto-activates the user's named tab. Other connected clients see the new tabs + reassigned notes but stay on whatever tab they were on (no surprise jumps).
+- The conditional Referred-by uses **the live source state during edit** so the row materializes as the user picks a Source for the first time and disappears if they clear it back to "—". Display-time it just gates on the persisted `person.source`. This is implemented with `{(editing ? source : person.source) && (…)}` in the prospect branch; the active-client branch reuses the persisted-only check since the Source field isn't editable there.
+- The visual stripe is implemented as an inline `borderLeft` style rather than a CSS class to keep the change to a single file (no `.css` module edit). The colors come from the same palette used by the prospect-stage badge family so the people page reads as visually consistent. A possible follow-up is promoting these to CSS custom properties on `:root` if we want to retheme.
+- The right-click "act on multi-select if part of it, else single-asset" behavior matches what users expect from desktop file managers (Finder, Explorer, VS Code's file tree). It avoids the surprising "I right-clicked asset A but it moved all 5 selected ones including asset A" trap when A wasn't actually one of the selected.
+- The `+ Tab` modal's preview hint (visible only when the project is in the pre-migration state) gives the user a chance to back out if they didn't expect the legacy-notes shuffle. The phrasing is intentionally non-scary ("will be moved into a new Tab 1 automatically") — this is a reversible operation (Tab 1 can be deleted and the notes flow back to Unassigned).
+
+**Decision rationale:**
+- **Stripe as left border vs full background tint or icon:** Left border carries the cue without taking horizontal space, doesn't compete with the existing card content, and is accessible at very small sizes. Background tint risks washing out the text; an icon would have to compete with the existing badges in the corner.
+- **Drop the StatusBadge text entirely** (rather than keeping a small text-only label) — the stripe IS the type indicator, and the corner is now reserved for the *interesting* info (funnel stage or billing status). Stripe + corner-badge gives two distinct visual signals without redundancy.
+- **First-tab auto-migration server-side, not "show a UI prompt":** The user explicitly said this should happen on first tab creation. Doing it server-side means it can't be skipped by a flaky client and the rest of the data model stays consistent without round-trip dependencies. The pre-create modal's preview hint covers the "did you know" UX angle.
+- **`slateTabCreatedAck` targeted ack vs reusing the broadcast:** The broadcast is intentionally idempotent and stateless (replaces local tab list). Auto-activating the new tab is a per-originator concern — a targeted ack is the right scope. Other clients shouldn't jump tabs because someone else added one.
+- **Right-click move semantics** — went with desktop convention (right-click in selection = act on selection, right-click outside = act on single) rather than always-single or always-selection, because either of those would break the user's mental model in different cases.
+
+**Alternatives considered:**
+- A toggle on the people-page list to "show type badge text" — declined; the stripe is sufficient and toggleable text would feel like an admission the visual cue isn't strong enough.
+- Skipping the first-tab Tab-1 migration entirely and just letting the user manually assign old notes — declined; the user explicitly asked for the migration, and manually reassigning dozens of pre-tabs notes would be a chore.
+- Showing the "+ Tab" button only when a project is loaded AND there are notes (to dovetail with the migration logic) — declined; the button should always work, the migration is automatic, and gating the button would feel arbitrary.
+- A separate `SlateTabNameModal` component file instead of inlining the new-tab modal — declined for v1; the modal is ~50 lines and only used in one place. If it grows or shares state with another surface, extract.
+
+**Commands/checks:**
+- No dev server started (per [[feedback_never_start_dev_server]]).
+- Grep verified no other call sites reference the removed `StatusBadge` / `STATUS_LABELS` / `pendingDeleteTabId` symbols.
+- Bracket-counted the new `+ Tab` modal JSX manually — balanced; nested cleanly under the existing `</div>` closing the page root.
+
+**Assumptions / follow-ups:**
+- The list-page stripe colors are hard-coded inline; if we end up theming the dashboard later, moving them to CSS custom properties on `:root` would let us swap palettes without touching components. Not worth doing now.
+- The first-tab migration is idempotent against the trigger (only runs when `tabs.length === 0`); if a user deletes all their tabs and creates a new one, the legacy-notes-now-orphaned notes would NOT be re-migrated. That's intentional — once they're tagged, they stay where the user put them.
+
+---
+
 ## 2026-06-09 — Move assets between projects (LPOS-only, bulk action from Internal Media)
 
 **Timestamp:** 2026-06-09T20:05:00Z

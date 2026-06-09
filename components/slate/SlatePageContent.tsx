@@ -9,6 +9,7 @@ import { CameraPanel } from '@/components/slate/CameraPanel';
 import { PresentationPanel } from '@/components/studio/PresentationPanel';
 import { SlateModal, ModalType } from '@/components/slate/SlateModal';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
+import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { generateRecordingBaseName } from '@/lib/services/atem-utils';
 
 // ── Local timecode / date hooks (client-only, no socket needed) ────────────
@@ -105,7 +106,11 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
   // Film-day tab inline-rename state
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState('');
-  const [pendingDeleteTabId, setPendingDeleteTabId] = useState<string | null>(null);
+  // Confirm-modal state for tab delete (replaces the old inline ✓/× flow).
+  const [confirmDeleteTab, setConfirmDeleteTab] = useState<{ id: string; name: string } | null>(null);
+  // Custom + Tab modal state (replaces window.prompt).
+  const [showAddTabModal, setShowAddTabModal] = useState(false);
+  const [addTabValue, setAddTabValue] = useState('');
   const VALID_TABS = ['notes', 'atem', 'lighting', 'camera', 'audio', 'playback', 'presentation'] as const;
   type StudioTab = typeof VALID_TABS[number];
   const isLightingGuest = isGuest && guestAccess === 'lighting';
@@ -408,11 +413,11 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
           {/* ── Notes tab ── */}
           {studioTab === 'notes' && (<>
             {/* Film-day tabs bar — manual create / rename / reorder / delete.
-                Hidden when no tabs exist so older projects still look the same.
-                "All" is a synthetic tab that shows every note regardless of
-                tabId (and is the destination for any note not assigned to a
-                specific film day). */}
-            {(slate.slateTabs.length > 0 || slate.currentProjectId) && (
+                Hidden when no tabs exist (the "+ Tab" entry now lives in the
+                log-controls row, so this bar is purely a tab selector and goes
+                away cleanly when there's nothing to select). "All" is a
+                synthetic tab that shows every note regardless of tabId. */}
+            {slate.slateTabs.length > 0 && (
               <div
                 className="sl-film-day-bar"
                 style={{
@@ -421,21 +426,18 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                   borderBottom: '1px solid rgba(255,255,255,0.06)',
                 }}
               >
-                {slate.slateTabs.length > 0 && (
-                  <button
-                    type="button"
-                    className={`sl-film-day-pill${slate.activeSlateTabId === null ? ' sl-film-day-pill--active' : ''}`}
-                    onClick={() => slate.setActiveSlateTab(null)}
-                    style={filmDayPillStyle(slate.activeSlateTabId === null)}
-                    title="Show every note, regardless of film-day assignment"
-                  >
-                    All
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`sl-film-day-pill${slate.activeSlateTabId === null ? ' sl-film-day-pill--active' : ''}`}
+                  onClick={() => slate.setActiveSlateTab(null)}
+                  style={filmDayPillStyle(slate.activeSlateTabId === null)}
+                  title="Show every note, regardless of film-day assignment"
+                >
+                  All
+                </button>
                 {slate.slateTabs.map((tab, idx) => {
                   const isActive = slate.activeSlateTabId === tab.id;
                   const isRenaming = renamingTabId === tab.id;
-                  const isPendingDelete = pendingDeleteTabId === tab.id;
                   return (
                     <div
                       key={tab.id}
@@ -506,47 +508,17 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                             onClick={() => { setRenamingValue(tab.name); setRenamingTabId(tab.id); }}
                             style={filmDayIconStyle(false)}
                           >✎</button>
-                          {isPendingDelete ? (
-                            <>
-                              <button
-                                type="button"
-                                title="Confirm delete (notes move to Unassigned)"
-                                onClick={() => { slate.deleteSlateTab(tab.id); setPendingDeleteTabId(null); slate.setActiveSlateTab(null); }}
-                                style={{ ...filmDayIconStyle(false), color: '#e07070' }}
-                              >✓</button>
-                              <button
-                                type="button"
-                                title="Cancel"
-                                onClick={() => setPendingDeleteTabId(null)}
-                                style={filmDayIconStyle(false)}
-                              >×</button>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              title="Delete tab (notes will move to Unassigned)"
-                              onClick={() => setPendingDeleteTabId(tab.id)}
-                              style={{ ...filmDayIconStyle(false), color: '#e07070' }}
-                            >🗑</button>
-                          )}
+                          <button
+                            type="button"
+                            title="Delete tab (notes will move to Unassigned)"
+                            onClick={() => setConfirmDeleteTab({ id: tab.id, name: tab.name })}
+                            style={{ ...filmDayIconStyle(false), color: '#e07070' }}
+                          >🗑</button>
                         </div>
                       )}
                     </div>
                   );
                 })}
-                <button
-                  type="button"
-                  className="sl-btn-ghost"
-                  onClick={() => {
-                    if (!slate.currentProjectId) return;
-                    const name = window.prompt('Film day name', `Day ${slate.slateTabs.length + 1}`);
-                    if (name && name.trim()) slate.createSlateTab(name.trim());
-                  }}
-                  disabled={!slate.currentProjectId}
-                  style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: '0.78rem' }}
-                >
-                  + Day
-                </button>
               </div>
             )}
 
@@ -604,6 +576,20 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                 disabled={slate.notes.length === 0}
               >
                 Export CSV
+              </button>
+              <button
+                className="sl-btn-ghost"
+                type="button"
+                onClick={() => {
+                  if (!slate.currentProjectId) return;
+                  setAddTabValue(`Tab ${slate.slateTabs.length + 1}`);
+                  setShowAddTabModal(true);
+                }}
+                disabled={!slate.currentProjectId}
+                style={{ marginLeft: 'auto' }}
+                title="Add a film-day tab"
+              >
+                + Tab
               </button>
             </div>
 
@@ -983,6 +969,96 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
             // Auto-load the newly created project into slate
             slate.loadProject(project.projectId);
           }}
+        />
+      )}
+
+      {/* Custom "+ Tab" modal replaces window.prompt — Cancel/Add buttons,
+          Enter submits. Tab name defaults to "Tab <N+1>" but is freely
+          editable. On first tab creation with existing notes, the server
+          auto-creates "Tab 1" first and reassigns legacy notes to it. */}
+      {showAddTabModal && (
+        <div className="modal-overlay" onClick={() => setShowAddTabModal(false)}>
+          <div
+            className="modal-box modal-box--sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 className="modal-title">New Film-Day Tab</h2>
+            </div>
+            <div style={{ padding: '0 24px 12px' }}>
+              <label
+                className="modal-label"
+                htmlFor="sl-new-tab-name"
+                style={{ display: 'block', marginBottom: 6 }}
+              >
+                Tab name
+              </label>
+              <input
+                id="sl-new-tab-name"
+                className="modal-input"
+                type="text"
+                value={addTabValue}
+                onChange={(e) => setAddTabValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && addTabValue.trim()) {
+                    slate.createSlateTab(addTabValue.trim());
+                    setShowAddTabModal(false);
+                  } else if (e.key === 'Escape') {
+                    setShowAddTabModal(false);
+                  }
+                }}
+                placeholder="e.g. Day 2 — Interviews"
+                autoFocus
+                style={{ width: '100%' }}
+              />
+              {slate.slateTabs.length === 0 && slate.notes.length > 0 && (
+                <p style={{ marginTop: 10, fontSize: '0.78rem', opacity: 0.7 }}>
+                  Your existing {slate.notes.length} note{slate.notes.length === 1 ? '' : 's'} will
+                  be moved into a new <strong>Tab 1</strong> automatically, so this new tab starts empty.
+                </p>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="modal-btn-ghost"
+                onClick={() => setShowAddTabModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="modal-btn-primary"
+                disabled={!addTabValue.trim()}
+                onClick={() => {
+                  slate.createSlateTab(addTabValue.trim());
+                  setShowAddTabModal(false);
+                }}
+              >
+                Add Tab
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab delete confirm — shared ConfirmModal so the danger styling and
+          busy-state UI match the rest of the app. Notes are not destroyed —
+          they move back to Unassigned and remain visible in the All view. */}
+      {confirmDeleteTab && (
+        <ConfirmModal
+          title={`Delete tab "${confirmDeleteTab.name}"?`}
+          body={`Notes assigned to this tab will move back to Unassigned and stay visible in the All view. The tab itself will be removed.`}
+          confirmLabel="Delete Tab"
+          danger
+          onConfirm={() => {
+            slate.deleteSlateTab(confirmDeleteTab.id);
+            if (slate.activeSlateTabId === confirmDeleteTab.id) {
+              slate.setActiveSlateTab(null);
+            }
+            setConfirmDeleteTab(null);
+          }}
+          onClose={() => setConfirmDeleteTab(null)}
         />
       )}
     </div>

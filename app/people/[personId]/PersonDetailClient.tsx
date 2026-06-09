@@ -23,11 +23,6 @@ const STATUS_STYLE: Record<ProspectStatus, { bg: string; border: string; color: 
   inactive: { bg: 'rgba(120,120,120,0.15)', border: '#888',    color: '#888'    },
 };
 
-const STATUS_LABELS: Record<ProspectStatus, string> = {
-  prospect: 'Prospect',
-  active:   'Active Client',
-  inactive: 'Inactive',
-};
 
 // ── Prospect stage badge (header) ─────────────────────────────────────────────
 
@@ -395,12 +390,17 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
                 : <span style={valueStyle}>{labelFor(PERSON_SOURCES, person.source) || <Dash />}</span>}
             </div>
 
-            <div style={rowStyle}>
-              <span style={labelStyle}>Referred by</span>
-              {editing
-                ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
-                : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
-            </div>
+            {/* Referred by — only meaningful when a Source has been selected.
+                Reads from the live `source` state while editing so the row
+                appears/disappears as the user changes Source mid-edit. */}
+            {(editing ? source : person.source) && (
+              <div style={rowStyle}>
+                <span style={labelStyle}>Referred by</span>
+                {editing
+                  ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
+                  : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
+              </div>
+            )}
 
             <div style={rowStyle}>
               <span style={labelStyle}>Stage</span>
@@ -479,12 +479,18 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
           </>
         ) : (
           <>
-            <div style={rowStyle}>
-              <span style={labelStyle}>Referred by</span>
-              {editing
-                ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
-                : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
-            </div>
+            {/* Referred by — only shown when Source is set. For active clients
+                Source can't be edited from this branch (the field doesn't
+                appear in the active-client AccountPanel layout), so we just
+                gate on the persisted person.source. */}
+            {person.source && (
+              <div style={rowStyle}>
+                <span style={labelStyle}>Referred by</span>
+                {editing
+                  ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
+                  : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
+              </div>
+            )}
 
             <div style={{ ...rowStyle, alignItems: 'flex-start' }}>
               <span style={{ ...labelStyle, paddingTop: 4 }}>Active Services</span>
@@ -838,18 +844,12 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
             {person.company}
           </h1>
 
-          {/* Status display / toggle */}
+          {/* Status display / toggle. The dedicated "Prospect" pill was dropped
+              (the Promote → button already signals state, and the people-list
+              card stripe carries the type at a glance) — only the editable
+              stage badge remains for prospects. */}
           {isProspect ? (
-            <>
-              <span style={{
-                display: 'inline-block', padding: '0.28rem 0.8rem', borderRadius: 999,
-                border: `1px solid ${statusStyle.border}`, background: statusStyle.bg,
-                color: statusStyle.color, fontSize: '0.8rem', fontWeight: 600,
-              }}>
-                Prospect
-              </span>
-              <ProspectStageBadge person={person} onUpdated={setPerson} />
-            </>
+            <ProspectStageBadge person={person} onUpdated={setPerson} />
           ) : (
             <select
               value={person.status}

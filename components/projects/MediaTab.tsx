@@ -205,6 +205,12 @@ const IconDelivery = () => (
     <line x1="12" y1="15" x2="12" y2="3"/>
   </svg>
 );
+const IconMove = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    <polyline points="9 22 9 12 15 12 15 22"/>
+  </svg>
+);
 const IconReviewLink = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
@@ -486,7 +492,11 @@ export function MediaTab({
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<{ deleteFile: boolean } | null>(null);
   const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
   const [bulkDeleteError, setBulkDeleteError]   = useState<string | null>(null);
-  const [showMoveModal,   setShowMoveModal]     = useState(false);
+  // Move-to-project modal state. The bar action sets it to the full selection
+  // ({ assetIds: [...selectedIds] }); the right-click entry sets it to either
+  // the single right-clicked asset (when it's not part of an active selection)
+  // or the full multi-select set (when it IS part of it) — desktop convention.
+  const [showMoveModal,   setShowMoveModal]     = useState<{ assetIds: string[] } | null>(null);
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [renamingId,      setRenamingId]      = useState<string | null>(null);
@@ -1225,6 +1235,21 @@ const { openMenu } = useContextMenu();
       { type: 'separator' as const },
       {
         type: 'item' as const,
+        label: 'Move to project…',
+        icon: <IconMove />,
+        onClick: () => {
+          // If the right-clicked asset is part of an active multi-selection,
+          // act on the whole set; otherwise just move this one. Matches desktop
+          // file-manager convention.
+          const ids = selectedIds.has(asset.assetId) && selectedIds.size > 1
+            ? [...selectedIds]
+            : [asset.assetId];
+          setShowMoveModal({ assetIds: ids });
+        },
+      },
+      { type: 'separator' as const },
+      {
+        type: 'item' as const,
         label: 'Re-transcribe',
         icon: <IconRefresh />,
         disabled: !asset.filePath || asset.transcription.status === 'queued' || asset.transcription.status === 'processing',
@@ -1663,7 +1688,7 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
-              onClick={() => setShowMoveModal(true)}
+              onClick={() => setShowMoveModal({ assetIds: [...selectedIds] })}
               title="Reassign the selected assets to a different project (LPOS-side only — Frame.io stays put)"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1850,9 +1875,9 @@ const { openMenu } = useContextMenu();
         <MoveAssetsModal
           fromProjectId={projectId}
           fromProjectName={projectName}
-          selectedCount={selectedIds.size}
-          selectedAssetIds={[...selectedIds]}
-          onClose={() => setShowMoveModal(false)}
+          selectedCount={showMoveModal.assetIds.length}
+          selectedAssetIds={showMoveModal.assetIds}
+          onClose={() => setShowMoveModal(null)}
           onMoved={(movedIds) => {
             // Drop the moved assets from the local selection + refresh the list
             // so they disappear from this project's tab. Partial moves keep the
@@ -1866,7 +1891,7 @@ const { openMenu } = useContextMenu();
               setSelectedAsset(null);
             }
             void fetchAssets();
-            setShowMoveModal(false);
+            setShowMoveModal(null);
           }}
         />
       )}

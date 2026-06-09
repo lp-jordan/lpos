@@ -25,29 +25,21 @@ function compactCurrency(v: number): string {
   return `$${v.toLocaleString()}`;
 }
 
-// ── Badges ────────────────────────────────────────────────────────────────────
+// ── Status visual ─────────────────────────────────────────────────────────────
 
-// Subtle status chip — used for prospect/active labels, de-emphasised
-const STATUS_STYLE: Record<ProspectStatus, { color: string }> = {
-  prospect: { color: 'rgba(91,141,217,0.55)'  },
-  active:   { color: 'rgba(90,185,90,0.55)'   },
-  inactive: { color: 'rgba(150,150,150,0.55)' },
+// Type-as-color-stripe rather than a separate badge: the left edge of every
+// card/row carries a 3px stripe that tells the user at a glance whether they're
+// looking at a prospect (warm amber = in-flight), an active client (cool green
+// = settled), or an inactive client (muted grey). The previous tiny text badge
+// ("Prospect" / "Client") was redundant with the stage/billing pill that
+// already lives in the top-right corner — dropping it cleans up the visual.
+const STATUS_STRIPE: Record<ProspectStatus, string> = {
+  prospect: '#f59e0b',  // amber
+  active:   '#5ab95a',  // green
+  inactive: '#777',     // muted
 };
-const STATUS_LABELS: Record<ProspectStatus, string> = {
-  prospect: 'Prospect',
-  active:   'Client',
-  inactive: 'Inactive',
-};
-function StatusBadge({ status }: { status: ProspectStatus }) {
-  const s = STATUS_STYLE[status];
-  return (
-    <span style={{
-      fontSize: '0.68rem', fontWeight: 500, color: s.color,
-      letterSpacing: '0.04em', whiteSpace: 'nowrap',
-    }}>
-      {STATUS_LABELS[status]}
-    </span>
-  );
+function stripeBorderStyle(status: ProspectStatus): React.CSSProperties {
+  return { borderLeft: `3px solid ${STATUS_STRIPE[status]}` };
 }
 
 // Compact funnel-stage badge — prospects only. Shows underneath/beside the
@@ -172,7 +164,11 @@ function PersonCard({ person, allUsers, lastUpdate, selected, onNavigate, onSele
   return (
     <div
       className={`proj-client-card${selected ? ' proj-client-card--selected' : ''}`}
-      style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', cursor: 'pointer', userSelect: 'none' }}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px',
+        cursor: 'pointer', userSelect: 'none',
+        ...stripeBorderStyle(person.status),
+      }}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey || e.shiftKey) { onSelect(e); return; }
         onNavigate();
@@ -188,15 +184,13 @@ function PersonCard({ person, allUsers, lastUpdate, selected, onNavigate, onSele
             {person.company}
           </span>
         </div>
+        {/* Corner indicator: billing pill for active clients, stage chip for
+            prospects, nothing for inactive (the muted stripe already says it). */}
         {person.status === 'active'
           ? <BillingBadge status={person.recurringBillingStatus} />
-          : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-              <StatusBadge status={person.status} />
-              {person.status === 'prospect' && <StageBadge stage={person.prospectStage} />}
-            </div>
-          )
-        }
+          : person.status === 'prospect'
+            ? <StageBadge stage={person.prospectStage} />
+            : null}
       </div>
 
       {lastUpdate ? (
@@ -236,7 +230,7 @@ function PersonRow({ person, allUsers, selected, onNavigate, onSelect, onContext
   return (
     <div
       className={`proj-client-row${selected ? ' proj-client-row--selected' : ''}`}
-      style={{ cursor: 'pointer', userSelect: 'none' }}
+      style={{ cursor: 'pointer', userSelect: 'none', ...stripeBorderStyle(person.status) }}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey || e.shiftKey) { onSelect(e); return; }
         onNavigate();
@@ -251,13 +245,9 @@ function PersonRow({ person, allUsers, selected, onNavigate, onSelect, onContext
       </span>
       {person.status === 'active'
         ? <BillingBadge status={person.recurringBillingStatus} />
-        : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <StatusBadge status={person.status} />
-            {person.status === 'prospect' && <StageBadge stage={person.prospectStage} />}
-          </div>
-        )
-      }
+        : person.status === 'prospect'
+          ? <StageBadge stage={person.prospectStage} />
+          : null}
       <AvatarStrip userIds={person.assignedTo} allUsers={allUsers} />
       <span style={{ fontSize: '0.78rem', color: 'var(--muted-soft)', whiteSpace: 'nowrap' }}>
         {relativeDate(person.updatedAt)}

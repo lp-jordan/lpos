@@ -146,26 +146,29 @@ export function NewPersonModal({ currentUserId, accessUsers, referrerSuggestions
               </div>
             </div>
 
-            {/* Referred by — free text with autocomplete suggestions sourced from
-                existing People company names. Falls back gracefully to bare typing. */}
-            <div className="modal-field">
-              <label className="modal-label">Referred by <span className="modal-label-optional">optional</span></label>
-              <input
-                className="modal-input"
-                type="text"
-                list="new-person-referrer-suggestions"
-                placeholder="Name of the person who referred this prospect"
-                value={referredBy}
-                onChange={(e) => setReferredBy(e.target.value)}
-                disabled={saving}
-                autoComplete="off"
-              />
-              {referrerSuggestions && referrerSuggestions.length > 0 && (
-                <datalist id="new-person-referrer-suggestions">
-                  {referrerSuggestions.map((name) => <option key={name} value={name} />)}
-                </datalist>
-              )}
-            </div>
+            {/* Referred by — only shown once a Source has been picked. Without a
+                source there's nothing for the referrer field to elaborate on, so
+                hiding it removes a meaningless empty input from the create flow. */}
+            {source && (
+              <div className="modal-field">
+                <label className="modal-label">Referred by <span className="modal-label-optional">optional</span></label>
+                <input
+                  className="modal-input"
+                  type="text"
+                  list="new-person-referrer-suggestions"
+                  placeholder="Name of the person who referred this prospect"
+                  value={referredBy}
+                  onChange={(e) => setReferredBy(e.target.value)}
+                  disabled={saving}
+                  autoComplete="off"
+                />
+                {referrerSuggestions && referrerSuggestions.length > 0 && (
+                  <datalist id="new-person-referrer-suggestions">
+                    {referrerSuggestions.map((name) => <option key={name} value={name} />)}
+                  </datalist>
+                )}
+              </div>
+            )}
 
             {/* Funnel stage — free-select; left empty by default so newly-added
                 prospects don't get a misleading "Reached Out" stage assigned. */}

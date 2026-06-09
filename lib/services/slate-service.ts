@@ -350,16 +350,52 @@ export class SlateService {
       if (!this.currentProjectId) { socket.emit('error', 'No project loaded'); return; }
       const name = (data?.name ?? '').trim();
       if (!name) return;
+      const now = new Date().toISOString();
+
+      // First-tab special case: when the project's tab list is empty and there
+      // are existing notes (likely untagged because tabs didn't exist when they
+      // were written), auto-create a "Tab 1" first and bulk-assign every
+      // tag-less note to it. This preserves the pre-tabs work in a clearly
+      // named container so the user's new tab starts empty rather than
+      // inheriting decades of legacy notes by surprise.
+      let autoCreatedTab1Id: string | null = null;
+      if (this.tabs.length === 0 && this.notes.length > 0) {
+        const tab1: SlateTab = { id: randomUUID(), name: 'Tab 1', sortOrder: 0, createdAt: now };
+        this.tabs.push(tab1);
+        autoCreatedTab1Id = tab1.id;
+        let touched = false;
+        for (const n of this.notes) {
+          if (!n.tabId) { n.tabId = tab1.id; touched = true; }
+        }
+        if (touched) writeNotes(this.currentProjectId, this.notes);
+      }
+
       const tab: SlateTab = {
         id: randomUUID(),
         name,
         sortOrder: this.tabs.length,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
       };
       this.tabs.push(tab);
       writeTabs(this.currentProjectId, this.tabs);
+
+      // Broadcast the new tab list + (if we auto-created Tab 1) the reassigned
+      // notes so every connected client renders the migration in one frame.
       this.io.of('/slate').emit('slateTabs', this.tabs);
-      this.log('Slate tab created', tab.name);
+      if (autoCreatedTab1Id) {
+        this.io.of('/slate').emit('notesReloaded', this.notes);
+      }
+
+      // Targeted ack to the originating socket so its UI can auto-activate the
+      // tab the user just named. Other clients receive the broadcast above and
+      // stay on whatever tab they were on.
+      socket.emit('slateTabCreatedAck', { id: tab.id });
+
+      this.log(
+        autoCreatedTab1Id
+          ? `Slate tab created: ${tab.name} (auto-created Tab 1 with existing notes)`
+          : `Slate tab created: ${tab.name}`,
+      );
     });
 
     socket.on('renameSlateTab', (data: { id?: string; name?: string }) => {
