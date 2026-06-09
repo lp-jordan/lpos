@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-06-09 — Asset move: keep historical activity events at the source
+
+**Timestamp:** 2026-06-09T21:20:00Z
+
+**User prompt (verbatim):**
+> Yeah I think we can keep historical events at the source, and then just record post-move events to the new location. Make sense? Where would users even see this original vs new location history?
+
+**Response summary:** Answered the "where do users see this" question — today the activity-events UI surface is sparse: dashboard ActivityStrip (global top-6 task bucket), dashboard ActivityHistoryModal (paginated global feed with optional per-project filter / search / bucket tabs), and MediaTab's "Latest comments" sort (indirect, no UI). No per-project activity tab or per-asset activity panel exists yet. Then changed the asset-move behavior: historical `activity_events` for moved assets stay at the SOURCE project (the rewrite-project_id step is dropped); the `asset.moved` event still anchors at the TARGET; future activity on the asset naturally lands at the target because the asset's project_id is now the target.
+
+**Files changed:**
+- `lib/store/asset-move-store.ts` — dropped the `activity_events.project_id` rewrite. Removed `getActivityDb` import and the per-asset `withTransaction(activityDb, …)` block. Updated the file-level docstring to describe the new "history stays at the source, arrival anchors at the target" model and to note that future activity inherits the asset's new project_id naturally.
+- `app/api/projects/[projectId]/media/move/route.ts` — docstring updated to match: target project gets one `asset.moved` event per successful move; source's historical events are intentionally untouched. Code path was already correct (the route always wrote the move event at `project_id: toProjectId`); only the prose was stale.
+
+**Implementation summary:**
+- Behavior change is one helper: the move route was always writing the move event at the target. The only thing that changed at the data layer is dropping the `UPDATE activity_events SET project_id = ? WHERE asset_id = ? AND project_id = ?` statement in the per-asset loop of `moveAssetsBetweenProjects`.
+- Net read of activity per project after this change:
+  - **Source project's feed:** Shows the asset's full pre-move history. No asset.moved event. After the move the asset just stops appearing — honest reflection of "it left here at this time, here's what came before".
+  - **Target project's feed:** Starts with the asset.moved event ("Asset moved from {fromName} to {toName}"). All subsequent activity on the asset (re-transcribes, comments, deliveries, etc.) naturally lands here because the asset's project_id is now this project.
+- The "honest split" is intentional — and aligned with how editors think about the move: the asset's pre-move story belongs to the project it was filmed/edited under; the post-move chapter belongs to the new home.
+
+**Decision rationale:**
+- **Drop the rewrite (vs. keep it + add an outbound counterpart event):** The user explicitly preferred this model. It's also simpler — no extra event row per move, no third DB touched, no source-side audit anchor to maintain. The cost is the absence of an "asset.moved (outbound)" marker at the source's tail, but the asset disappearing from the source's asset list IS the marker (and the move event at the target carries the from-project info in its `details_json` for cross-referencing).
+- **Don't add a per-project activity tab in this commit:** The user asked about the surface as part of the question, not as a feature request. The current surfaces handle the read fine for now; a per-project activity tab is the obvious follow-up if/when the user wants it (the API endpoint already exists at `/api/projects/[projectId]/activity` — just unused).
+
+**Alternatives considered:**
+- **Record a parallel outbound `asset.moved` event at the source** (`project_id: fromProjectId` with the same `details_json`). Cleaner audit trail at the cost of doubling the per-move event count. Declined to match the user's instruction; can be added as a one-line `recordActivity` call if they reconsider.
+- **Keep the historical rewrite but ALSO write a source-side event:** maximally redundant; not what was asked.
+
+**Commands/checks:**
+- Tracing: ran an Explore agent over the full UI to confirm there's no per-project activity tab today before recommending the model. Findings included in the response that preceded the implementation.
+- Grep verified that `getActivityDb` is no longer used in `asset-move-store.ts` after the import was removed.
+- Working tree showed only the two intended files modified before the commit.
+
+**Assumptions / follow-ups:**
+- If/when a per-project activity tab is built (the `/api/projects/[projectId]/activity` route already exists), this asymmetry will become user-visible — the SOURCE project's tab will show pre-move events with the asset name but no record of where the asset went; the TARGET project's tab will start with the move event. Both reads are correct; if "explain where the asset went" is desired on the source side, adding the outbound parallel event is a one-liner.
+- `getActivityDb` is still imported and used by the activity-monitor-service itself and by other consumers — only the unused import in `asset-move-store.ts` was removed.
+
+---
+
 ## 2026-06-09 — Follow-up tweaks: conditional Referred-by, prospect/client visual stripe, asset right-click move, + Tab modal, auto-Tab-1, tab delete confirm
 
 **Timestamp:** 2026-06-09T20:55:00Z

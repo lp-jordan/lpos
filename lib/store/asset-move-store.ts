@@ -1,10 +1,8 @@
 import { getCoreDb, withTransaction } from '@/lib/store/core-db';
 import { getCanonicalAssetDb } from '@/lib/store/canonical-asset-db';
-import { getActivityDb } from '@/lib/store/activity-db';
 
 /**
- * Move one or more assets from one project to another. v22-ish feature
- * (Phase: cross-project asset reassignment) — touches three databases:
+ * Move one or more assets from one project to another. Touches two databases:
  *
  *   - canonical-assets.sqlite: `assets.project_id` UPDATE. Child rows
  *     (asset_versions / media_files / distribution_records / editorial_links)
@@ -17,18 +15,21 @@ import { getActivityDb } from '@/lib/store/activity-db';
  *     auto-add to a target-project deliverable because the user usually
  *     wants to assemble a fresh delivery from the new project's UI).
  *
- *   - activity.sqlite: existing events for the asset in the source project
- *     get their `project_id` rewritten to the target. Keeps the asset's
- *     history coherent under its new home; the new asset.moved event we
- *     record encodes the from/to in its impact_json so the audit chain is
- *     intact.
+ * Activity history (activity_events) is intentionally LEFT ALONE: historical
+ * events stay at the source project, so the asset's pre-move story remains
+ * visible from the source's perspective ("this asset was here, here's what
+ * happened"). Post-move events naturally land at the target — the move
+ * route writes the `asset.moved` event with `project_id: toProjectId`, and
+ * any subsequent activity emitted by the asset's child operations (comments,
+ * re-transcribes, deliveries, etc.) inherits the asset's new project_id.
+ * The asymmetry is honest: source = pre-move history, target = post-move.
  *
  * Frame.io references on the asset (frameio.assetId / stackId / playerUrl /
  * reviewLink / comments) are intentionally left untouched — moving the asset
  * on Frame.io is OUT OF SCOPE per the spec ("LPOS-only move"). The UI surfaces
  * a one-time warning explaining the history-split before the move proceeds.
  *
- * Cross-DB note: the three SQLite databases live in separate files, so we
+ * Cross-DB note: the two SQLite databases live in separate files, so we
  * can't wrap the whole operation in a single transaction. We do per-DB
  * transactions, which gives us per-DB atomicity. A crash between DB writes
  * is theoretically possible; for v1 we accept that tradeoff (moves are
@@ -58,7 +59,6 @@ export function moveAssetsBetweenProjects(input: {
 
   const canonicalDb = getCanonicalAssetDb();
   const coreDb = getCoreDb();
-  const activityDb = getActivityDb();
   const now = new Date().toISOString();
 
   for (const assetId of assetIds) {
@@ -104,15 +104,12 @@ export function moveAssetsBetweenProjects(input: {
           .run(assetId, fromProjectId);
       });
 
-      // Activity DB — rewrite historical events' project_id so the new
-      // project's activity tab surfaces the asset's full history. New
-      // asset.moved event recorded by the API route after the loop preserves
-      // the audit chain (it embeds from/to in impact_json).
-      withTransaction(activityDb, () => {
-        activityDb
-          .prepare('UPDATE activity_events SET project_id = ? WHERE asset_id = ? AND project_id = ?')
-          .run(toProjectId, assetId, fromProjectId);
-      });
+      // Activity DB is intentionally NOT touched here. See the file-level
+      // docstring — historical events stay at the source so the asset's
+      // pre-move history is preserved in the source project's feed; the
+      // asset.moved event recorded by the API route at the TARGET project
+      // anchors the new location. Future activity naturally lands at the
+      // target because the asset's project_id is now the target.
 
       moved.push(assetId);
     } catch (err) {

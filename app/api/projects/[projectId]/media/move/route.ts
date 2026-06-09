@@ -15,11 +15,13 @@ import { getUserById } from '@/lib/store/user-store';
  *
  * Response: `{ moved: string[], failed: Array<{assetId, reason}> }`.
  *
- * Records ONE asset.moved activity event PER successful asset (so the new
- * project's timeline shows the arrival and the from-project is captured in
- * the event's impact_json for the audit trail). Existing historical events
- * for the moved asset have their project_id rewritten by the move helper —
- * see asset-move-store.ts for details and tradeoffs.
+ * Records ONE asset.moved activity event PER successful asset, scoped to
+ * the TARGET project so the new home gets an "arrival" entry. Historical
+ * events for the moved asset are intentionally left at the SOURCE so the
+ * source's feed still shows the asset's pre-move story — see
+ * asset-move-store.ts for details. Net effect: the source's history ends
+ * at "asset was here, here's what happened"; the target's history begins
+ * with "asset moved in from X, here's what's happened since."
  *
  * Frame.io state is intentionally NOT moved. The MoveAssetsModal surfaces
  * that to the user before they confirm.
