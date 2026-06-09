@@ -22,9 +22,13 @@ import { randomUUID } from 'node:crypto';
 import { getCoreDb } from './core-db';
 import {
   rowToMediaComment,
+  rowToMediaCommentMirrorJob,
   type MediaComment,
   type MediaCommentInsert,
   type MediaCommentRow,
+  type MediaCommentMirrorAction,
+  type MediaCommentMirrorJob,
+  type MediaCommentMirrorJobRow,
 } from '@/lib/models/media-comment';
 
 // ── Inserts ──────────────────────────────────────────────────────────────────
@@ -172,6 +176,237 @@ export function softDeleteMediaCommentByFrameioId(frameioCommentId: string): Med
   return getMediaCommentByFrameioId(frameioCommentId);
 }
 
+// ── Phase 2 mutations (local-first writes) ───────────────────────────────────
+
+/** Update a comment's text by LOCAL comment_id. Phase 2 write-path. LWW per §11 #6. */
+export function updateMediaCommentTextById(commentId: string, newBody: string): MediaComment | null {
+  const db = getCoreDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE media_comments
+        SET body = ?, updated_at = ?
+      WHERE comment_id = ?`,
+  ).run(newBody, now, commentId);
+  return getMediaCommentById(commentId);
+}
+
+/** Flip completion by LOCAL comment_id. Phase 2 write-path. */
+export function setMediaCommentCompletedById(
+  commentId:          string,
+  completed:          boolean,
+  completedByUserId:  string | null,
+): MediaComment | null {
+  const db  = getCoreDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE media_comments
+        SET completed            = ?,
+            completed_at         = CASE WHEN ? = 1 THEN ? ELSE NULL END,
+            completed_by_user_id = CASE WHEN ? = 1 THEN ? ELSE NULL END,
+            updated_at           = ?
+      WHERE comment_id = ?`,
+  ).run(
+    completed ? 1 : 0,
+    completed ? 1 : 0, now,
+    completed ? 1 : 0, completedByUserId,
+    now,
+    commentId,
+  );
+  return getMediaCommentById(commentId);
+}
+
+/** Soft-delete by LOCAL comment_id. Locked §11 #8. Phase 2 write-path. */
+export function softDeleteMediaCommentById(commentId: string): MediaComment | null {
+  const db  = getCoreDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE media_comments
+        SET deleted_at = ?, updated_at = ?
+      WHERE comment_id = ?`,
+  ).run(now, now, commentId);
+  return getMediaCommentById(commentId);
+}
+
+/**
+ * Set the Frame.io comment id on a local row after the mirror worker
+ * successfully created the Frame.io counterpart. Idempotent: the column has
+ * a UNIQUE constraint so duplicate writes are a no-op.
+ */
+export function setFrameioIdOnComment(commentId: string, frameioCommentId: string, frameioFileId: string): void {
+  const db = getCoreDb();
+  db.prepare(
+    `UPDATE media_comments
+        SET frameio_comment_id = ?,
+            frameio_file_id    = ?,
+            updated_at         = ?
+      WHERE comment_id = ?
+        AND frameio_comment_id IS NULL`,
+  ).run(frameioCommentId, frameioFileId, new Date().toISOString(), commentId);
+}
+
+/**
+ * Best-effort lookup of a comment by either its local comment_id OR its
+ * Frame.io comment id. Phase 2 PATCH/DELETE handlers call this because the
+ * UI may pass either depending on whether the comment's mirror has landed.
+ */
+export function getMediaCommentByEitherId(maybeId: string): MediaComment | null {
+  return getMediaCommentById(maybeId) ?? getMediaCommentByFrameioId(maybeId);
+}
+
+// ── Phase 2 mirror queue ─────────────────────────────────────────────────────
+
+/**
+ * Enqueue a mirror job. Phase 2 write paths call this after every local
+ * mutation. Replies are NEVER enqueued (locked §11 #2 — checked at call
+ * sites, not here, so the queue stays a dumb FIFO).
+ *
+ * If the same comment already has a pending job for the same action, we
+ * return the existing one rather than duplicating — keeps the queue tight
+ * and avoids racing the worker.
+ */
+export function enqueueMediaCommentMirrorJob(
+  commentId: string,
+  action:    MediaCommentMirrorAction,
+): MediaCommentMirrorJob {
+  const db = getCoreDb();
+
+  const existing = db.prepare(
+    `SELECT * FROM media_comment_mirror_jobs
+      WHERE comment_id = ? AND action = ? AND status IN ('pending', 'failed')
+      ORDER BY enqueued_at DESC
+      LIMIT 1`,
+  ).get(commentId, action) as MediaCommentMirrorJobRow | undefined;
+  if (existing) return rowToMediaCommentMirrorJob(existing);
+
+  const jobId: string = randomUUID();
+  const now           = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO media_comment_mirror_jobs (
+       job_id, comment_id, action, status, attempt_count, enqueued_at, next_attempt_at
+     ) VALUES (?, ?, ?, 'pending', 0, ?, ?)`,
+  ).run(jobId, commentId, action, now, now);
+
+  const row = db.prepare('SELECT * FROM media_comment_mirror_jobs WHERE job_id = ?').get(jobId) as MediaCommentMirrorJobRow;
+  return rowToMediaCommentMirrorJob(row);
+}
+
+/**
+ * Pull the next batch of jobs ready to run (status='pending' AND
+ * next_attempt_at <= now). Limit prevents the worker from holding too many
+ * Frame.io API calls in flight simultaneously.
+ */
+export function getPendingMirrorJobs(limit = 5): MediaCommentMirrorJob[] {
+  const db = getCoreDb();
+  const now = new Date().toISOString();
+  const rows = db.prepare(
+    `SELECT * FROM media_comment_mirror_jobs
+      WHERE status = 'pending'
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      ORDER BY enqueued_at ASC
+      LIMIT ?`,
+  ).all(now, limit) as MediaCommentMirrorJobRow[];
+  return rows.map(rowToMediaCommentMirrorJob);
+}
+
+/** Mark a job in-flight so concurrent workers don't grab it. */
+export function markMirrorJobInFlight(jobId: string): void {
+  const db = getCoreDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE media_comment_mirror_jobs
+        SET status = 'in_flight',
+            first_attempt_at = COALESCE(first_attempt_at, ?)
+      WHERE job_id = ?`,
+  ).run(now, jobId);
+}
+
+/** Mark a job successfully completed. */
+export function markMirrorJobSucceeded(jobId: string): void {
+  const db = getCoreDb();
+  db.prepare(
+    `UPDATE media_comment_mirror_jobs
+        SET status = 'succeeded',
+            completed_at = ?,
+            last_error = NULL
+      WHERE job_id = ?`,
+  ).run(new Date().toISOString(), jobId);
+}
+
+/**
+ * Record a failure and schedule the next attempt (or abandon if past the
+ * 3-hour ceiling). Backoff schedule per locked §11 #7: exponential 1s base
+ * doubling up to a 30 min cap.
+ *
+ * Status path: failed → pending (when re-scheduled) → in_flight (next pull).
+ * Or: failed → abandoned (3h ceiling exceeded; no more attempts).
+ */
+export function recordMirrorJobFailure(jobId: string, errorMessage: string): { abandoned: boolean } {
+  const db = getCoreDb();
+  const row = db.prepare('SELECT * FROM media_comment_mirror_jobs WHERE job_id = ?').get(jobId) as MediaCommentMirrorJobRow | undefined;
+  if (!row) return { abandoned: false };
+
+  const nowMs        = Date.now();
+  const firstMs      = row.first_attempt_at ? Date.parse(row.first_attempt_at) : nowMs;
+  const elapsedMs    = nowMs - firstMs;
+  const ABANDON_MS   = 3 * 60 * 60 * 1000;  // 3h locked §11 #7
+  const attempt      = row.attempt_count + 1;
+  const truncated    = errorMessage.slice(0, 2000);
+
+  if (elapsedMs >= ABANDON_MS) {
+    db.prepare(
+      `UPDATE media_comment_mirror_jobs
+          SET status        = 'abandoned',
+              attempt_count = ?,
+              last_error    = ?,
+              completed_at  = ?
+        WHERE job_id = ?`,
+    ).run(attempt, truncated, new Date().toISOString(), jobId);
+    return { abandoned: true };
+  }
+
+  // Backoff: 1s, 2s, 4s, 8s, ... capped at 30 min.
+  const CAP_MS       = 30 * 60 * 1000;
+  const backoffMs    = Math.min(CAP_MS, Math.pow(2, attempt - 1) * 1000);
+  const nextAttempt  = new Date(nowMs + backoffMs).toISOString();
+
+  db.prepare(
+    `UPDATE media_comment_mirror_jobs
+        SET status          = 'pending',
+            attempt_count   = ?,
+            last_error      = ?,
+            next_attempt_at = ?
+      WHERE job_id = ?`,
+  ).run(attempt, truncated, nextAttempt, jobId);
+  return { abandoned: false };
+}
+
+/**
+ * Find comments whose most-recent mirror job is in 'abandoned' state. Used
+ * by the GET handler to set the `mirrorAbandoned` flag on each comment so
+ * the UI can render the `!` indicator (locked §11 #7).
+ *
+ * Returns a set of comment_ids (local), scoped to one (project, asset,
+ * version) for cheap lookups during a typical comment-list render.
+ */
+export function getAbandonedMirrorCommentIds(
+  projectId:      string,
+  assetId:        string,
+  assetVersionId: string,
+): Set<string> {
+  const db = getCoreDb();
+  const rows = db.prepare(
+    `SELECT DISTINCT mc.comment_id
+       FROM media_comments mc
+       JOIN media_comment_mirror_jobs mj ON mj.comment_id = mc.comment_id
+      WHERE mc.project_id = ?
+        AND mc.asset_id = ?
+        AND mc.asset_version_id = ?
+        AND mc.deleted_at IS NULL
+        AND mj.status = 'abandoned'`,
+  ).all(projectId, assetId, assetVersionId) as Array<{ comment_id: string }>;
+  return new Set(rows.map((r) => r.comment_id));
+}
+
 // ── Phase 1 reads ────────────────────────────────────────────────────────────
 
 /**
@@ -193,6 +428,11 @@ export interface ThreadedMediaComment {
   authorAvatar: string | null;
   createdAt:    string;
   completed:    boolean;
+  /** Phase 2: true when the outbound Frame.io mirror has abandoned this comment
+   *  after exhausting the 3h retry window (locked §11 #7). The UI surfaces
+   *  this as a small `!` indicator with a hover tooltip. Replies don't get
+   *  mirrored (§11 #2) so they're never flagged here. */
+  mirrorAbandoned?: boolean;
   replies: Array<{
     id:           string;
     text:         string;
@@ -255,6 +495,10 @@ export function getThreadedCommentsForAssetVersion(
   const rowLookup = new Map<string, { authorUserId: string | null; authorExternalName: string | null; commentId: string }>();
   const comments: ThreadedMediaComment[] = [];
 
+  // Phase 2: which top-level comments have abandoned outbound mirrors? One
+  // query, returned as a Set for O(1) lookup during the per-row mapping below.
+  const abandoned = getAbandonedMirrorCommentIds(projectId, assetId, assetVersionId);
+
   for (const { root, replies } of byThread.values()) {
     if (!root) continue;  // orphan reply (parent was soft-deleted) — drop for now
 
@@ -282,15 +526,16 @@ export function getThreadedCommentsForAssetVersion(
     });
 
     comments.push({
-      id:           rootId,
-      text:         root.body,
-      timestamp:    root.timestamp_seconds,
-      duration:     root.duration_seconds,
-      authorName:   root.author_external_name ?? '',
-      authorAvatar: root.author_avatar_url,
-      createdAt:    root.created_at,
-      completed:    root.completed === 1,
-      replies:      replyOut,
+      id:              rootId,
+      text:            root.body,
+      timestamp:       root.timestamp_seconds,
+      duration:        root.duration_seconds,
+      authorName:      root.author_external_name ?? '',
+      authorAvatar:    root.author_avatar_url,
+      createdAt:       root.created_at,
+      completed:       root.completed === 1,
+      mirrorAbandoned: abandoned.has(root.comment_id),
+      replies:         replyOut,
     });
   }
 

@@ -60,6 +60,7 @@ import { EpReleaseService } from './ep-release-service';
 import { BackupService } from './backup-service';
 import { B2MediaSyncService } from './b2-media-sync-service';
 import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
+import { MediaCommentMirrorService } from './media-comment-mirror';
 import { getMonitorRegistry } from './monitor-registry';
 import { HandoffStaleMonitor } from './monitors/handoff-stale-monitor';
 
@@ -122,6 +123,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_cloudflareOrphanReconciler: CloudflareOrphanReconciler | undefined;
   // eslint-disable-next-line no-var
+  var __lpos_mediaCommentMirrorService: MediaCommentMirrorService | undefined;
+  // eslint-disable-next-line no-var
   var __lpos_restartPending: boolean | undefined;
   // eslint-disable-next-line no-var
   var __lpos_prospectStore: ProspectStore | undefined;
@@ -163,6 +166,7 @@ let epReleaseService: EpReleaseService | null = null;
 let backupService: BackupService | null = null;
 let b2MediaSyncService: B2MediaSyncService | null = null;
 let cloudflareOrphanReconciler: CloudflareOrphanReconciler | null = null;
+let mediaCommentMirrorService: MediaCommentMirrorService | null = null;
 let prospectStore: ProspectStore | null = null;
 let clientStore: ClientStore | null = null;
 let prospectNotificationStore: ProspectNotificationStore | null = null;
@@ -275,6 +279,12 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   cloudflareOrphanReconciler = new CloudflareOrphanReconciler();
   cloudflareOrphanReconciler.start();
   globalThis.__lpos_cloudflareOrphanReconciler = cloudflareOrphanReconciler;
+
+  // Phase 2 of the local-comments refactor — drains the outbound mirror
+  // queue every 5 s. See docs/local-comments-refactor-spec.md §6.1.
+  mediaCommentMirrorService = new MediaCommentMirrorService();
+  mediaCommentMirrorService.start();
+  globalThis.__lpos_mediaCommentMirrorService = mediaCommentMirrorService;
 
   // MonitorRegistry — the foundation seam for the planned LPOS-wide "traffic
   // controller" (see workspace memory project_brain_agent). New background

@@ -410,6 +410,15 @@ export function VideoTheaterMode({
                     <span className="vt-cp-general">General</span>
                   )}
                   <span className="vt-cp-author">{c.authorName || 'Frame.io'}</span>
+                  {(c as FrameIOComment & { mirrorAbandoned?: boolean }).mirrorAbandoned && (
+                    <span
+                      className="mad-comment-mirror-warn"
+                      title="Couldn't sync to Frame.io — clients viewing the review link won't see this comment."
+                      aria-label="Mirror to Frame.io failed"
+                    >
+                      !
+                    </span>
+                  )}
                   <button
                     type="button"
                     className={`vt-cp-check${c.completed ? ' vt-cp-check--done' : ''}`}

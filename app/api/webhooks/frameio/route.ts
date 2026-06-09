@@ -25,6 +25,7 @@ import {
   softDeleteMediaCommentByFrameioId,
   getMediaCommentByFrameioId,
 } from '@/lib/store/media-comment-store';
+import { notifyCommentReply } from '@/lib/services/comment-notification-service';
 
 // ── Signature verification ────────────────────────────────────────────────────
 
@@ -164,7 +165,7 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
   // the existing activity/refresh-broadcast paths above.
   // See docs/local-comments-refactor-spec.md §12 Phase 0.
   try {
-    shadowCaptureComment(payload);
+    shadowCaptureComment(payload, tracked);
   } catch (err) {
     console.warn(`[webhooks/frameio] shadow-capture failed for ${payload.type} ${data.id}: ${(err as Error).message}`);
   }
@@ -254,7 +255,7 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
 //
 // Idempotency on `frameio_comment_id UNIQUE`: webhook echoes of comments we
 // just posted via LPOS get short-circuited inside insertMediaComment.
-function shadowCaptureComment(payload: FrameIoWebhookPayload): void {
+function shadowCaptureComment(payload: FrameIoWebhookPayload, tracked: TrackedAsset): void {
   const { data } = payload;
   const frameioCommentId = data.id;
   const fileId           = data.file_id;
@@ -271,18 +272,18 @@ function shadowCaptureComment(payload: FrameIoWebhookPayload): void {
 
       // Resolve the local parent comment_id for replies. Webhook payload's
       // parent_id is a Frame.io comment ID; we look up the local row.
-      let parentCommentId: string | null = null;
+      let parentLocal: { commentId: string; authorUserId: string | null } | null = null;
       if (data.parent_id) {
         const parent = getMediaCommentByFrameioId(data.parent_id);
-        parentCommentId = parent?.commentId ?? null;
+        if (parent) parentLocal = { commentId: parent.commentId, authorUserId: parent.authorUserId };
       }
 
       const author = data.author ?? data.owner;
-      insertMediaComment({
+      const inserted = insertMediaComment({
         projectId:          mapping.projectId,
         assetId:            mapping.assetId,
         assetVersionId:     mapping.assetVersionId,
-        parentCommentId,
+        parentCommentId:    parentLocal?.commentId ?? null,
         body:               data.text ?? '',
         timestampSeconds:   typeof data.timestamp === 'number' ? data.timestamp / 24 : null,  // frames → NDF seconds (matches frameio.ts convention)
         durationSeconds:    null,
@@ -294,6 +295,31 @@ function shadowCaptureComment(payload: FrameIoWebhookPayload): void {
         completed:          Boolean(data.completed),
         createdAtOverride:  data.inserted_at ?? undefined,
       });
+
+      // Locked decision §11 #9: when an external client replies via the
+      // Frame.io review-link UI to an LPOS-authored top-level comment,
+      // notify the LPOS user just like the direct-POST reply path does.
+      // Conditions: it's a reply (parent_id set), parent has an
+      // author_user_id (LPOS user wrote it), and the inserted row is NEW
+      // (not an echo of our own write — insertMediaComment short-circuits
+      // those, so this only fires for genuine external replies).
+      const isReply       = Boolean(data.parent_id);
+      const isExternal    = inserted.source === 'frameio' && inserted.frameioCommentId === frameioCommentId;
+      const parentIsLpos  = !!parentLocal?.authorUserId;
+      if (isReply && isExternal && parentIsLpos && parentLocal?.authorUserId) {
+        const assetIdLocal   = mapping.assetId;
+        const projectIdLocal = mapping.projectId;
+        void notifyCommentReply({
+          userId:     parentLocal.authorUserId,
+          projectId:  projectIdLocal,
+          assetId:    assetIdLocal,
+          assetName:  tracked.asset_name,
+          commentId:  data.parent_id ?? '',
+          fromUserId: undefined,
+          fromName:   author?.name ?? 'External reviewer',
+          snippet:    (data.text ?? '').slice(0, 140),
+        }).catch(() => {});
+      }
       break;
     }
     case 'comment.updated': {

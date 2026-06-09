@@ -1,26 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireEpToken } from '@/lib/services/ep-auth';
 import { getAsset } from '@/lib/store/media-registry';
-import { toggleCommentCompleted } from '@/lib/services/frameio';
+import {
+  getMediaCommentByEitherId,
+  setMediaCommentCompletedById,
+  enqueueMediaCommentMirrorJob,
+} from '@/lib/store/media-comment-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string; commentId: string }> };
 
 /**
  * PATCH /api/ep/projects/:projectId/assets/:assetId/comments/:commentId
  *
- * Phase 5c.10 (2026-06-03): mark a Frame.io comment complete (or reopen it)
- * from editpanel. Wraps the Frame.io toggleCommentCompleted call so the
- * editor's "Mark complete" action in the CommentPullReport flows all the way
- * back to Frame.io — comment becomes `completed: true` upstream, and the
- * editor's next Pull Comments treats it as resolved (marker removed).
+ * Mark a comment complete (or reopen it) from editpanel. Wraps the local
+ * write + outbound mirror enqueue so the editor's "Mark complete" action
+ * in CommentPullReport flips state locally instantly and reflects to
+ * Frame.io eventually-consistently. The editor's next Pull Comments
+ * treats completed=true as resolved (marker removed).
  *
  * Body: { completed: boolean }
  *
- * The asset scoping in the URL is for access control consistency with the
- * other `/api/ep/projects/:id/assets/:assetId/...` routes — the underlying
- * Frame.io call only needs commentId, so we don't strictly need to verify
- * the comment belongs to this asset, but resolving the asset confirms the
- * editor has visibility on its project.
+ * Phase 2 of the local-comments refactor (docs/local-comments-refactor-spec.md):
+ *   - Was: synchronous toggleCommentCompleted to Frame.io
+ *   - Now: setMediaCommentCompletedById + enqueueMediaCommentMirrorJob,
+ *          returns 200 immediately. Mirror worker pushes the change to
+ *          Frame.io within seconds. If the mirror abandons (Frame.io down
+ *          for 3+ hours), the editor never sees the completion in Frame.io
+ *          — locally it's flipped, and the editpanel's next Pull will pick
+ *          up the local state via the GET route.
+ *
+ * The `commentId` URL parameter is either the Frame.io comment id (used by
+ * editpanel today) or the local comment_id. The store resolves either.
  */
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const auth = requireEpToken(req);
@@ -44,8 +54,16 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     return NextResponse.json({ error: 'commentId is required' }, { status: 400 });
   }
 
+  const target = getMediaCommentByEitherId(commentId);
+  if (!target) return NextResponse.json({ error: 'Comment not found' }, { status: 404 });
+
   try {
-    await toggleCommentCompleted(commentId, body.completed);
+    // Editpanel actions don't have an LPOS user session — pass null for
+    // completed_by_user_id. The mirror worker still pushes the completion
+    // to Frame.io; the audit trail says "EP action" by virtue of the
+    // EP-token auth on this route.
+    setMediaCommentCompletedById(target.commentId, body.completed, null);
+    enqueueMediaCommentMirrorJob(target.commentId, body.completed ? 'complete' : 'uncomplete');
     return NextResponse.json({ ok: true, commentId, completed: body.completed });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 502 });

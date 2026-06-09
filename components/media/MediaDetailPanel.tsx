@@ -27,7 +27,7 @@ import {
 import type { FrameIOComment } from '@/lib/services/frameio';
 import { formatTimecode } from '@/lib/utils/time';
 
-type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean };
+type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean; mirrorAbandoned?: boolean };
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
 import { DeliverableModal } from '@/components/projects/DeliverableModal';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
@@ -944,6 +944,15 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                             </span>
                             {c.fromFrame && (
                               <span className="mad-comment-source" title="Left via Frame.io">Frame.io</span>
+                            )}
+                            {c.mirrorAbandoned && (
+                              <span
+                                className="mad-comment-mirror-warn"
+                                title="Couldn't sync to Frame.io — clients viewing the review link won't see this comment."
+                                aria-label="Mirror to Frame.io failed"
+                              >
+                                !
+                              </span>
                             )}
                             {c.timestamp !== null && (() => {
                               const label = `${formatTimecode(c.timestamp)}${c.duration ? ` → ${formatTimecode(c.timestamp + c.duration)}` : ''}`;

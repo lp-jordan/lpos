@@ -108,6 +108,53 @@ export interface MediaCommentInsert {
   createdAtOverride?:   string;
 }
 
+// ── Mirror jobs (Phase 2 outbound queue) ─────────────────────────────────────
+
+export type MediaCommentMirrorAction = 'create' | 'update' | 'complete' | 'uncomplete' | 'delete';
+
+export type MediaCommentMirrorStatus = 'pending' | 'in_flight' | 'succeeded' | 'failed' | 'abandoned';
+
+export interface MediaCommentMirrorJob {
+  jobId:           string;
+  commentId:       string;
+  action:          MediaCommentMirrorAction;
+  status:          MediaCommentMirrorStatus;
+  attemptCount:    number;
+  lastError:       string | null;
+  enqueuedAt:      string;
+  nextAttemptAt:   string | null;
+  firstAttemptAt:  string | null;
+  completedAt:     string | null;
+}
+
+export interface MediaCommentMirrorJobRow {
+  job_id:           string;
+  comment_id:       string;
+  action:           MediaCommentMirrorAction;
+  status:           MediaCommentMirrorStatus;
+  attempt_count:    number;
+  last_error:       string | null;
+  enqueued_at:      string;
+  next_attempt_at:  string | null;
+  first_attempt_at: string | null;
+  completed_at:     string | null;
+}
+
+export function rowToMediaCommentMirrorJob(row: MediaCommentMirrorJobRow): MediaCommentMirrorJob {
+  return {
+    jobId:           row.job_id,
+    commentId:       row.comment_id,
+    action:          row.action,
+    status:          row.status,
+    attemptCount:    row.attempt_count,
+    lastError:       row.last_error,
+    enqueuedAt:      row.enqueued_at,
+    nextAttemptAt:   row.next_attempt_at,
+    firstAttemptAt:  row.first_attempt_at,
+    completedAt:     row.completed_at,
+  };
+}
+
 /** Convert a raw SQLite row into the camelCase model. */
 export function rowToMediaComment(row: MediaCommentRow): MediaComment {
   return {

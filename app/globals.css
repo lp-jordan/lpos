@@ -4994,6 +4994,26 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   color: rgba(99, 155, 255, 0.9); background: rgba(99, 155, 255, 0.1);
   padding: 0.05rem 0.35rem; border-radius: 3px; flex-shrink: 0;
 }
+/* Phase 2 of the local-comments refactor: the outbound mirror to Frame.io
+ * gave up after the 3-hour abandonment ceiling (locked decision §11 #7).
+ * Surfaces to LPOS users so they know clients viewing the review link
+ * won't see this comment. Tooltip on hover explains. */
+.mad-comment-mirror-warn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.18);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 50%;
+  cursor: help;
+  flex-shrink: 0;
+}
 .mad-comment-action {
   background: none;
   border: none;

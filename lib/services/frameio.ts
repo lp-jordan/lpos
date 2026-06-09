@@ -1060,26 +1060,27 @@ export async function postComment(
 }
 
 /**
- * Post a reply to an existing comment.
- *
- * Frame.io V4 has no reply-creation endpoint — replies are not in the
- * CreateCommentParamsData schema. We work around this by posting a top-level
- * comment with a "Reply to above: " prefix so reviewers see the context in
- * Frame.io, while LPOS stores the parentId→replyId mapping separately and
- * reconstructs the thread on read.
+ * @deprecated Removed from the LPOS write path in Phase 2 of the local-comments
+ * refactor (docs/local-comments-refactor-spec.md §11 #2). Replies stay LPOS-
+ * only — they are not mirrored to Frame.io, so this function is no longer
+ * called from any route. Kept exported as a no-op for source compatibility
+ * with any cached client/SDK that may still reference it; will be deleted
+ * after one release. The "Reply to above: " prefix hack has been removed
+ * to avoid accidental reuse.
  */
 export async function postReply(
-  fileId:    string,
-  _parentId: string, // stored by the route layer; not sent to Frame.io
-  text:      string,
+  _fileId:   string,
+  _parentId: string,
+  _text:     string,
 ): Promise<FrameIOCommentReply> {
-  const comment = await postComment(fileId, `Reply to above: ${text}`, null, null);
+  throw new Error('postReply is deprecated — replies are LPOS-only per local-comments refactor §11 #2');
+  // unreachable; type-only kept for back-compat
   return {
-    id:           comment.id,
-    text,           // return clean text; Frame.io stores the prefixed version
-    authorName:   comment.authorName,
-    authorAvatar: comment.authorAvatar,
-    createdAt:    comment.createdAt,
+    id:           '',
+    text:         '',
+    authorName:   '',
+    authorAvatar: null,
+    createdAt:    '',
   };
 }
 

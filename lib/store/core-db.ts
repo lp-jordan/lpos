@@ -485,6 +485,37 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_media_comments_thread     ON media_comments(thread_root_id, created_at ASC);
     CREATE INDEX IF NOT EXISTS idx_media_comments_frameio_id ON media_comments(frameio_comment_id) WHERE frameio_comment_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_media_comments_version    ON media_comments(asset_version_id);
+
+    -- Outbound mirror queue (Phase 2 of the local-comments refactor — see
+    -- docs/local-comments-refactor-spec.md §5.3 and §6.1). One row per LPOS-
+    -- side write that needs to be reflected to Frame.io for external client
+    -- viewing. Locked decision §11 #7: exponential backoff to 30 min cap,
+    -- abandon after 3 hours total — the "!" indicator in the comment list
+    -- surfaces the abandoned state to the LPOS user.
+    --
+    -- action enum reflects what to do on Frame.io:
+    --   create     — POST a brand-new top-level comment
+    --   update     — PATCH the comment body (text edit)
+    --   complete   — PATCH completion to true
+    --   uncomplete — PATCH completion to false
+    --   delete     — DELETE the comment from Frame.io
+    --
+    -- Replies are NEVER mirrored (locked §11 #2) — the queue should never
+    -- contain a 'create' job for a comment with parent_comment_id != null.
+    CREATE TABLE IF NOT EXISTS media_comment_mirror_jobs (
+      job_id          TEXT PRIMARY KEY,
+      comment_id      TEXT NOT NULL REFERENCES media_comments(comment_id) ON DELETE CASCADE,
+      action          TEXT NOT NULL CHECK (action IN ('create', 'update', 'complete', 'uncomplete', 'delete')),
+      status          TEXT NOT NULL CHECK (status IN ('pending', 'in_flight', 'succeeded', 'failed', 'abandoned')),
+      attempt_count   INTEGER NOT NULL DEFAULT 0,
+      last_error      TEXT,
+      enqueued_at     TEXT NOT NULL,
+      next_attempt_at TEXT,
+      first_attempt_at TEXT,
+      completed_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_mirror_jobs_pending ON media_comment_mirror_jobs(status, next_attempt_at) WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS idx_mirror_jobs_comment ON media_comment_mirror_jobs(comment_id, status);
   `);
 }
 
@@ -951,6 +982,30 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`ALTER TABLE prospects ADD COLUMN prospect_stage TEXT`);
   } catch {
     // Column already exists
+  }
+
+  // v24: Local-comments Phase 2 — outbound mirror queue
+  // (docs/local-comments-refactor-spec.md §5.3, §6.1). Idempotent: CREATE
+  // IF NOT EXISTS for both the table and its indexes.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS media_comment_mirror_jobs (
+        job_id          TEXT PRIMARY KEY,
+        comment_id      TEXT NOT NULL REFERENCES media_comments(comment_id) ON DELETE CASCADE,
+        action          TEXT NOT NULL CHECK (action IN ('create', 'update', 'complete', 'uncomplete', 'delete')),
+        status          TEXT NOT NULL CHECK (status IN ('pending', 'in_flight', 'succeeded', 'failed', 'abandoned')),
+        attempt_count   INTEGER NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        enqueued_at     TEXT NOT NULL,
+        next_attempt_at TEXT,
+        first_attempt_at TEXT,
+        completed_at    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_mirror_jobs_pending ON media_comment_mirror_jobs(status, next_attempt_at) WHERE status = 'pending';
+      CREATE INDEX IF NOT EXISTS idx_mirror_jobs_comment ON media_comment_mirror_jobs(comment_id, status);
+    `);
+  } catch (err) {
+    console.warn('[core-db v24] media_comment_mirror_jobs create skipped:', (err as Error).message);
   }
 
   // v23: Local-first media comments — Phase 0 shadow capture
