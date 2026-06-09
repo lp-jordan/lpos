@@ -46,8 +46,14 @@ export async function POST(req: NextRequest) {
   if (!body.description?.trim()) {
     return NextResponse.json({ error: 'description is required' }, { status: 400 });
   }
-  if (!body.taskType || (body.taskType !== 'editing' && body.taskType !== 'platform')) {
-    return NextResponse.json({ error: 'taskType is required and must be editing or platform' }, { status: 400 });
+  if (
+    !body.taskType ||
+    (body.taskType !== 'editing' && body.taskType !== 'platform' && body.taskType !== 'preprod')
+  ) {
+    return NextResponse.json(
+      { error: 'taskType is required and must be preprod, editing, or platform' },
+      { status: 400 },
+    );
   }
 
   const task = getTaskStore().create({

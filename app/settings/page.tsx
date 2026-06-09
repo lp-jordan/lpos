@@ -14,6 +14,7 @@ import { EpReleasesCard } from '@/components/settings/EpReleasesCard';
 import { EditpanelAccessPanel } from '@/components/settings/EditpanelAccessPanel';
 import { WhatsNewTestCard } from '@/components/settings/WhatsNewTestCard';
 import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel';
+import { PreprodBoardAccessPanel } from '@/components/settings/PreprodBoardAccessPanel';
 import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
@@ -77,6 +78,7 @@ export default async function SettingsPage() {
       {role === 'admin' && <SlackUsersCard />}
       {role === 'admin' && <GuestPinCard />}
       {role === 'admin' && <ProspectsAccessPanel />}
+      {role === 'admin' && <PreprodBoardAccessPanel />}
       {role === 'admin' && <NasIngestPanel />}
       {role === 'admin' && <TaskCategoriesPanel />}
       {role === 'admin' && <CloudflareOrphansPanel />}

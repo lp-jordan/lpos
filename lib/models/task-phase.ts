@@ -2,12 +2,18 @@
  * Task type configs.
  *
  * NOTE: file name still says "task-phase" for git-history continuity, but the
- * concept is now "task type" (editing vs platform). The `TaskType` discriminator
- * replaces what was previously called `TaskPhase`. Pre-production has been removed
- * — that work moved to the People CRM.
+ * concept is now "task type". The `TaskType` discriminator replaces what was
+ * previously called `TaskPhase`. v21 adds 'preprod' (Pre-Production) back as a
+ * THIRD task type, this time with admin-configurable columns sourced from the
+ * `task_phase_configs` table — the static entry below is an empty placeholder
+ * so getTaskTypeConfig doesn't throw; use resolveTaskTypeConfig() at the
+ * render boundary to merge the DB-backed statuses in.
+ *
+ * Tab order in the dashboard mirrors the array order — Pre-Production comes
+ * first by user request.
  */
 
-export type TaskType = 'editing' | 'platform';
+export type TaskType = 'preprod' | 'editing' | 'platform';
 
 export interface TaskTypeStatus {
   value: string;
@@ -24,6 +30,17 @@ export interface TaskTypeConfig {
 }
 
 export const TASK_TYPE_CONFIGS: TaskTypeConfig[] = [
+  {
+    value: 'preprod',
+    label: 'Pre-Production',
+    // Dynamic — real statuses live in task_phase_configs (DB). The empty
+    // arrays/strings here are a no-op fallback so static call sites don't
+    // crash; render paths must call resolveTaskTypeConfig(taskType, statuses)
+    // and pass in the live list fetched from /api/preprod-board/columns.
+    defaultStatus: '',
+    terminalStatus: '',
+    statuses: [],
+  },
   {
     value: 'editing',
     label: 'Editing',
@@ -69,6 +86,27 @@ export function getTaskTypeConfig(taskType: TaskType): TaskTypeConfig {
   return TASK_TYPE_MAP.get(taskType)!;
 }
 
+/**
+ * Returns the effective TaskTypeConfig at render time. For 'preprod' the
+ * statuses array comes from the DB and is passed in via context; for editing
+ * and platform the static config is returned unchanged. terminalStatus is
+ * intentionally left empty for preprod in v1 — no auto-completed-at behavior.
+ */
+export function resolveTaskTypeConfig(
+  taskType: TaskType,
+  dynamicPreprodStatuses?: TaskTypeStatus[],
+): TaskTypeConfig {
+  const base = getTaskTypeConfig(taskType);
+  if (taskType !== 'preprod') return base;
+  const statuses = dynamicPreprodStatuses ?? [];
+  return {
+    ...base,
+    statuses,
+    defaultStatus: statuses[0]?.value ?? '',
+    terminalStatus: '',
+  };
+}
+
 export function getStatusConfig(taskType: TaskType, status: string): TaskTypeStatus | undefined {
   return getTaskTypeConfig(taskType).statuses.find((s) => s.value === status);
 }
@@ -82,5 +120,6 @@ export function getStatusColor(taskType: TaskType, status: string): string {
 }
 
 export function isTerminalStatus(taskType: TaskType, status: string): boolean {
-  return getTaskTypeConfig(taskType).terminalStatus === status;
+  const terminal = getTaskTypeConfig(taskType).terminalStatus;
+  return terminal !== '' && terminal === status;
 }

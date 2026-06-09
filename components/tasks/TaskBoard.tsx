@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/core';
 import type { Task } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
-import { TASK_TYPE_CONFIGS, getTaskTypeConfig, isTerminalStatus } from '@/lib/models/task-phase';
+import { TASK_TYPE_CONFIGS, resolveTaskTypeConfig, isTerminalStatus } from '@/lib/models/task-phase';
 import type { Project } from '@/lib/models/project';
 import type { UserSummary } from '@/lib/models/user';
 import { TaskColumn } from './TaskColumn';
@@ -21,8 +21,10 @@ import { TaskCard } from './TaskCard';
 import { TaskDetailModal } from './TaskDetailModal';
 import { TaskContextMenu } from './TaskContextMenu';
 import { PlatformListView } from './PlatformListView';
+import { PreprodColumnEditorModal } from './PreprodColumnEditorModal';
 import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 import { useTaskBroadcasts } from '@/hooks/useTaskBroadcasts';
+import { usePreprodConfig } from '@/components/dashboard/preprod-config-context';
 
 interface Props {
   initialTasks: Task[];
@@ -35,12 +37,16 @@ interface Props {
 export function TaskBoard({ initialTasks, allProjects, users, currentUserId, commentCounts: initialCommentCounts }: Readonly<Props>) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { statuses: preprodStatuses, canEditColumns: canEditPreprodCols } = usePreprodConfig();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>(initialCommentCounts);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
   const [doneCollapsed, setDoneCollapsed] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showColumnEditor, setShowColumnEditor] = useState(false);
+  // Defaults to Editing (not Pre-Production) since fresh preprod is empty —
+  // landing on a blank board is a worse first-paint than landing on tasks.
   const [activeTaskType, setActiveTaskType] = useState<TaskType>('editing');
   // Platform-only view preference: list (grouped by category) vs kanban (12 status cols).
   // Persisted in localStorage so each user's choice survives across sessions. SSR-safe
@@ -79,7 +85,7 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   useEffect(() => {
     try {
       const t = window.localStorage.getItem('lpos:tasks:taskType');
-      if (t === 'editing' || t === 'platform') setActiveTaskType(t);
+      if (t === 'preprod' || t === 'editing' || t === 'platform') setActiveTaskType(t);
       const s = window.localStorage.getItem('lpos:tasks:scope');
       if (s === 'mine' || s === 'others' || s === 'all') setViewScope(s);
     } catch { /* localStorage may be blocked */ }
@@ -168,7 +174,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   );
 
   const selectedTask = tasks.find((t) => t.taskId === selectedTaskId) ?? null;
-  const taskTypeConfig = getTaskTypeConfig(activeTaskType);
+  // For Pre-Production the column list is dynamic — merge live statuses from
+  // PreprodConfigContext. Editing / Platform fall through to the static config.
+  const taskTypeConfig = resolveTaskTypeConfig(activeTaskType, preprodStatuses);
+  const isEmptyPreprod = activeTaskType === 'preprod' && taskTypeConfig.statuses.length === 0;
 
   // Filtered tasks: scope (mine/others) + active task type
   const visibleTasks = tasks.filter((t) => {
@@ -212,7 +221,8 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     // landed on something that isn't a status column for this task type (and isn't
     // another card we could resolve), reject the drop entirely — don't corrupt
     // the task's status by sending a garbage value to the server.
-    const validStatuses = new Set(getTaskTypeConfig(task.taskType).statuses.map((s) => s.value));
+    const dragConfig = resolveTaskTypeConfig(task.taskType, preprodStatuses);
+    const validStatuses = new Set(dragConfig.statuses.map((s) => s.value));
     if (!validStatuses.has(newStatus)) {
       setDragError(`Invalid drop target — that's not a status column for ${task.taskType}.`);
       return;
@@ -435,14 +445,29 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
         {/* Editing has its own column-level "+" in the Not Started column;
             the toolbar button is hidden there to avoid two entry points.
             Platform's kanban statuses don't map to a single starting point
-            cleanly, so it keeps the toolbar button as the canonical add. */}
-        {activeTaskType !== 'editing' && (
+            cleanly, so it keeps the toolbar button as the canonical add.
+            Pre-Production behaves like Editing: column-level "+" on the
+            first column; toolbar add hidden — and entirely suppressed when
+            no columns exist yet (forces the editor flow first). */}
+        {activeTaskType === 'platform' && (
           <button
             type="button"
             className="task-board-add-btn"
             onClick={() => setShowNewTask(true)}
           >
             + New Task
+          </button>
+        )}
+
+        {/* Pre-Production-only: column-management entry, gated on permission. */}
+        {activeTaskType === 'preprod' && canEditPreprodCols && (
+          <button
+            type="button"
+            className="task-board-add-btn"
+            onClick={() => setShowColumnEditor(true)}
+            title="Add, rename, recolor, reorder, or delete columns on the Pre-Production board."
+          >
+            Manage columns
           </button>
         )}
       </div>
@@ -471,7 +496,36 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
             • Editing: always kanban (no toggle, no other option)
           The kanban branch is shared between Editing and Platform — taskTypeConfig
           already drives column statuses from the active task type. */}
-      {activeTaskType === 'platform' && platformView === 'list' ? (
+      {isEmptyPreprod ? (
+        <div
+          style={{
+            padding: '48px 24px',
+            textAlign: 'center',
+            opacity: 0.75,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <p style={{ margin: 0, fontSize: '0.95rem' }}>
+            No Pre-Production columns yet.
+          </p>
+          {canEditPreprodCols ? (
+            <button
+              type="button"
+              className="task-board-add-btn"
+              onClick={() => setShowColumnEditor(true)}
+            >
+              Set up columns
+            </button>
+          ) : (
+            <p style={{ margin: 0, fontSize: '0.8rem', opacity: 0.7 }}>
+              Ask an admin to set up columns for this board.
+            </p>
+          )}
+        </div>
+      ) : activeTaskType === 'platform' && platformView === 'list' ? (
         <PlatformListView
           tasks={visibleTasks}
           users={users}
@@ -572,6 +626,11 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           onCreated={handleCreated}
           onClose={() => setShowNewTask(false)}
         />
+      )}
+
+      {/* Pre-Production column editor */}
+      {showColumnEditor && (
+        <PreprodColumnEditorModal onClose={() => setShowColumnEditor(false)} />
       )}
     </div>
   );

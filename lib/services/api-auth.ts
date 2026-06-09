@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import type { UserRole } from '@/lib/models/user';
 import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
+import { canEditPreprodColumns } from '@/lib/store/preprod-board-admin-store';
 
 const ROLE_RANK: Record<UserRole, number> = { guest: 0, user: 1, admin: 2 };
 
@@ -55,6 +56,25 @@ export async function requireProspectsAccess(req: NextRequest): Promise<NextResp
   }
   if (!hasProspectsAccess(session.userId, session.role === 'admin')) {
     return NextResponse.json({ error: 'You do not have access to Prospects.' }, { status: 403 });
+  }
+  return null;
+}
+
+/**
+ * Returns a 401/403 NextResponse if the request does not have permission to
+ * edit Pre-Production board columns. Admins always pass; otherwise the user
+ * must be in `preprod_board_admins`. Returns null when access is allowed.
+ */
+export async function requirePreprodBoardAdmin(req: NextRequest): Promise<NextResponse | null> {
+  const session = await verifySessionToken(req.cookies.get(APP_SESSION_COOKIE)?.value);
+  if (!session) {
+    return NextResponse.json({ error: 'Sign in to continue.' }, { status: 401 });
+  }
+  if (!canEditPreprodColumns(session.userId, session.role === 'admin')) {
+    return NextResponse.json(
+      { error: 'You do not have permission to edit Pre-Production board columns.' },
+      { status: 403 },
+    );
   }
   return null;
 }

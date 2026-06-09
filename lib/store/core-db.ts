@@ -855,6 +855,42 @@ function runMigrations(db: DatabaseSync): void {
     console.warn('[core-db v20] lpos_settings create skipped:', (err as Error).message);
   }
 
+  // v21: Pre-Production task board — configurable per-type kanban columns,
+  // plus a per-user "can edit columns" access list. Columns are intentionally
+  // empty by default — admin must add them via /dashboard's column editor.
+  // Schema is generic per task_type so we can extend configurability to other
+  // task types later without another migration.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_phase_configs (
+        config_id   TEXT PRIMARY KEY,
+        task_type   TEXT NOT NULL,
+        slug        TEXT NOT NULL,
+        label       TEXT NOT NULL,
+        color       TEXT NOT NULL,
+        sort_order  INTEGER NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        UNIQUE (task_type, slug)
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_phase_configs_type
+        ON task_phase_configs(task_type, sort_order);
+    `);
+  } catch (err) {
+    console.warn('[core-db v21] task_phase_configs create skipped:', (err as Error).message);
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS preprod_board_admins (
+        user_id    TEXT PRIMARY KEY,
+        granted_by TEXT NOT NULL,
+        granted_at TEXT NOT NULL
+      );
+    `);
+  } catch (err) {
+    console.warn('[core-db v21] preprod_board_admins create skipped:', (err as Error).message);
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.

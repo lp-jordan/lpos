@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-06-09 — Pre-Production task board (new /dashboard tab, admin-configurable columns)
+
+**Timestamp:** 2026-06-09T18:00:00Z
+
+**User prompt (verbatim — part of a 6-tweak batch):**
+> Another big one - a Pre-Production task dashboard. Status' are unknown - I would want to temporarily allow admin-set users to create and rearrange status' within the dashbaord to allow them to set it up as they see fit.
+
+User clarified: no seed/starter set; empty by default; admin can SELECT which non-admin users are allowed to edit statuses; the tab should come BEFORE Editing in the dashboard tab order; otherwise mirrors the existing Editing board.
+
+**Response summary:** Added a third `task_type` ('preprod') to the existing Editing/Platform board system on `/dashboard`. Columns live in a new `task_phase_configs` table (DB-backed instead of hardcoded), with full CRUD via a column-editor modal reachable from the board toolbar. Permission to edit columns is a new per-user access list (`preprod_board_admins`), mirroring the existing prospect-access / editpanel-access pattern; admins always have it. Empty board renders an empty-state with a CTA (or polite copy for users without permission).
+
+**Files changed:**
+- `lib/store/core-db.ts` — v21 migration: `task_phase_configs` (config_id, task_type, slug, label, color, sort_order, timestamps; UNIQUE(task_type,slug)) + `preprod_board_admins` (user_id PK, granted_by, granted_at).
+- `lib/store/preprod-board-admin-store.ts` — new. `canEditPreprodColumns`/`getUsersWith…`/`grant…`/`revoke…` — mirror of prospect-access-store.
+- `lib/store/task-phase-config-store.ts` — new. CRUD for column configs: `getPhaseConfigsForType`, `getPhaseStatusesForType` (TaskTypeStatus shape for UI), `createPhaseConfig` (auto-slugifies + ensures uniqueness within task_type), `updatePhaseConfig` (label/color only — slug is immutable), `deletePhaseConfig`, `reorderPhaseConfigs` (transactional batch), `countTasksInPhaseSlug` (used by delete-confirm).
+- `lib/models/task-phase.ts` — added `'preprod'` to TaskType union as the FIRST entry (drives tab order), with empty placeholder statuses. Added `resolveTaskTypeConfig(taskType, dynamicPreprodStatuses?)` that merges live DB statuses for preprod and falls through to static config for editing/platform. `isTerminalStatus` now safely returns false when terminalStatus is empty (preprod has no auto-terminal in v1).
+- `lib/services/api-auth.ts` — added `requirePreprodBoardAdmin(req)` helper.
+- `app/api/admin/preprod-board-admins/route.ts` — new. GET/POST/DELETE, admin-only. Mirrors `/api/admin/prospects-access`.
+- `app/api/preprod-board/columns/route.ts` — new. GET (any logged-in user, drives UI) + POST (preprod-board-admin only) with label/color validation.
+- `app/api/preprod-board/columns/[configId]/route.ts` — new. PATCH (rename / recolor) + DELETE (409 with taskCount if column still has tasks).
+- `app/api/preprod-board/columns/reorder/route.ts` — new. POST batch reorder.
+- `app/api/tasks/route.ts` — POST validator now accepts `'preprod'` alongside `'editing'`/`'platform'`.
+- `app/dashboard/page.tsx` — fetches `getPhaseStatusesForType('preprod')` and `canEditPreprodColumns(...)` server-side, passes them down to DashboardClient.
+- `components/dashboard/DashboardClient.tsx` — wraps TaskBoard in a new `PreprodConfigProvider` so the dynamic column list and edit-permission flag are available throughout the dashboard's task surfaces without prop-drilling.
+- `components/dashboard/preprod-config-context.tsx` — new. React context with `{ statuses, canEditColumns, refresh }`; column editor calls `refresh()` after every mutation so the kanban stays in sync without a full reload.
+- `components/tasks/TaskBoard.tsx` — uses `resolveTaskTypeConfig(activeTaskType, preprodStatuses)` in place of `getTaskTypeConfig` everywhere it determined columns. Accepts `'preprod'` in the localStorage taskType restore. Toolbar "+ New Task" button now hidden for preprod (column-level "+" handles it, matching Editing). New "Manage columns" toolbar button (preprod tab + canEditColumns only). Empty-state branch when `activeTaskType === 'preprod' && statuses.length === 0` with "Set up columns" CTA (or read-only message for non-permitted users). New `PreprodColumnEditorModal` mounted alongside `NewTaskModal`. Drag-validation now uses the resolved (dynamic) config.
+- `components/tasks/TaskDetailModal.tsx` — uses `resolveTaskTypeConfig` so the status dropdown shows preprod columns when a preprod task is selected; task-type switcher computes the new default from the resolved config too.
+- `components/dashboard/NewTaskModal.tsx` — uses `resolveTaskTypeConfig` for default status; disables submit + shows "no columns yet" hint if preprod tab is opened with an empty column list. Title now reads "New Pre-Production Task" for preprod.
+- `components/tasks/PreprodColumnEditorModal.tsx` — new. Add/rename (inline)/recolor (swatch-cycle through a 13-color palette matching the existing Editing/Platform palette)/reorder (up/down arrows)/delete (with confirm step + task-count guard surfaced from the 409 response).
+- `components/settings/PreprodBoardAccessPanel.tsx` — new. Mirror of ProspectsAccessPanel — list/grant/revoke the per-user permission.
+- `app/settings/page.tsx` — mounted `<PreprodBoardAccessPanel />` next to `<ProspectsAccessPanel />` under the admin-only block.
+
+**Implementation summary:**
+- Columns are persisted in a generic `task_phase_configs` schema keyed by `task_type` so configurability can later extend to other task types without another migration — but only `'preprod'` reads from it in v1; `'editing'` and `'platform'` stay on their hardcoded `TASK_TYPE_CONFIGS` entries.
+- Slugs are auto-generated from labels on create (`/[^a-z0-9]+/g → '_'`) and uniquified per task_type (`brief_drafted`, `brief_drafted_2`, …). Slugs are immutable; renaming changes the display label only, so the existing `tasks.status` references never go stale.
+- A new React context (`PreprodConfigContext`) lets TaskBoard / TaskDetailModal / NewTaskModal all consume the same live statuses + the user's edit permission. The context's `refresh()` re-fetches from `/api/preprod-board/columns` after every editor mutation so the kanban + dropdowns update without a full page reload.
+- Delete is guarded by a `countTasksInPhaseSlug` lookup: the API returns 409 with the live count if any tasks still live in the column, and the editor surfaces "Column has N tasks. Move them first." Avoids silent task orphaning.
+- Empty-state UX: when preprod has zero columns, the kanban body becomes a centered "No Pre-Production columns yet." card with a "Set up columns" button for permitted users; non-permitted users see "Ask an admin to set up columns for this board." The toolbar "+ New Task" button is suppressed and NewTaskModal disables submit (with the same hint) if someone reaches it via the locked-client flow from elsewhere.
+- The Pre-Production tab is the FIRST entry in `TASK_TYPE_CONFIGS`, which drives `task-phase-tabs` ordering in TaskBoard's toolbar. The default `activeTaskType` stays `'editing'` because a fresh preprod board is empty — landing new users on a blank kanban would be a poor first impression. localStorage restore now also accepts `'preprod'`.
+
+**Decision rationale:**
+- **Generic `task_phase_configs` table (keyed by task_type) over a preprod-only `preprod_columns` table:** Same schema, leaves the door open to making Editing/Platform configurable later without another migration. Net zero current code complexity.
+- **Slug-immutable / label-mutable:** Renaming a column shouldn't migrate every `tasks.status` row — it's purely cosmetic. Slug stays the storage key; this also matches how Editing/Platform statuses work today (their slugs are stable values like `'cutting'`, `'color_polish'`).
+- **`requirePreprodBoardAdmin` auth helper, dedicated table for the access list:** Mirrors the existing `prospect_access` / `editpanel_access` convention rather than inventing a new permission model. Real admins always pass.
+- **Up/down arrows instead of drag-and-drop reorder in v1:** The editor is occasional-use and an admin-only surface — drag-and-drop would mean pulling `@dnd-kit/sortable` into a new component for marginal UX win. Arrows are trivially accessible too.
+- **`isTerminalStatus` becomes "false when terminalStatus is empty":** Avoids accidentally matching status `''` for preprod. Means preprod tasks never auto-set `completedAt` on transition — the user's spec didn't request a terminal/done concept and v1 leaves it out cleanly.
+- **Empty board hard-blocks task creation rather than auto-creating a "Backlog" column:** User explicitly said "No seed starter set." A reasonable empty-state with a CTA respects that without forcing them to delete a placeholder column on first use.
+- **Tab default stays Editing:** First-render UX. Existing users with stored `lpos:tasks:taskType` land where they were; new users land on Editing (which has content) instead of an empty Pre-Production board.
+
+**Alternatives considered:**
+- Inline "+ Add column" pill at the end of the kanban row instead of a "Manage columns" modal — works but exposes the same surface to non-permitted users (worse: would have to invisible-only-for-admins which is brittle). Modal entry behind a permission-gated toolbar button is cleaner.
+- Storing column configs in `lpos_settings` (the KV table from v20) as a JSON blob — would have collapsed v21 to zero new tables but lost SQL-level uniqueness/sort_order semantics and made `countTasksInPhaseSlug` impossible without parsing JSON on every delete.
+- Adding `is_terminal` flag in v1 so admins can mark a "Done" column that auto-stamps `completedAt` — deferred to a follow-up to keep v1 surface tight. Current behavior: if an admin names a column "Done" (slug `'done'`), `isTerminalStatus` still returns false because the static config's `terminalStatus` for preprod is `''`. That's acceptable until terminal semantics are explicitly requested.
+
+**Commands/checks:**
+- No dev server started (per [[feedback_never_start_dev_server]]).
+- Grep verified no other call sites consume `getTaskTypeConfig` for preprod statuses (only TaskCard's `isTerminalStatus(task.taskType, task.status)` which safely returns false, and PlatformListView's `getStatusLabel`/`getStatusColor` which only render for `activeTaskType === 'platform'`).
+- Migration v21 is idempotent (`CREATE TABLE IF NOT EXISTS` + try/catch).
+
+**Assumptions / follow-ups:**
+- No terminal-column flag in v1; if user reports needing auto-`completedAt` on a "Done" column, add `is_terminal INTEGER` to `task_phase_configs` and update `isTerminalStatus` + `TaskStore.update` to consult it.
+- The "Manage columns" button is the only entry point — works fine but a per-column kebab menu (rename/delete inline on the kanban) could be a future ergonomic win.
+- Tasks #2–#6 in the same batch (Referred by field, prospect stage badge, task icon on people rows, film day tabs, asset move between projects) are queued and will land in subsequent commits.
+
+---
+
 ## 2026-06-08 — Delivery uploads heartbeat during multi-GB R2 transfers (no more 3-min false-fail)
 
 **Timestamp:** 2026-06-08T19:25:00Z

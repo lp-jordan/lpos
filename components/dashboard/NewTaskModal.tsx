@@ -3,10 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Task, TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
-import { getTaskTypeConfig } from '@/lib/models/task-phase';
+import { resolveTaskTypeConfig } from '@/lib/models/task-phase';
 import { STARTER_PLATFORM_CATEGORIES } from '@/lib/models/task-categories';
 import type { UserSummary } from '@/lib/models/user';
 import { MentionTextarea } from './MentionTextarea';
+import { usePreprodConfig } from './preprod-config-context';
 
 interface Props {
   /** Distinct client names to populate the picker. "General" is added at the top
@@ -75,7 +76,11 @@ export function NewTaskModal({
     setTimeout(onClose, 140);
   }
 
-  const taskTypeConfig = getTaskTypeConfig(taskType);
+  // Pre-Production statuses are DB-backed; usePreprodConfig is a no-op for
+  // editing/platform (resolveTaskTypeConfig ignores the dynamic list for them).
+  const { statuses: preprodStatuses } = usePreprodConfig();
+  const taskTypeConfig = resolveTaskTypeConfig(taskType, preprodStatuses);
+  const noPreprodColumns = taskType === 'preprod' && taskTypeConfig.statuses.length === 0;
 
   // "General" floats at the top; the rest are deduped and alphabetized.
   const clientOptions = useMemo<string[]>(() => {
@@ -96,6 +101,10 @@ export function NewTaskModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!description.trim()) { setError('Description is required.'); return; }
+    if (noPreprodColumns) {
+      setError('Pre-Production has no columns yet. Ask an admin to set them up first.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -131,7 +140,9 @@ export function NewTaskModal({
     <div className={`modal-overlay${closing ? ' modal-overlay--closing' : ''}`} onClick={handleClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 className="modal-title">New {taskType === 'platform' ? 'Platform' : 'Editing'} Task</h2>
+          <h2 className="modal-title">
+            New {taskType === 'platform' ? 'Platform' : taskType === 'preprod' ? 'Pre-Production' : 'Editing'} Task
+          </h2>
           <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -230,10 +241,15 @@ export function NewTaskModal({
           </div>
 
           {error && <p className="modal-error">{error}</p>}
+          {noPreprodColumns && !error && (
+            <p className="modal-error" style={{ opacity: 0.8 }}>
+              Pre-Production has no columns yet. Open “Manage columns” on the board to add some, then try again.
+            </p>
+          )}
 
           <div className="modal-actions">
             <button type="button" className="modal-btn-ghost" onClick={handleClose} disabled={saving}>Cancel</button>
-            <button type="submit" className="modal-btn-primary" disabled={saving}>
+            <button type="submit" className="modal-btn-primary" disabled={saving || noPreprodColumns}>
               {saving ? 'Creating…' : 'Create Task'}
             </button>
           </div>

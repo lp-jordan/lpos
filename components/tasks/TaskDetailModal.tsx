@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
-import { TASK_TYPE_CONFIGS, getTaskTypeConfig } from '@/lib/models/task-phase';
+import { TASK_TYPE_CONFIGS, resolveTaskTypeConfig } from '@/lib/models/task-phase';
 import type { UserSummary } from '@/lib/models/user';
 import type { TaskCategory } from '@/lib/models/task-category';
 import { CommentThread } from './CommentThread';
 import { HandoffModal } from './HandoffModal';
+import { usePreprodConfig } from '@/components/dashboard/preprod-config-context';
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
   { value: 'urgent', label: 'Urgent' },
@@ -55,7 +56,10 @@ export function TaskDetailModal({
   const [commentReloadKey, setCommentReloadKey] = useState(0);
   const assigneeRef = useRef<HTMLDivElement>(null);
 
-  const taskTypeConfig = getTaskTypeConfig(taskType);
+  // Pre-Production statuses come from the DB via context; for editing/platform
+  // the dynamic list is ignored and the static config is returned.
+  const { statuses: preprodStatuses } = usePreprodConfig();
+  const taskTypeConfig = resolveTaskTypeConfig(taskType, preprodStatuses);
 
   function handleClose() {
     setClosing(true);
@@ -150,7 +154,7 @@ export function TaskDetailModal({
   }
 
   function handleTaskTypeChange(t: TaskType) {
-    const nextDefault = getTaskTypeConfig(t).defaultStatus;
+    const nextDefault = resolveTaskTypeConfig(t, preprodStatuses).defaultStatus;
     setTaskType(t);
     setStatus(nextDefault);
     if (t !== 'platform') setCategory(null);
