@@ -58,6 +58,8 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (typeof body.website  === 'string') patch.website  = body.website  || null;
   if (typeof body.industry === 'string') patch.industry = body.industry || null;
   if (str('source')               !== undefined) patch.source               = str('source')!;
+  if (str('referredBy')           !== undefined) patch.referredBy           = str('referredBy')!;
+  if (str('prospectStage')        !== undefined) patch.prospectStage        = str('prospectStage')!;
   if (body.entityType === 'individual' || body.entityType === 'organization') patch.entityType = body.entityType;
   if (str('status')               !== undefined) patch.status               = body.status as never;
   if (str('accountModel')         !== undefined) patch.accountModel         = str('accountModel')!;

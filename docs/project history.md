@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-06-09 — People-page tweaks: Referred by field, prospect stage badge (7-stage funnel), inline task creation
+
+**Timestamp:** 2026-06-09T18:45:00Z
+
+**User prompt (verbatim — items 1, 2, 8 of a 6-tweak batch):**
+> A secondary field that appears underneath the source entry entitled "Referred by" and it allows the user to type in a name
+>
+> Another status badge on a prospect (not active client). [7 stages listed: Reached Out, Zoom Meeting Set, Post-Zoom Email Sent, Examples Sent, Proposal Sent, Blueprint SOW & Payment Link Sent, Contract Sent]
+>
+> The ability to create a task from the people page. A simple task icon next to the attachment would suffice, bring up the same modal as the task dashboard right there on the people page entry.
+
+Clarifications recorded earlier: stage badge sits ALONGSIDE the existing status (not replacing it), free-select (not a forced funnel), prospects only. Referred-by is autocompleted from existing People entries (free-text fallback). Task icon auto-defaults to Pre-Production for prospects, no default for active/inactive clients (depends on Pre-Production board built in the prior commit).
+
+**Response summary:** Added `referred_by` + `prospect_stage` columns to the `prospects` table (v22 migration). Rendered referred-by as a free-text input under Source in both `NewPersonModal` and the Account panel on the detail page, with `<datalist>` autocomplete sourced from existing People company names. Added a 7-stage `PROSPECT_STAGES` enum and rendered it as: (a) a clickable pill in the detail-page header next to the "Prospect" status badge (free-select dropdown that PATCHes on change), (b) a compact chip in both card and row layouts on the list, (c) a row in the Account panel for editing the same value. Added a task icon button next to the existing attach button in the `UpdatesLog` compose footer; clicking opens `NewTaskModal` pre-bound to the current person — defaults `taskType='preprod'` for prospects, leaves it null for active/inactive clients (the modal now renders a 3-button internal picker when `taskType` is omitted).
+
+**Files changed:**
+- `lib/store/core-db.ts` — v22 migration: `ALTER TABLE prospects ADD COLUMN referred_by TEXT` + `ALTER TABLE prospects ADD COLUMN prospect_stage TEXT`. Both nullable; idempotent via try/catch.
+- `lib/models/prospect.ts` — new `PROSPECT_STAGES` const (7 entries, each with `value`/`label`/`color`), `ProspectStage` type, `PROSPECT_STAGE_VALUES` helper. Added `referredBy: string | null` + `prospectStage: string | null` to the `Prospect` interface.
+- `lib/store/prospect-store.ts` — added `referred_by` + `prospect_stage` to `ProspectRow`, `rowToProspect`, the `create()` INSERT statement (and its param signature), and the `update()` UPDATE statement. The `update()` patch type uses `Partial<Omit<Prospect, …>>` so the new fields are auto-accepted without an explicit pick.
+- `app/api/prospects/route.ts` — POST handler accepts `referredBy` (trimmed) + `prospectStage` (null-coerced if empty string).
+- `app/api/prospects/[prospectId]/route.ts` — PATCH handler routes `referredBy` + `prospectStage` through the existing `str()` helper.
+- `components/prospects/NewPersonModal.tsx` — added `referredBy` state with a `<datalist>` autocomplete (populated from a new optional `referrerSuggestions` prop), plus a `prospectStage` `<select>` defaulting to "— not set —". Both fields ride along in the POST body.
+- `app/people/PeoplePageClient.tsx` — new `StageBadge` component renders a compact funnel chip (color from `PROSPECT_STAGES`) when `person.status === 'prospect' && person.prospectStage`. Wired into both `PersonCard` and `PersonRow` (stacked below the status badge in cards, inline beside it in rows). Now passes `referrerSuggestions` to `NewPersonModal`.
+- `app/people/[personId]/PersonDetailClient.tsx` — imported `PROSPECT_STAGES`; new `ProspectStageBadge` component (pill-styled `<select>` matching the active-client status badge UX) rendered in the header next to the "Prospect" badge — PATCHes `prospectStage` on change. Added `referredBy` + `prospectStage` to `AccountPanel`'s edit state, `handleCancel`, and `handleSave` payload. Added a "Referred by" row to both the prospect AND active-client branches of `AccountPanel`, and a "Stage" row to the prospect branch. UpdatesLog invocation now passes `companyName` + `personStatus` for the new task-icon plumbing.
+- `components/prospects/UpdatesLog.tsx` — new required props `companyName` + `personStatus`. New task button rendered next to the existing attach paperclip (same compose-footer treatment); clicking sets `showNewTask = true` and mounts a `NewTaskModal` with `clientNames={[companyName]}`, `defaultClientName={companyName}`, `lockedClient`, and `taskType` set to `'preprod'` for prospects or `undefined` for clients (triggers the modal's new internal picker).
+- `components/dashboard/NewTaskModal.tsx` — `taskType` prop is now optional. When omitted, internal `taskType` state starts at `null` and the modal renders a 3-button picker (Pre-Production / Editing / Platform) at the top of the form; once clicked, the rest of the form unlocks. Title becomes the plain "New Task" until type is picked. Submit guards on `!taskType`. All existing call sites that pass a `taskType` are unchanged.
+
+**Implementation summary:**
+- Pretty straightforward CRUD extension: two new nullable columns + the wiring through the model, store, API, and three UI surfaces.
+- `referred_by` is intentionally free-text instead of an FK to `prospects.prospect_id` so an editor can record "Tom Calabrese (LinkedIn DM)" without forcing a People record to exist first. Autocomplete via `<datalist>` gives the snappy reuse path when the referrer IS already in the system.
+- `prospect_stage` is a free-string slug into the `PROSPECT_STAGES` enum, with stage validation living at the application layer rather than a CHECK constraint — keeps the door open to renaming/reordering stages without a schema change.
+- The stage badge in the detail header is a custom-styled `<select>` (same pattern as the existing active-client status select) so it's clickable and editable inline. On the list, it's a smaller read-only chip — clicking the row navigates to the detail page where the stage can be changed.
+- Task icon button uses the same compose-footer button styling as the attach paperclip; sits to its right with a `Create task for {companyName}` tooltip.
+- Making `NewTaskModal.taskType` optional was the cleanest way to honor the "auto for prospects, no default for clients" spec — adding a 3-button picker at the top of the modal lets the active-client case open without a pre-selected type. The picker disappears once a type is chosen, so the form layout stays compact for the common case.
+
+**Decision rationale:**
+- **Free-text referred_by over a strict person-id FK:** Editors record referrers from outside the existing People list all the time (LinkedIn DMs, podcast guests, etc.). An FK would force every referrer into the system as a stub prospect — annoying friction. Autocomplete via `<datalist>` still gives the dedupe path when the name IS already there.
+- **`PROSPECT_STAGES` as a typed enum constant in the model (not a DB lookup table):** The list is small and admin-curated; coupling it to source means PR-reviewable changes and TypeScript-checked usage. A lookup table would have added a second admin surface for a list that changes rarely.
+- **Stage badge is a `<select>` styled as a pill, not a button-opens-dropdown:** Native `<select>` is more accessible, free of click-outside complexity, and matches the existing active-client status pattern exactly.
+- **Compact chip on the list (not editable from the list):** Inline-editing on the list would mean either (a) a dropdown that stops row-click navigation, or (b) a more complex hover-only affordance. Neither is worth the complexity when the detail page handles editing one click away.
+- **Modal-internal picker over caller-side picker for "no default" task type:** Keeps the people-page integration to a single button + no taskType prop, and keeps the modal's own DOM the source of truth for its current state. Cleaner than threading a picker through the people-page tree.
+
+**Alternatives considered:**
+- Inline-editable stage chip on each list row — rejected per above; preserves row-click as navigation.
+- Adding a separate `referred_by_person_id` column AND keeping the free text as a fallback — overengineering for v1; if the user later wants navigation from referrer chip to the referrer's page we can resolve `referred_by` against `prospects.company` on demand or add the FK then.
+- Putting the task icon as a per-row button in the list — the user's "next to the attachment" wording pinned the location to the UpdatesLog compose footer where the paperclip lives; per-row icons would need a different UX justification.
+- Forcing a stage on prospect creation — explicitly avoided per the empty-by-default "Stage" picker in `NewPersonModal` ("— not set —"). Many prospects come in mid-funnel from external sources; auto-tagging "Reached Out" would be misleading.
+
+**Commands/checks:**
+- No dev server started (per [[feedback_never_start_dev_server]]).
+- Grep verified `<UpdatesLog />` is invoked from one place only (`PersonDetailClient.tsx`) — no other surfaces needed the new required props.
+- Migration v22 idempotent (try/catch on ADD COLUMN).
+
+**Assumptions / follow-ups:**
+- A future iteration could resolve `referred_by` to a clickable link when the value matches an existing prospect — handled later if the user requests it.
+- If the stage list grows or wants per-user customization, we can mirror the Pre-Production board's pattern (`task_phase_configs`-style table + access list). v1 keeps it as a static enum.
+
+---
+
 ## 2026-06-09 — Pre-Production task board (new /dashboard tab, admin-configurable columns)
 
 **Timestamp:** 2026-06-09T18:00:00Z

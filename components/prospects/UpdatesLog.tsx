@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
-import type { ProspectUpdate, ProspectUpdateAttachment } from '@/lib/models/prospect';
+import type { ProspectStatus, ProspectUpdate, ProspectUpdateAttachment } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
+import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -420,6 +421,12 @@ function UpdateEntry({ update, author, isOwn, prospectId, onEdited, onDeleted, r
 
 interface Props {
   prospectId:     string;
+  /** Used to pre-fill (and lock) the client picker on the inline NewTaskModal
+   *  opened from the task icon next to the attach button. */
+  companyName:    string;
+  /** Drives the inline task icon's default taskType: 'preprod' for prospects,
+   *  no default for active/inactive clients (the modal shows its picker). */
+  personStatus:   ProspectStatus;
   initialUpdates: ProspectUpdate[];
   currentUserId:  string;
   allUsers:       UserSummary[];
@@ -427,7 +434,7 @@ interface Props {
   readOnly?:      boolean;
 }
 
-export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers, mentionUsers, readOnly }: Props) {
+export function UpdatesLog({ prospectId, companyName, personStatus, initialUpdates, currentUserId, allUsers, mentionUsers, readOnly }: Props) {
   const [updates,       setUpdates]       = useState<ProspectUpdate[]>(initialUpdates);
   const [compose,       setCompose]       = useState('');
   const [posting,       setPosting]       = useState(false);
@@ -436,8 +443,13 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
   const [mentionCursor, setMentionCursor] = useState(0);
   const [pending,       setPending]       = useState<PendingAttachment[]>([]);
   const [dragOver,      setDragOver]      = useState(false);
+  const [showNewTask,   setShowNewTask]   = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /** Mirrors the user's spec: auto-default to Pre-Production for prospects;
+   *  no default for active/inactive clients (the modal renders its own picker). */
+  const defaultTaskType = personStatus === 'prospect' ? 'preprod' : undefined;
 
   const userMap = new Map(allUsers.map((u) => [u.id, u]));
 
@@ -659,6 +671,26 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
                       <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
                     </svg>
                   </button>
+                  {/* Task button — opens NewTaskModal pre-bound to this person.
+                      Defaults to preprod for prospects per spec; for active/
+                      inactive clients the modal renders its own taskType picker. */}
+                  <button
+                    type="button"
+                    title={`Create task for ${companyName}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setShowNewTask(true)}
+                    disabled={posting}
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--muted)', padding: 2, lineHeight: 1,
+                      display: 'flex', alignItems: 'center',
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="9 11 12 14 22 4" />
+                      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                    </svg>
+                  </button>
                   <span style={{ fontSize: '0.72rem', color: 'var(--muted-soft)' }}>
                     ⌘↵ to post · @name to mention
                   </span>
@@ -684,6 +716,22 @@ export function UpdatesLog({ prospectId, initialUpdates, currentUserId, allUsers
             style={{ display: 'none' }}
             onChange={(e) => { if (e.target.files) { setFocused(true); handleFiles(e.target.files); e.target.value = ''; } }}
           />
+
+          {/* Inline task-creation modal. clientNames is just this person's
+              company — the modal pre-fills and locks the client picker, so it
+              only needs the one entry to render the disabled select correctly. */}
+          {showNewTask && (
+            <NewTaskModal
+              clientNames={[companyName]}
+              users={allUsers}
+              currentUserId={currentUserId}
+              taskType={defaultTaskType}
+              defaultClientName={companyName}
+              lockedClient
+              onCreated={() => setShowNewTask(false)}
+              onClose={() => setShowNewTask(false)}
+            />
+          )}
 
           {/* Mention picker */}
           {mentionQuery !== null && mentionCandidates.length > 0 && (

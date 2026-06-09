@@ -2,28 +2,33 @@
 
 import { useRef, useState } from 'react';
 import type { EntityType, Prospect } from '@/lib/models/prospect';
-import { ACCOUNT_MODELS, PERSON_SOURCES } from '@/lib/models/prospect';
+import { ACCOUNT_MODELS, PERSON_SOURCES, PROSPECT_STAGES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 
 interface Props {
   currentUserId: string;
   accessUsers:   UserSummary[];
+  /** Existing People entry names — used to populate the autocomplete datalist
+   *  for the "Referred by" input. Free text is still allowed. */
+  referrerSuggestions?: string[];
   onCreated:     (person: Prospect) => void;
   onClose:       () => void;
 }
 
-export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose }: Props) {
+export function NewPersonModal({ currentUserId, accessUsers, referrerSuggestions, onCreated, onClose }: Props) {
   const companyRef = useRef<HTMLInputElement>(null);
-  const [company,      setCompany]      = useState('');
-  const [entityType,   setEntityType]   = useState<EntityType>('individual');
-  const [website,      setWebsite]      = useState('');
-  const [industry,     setIndustry]     = useState('');
-  const [source,       setSource]       = useState('');
-  const [accountModel, setAccountModel] = useState('');
-  const [assignedTo,   setAssignedTo]   = useState<string[]>([currentUserId]);
-  const [openingNote,  setOpeningNote]  = useState('');
-  const [saving,       setSaving]       = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
+  const [company,       setCompany]       = useState('');
+  const [entityType,    setEntityType]    = useState<EntityType>('individual');
+  const [website,       setWebsite]       = useState('');
+  const [industry,      setIndustry]      = useState('');
+  const [source,        setSource]        = useState('');
+  const [referredBy,    setReferredBy]    = useState('');
+  const [prospectStage, setProspectStage] = useState('');
+  const [accountModel,  setAccountModel]  = useState('');
+  const [assignedTo,    setAssignedTo]    = useState<string[]>([currentUserId]);
+  const [openingNote,   setOpeningNote]   = useState('');
+  const [saving,        setSaving]        = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
 
   function toggleUser(userId: string) {
     setAssignedTo((prev) =>
@@ -41,14 +46,16 @@ export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose 
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          company:      company.trim(),
+          company:       company.trim(),
           entityType,
-          website:      website.trim() || null,
-          industry:     industry.trim() || null,
-          source:       source || null,
-          accountModel: accountModel || null,
+          website:       website.trim() || null,
+          industry:      industry.trim() || null,
+          source:        source || null,
+          referredBy:    referredBy.trim() || null,
+          prospectStage: prospectStage || null,
+          accountModel:  accountModel || null,
           assignedTo,
-          openingNote:  openingNote.trim() || null,
+          openingNote:   openingNote.trim() || null,
         }),
       });
       const data = await res.json() as { prospect?: Prospect; error?: string };
@@ -137,6 +144,42 @@ export function NewPersonModal({ currentUserId, accessUsers, onCreated, onClose 
                   {ACCOUNT_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                 </select>
               </div>
+            </div>
+
+            {/* Referred by — free text with autocomplete suggestions sourced from
+                existing People company names. Falls back gracefully to bare typing. */}
+            <div className="modal-field">
+              <label className="modal-label">Referred by <span className="modal-label-optional">optional</span></label>
+              <input
+                className="modal-input"
+                type="text"
+                list="new-person-referrer-suggestions"
+                placeholder="Name of the person who referred this prospect"
+                value={referredBy}
+                onChange={(e) => setReferredBy(e.target.value)}
+                disabled={saving}
+                autoComplete="off"
+              />
+              {referrerSuggestions && referrerSuggestions.length > 0 && (
+                <datalist id="new-person-referrer-suggestions">
+                  {referrerSuggestions.map((name) => <option key={name} value={name} />)}
+                </datalist>
+              )}
+            </div>
+
+            {/* Funnel stage — free-select; left empty by default so newly-added
+                prospects don't get a misleading "Reached Out" stage assigned. */}
+            <div className="modal-field">
+              <label className="modal-label">Stage <span className="modal-label-optional">optional</span></label>
+              <select
+                className="modal-input modal-select"
+                value={prospectStage}
+                onChange={(e) => setProspectStage(e.target.value)}
+                disabled={saving}
+              >
+                <option value="">— not set —</option>
+                {PROSPECT_STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
             </div>
 
             {/* Assign users */}

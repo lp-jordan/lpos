@@ -15,10 +15,11 @@ interface Props {
   clientNames: string[];
   users: UserSummary[];
   currentUserId: string;
-  /** Required. The modal infers task type from caller context (Editing tab's
-   *  Not Started column vs. Platform tab's top-level button); the user never
-   *  picks it inside the modal. */
-  taskType: TaskType;
+  /** Optional. When set, the modal opens directly into that task-type's form
+   *  (matches the previous /dashboard behavior). When omitted, the user picks
+   *  a type via an internal three-button picker before the form appears —
+   *  used by the people-page task icon for active clients ("no default"). */
+  taskType?: TaskType;
   /** Pre-selects the client dropdown and locks it (e.g. when creating from a
    *  project-scoped surface where the client is already known). */
   defaultClientName?: string;
@@ -31,12 +32,15 @@ export function NewTaskModal({
   clientNames,
   users,
   currentUserId,
-  taskType,
+  taskType: initialTaskType,
   defaultClientName,
   lockedClient,
   onCreated,
   onClose,
 }: Readonly<Props>) {
+  // Internal taskType state — starts from the caller's prop (when provided) or
+  // null when the caller didn't pre-select. Null forces the picker step.
+  const [taskType, setTaskTypeState] = useState<TaskType | null>(initialTaskType ?? null);
   const [description, setDescription] = useState('');
   const [clientName, setClientName] = useState<string>(defaultClientName ?? 'General');
   // Live category list, fetched once on mount. Falls back to the F2 hardcoded
@@ -52,7 +56,7 @@ export function NewTaskModal({
 
   // Only Platform tasks need the categories — skip the fetch for Editing.
   useEffect(() => {
-    if (taskType !== 'platform') return;
+    if (!taskType || taskType !== 'platform') return;
     let cancelled = false;
     (async () => {
       try {
@@ -78,8 +82,12 @@ export function NewTaskModal({
 
   // Pre-Production statuses are DB-backed; usePreprodConfig is a no-op for
   // editing/platform (resolveTaskTypeConfig ignores the dynamic list for them).
+  // When taskType is null (picker step) the resolve call falls back to a stub
+  // config — submit is disabled until a type is picked anyway.
   const { statuses: preprodStatuses } = usePreprodConfig();
-  const taskTypeConfig = resolveTaskTypeConfig(taskType, preprodStatuses);
+  const taskTypeConfig = taskType
+    ? resolveTaskTypeConfig(taskType, preprodStatuses)
+    : { value: 'editing' as TaskType, label: '', statuses: [], defaultStatus: '', terminalStatus: '' };
   const noPreprodColumns = taskType === 'preprod' && taskTypeConfig.statuses.length === 0;
 
   // "General" floats at the top; the rest are deduped and alphabetized.
@@ -100,6 +108,7 @@ export function NewTaskModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!taskType) { setError('Pick a task type first.'); return; }
     if (!description.trim()) { setError('Description is required.'); return; }
     if (noPreprodColumns) {
       setError('Pre-Production has no columns yet. Ask an admin to set them up first.');
@@ -141,7 +150,9 @@ export function NewTaskModal({
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">
-            New {taskType === 'platform' ? 'Platform' : taskType === 'preprod' ? 'Pre-Production' : 'Editing'} Task
+            {taskType
+              ? `New ${taskType === 'platform' ? 'Platform' : taskType === 'preprod' ? 'Pre-Production' : 'Editing'} Task`
+              : 'New Task'}
           </h2>
           <button type="button" className="modal-close" onClick={handleClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -151,6 +162,33 @@ export function NewTaskModal({
         </div>
 
         <form className="modal-form" onSubmit={handleSubmit}>
+          {/* Type picker — shown only when the caller didn't pre-select a
+              taskType (e.g. people-page task icon on active clients). Once
+              clicked, the rest of the form renders for that type's flow. */}
+          {!taskType && (
+            <div className="modal-field">
+              <label className="modal-label">Task Type</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {(['preprod', 'editing', 'platform'] as TaskType[]).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTaskTypeState(t)}
+                    style={{
+                      flex: 1, padding: '0.45rem 0', borderRadius: 6,
+                      fontSize: '0.82rem', fontWeight: 600,
+                      border: '1px solid var(--color-border,#444)',
+                      background: 'transparent', color: 'var(--muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t === 'preprod' ? 'Pre-Production' : t === 'editing' ? 'Editing' : 'Platform'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="modal-field">
             <label className="modal-label" htmlFor="nt-client">Client</label>
             <select

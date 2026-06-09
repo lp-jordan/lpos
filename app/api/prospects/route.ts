@@ -26,14 +26,16 @@ export async function POST(req: NextRequest) {
 
   const session = await getSession(req);
   const body = await req.json() as {
-    company?:      unknown;
-    website?:      unknown;
-    industry?:     unknown;
-    source?:       unknown;
-    entityType?:   unknown;
-    accountModel?: unknown;
-    assignedTo?:   unknown;
-    openingNote?:  unknown;
+    company?:        unknown;
+    website?:        unknown;
+    industry?:       unknown;
+    source?:         unknown;
+    referredBy?:     unknown;
+    prospectStage?:  unknown;
+    entityType?:     unknown;
+    accountModel?:   unknown;
+    assignedTo?:     unknown;
+    openingNote?:    unknown;
   };
 
   if (!body.company || typeof body.company !== 'string' || !body.company.trim()) {
@@ -42,14 +44,16 @@ export async function POST(req: NextRequest) {
 
   const store    = getProspectStore();
   const prospect = store.create({
-    company:      body.company,
-    website:      typeof body.website === 'string' ? body.website : null,
-    industry:     typeof body.industry === 'string' ? body.industry : null,
-    source:       typeof body.source === 'string' ? body.source : null,
-    entityType:   body.entityType === 'organization' ? 'organization' : 'individual',
-    accountModel: typeof body.accountModel === 'string' ? body.accountModel : null,
-    assignedTo:   Array.isArray(body.assignedTo) ? (body.assignedTo as string[]) : undefined,
-    createdBy:    session!.userId,
+    company:       body.company,
+    website:       typeof body.website === 'string' ? body.website : null,
+    industry:      typeof body.industry === 'string' ? body.industry : null,
+    source:        typeof body.source === 'string' ? body.source : null,
+    referredBy:    typeof body.referredBy === 'string' ? (body.referredBy.trim() || null) : null,
+    prospectStage: typeof body.prospectStage === 'string' ? (body.prospectStage || null) : null,
+    entityType:    body.entityType === 'organization' ? 'organization' : 'individual',
+    accountModel:  typeof body.accountModel === 'string' ? body.accountModel : null,
+    assignedTo:    Array.isArray(body.assignedTo) ? (body.assignedTo as string[]) : undefined,
+    createdBy:     session!.userId,
   });
 
   if (typeof body.openingNote === 'string' && body.openingNote.trim()) {

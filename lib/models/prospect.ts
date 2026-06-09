@@ -44,6 +44,23 @@ export const PERSON_SOURCES = [
   { value: 'other',    label: 'Other'    },
 ] as const;
 
+/** Prospect-only funnel stages. Free-select (not a strict sequence) — the user
+ *  picks whichever stage best describes where the conversation is. Hidden for
+ *  active/inactive clients. */
+export const PROSPECT_STAGES = [
+  { value: 'reached_out',          label: 'Reached Out',                    color: '#94a3b8' },
+  { value: 'zoom_meeting_set',     label: 'Zoom Meeting Set',               color: '#5b8dd9' },
+  { value: 'post_zoom_email_sent', label: 'Post-Zoom Email Sent',           color: '#7c3aed' },
+  { value: 'examples_sent',        label: 'Examples Sent',                  color: '#0ea5e9' },
+  { value: 'proposal_sent',        label: 'Proposal Sent',                  color: '#f59e0b' },
+  { value: 'blueprint_sow_sent',   label: 'Blueprint SOW & Payment Link Sent', color: '#c9a227' },
+  { value: 'contract_sent',        label: 'Contract Sent',                  color: '#10b981' },
+] as const;
+
+export type ProspectStage = (typeof PROSPECT_STAGES)[number]['value'];
+
+export const PROSPECT_STAGE_VALUES: readonly string[] = PROSPECT_STAGES.map((s) => s.value);
+
 export const ENTITY_TYPES = [
   { value: 'individual',   label: 'Individual'   },
   { value: 'organization', label: 'Organization' },
@@ -57,6 +74,13 @@ export interface Prospect {
   website:     string | null;
   industry:    string | null;
   source:      string | null;
+  /** Free-text — name of the person who referred this prospect. Editable on
+   *  both prospects and active clients. Sits underneath Source in the UI. */
+  referredBy:  string | null;
+  /** Prospect funnel stage (PROSPECT_STAGES enum value, free-select). Null for
+   *  prospects that haven't been classified yet; ignored on active/inactive
+   *  clients. */
+  prospectStage: string | null;
   entityType:  EntityType;
   status:      ProspectStatus;
   archived:    boolean;

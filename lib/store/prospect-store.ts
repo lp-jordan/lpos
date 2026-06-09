@@ -18,6 +18,8 @@ interface ProspectRow {
   website:                   string | null;
   industry:                  string | null;
   source:                    string | null;
+  referred_by:               string | null;
+  prospect_stage:            string | null;
   entity_type:               string | null;
   status:                    string;
   archived:                  number;
@@ -87,6 +89,8 @@ function rowToProspect(row: ProspectRow, assignedTo: string[]): Prospect {
     website:                 row.website,
     industry:                row.industry,
     source:                  row.source,
+    referredBy:              row.referred_by,
+    prospectStage:           row.prospect_stage,
     entityType:              (row.entity_type as EntityType) ?? 'individual',
     status:                  row.status as ProspectStatus,
     archived:                row.archived === 1,
@@ -259,6 +263,8 @@ export class ProspectStore {
     website?:     string | null;
     industry?:    string | null;
     source?:      string | null;
+    referredBy?:  string | null;
+    prospectStage?: string | null;
     entityType?:  EntityType;
     accountModel?: string | null;
     createdBy:    string;
@@ -272,6 +278,8 @@ export class ProspectStore {
       website:                 input.website ?? null,
       industry:                input.industry ?? null,
       source:                  input.source ?? null,
+      referredBy:              input.referredBy ?? null,
+      prospectStage:           input.prospectStage ?? null,
       entityType:              input.entityType ?? 'individual',
       status:                  'prospect',
       archived:                false,
@@ -301,19 +309,21 @@ export class ProspectStore {
     withTransaction(db, () => {
       db.prepare(`
         INSERT INTO prospects (
-          prospect_id, company, website, industry, source, entity_type, status, archived,
+          prospect_id, company, website, industry, source, referred_by, prospect_stage,
+          entity_type, status, archived,
           created_by, created_at, updated_at, promoted_at, client_name,
           account_model, revenue_type, one_time_lp_revenue, monthly_lp_revenue,
           monthly_lp_tech_revenue, estimated_first_year_value, expected_start_month,
           expansion_potential, owner, start_month, recurring_billing_status,
           renewal_date, first_recurring_bill_date, active_services, next_film_date
         ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL,
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
       `).run(
         prospect.prospectId, prospect.company, prospect.website, prospect.industry,
-        prospect.source, prospect.entityType, prospect.status,
+        prospect.source, prospect.referredBy, prospect.prospectStage,
+        prospect.entityType, prospect.status,
         prospect.createdBy, prospect.createdAt, prospect.updatedAt,
         prospect.accountModel, prospect.revenueType, prospect.oneTimeLpRevenue,
         prospect.monthlyLpRevenue, prospect.monthlyLpTechRevenue, prospect.estimatedFirstYearValue,
@@ -352,7 +362,8 @@ export class ProspectStore {
     withTransaction(db, () => {
       db.prepare(`
         UPDATE prospects SET
-          company = ?, website = ?, industry = ?, source = ?, entity_type = ?, status = ?,
+          company = ?, website = ?, industry = ?, source = ?, referred_by = ?, prospect_stage = ?,
+          entity_type = ?, status = ?,
           account_model = ?, revenue_type = ?,
           one_time_lp_revenue = ?, monthly_lp_revenue = ?, monthly_lp_tech_revenue = ?,
           estimated_first_year_value = ?, expected_start_month = ?, expansion_potential = ?,
@@ -361,7 +372,8 @@ export class ProspectStore {
           updated_at = ?
         WHERE prospect_id = ?
       `).run(
-        next.company, next.website, next.industry, next.source, next.entityType, next.status,
+        next.company, next.website, next.industry, next.source, next.referredBy, next.prospectStage,
+        next.entityType, next.status,
         next.accountModel, next.revenueType,
         next.oneTimeLpRevenue, next.monthlyLpRevenue, next.monthlyLpTechRevenue,
         next.estimatedFirstYearValue, next.expectedStartMonth, next.expansionPotential,

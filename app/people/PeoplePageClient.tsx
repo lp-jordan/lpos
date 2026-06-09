@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Prospect, ProspectStatus } from '@/lib/models/prospect';
+import { PROSPECT_STAGES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { NewPersonModal } from '@/components/prospects/NewPersonModal';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
@@ -45,6 +46,29 @@ function StatusBadge({ status }: { status: ProspectStatus }) {
       letterSpacing: '0.04em', whiteSpace: 'nowrap',
     }}>
       {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+// Compact funnel-stage badge — prospects only. Shows underneath/beside the
+// status badge so users can see the funnel position at a glance. Returns null
+// when the prospect has no stage set (still onboarding).
+function StageBadge({ stage }: { stage: string | null }) {
+  if (!stage) return null;
+  const cfg = PROSPECT_STAGES.find((s) => s.value === stage);
+  if (!cfg) return null;
+  return (
+    <span
+      title={cfg.label}
+      style={{
+        display: 'inline-block', padding: '1px 7px', borderRadius: '999px',
+        background: `${cfg.color}1F`, // ~12% alpha
+        color: cfg.color,
+        fontSize: '0.66rem', fontWeight: 600, letterSpacing: '0.02em',
+        whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis',
+      }}
+    >
+      {cfg.label}
     </span>
   );
 }
@@ -166,7 +190,12 @@ function PersonCard({ person, allUsers, lastUpdate, selected, onNavigate, onSele
         </div>
         {person.status === 'active'
           ? <BillingBadge status={person.recurringBillingStatus} />
-          : <StatusBadge status={person.status} />
+          : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+              <StatusBadge status={person.status} />
+              {person.status === 'prospect' && <StageBadge stage={person.prospectStage} />}
+            </div>
+          )
         }
       </div>
 
@@ -222,7 +251,12 @@ function PersonRow({ person, allUsers, selected, onNavigate, onSelect, onContext
       </span>
       {person.status === 'active'
         ? <BillingBadge status={person.recurringBillingStatus} />
-        : <StatusBadge status={person.status} />
+        : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <StatusBadge status={person.status} />
+            {person.status === 'prospect' && <StageBadge stage={person.prospectStage} />}
+          </div>
+        )
       }
       <AvatarStrip userIds={person.assignedTo} allUsers={allUsers} />
       <span style={{ fontSize: '0.78rem', color: 'var(--muted-soft)', whiteSpace: 'nowrap' }}>
@@ -934,6 +968,9 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
         <NewPersonModal
           currentUserId={currentUserId}
           accessUsers={accessUsers}
+          referrerSuggestions={Array.from(new Set(
+            people.map((p) => p.company).filter(Boolean),
+          )).sort((a, b) => a.localeCompare(b))}
           onClose={() => setShowNew(false)}
           onCreated={(p) => { setPeople((prev) => [p, ...prev]); setShowNew(false); }}
         />

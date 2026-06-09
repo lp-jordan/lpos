@@ -891,6 +891,22 @@ function runMigrations(db: DatabaseSync): void {
     console.warn('[core-db v21] preprod_board_admins create skipped:', (err as Error).message);
   }
 
+  // v22: People CRM — referred_by (free-text) + prospect_stage (funnel badge on
+  // prospects). Both nullable; pre-v22 rows default to NULL on both fields.
+  // prospect_stage is a free-string slug from a fixed enum (see PROSPECT_STAGES
+  // in lib/models/prospect.ts); enforcing at the DB layer doesn't buy much vs
+  // application-layer validation, and leaves room for future stage tweaks.
+  try {
+    db.exec(`ALTER TABLE prospects ADD COLUMN referred_by TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE prospects ADD COLUMN prospect_stage TEXT`);
+  } catch {
+    // Column already exists
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.

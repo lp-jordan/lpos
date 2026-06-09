@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { EntityType, Prospect, ProspectContact, ProspectStatus, ProspectStatusHistory, ProspectUpdate } from '@/lib/models/prospect';
-import { ACCOUNT_MODELS, BILLING_STATUSES, ENTITY_TYPES, EXPANSION_POTENTIALS, PERSON_SOURCES, REVENUE_TYPES } from '@/lib/models/prospect';
+import { ACCOUNT_MODELS, BILLING_STATUSES, ENTITY_TYPES, EXPANSION_POTENTIALS, PERSON_SOURCES, PROSPECT_STAGES, REVENUE_TYPES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ContactModal } from '@/components/prospects/ContactModal';
@@ -28,6 +28,53 @@ const STATUS_LABELS: Record<ProspectStatus, string> = {
   active:   'Active Client',
   inactive: 'Inactive',
 };
+
+// ── Prospect stage badge (header) ─────────────────────────────────────────────
+
+/** Inline stage badge that doubles as a stage picker. Mirrors the active-client
+ *  status select's "pill-with-arrow" look so the header reads consistently
+ *  whether the person is a prospect or active. Free-select — no funnel
+ *  enforcement; PATCHes prospectStage on every change. */
+function ProspectStageBadge({ person, onUpdated }: { person: Prospect; onUpdated: (p: Prospect) => void }) {
+  const cfg = PROSPECT_STAGES.find((s) => s.value === person.prospectStage);
+  const color = cfg?.color ?? '#94a3b8';
+  const bg = `${color}22`; // ~13% alpha
+  const [saving, setSaving] = useState(false);
+
+  async function handleChange(value: string) {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/prospects/${person.prospectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectStage: value || null }),
+      });
+      const data = await res.json() as { prospect?: Prospect };
+      if (res.ok && data.prospect) onUpdated(data.prospect);
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <select
+      value={person.prospectStage ?? ''}
+      onChange={(e) => void handleChange(e.target.value)}
+      disabled={saving}
+      style={{
+        padding: '0.28rem 2rem 0.28rem 0.7rem', borderRadius: 999,
+        border: `1px solid ${color}`, backgroundColor: bg, color,
+        fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+        appearance: 'none',
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(color)}' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`,
+        backgroundPosition: 'right 8px center', backgroundRepeat: 'no-repeat',
+      }}
+    >
+      <option value="">No stage</option>
+      {PROSPECT_STAGES.map((s) => (
+        <option key={s.value} value={s.value}>{s.label}</option>
+      ))}
+    </select>
+  );
+}
 
 // ── Shared field helpers ──────────────────────────────────────────────────────
 
@@ -235,6 +282,10 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
 
   // Prospect edit state
   const [source,        setSource]        = useState(person.source              ?? '');
+  // Referred-by is visible on both prospects and active clients (we render an
+  // extra row for it below), so it sits outside the isProspect branch.
+  const [referredBy,    setReferredBy]    = useState(person.referredBy          ?? '');
+  const [prospectStage, setProspectStage] = useState(person.prospectStage       ?? '');
   const [accountModel,  setAccountModel]  = useState(person.accountModel        ?? '');
   const [revenueType,   setRevenueType]   = useState(person.revenueType         ?? '');
   const [oneTime,       setOneTime]       = useState(person.oneTimeLpRevenue?.toString()        ?? '');
@@ -252,6 +303,9 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
   const [nextFilmDate,   setNextFilmDate]   = useState(person.nextFilmDate           ?? null);
 
   function handleCancel() {
+    // Shared fields reset regardless of which sub-branch is active
+    setReferredBy(person.referredBy ?? '');
+    setProspectStage(person.prospectStage ?? '');
     if (isProspect) {
       setSource(person.source ?? ''); setAccountModel(person.accountModel ?? '');
       setRevenueType(person.revenueType ?? '');
@@ -280,6 +334,8 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
       const body: Record<string, unknown> = isProspect
         ? {
             source:                  source || null,
+            referredBy:              referredBy.trim() || null,
+            prospectStage:           prospectStage || null,
             accountModel:            accountModel || null,
             revenueType:             revenueType || null,
             oneTimeLpRevenue:        oneTime ? parseFloat(oneTime) : null,
@@ -290,6 +346,7 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
             expansionPotential:      expansion || null,
           }
         : {
+            referredBy:             referredBy.trim() || null,
             activeServices:         activeServices || null,
             firstRecurringBillDate: firstBillDate,
             revenueType:            revenueType || null,
@@ -336,6 +393,23 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
                     {PERSON_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 : <span style={valueStyle}>{labelFor(PERSON_SOURCES, person.source) || <Dash />}</span>}
+            </div>
+
+            <div style={rowStyle}>
+              <span style={labelStyle}>Referred by</span>
+              {editing
+                ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
+                : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
+            </div>
+
+            <div style={rowStyle}>
+              <span style={labelStyle}>Stage</span>
+              {editing
+                ? <select style={inputStyle} value={prospectStage} onChange={(e) => setProspectStage(e.target.value)} disabled={saving}>
+                    <option value="">— not set —</option>
+                    {PROSPECT_STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                : <span style={valueStyle}>{labelFor(PROSPECT_STAGES, person.prospectStage) || <Dash />}</span>}
             </div>
 
             <div style={rowStyle}>
@@ -405,6 +479,13 @@ function AccountPanel({ person, onUpdated }: { person: Prospect; onUpdated: (p: 
           </>
         ) : (
           <>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Referred by</span>
+              {editing
+                ? <input style={inputStyle} type="text" value={referredBy} placeholder="Name" onChange={(e) => setReferredBy(e.target.value)} disabled={saving} />
+                : <span style={valueStyle}>{person.referredBy || <Dash />}</span>}
+            </div>
+
             <div style={{ ...rowStyle, alignItems: 'flex-start' }}>
               <span style={{ ...labelStyle, paddingTop: 4 }}>Active Services</span>
               {editing
@@ -759,13 +840,16 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
 
           {/* Status display / toggle */}
           {isProspect ? (
-            <span style={{
-              display: 'inline-block', padding: '0.28rem 0.8rem', borderRadius: 999,
-              border: `1px solid ${statusStyle.border}`, background: statusStyle.bg,
-              color: statusStyle.color, fontSize: '0.8rem', fontWeight: 600,
-            }}>
-              Prospect
-            </span>
+            <>
+              <span style={{
+                display: 'inline-block', padding: '0.28rem 0.8rem', borderRadius: 999,
+                border: `1px solid ${statusStyle.border}`, background: statusStyle.bg,
+                color: statusStyle.color, fontSize: '0.8rem', fontWeight: 600,
+              }}>
+                Prospect
+              </span>
+              <ProspectStageBadge person={person} onUpdated={setPerson} />
+            </>
           ) : (
             <select
               value={person.status}
@@ -822,6 +906,8 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
           <SectionLabel>Updates</SectionLabel>
           <UpdatesLog
             prospectId={person.prospectId}
+            companyName={person.company}
+            personStatus={person.status}
             initialUpdates={initialUpdates}
             currentUserId={currentUser?.id ?? ''}
             allUsers={allUsers}
