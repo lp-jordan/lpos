@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-06-09 — Move assets between projects (LPOS-only, bulk action from Internal Media)
+
+**Timestamp:** 2026-06-09T20:05:00Z
+
+**User prompt (verbatim — item #4 of the 6-tweak batch):**
+> Big one - The ability to move an asset or group of assets between projects. We'd want it to be clean - all records moving with the asset.
+
+Clarification recorded earlier: Frame.io stays put on the FIO side; only LPOS records move. Banner-warning the editor about the FIO history-split before confirming.
+
+**Response summary:** Added a "Move to project…" action to the Internal Media bulk-selection bar (existing multi-select infrastructure was already in place). The action opens a new `MoveAssetsModal` with a grouped project picker, search, and the FIO history-split warning. Confirm POSTs to a new `/api/projects/[projectId]/media/move` endpoint that runs a three-DB move helper: canonical-assets DB rewrites `assets.project_id`; core DB rewrites `asset_share_links.project_id` and detaches the asset from the old project's `deliverable_assets`; activity DB rewrites the asset's historical `activity_events.project_id` to the target so the new project's timeline shows the full asset history. The API records one `asset.moved` activity event per successful move, embedding the from-project / to-project info in `details_json` as the canonical audit anchor.
+
+**Files changed:**
+- `lib/store/asset-move-store.ts` — new. `moveAssetsBetweenProjects({ fromProjectId, toProjectId, assetIds })` returns `{ movedAssetIds, failedAssetIds }`. Per-asset: verifies `assets.project_id === fromProjectId` (fast-fail with reason text), then within per-DB transactions: canonical asset row updates `project_id`/`updated_at`; legacy `asset_share_links` UPDATE; `deliverable_assets` DELETE filtered to the source project's deliverables; `activity_events.project_id` rewrite. Child rows (asset_versions / media_files / distribution_records / editorial_links) follow implicitly because they reference asset_id, not project_id.
+- `app/api/projects/[projectId]/media/move/route.ts` — new POST handler. Validates body shape, source ≠ target, both projects exist + target not archived. Calls the helper, then for each successful move records an `asset.moved` activity event scoped to the target project (with `from_project_*` and `to_project_*` in `details_json`). Response: `{ moved, failed }`.
+- `components/projects/MoveAssetsModal.tsx` — new client modal. Fetches `/api/projects`, excludes the source + archived projects, groups by `clientName`, supports name/client filter search. Sticky FIO warning banner. Confirm calls the move endpoint, distinguishes "0 moved" (full failure → show reason) from partial-success (notify + propagate moved ids), and dismisses on full success. Returns moved ids to the parent so it can drop them from the selection set and refresh the local asset list.
+- `components/projects/MediaTab.tsx` — added `showMoveModal` state; rendered a "Move to project…" action in the bulk-selection bar (positioned right before the destructive "Delete Files" button, with a building/house icon and a one-line tooltip). On `onMoved`, drops the moved ids from `selectedIds`, clears `selectedAsset` if it was among them, and re-runs `fetchAssets()` so the list reflects the move without a page reload.
+
+**Implementation summary:**
+- Multi-select was already wired in `MediaTab` (`selectedIds: Set<string>`, action bar, bulk handlers like delete / re-transcribe / publish) — the new button slots straight in. No new selection plumbing needed.
+- Cross-DB move is per-asset, per-DB transactioned (not a single global transaction — three SQLite files = three connections). For v1 we accept that a crash mid-asset could leave a partial state; admin-initiated moves are rare enough that the simpler design is the right call. Per-asset failures are reported back individually so a partial batch still moves what it can.
+- "Move + don't auto-add to target deliverable": deliverable membership is a project-scoped curation decision — the user usually wants to assemble a fresh delivery in the target. We drop the old `deliverable_assets` row to avoid stranded references, but don't fabricate one in the target.
+- Historical `activity_events` rewrite is the spec'd "all records moving" answer. The audit chain stays intact because the new `asset.moved` event embeds the from/to in `details_json` — the source project still has THIS one event referencing the asset, and the target project has both the historical events (rewritten) AND the move event.
+- FIO references on the asset (`frameio.assetId`, `stackId`, `playerUrl`, `reviewLink`, comments) are deliberately untouched — moving the asset on Frame.io is out of scope per spec. The modal banner makes this explicit before the user confirms.
+
+**Decision rationale:**
+- **Cross-DB sequential transactions** vs an attached-database transaction: SQLite supports cross-database transactions via `ATTACH`, but wiring the three connections that way would mean restructuring the existing single-DB store layout. Per-DB transactions are simple, atomic-per-DB, and the failure window is tiny.
+- **Rewrite historical activity_events.project_id** over leaving them under the old project: spec said "all records moving with the asset." Leaving history under the source project would mean a moved asset's comment/upload/render history vanishes from the new project's activity feed — a real workflow regression.
+- **Drop deliverable_assets, don't auto-link in target:** Auto-creating a target deliverable would make assumptions about the user's intent that they almost certainly don't want. The clean state is "asset has no deliverable link in either project"; user picks up from the new project's UI when they're ready.
+- **Sticky banner warning vs require-checkbox-to-confirm:** Banner conveys the risk and keeps the modal one-click-to-confirm for the common case. A required checkbox would feel like seatbelt theater for a feature whose alt-flow is more confusing.
+- **Per-asset failures returned individually:** preserves partial-success behavior. If 8 of 10 assets move and 2 fail, the 8 still relocate; the user sees a "Moved 8 of 10" message and the failed pair stays selected for retry.
+
+**Alternatives considered:**
+- Moving the Frame.io asset on Frame.io's side (via the FIO move API) — explicitly excluded per spec. Could be added later as an opt-in checkbox in the modal.
+- Auto-linking the moved asset to a target-project deliverable when one with a matching name exists — too magical for v1; explicit re-assembly is cleaner.
+- A worker queue for the move instead of in-process — overkill for a sub-second SQL operation; queue would only matter at a different scale.
+- Recording one `asset.moved.batch` event per batch (one event covering N assets) instead of N events — declined; per-asset event makes the new project's activity feed show one row per moved item which matches the existing "asset.* event ↔ asset row" mental model.
+
+**Commands/checks:**
+- No dev server started (per [[feedback_never_start_dev_server]]).
+- Verified `recordActivity` field shapes against `lib/models/activity.ts` after a first-draft used invalid `visibility: 'project_timeline'` (corrected to `'user_timeline'`) and JSON-stringified `details_json` (corrected to a plain object — the activity monitor stringifies internally).
+- Grep verified the `MediaTab` `selectedIds` + bulk-action bar pattern was identical to existing bulk handlers (LeaderPass publish, Re-transcribe, Delete) — the new button followed that pattern.
+
+**Assumptions / follow-ups:**
+- Moving the Frame.io asset is the obvious next step if editors want a fully mirrored move. The infra for this would be a checkbox in the modal + a FIO move-asset call in the route handler.
+- The historical-events rewrite is per-asset, looped — for a hypothetical massive move (hundreds of assets, tens of thousands of events) we'd want a batched UPDATE. v1's loop is fine for the practical batch sizes (1–20 assets at a time).
+- The pre-commit hook on the repo prints the staged file list; verified once with `git diff --cached --name-only` before committing.
+
+---
+
 ## 2026-06-09 — Film-day tabs on the Slate production notes panel
 
 **Timestamp:** 2026-06-09T19:25:00Z

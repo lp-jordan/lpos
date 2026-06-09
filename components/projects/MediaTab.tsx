@@ -11,6 +11,7 @@ import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModa
 // with tabs for Review Links / Deliveries. Single toolbar button entry.
 import { DeliverablesHub } from '@/components/projects/DeliverablesHub';
 import { DeliverableModal } from '@/components/projects/DeliverableModal';
+import { MoveAssetsModal } from '@/components/projects/MoveAssetsModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
@@ -485,6 +486,7 @@ export function MediaTab({
   const [confirmBulkDelete, setConfirmBulkDelete] = useState<{ deleteFile: boolean } | null>(null);
   const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
   const [bulkDeleteError, setBulkDeleteError]   = useState<string | null>(null);
+  const [showMoveModal,   setShowMoveModal]     = useState(false);
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [renamingId,      setRenamingId]      = useState<string | null>(null);
@@ -1660,6 +1662,18 @@ const { openMenu } = useContextMenu();
             {retranscribeError && <span className="ma-selection-error">{retranscribeError}</span>}
             <button
               type="button"
+              className="ma-selection-action"
+              onClick={() => setShowMoveModal(true)}
+              title="Reassign the selected assets to a different project (LPOS-side only — Frame.io stays put)"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                <polyline points="9 22 9 12 15 12 15 22"/>
+              </svg>
+              Move to project…
+            </button>
+            <button
+              type="button"
               className="ma-selection-action ma-selection-action--danger"
               onClick={() => setConfirmBulkDelete({ deleteFile: true })}
               disabled={bulkDeleteWorking}
@@ -1828,6 +1842,32 @@ const { openMenu } = useContextMenu();
           error={bulkDeleteError}
           onConfirm={() => void handleBulkDelete(confirmBulkDelete.deleteFile)}
           onClose={() => { setConfirmBulkDelete(null); setBulkDeleteError(null); }}
+        />
+      )}
+
+      {/* Move-to-project modal */}
+      {showMoveModal && (
+        <MoveAssetsModal
+          fromProjectId={projectId}
+          fromProjectName={projectName}
+          selectedCount={selectedIds.size}
+          selectedAssetIds={[...selectedIds]}
+          onClose={() => setShowMoveModal(false)}
+          onMoved={(movedIds) => {
+            // Drop the moved assets from the local selection + refresh the list
+            // so they disappear from this project's tab. Partial moves keep the
+            // unmoved ones selected so the user can retry or pick another target.
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of movedIds) next.delete(id);
+              return next;
+            });
+            if (selectedAsset && movedIds.includes(selectedAsset.assetId)) {
+              setSelectedAsset(null);
+            }
+            void fetchAssets();
+            setShowMoveModal(false);
+          }}
         />
       )}
 
