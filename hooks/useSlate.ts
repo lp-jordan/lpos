@@ -10,6 +10,7 @@ import type {
   AudioMonitorWebRtcState,
   PlaybackConnectionState,
   SlateNote,
+  SlateTab,
 } from '@/lib/services/atem-utils';
 import type { CqMixerState } from '@/lib/services/cq-mixer-client';
 
@@ -43,6 +44,13 @@ export interface SlateState {
   socketConnected: boolean;
   currentProjectId: string | null;
   notes: SlateNote[];
+  /** Film-day tabs configured for the currently-loaded project. Empty list
+   *  means "no tabs configured yet" — the UI hides the tab bar and behaves as
+   *  it did pre-tabs (a single chronological notes log). */
+  slateTabs: SlateTab[];
+  /** Currently-selected film day tab, or null for the "All" view (which also
+   *  surfaces notes without a tabId). Persisted per-project in localStorage. */
+  activeSlateTabId: string | null;
   codeText: string;
   atemState: AtemState | null;
   atemProfiles: AtemProfile[];
@@ -62,6 +70,13 @@ export interface SlateActions {
   editNote: (index: number, code: string, note: string) => void;
   deleteNote: (index: number) => void;
   deleteNotes: (indices: number[]) => void;
+  assignNoteToTab: (index: number, tabId: string | null) => void;
+  // Film-day tab management — manual create/rename/reorder/delete.
+  createSlateTab: (name: string) => void;
+  renameSlateTab: (id: string, name: string) => void;
+  reorderSlateTabs: (ids: string[]) => void;
+  deleteSlateTab: (id: string) => void;
+  setActiveSlateTab: (tabId: string | null) => void;
   updateCode: (value: string) => void;
   atemConnect: (ip: string) => void;
   atemDisconnect: () => void;
@@ -208,6 +223,24 @@ export function useSlate(): SlateState & SlateActions {
   const [socketConnected, setSocketConnected] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [notes, setNotes] = useState<SlateNote[]>([]);
+  const [slateTabs, setSlateTabs] = useState<SlateTab[]>([]);
+  const [activeSlateTabId, setActiveSlateTabIdState] = useState<string | null>(null);
+  // Restore last-active tab per project from localStorage so reopening the
+  // same shoot lands the user on the same film day they were tagging.
+  const restoreActiveTab = useCallback((projectId: string | null) => {
+    if (!projectId) { setActiveSlateTabIdState(null); return; }
+    try {
+      const stored = window.localStorage.getItem(`lpos:slate:activeTab:${projectId}`);
+      setActiveSlateTabIdState(stored && stored !== 'all' ? stored : null);
+    } catch { setActiveSlateTabIdState(null); }
+  }, []);
+  const setActiveSlateTab = useCallback((tabId: string | null) => {
+    setActiveSlateTabIdState(tabId);
+    if (!currentProjectId) return;
+    try {
+      window.localStorage.setItem(`lpos:slate:activeTab:${currentProjectId}`, tabId ?? 'all');
+    } catch { /* ignore */ }
+  }, [currentProjectId]);
   const [codeText, setCodeText] = useState('');
   const [atemState, setAtemState] = useState<AtemState | null>(DEFAULT_ATEM_STATE);
   const [atemProfiles, setAtemProfiles] = useState<AtemProfile[]>([]);
@@ -375,16 +408,29 @@ export function useSlate(): SlateState & SlateActions {
       pushLog('[socket] disconnected');
     });
 
-    socket.on('projectLoaded', (data: { projectId: string; notes: SlateNote[] }) => {
+    socket.on('projectLoaded', (data: { projectId: string; notes: SlateNote[]; tabs?: SlateTab[] }) => {
       setCurrentProjectId(data.projectId);
       setNotes(data.notes);
-      pushLog(`[slate] project loaded: ${data.projectId} (${data.notes.length} notes)`);
+      setSlateTabs(data.tabs ?? []);
+      restoreActiveTab(data.projectId);
+      pushLog(`[slate] project loaded: ${data.projectId} (${data.notes.length} notes, ${data.tabs?.length ?? 0} tabs)`);
     });
 
     socket.on('noActiveProject', () => {
       setCurrentProjectId(null);
       setNotes([]);
+      setSlateTabs([]);
+      setActiveSlateTabIdState(null);
     });
+
+    // Server-side broadcast on any tab CRUD — single event covers create/
+    // rename/reorder/delete to keep the client surface simple. The new list
+    // replaces local state verbatim.
+    socket.on('slateTabs', (tabs: SlateTab[]) => setSlateTabs(tabs ?? []));
+
+    // Emitted after a tab deletion that re-homed notes to Unassigned —
+    // simpler than diff-patching individual indices.
+    socket.on('notesReloaded', (next: SlateNote[]) => setNotes(next));
 
     socket.on('noteAdded', (note: SlateNote) => {
       setNotes((prev) => [...prev, note]);
@@ -445,7 +491,7 @@ export function useSlate(): SlateState & SlateActions {
       teardownAudioMonitor();
       socket.disconnect();
     };
-  }, [pushLog, teardownAudioMonitor]);
+  }, [pushLog, restoreActiveTab, teardownAudioMonitor]);
 
   const audioMonitor = deriveAudioMonitorState(remoteAudioMonitor, {
     joined: audioJoined,
@@ -459,6 +505,8 @@ export function useSlate(): SlateState & SlateActions {
     socketConnected,
     currentProjectId,
     notes,
+    slateTabs,
+    activeSlateTabId,
     codeText,
     atemState,
     atemProfiles,
@@ -483,10 +531,18 @@ export function useSlate(): SlateState & SlateActions {
         });
       }
     },
-    addNote: (code, note) => emit('addNote', { code, note }),
+    // tabId is whatever the user has selected as the active film day —
+    // tagged automatically so adding a note to the open tab Just Works.
+    addNote: (code, note) => emit('addNote', { code, note, tabId: activeSlateTabId }),
     editNote: (index, code, note) => emit('editNote', { index, code, note }),
     deleteNote: (index) => emit('deleteNote', index),
     deleteNotes: (indices) => emit('deleteNotes', indices),
+    assignNoteToTab: (index, tabId) => emit('assignNoteToTab', { index, tabId }),
+    createSlateTab: (name) => emit('createSlateTab', { name }),
+    renameSlateTab: (id, name) => emit('renameSlateTab', { id, name }),
+    reorderSlateTabs: (ids) => emit('reorderSlateTabs', { ids }),
+    deleteSlateTab: (id) => emit('deleteSlateTab', { id }),
+    setActiveSlateTab,
     updateCode: (value) => { setCodeText(value); emit('codeUpdate', value); },
     atemConnect: (ip) => emit('atemConnect', { ipAddress: ip }),
     atemDisconnect: () => emit('atemDisconnect'),

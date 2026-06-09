@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Server as SocketIOServer, Socket } from 'socket.io';
 import type { ServiceRegistry } from './registry';
 import { AtemBridgeClient } from './atem-bridge-client';
@@ -15,6 +16,7 @@ import {
   type PlaybackRemoteEntry,
   type PlaybackSessionEntry,
   type SlateNote,
+  type SlateTab,
   createAtemNote,
   createDefaultAudioMonitorState,
   createDefaultAtemState,
@@ -130,12 +132,35 @@ function writeNotes(projectId: string, notes: SlateNote[]) {
   fs.writeFileSync(file, JSON.stringify(notes, null, 2));
 }
 
+// Tabs are stored in a sibling JSON file so each shoot project owns both its
+// notes and its day-tab structure under data/projects/<id>/. The two files are
+// kept consistent on tab delete (notes get their tabId cleared, never deleted).
+function tabsPath(projectId: string): string {
+  return path.join(DATA_DIR, 'projects', projectId, 'slate-tabs.json');
+}
+
+function readTabs(projectId: string): SlateTab[] {
+  const file = tabsPath(projectId);
+  if (!fs.existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as SlateTab[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function writeTabs(projectId: string, tabs: SlateTab[]) {
+  const file = tabsPath(projectId);
+  ensureDir(path.dirname(file));
+  fs.writeFileSync(file, JSON.stringify(tabs, null, 2));
+}
+
 // ── Service ────────────────────────────────────────────────────────────────
 
 export class SlateService {
   private config = loadConfig();
   private currentProjectId: string | null = null;
   private notes: SlateNote[] = [];
+  private tabs: SlateTab[] = [];
   private codeText = '';
   private atemState: AtemState = createDefaultAtemState({ switcherIp: this.config.atem.switcherIp });
   private audioMonitorState: AudioMonitorState = createDefaultAudioMonitorState({
@@ -274,9 +299,12 @@ export class SlateService {
     this.emitCqMixerState(socket);
 
     // ── Note events ──
-    socket.on('addNote', (data: { code: string; note: string }) => {
+    socket.on('addNote', (data: { code: string; note: string; tabId?: string | null }) => {
       if (!this.currentProjectId) { socket.emit('error', 'No project loaded'); return; }
-      const note = { timestamp: createTimestamp(), code: data.code, note: data.note };
+      // Only persist tabId when it points at an existing tab; "all" or stale
+      // ids collapse to null so the note stays visible in the All view.
+      const tabId = data.tabId && this.tabs.some((t) => t.id === data.tabId) ? data.tabId : null;
+      const note: SlateNote = { timestamp: createTimestamp(), code: data.code, note: data.note, tabId };
       this.addNote(note);
       this.log('Added note', note);
     });
@@ -305,6 +333,80 @@ export class SlateService {
         if (this.currentProjectId) writeNotes(this.currentProjectId, this.notes);
         this.io.of('/slate').emit('notesDeleted', unique);
       }
+    });
+
+    // Reassign an existing note's tabId (drag/move-to-tab UI from the client).
+    // `tabId === null` clears the assignment (note becomes Unassigned).
+    socket.on('assignNoteToTab', (data: { index: number; tabId: string | null }) => {
+      if (typeof data?.index !== 'number' || !this.notes[data.index]) return;
+      const next = data.tabId && this.tabs.some((t) => t.id === data.tabId) ? data.tabId : null;
+      this.notes[data.index].tabId = next;
+      if (this.currentProjectId) writeNotes(this.currentProjectId, this.notes);
+      this.io.of('/slate').emit('noteEdited', { index: data.index, note: this.notes[data.index] });
+    });
+
+    // ── Tab events ──
+    socket.on('createSlateTab', (data: { name?: string }) => {
+      if (!this.currentProjectId) { socket.emit('error', 'No project loaded'); return; }
+      const name = (data?.name ?? '').trim();
+      if (!name) return;
+      const tab: SlateTab = {
+        id: randomUUID(),
+        name,
+        sortOrder: this.tabs.length,
+        createdAt: new Date().toISOString(),
+      };
+      this.tabs.push(tab);
+      writeTabs(this.currentProjectId, this.tabs);
+      this.io.of('/slate').emit('slateTabs', this.tabs);
+      this.log('Slate tab created', tab.name);
+    });
+
+    socket.on('renameSlateTab', (data: { id?: string; name?: string }) => {
+      const id = data?.id;
+      const name = (data?.name ?? '').trim();
+      if (!id || !name) return;
+      const tab = this.tabs.find((t) => t.id === id);
+      if (!tab) return;
+      tab.name = name;
+      if (this.currentProjectId) writeTabs(this.currentProjectId, this.tabs);
+      this.io.of('/slate').emit('slateTabs', this.tabs);
+    });
+
+    socket.on('reorderSlateTabs', (data: { ids?: string[] }) => {
+      if (!Array.isArray(data?.ids)) return;
+      const byId = new Map(this.tabs.map((t) => [t.id, t]));
+      const next: SlateTab[] = [];
+      data.ids.forEach((id, idx) => {
+        const t = byId.get(id);
+        if (t) { t.sortOrder = idx; next.push(t); byId.delete(id); }
+      });
+      // Append any tabs the client didn't include (defensive) so we never drop one.
+      for (const t of byId.values()) { t.sortOrder = next.length; next.push(t); }
+      this.tabs = next;
+      if (this.currentProjectId) writeTabs(this.currentProjectId, this.tabs);
+      this.io.of('/slate').emit('slateTabs', this.tabs);
+    });
+
+    socket.on('deleteSlateTab', (data: { id?: string }) => {
+      const id = data?.id;
+      if (!id) return;
+      const before = this.tabs.length;
+      this.tabs = this.tabs.filter((t) => t.id !== id);
+      if (this.tabs.length === before) return;
+      // Notes in the deleted tab go back to Unassigned — never destroyed.
+      let touched = false;
+      for (const n of this.notes) {
+        if (n.tabId === id) { n.tabId = null; touched = true; }
+      }
+      // Renormalize sort_order so gaps from deletion don't accumulate.
+      this.tabs.forEach((t, i) => { t.sortOrder = i; });
+      if (this.currentProjectId) {
+        writeTabs(this.currentProjectId, this.tabs);
+        if (touched) writeNotes(this.currentProjectId, this.notes);
+      }
+      this.io.of('/slate').emit('slateTabs', this.tabs);
+      if (touched) this.io.of('/slate').emit('notesReloaded', this.notes);
     });
 
     // ── Project events ──
@@ -620,6 +722,7 @@ export class SlateService {
 
   private loadProject(projectId: string) {
     this.notes = readNotes(projectId);
+    this.tabs = readTabs(projectId);
     this.currentProjectId = projectId;
     const project = this.projectStore.getById(projectId);
     if (project) {
@@ -646,7 +749,7 @@ export class SlateService {
   }
 
   private projectLoadedPayload() {
-    return { projectId: this.currentProjectId, notes: this.notes };
+    return { projectId: this.currentProjectId, notes: this.notes, tabs: this.tabs };
   }
 
   // ── Note helpers ───────────────────────────────────────────────────────

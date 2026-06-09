@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-06-09 — Film-day tabs on the Slate production notes panel
+
+**Timestamp:** 2026-06-09T19:25:00Z
+
+**User prompt (verbatim — item #5 of a 6-tweak batch):**
+> A tab system on the studio page production notes to enable "film day" separation.
+
+Clarification recorded earlier: fully manual ("+ Day" creates / drag-to-reorder / rename / delete) — no auto-detection from dates.
+
+**Response summary:** Added a manual film-day tab system to the Slate `/slate` page's Production Notes panel. Each project owns an independent list of `SlateTab` rows persisted in a new `slate-tabs.json` file (sibling to the existing `slate-notes.json`). The notes panel now shows a horizontal pill bar above the note input — "All" + each named tab + "+ Day" button. Notes carry an optional `tabId`; when the user selects a specific tab the notes log filters to that day; the tab the note was added under is auto-tagged based on the active selection. Existing notes (pre-tabs) appear in "All" and stay visible.
+
+**Files changed:**
+- `lib/services/atem-utils.ts` — added optional `tabId?: string | null` to `SlateNote` and a new `SlateTab` interface (`id`, `name`, `sortOrder`, `createdAt`). The optional `tabId` is the only schema bump on the notes side — old `slate-notes.json` files load unchanged (undefined `tabId` reads as "Unassigned").
+- `lib/services/slate-service.ts` — new `tabsPath` / `readTabs` / `writeTabs` helpers (mirror the existing notes file ops). `loadProject()` now also reads tabs; `projectLoadedPayload()` includes them. New socket events: `createSlateTab`, `renameSlateTab`, `reorderSlateTabs`, `deleteSlateTab`, `assignNoteToTab`. `addNote` now accepts an optional `tabId` from the client (and only persists it when it points at an existing tab — silently nulls stale/empty ids). Delete reassigns affected notes' `tabId` to null and emits a `notesReloaded` broadcast so all clients re-render in one shot.
+- `hooks/useSlate.ts` — exposes `slateTabs` + `activeSlateTabId` state, with the active tab persisted per-project in `localStorage` (`lpos:slate:activeTab:<projectId>`). New socket handlers: `slateTabs` (single broadcast covering all CRUD), `notesReloaded` (full notes refresh after tab delete). Actions: `addNote` now automatically tags the new note with the active tab id; new `assignNoteToTab` / `createSlateTab` / `renameSlateTab` / `reorderSlateTabs` / `deleteSlateTab` / `setActiveSlateTab`.
+- `components/slate/SlatePageContent.tsx` — new `sl-film-day-bar` above the note input on the Notes tab, only shown when a project is loaded. Per-tab UI: pill (click to activate, double-click to rename), and when active: ◂ / ▸ reorder arrows, ✎ rename, and 🗑 → confirm/cancel delete. "+ Day" button at the far right uses `window.prompt` to capture the new name (defaults to "Day N+1"). The existing notes log now filters the rendered list to the active tab (showing "No notes on this film day yet." when the day exists but is empty); All view shows every note. Filter happens BEFORE reverse so newest-in-tab still sits at the top, and the original `(note, originalIndex)` pair is threaded through the render so edit/delete/select still target the correct server index.
+
+**Implementation summary:**
+- Tabs persist in `data/projects/<projectId>/slate-tabs.json` — same sibling-file pattern as notes, no SQLite migration needed. The whole list is rewritten on every mutation (small array; not hot path).
+- A single `slateTabs` broadcast covers create / rename / reorder / delete — the client just replaces local state with the server's authoritative list. Simpler than diff-patching and prevents drift between connected clients.
+- The "All" pill is synthetic — it's `activeSlateTabId === null`. It shows every note regardless of `tabId`, and is the default after a tab delete (so the user isn't stranded on a tab that no longer exists).
+- Notes inherit the active tab's id at creation time. The user doesn't have to think about it — open the "Day 2" tab, type, send.
+- Tab delete never destroys notes. The server clears `tabId` on every affected note (in memory + file) and emits `notesReloaded` so the UI reflects the move-to-Unassigned without a refresh.
+- Active tab persists per project in `localStorage` so reopening the same shoot re-lands on the same day.
+- All the JSX restructuring around the notes log keeps the existing batch-select / edit / delete / CSV-export wiring intact: the `originalIndex` from the tuple list is what those handlers use, so the indices stay correct even when the visible list is filtered.
+
+**Decision rationale:**
+- **JSON file vs SQLite for tabs:** Slate already persists its notes as per-project JSON; staying in the same store keeps the deployment surface simple and lets a project be backed up / inspected / copied by trivially copying the project folder. The data is small and per-project — no relational queries warranted.
+- **`tabId: string | null` (nullable column-style)** over a separate `tab_notes` junction: notes are 1:1 with tabs in this model — a note belongs to exactly one day. Null is the natural "Unassigned" state and reads cleanly in filters.
+- **Single `slateTabs` broadcast** over a verb-per-action set (`tabCreated`, `tabRenamed`, …): the per-client handler reduces to one set-state call, and the server is the source of truth — no diff-patching to maintain.
+- **Reorder = up/down arrows over drag-and-drop:** matches the [[editpanel_layout_and_design]] consistency note from the preprod board commit — the editor is occasional-use, arrows are accessible, no extra DnD library pull-in.
+- **`window.prompt` for new-tab name:** the bar is already crowded with pills + active-tab affordances; a dedicated modal would feel heavy for a one-field input. Inline rename via double-click handles the most common edit case anyway.
+- **Tab delete soft-nulls notes (never destroys):** consistent with the preprod column delete behavior — we don't lose user data on a misclick. The deleted tab's notes resurface in All, ready to be reassigned.
+
+**Alternatives considered:**
+- Auto-detect days from note timestamps (suggested in the earlier explore agent's notes) — declined explicitly per the user's "fully manual" answer.
+- Drag-and-drop between tabs to reassign notes — deferred. The new `assignNoteToTab` server event is in place to support it later; for v1 the user moves notes manually by editing them after creation if needed.
+- Storing tabs in `core-db.ts` SQLite — would add a v23 migration for a feature whose data already lives in the per-project JSON neighborhood. Net cost > value.
+
+**Commands/checks:**
+- No dev server started (per [[feedback_never_start_dev_server]]).
+- Grep verified `useSlate` consumers (`SlatePageContent.tsx` is the only one) so the new state/actions don't break anything else.
+- IIFE-around-the-map rewrite manually counted brackets — balanced.
+
+**Assumptions / follow-ups:**
+- The per-note `tabId` is intentionally optional — old notes load with `undefined` and behave the same as Unassigned. A future cleanup pass could backfill them to explicit `null` on first write, but the runtime treats them identically.
+- The Google Sheets sync item the user wants for production notes will hook off this `tabId` field — one Sheets tab per slate tab when that ships. Schema is forward-compatible.
+
+---
+
 ## 2026-06-09 — NewTaskModal lazy-fetches preprod columns when opened outside DashboardClient
 
 **Timestamp:** 2026-06-09T18:55:00Z

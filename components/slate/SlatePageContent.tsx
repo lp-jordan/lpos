@@ -39,6 +39,39 @@ function useCurrentDate() {
   return date;
 }
 
+// Film-day pill styling — kept inline (not in the .css module) so the bar can
+// coexist with the existing Slate stylesheet without a class-name collision.
+function filmDayPillStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: `1px solid ${active ? '#c9a227' : 'rgba(255,255,255,0.15)'}`,
+    background: active ? 'rgba(201,162,39,0.16)' : 'transparent',
+    color: active ? '#c9a227' : 'var(--muted, #aaa)',
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  };
+}
+
+function filmDayIconStyle(disabled: boolean): React.CSSProperties {
+  return {
+    width: 22,
+    height: 22,
+    padding: 0,
+    background: 'none',
+    border: 'none',
+    color: 'inherit',
+    fontSize: '0.8rem',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.25 : 0.7,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: boolean; isAdmin: boolean; guestAccess?: 'lighting' }) {
@@ -68,6 +101,11 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
   const [editNoteText, setEditNoteText] = useState('');
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectClient, setNewProjectClient] = useState<string | undefined>();
+
+  // Film-day tab inline-rename state
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [renamingValue, setRenamingValue] = useState('');
+  const [pendingDeleteTabId, setPendingDeleteTabId] = useState<string | null>(null);
   const VALID_TABS = ['notes', 'atem', 'lighting', 'camera', 'audio', 'playback', 'presentation'] as const;
   type StudioTab = typeof VALID_TABS[number];
   const isLightingGuest = isGuest && guestAccess === 'lighting';
@@ -369,6 +407,149 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
 
           {/* ── Notes tab ── */}
           {studioTab === 'notes' && (<>
+            {/* Film-day tabs bar — manual create / rename / reorder / delete.
+                Hidden when no tabs exist so older projects still look the same.
+                "All" is a synthetic tab that shows every note regardless of
+                tabId (and is the destination for any note not assigned to a
+                specific film day). */}
+            {(slate.slateTabs.length > 0 || slate.currentProjectId) && (
+              <div
+                className="sl-film-day-bar"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 8px', marginBottom: 6, flexWrap: 'wrap',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                }}
+              >
+                {slate.slateTabs.length > 0 && (
+                  <button
+                    type="button"
+                    className={`sl-film-day-pill${slate.activeSlateTabId === null ? ' sl-film-day-pill--active' : ''}`}
+                    onClick={() => slate.setActiveSlateTab(null)}
+                    style={filmDayPillStyle(slate.activeSlateTabId === null)}
+                    title="Show every note, regardless of film-day assignment"
+                  >
+                    All
+                  </button>
+                )}
+                {slate.slateTabs.map((tab, idx) => {
+                  const isActive = slate.activeSlateTabId === tab.id;
+                  const isRenaming = renamingTabId === tab.id;
+                  const isPendingDelete = pendingDeleteTabId === tab.id;
+                  return (
+                    <div
+                      key={tab.id}
+                      style={{ display: 'flex', alignItems: 'center', gap: 2 }}
+                    >
+                      {isRenaming ? (
+                        <input
+                          autoFocus
+                          value={renamingValue}
+                          onChange={(e) => setRenamingValue(e.target.value)}
+                          onBlur={() => {
+                            const v = renamingValue.trim();
+                            if (v && v !== tab.name) slate.renameSlateTab(tab.id, v);
+                            setRenamingTabId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            if (e.key === 'Escape') setRenamingTabId(null);
+                          }}
+                          style={{
+                            padding: '4px 10px', borderRadius: 999,
+                            border: '1px solid rgba(255,255,255,0.3)',
+                            background: '#1a1a1a', color: 'inherit',
+                            fontSize: '0.78rem', minWidth: 80,
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className={`sl-film-day-pill${isActive ? ' sl-film-day-pill--active' : ''}`}
+                          onClick={() => slate.setActiveSlateTab(tab.id)}
+                          onDoubleClick={() => { setRenamingValue(tab.name); setRenamingTabId(tab.id); }}
+                          title="Click to switch · double-click to rename"
+                          style={filmDayPillStyle(isActive)}
+                        >
+                          {tab.name}
+                        </button>
+                      )}
+                      {isActive && !isRenaming && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 1, marginLeft: 1 }}>
+                          <button
+                            type="button"
+                            title="Move left"
+                            onClick={() => {
+                              if (idx === 0) return;
+                              const ids = slate.slateTabs.map((t) => t.id);
+                              [ids[idx], ids[idx - 1]] = [ids[idx - 1], ids[idx]];
+                              slate.reorderSlateTabs(ids);
+                            }}
+                            disabled={idx === 0}
+                            style={filmDayIconStyle(idx === 0)}
+                          >◂</button>
+                          <button
+                            type="button"
+                            title="Move right"
+                            onClick={() => {
+                              if (idx === slate.slateTabs.length - 1) return;
+                              const ids = slate.slateTabs.map((t) => t.id);
+                              [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+                              slate.reorderSlateTabs(ids);
+                            }}
+                            disabled={idx === slate.slateTabs.length - 1}
+                            style={filmDayIconStyle(idx === slate.slateTabs.length - 1)}
+                          >▸</button>
+                          <button
+                            type="button"
+                            title="Rename"
+                            onClick={() => { setRenamingValue(tab.name); setRenamingTabId(tab.id); }}
+                            style={filmDayIconStyle(false)}
+                          >✎</button>
+                          {isPendingDelete ? (
+                            <>
+                              <button
+                                type="button"
+                                title="Confirm delete (notes move to Unassigned)"
+                                onClick={() => { slate.deleteSlateTab(tab.id); setPendingDeleteTabId(null); slate.setActiveSlateTab(null); }}
+                                style={{ ...filmDayIconStyle(false), color: '#e07070' }}
+                              >✓</button>
+                              <button
+                                type="button"
+                                title="Cancel"
+                                onClick={() => setPendingDeleteTabId(null)}
+                                style={filmDayIconStyle(false)}
+                              >×</button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Delete tab (notes will move to Unassigned)"
+                              onClick={() => setPendingDeleteTabId(tab.id)}
+                              style={{ ...filmDayIconStyle(false), color: '#e07070' }}
+                            >🗑</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="sl-btn-ghost"
+                  onClick={() => {
+                    if (!slate.currentProjectId) return;
+                    const name = window.prompt('Film day name', `Day ${slate.slateTabs.length + 1}`);
+                    if (name && name.trim()) slate.createSlateTab(name.trim());
+                  }}
+                  disabled={!slate.currentProjectId}
+                  style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: '0.78rem' }}
+                >
+                  + Day
+                </button>
+              </div>
+            )}
+
             <div className="sl-note-inputs">
               <div className="sl-code-box">
                 <span className="sl-code-placeholder">CODE</span>
@@ -433,10 +614,22 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                     {slate.currentProjectId ? 'No notes yet.' : 'Select a project to begin.'}
                   </p>
                 )}
-                {[...slate.notes].reverse().map((n, displayIdx) => {
-                  // Map display index (newest-first) back to actual server index (oldest-first)
-                  const index = slate.notes.length - 1 - displayIdx;
-                  return (
+                {(() => {
+                  // Build a (note, originalIndex) tuple list, then film-day-filter
+                  // BEFORE reverse so newest-in-tab stays at the top.
+                  const tuples = slate.notes.map((note, index) => ({ note, index }));
+                  const filtered = slate.slateTabs.length === 0 || slate.activeSlateTabId === null
+                    ? tuples
+                    : tuples.filter(({ note }) => note.tabId === slate.activeSlateTabId);
+                  if (filtered.length === 0 && slate.notes.length > 0) {
+                    return (
+                      <p className="sl-notes-empty">
+                        No notes on this film day yet.
+                      </p>
+                    );
+                  }
+                  return [...filtered].reverse().map(({ note: n, index }) => {
+                    return (
                   <div
                     key={`${n.timestamp}-${index}`}
                     className={`sl-note-row${selected.has(index) ? ' sl-note-row--selected' : ''}`}
@@ -534,7 +727,8 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                     )}
                   </div>
                   );
-                })}
+                });
+                })()}
               </div>
             )}
           </>)}

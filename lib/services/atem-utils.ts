@@ -8,6 +8,22 @@ export interface SlateNote {
   timestamp: string;
   code: string;
   note: string;
+  /** Optional film-day tab assignment. Null/undefined means "unassigned" (visible
+   *  in the All view, hidden from any specific tab). Pre-tabs notes default to
+   *  undefined on read; the service emits them as-is so old data isn't churned. */
+  tabId?: string | null;
+}
+
+/** Manually-managed film-day tab on the Production Notes panel. */
+export interface SlateTab {
+  /** Server-issued UUID. */
+  id: string;
+  /** Display label, e.g. "Day 1", "Studio Reset", "B-roll Day". */
+  name: string;
+  /** 0-based ordinal for ordering tabs in the UI. */
+  sortOrder: number;
+  /** ISO 8601 creation timestamp. */
+  createdAt: string;
 }
 
 export interface AtemInput {
