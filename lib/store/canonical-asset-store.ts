@@ -1325,6 +1325,42 @@ export function getCurrentAssetVersion(assetId: string): CanonicalAssetVersion |
   return getLatestNonDuplicateVersionForAsset(assetId);
 }
 
+/**
+ * List every version of an asset along with the Frame.io file id (if any)
+ * associated with each. Used by the Phase 3 sidebar version cycler in
+ * MediaDetailPanel — the UI needs to know which versions exist so it can
+ * render the version chips, and the Frame.io file id is the bridge to the
+ * (project, asset, version_id) mapping the comments endpoint expects.
+ *
+ * Returns versions newest-first.
+ */
+export function listAssetVersionsWithFrameioFileId(assetId: string): Array<{
+  assetVersionId: string;
+  versionNumber: number;
+  frameioFileId: string | null;
+  createdAt: string;
+}> {
+  const db = getCanonicalAssetDb();
+  const rows = db.prepare(
+    `SELECT av.asset_version_id AS assetVersionId,
+            av.version_number   AS versionNumber,
+            av.created_at       AS createdAt,
+            dr.provider_asset_id AS frameioFileId
+       FROM asset_versions av
+       LEFT JOIN distribution_records dr
+              ON dr.asset_version_id = av.asset_version_id
+             AND dr.provider = 'frameio'
+      WHERE av.asset_id = ?
+      ORDER BY av.version_number DESC, av.created_at DESC`,
+  ).all(assetId) as Array<{
+    assetVersionId: string;
+    versionNumber:  number;
+    createdAt:      string;
+    frameioFileId:  string | null;
+  }>;
+  return rows;
+}
+
 export function isExactHashMatch(assetId: string, contentHash: string): boolean {
   const version = getLatestNonDuplicateVersionForAsset(assetId);
   if (!version) return false;

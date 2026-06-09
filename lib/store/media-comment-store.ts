@@ -546,6 +546,28 @@ export function getThreadedCommentsForAssetVersion(
 }
 
 /**
+ * Phase 3 supporting query: how many (non-deleted) comments exist per
+ * version of one asset? Drives the version-cycler chip badges in
+ * MediaDetailPanel and the cross-version rollup chip ("v1 had N
+ * comments → show").
+ */
+export function getCommentCountsByVersion(projectId: string, assetId: string): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!projectId || !assetId) return result;
+  const db = getCoreDb();
+  const rows = db.prepare(
+    `SELECT asset_version_id AS assetVersionId, count(*) AS count
+       FROM media_comments
+      WHERE project_id = ?
+        AND asset_id   = ?
+        AND deleted_at IS NULL
+      GROUP BY asset_version_id`,
+  ).all(projectId, assetId) as Array<{ assetVersionId: string; count: number }>;
+  for (const row of rows) result.set(row.assetVersionId, row.count);
+  return result;
+}
+
+/**
  * Phase 1 supporting query for the "Latest comments" sort on the project
  * media tab. Replaces the broken-in-prod `activity_events`-based
  * `getLatestCommentByAssetForProject` (per memory: 0 frameio.comment.* rows

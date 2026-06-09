@@ -39,25 +39,39 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const cookieStore = await cookies();
   const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
 
-  // Phase 1: read from media_comments instead of Frame.io. The threading,
-  // author shim merge, and reply-prefix stripping all happened during
-  // Phase 0 shadow capture, so the local table already has the assembled
-  // shape. Falls back to Frame.io GET if the local table has no rows for
-  // this asset version — covers the edge case where shadow capture missed
-  // an event (rare; backfill closes any historical gap).
+  // Phase 1: read from media_comments instead of Frame.io.
+  // Phase 3: accept ?version=<assetVersionId> to scope comments to one
+  // version (used by the sidebar version cycler in MediaDetailPanel). When
+  // absent, defaults to the latest version via the current Frame.io file id.
+  const requestedVersionId = new URL(req.url).searchParams.get('version');
   try {
-    const mapping = findAssetVersionByFrameioFileId(fileId);
-    if (!mapping) {
-      // No version mapping shouldn't happen for an asset with a Frame.io ID,
-      // but degrade gracefully: empty list rather than 500.
-      console.warn(`[frameio/comments GET] no version mapping for file ${fileId} — returning empty`);
-      return NextResponse.json({ comments: [] });
+    let resolvedProjectId:     string;
+    let resolvedAssetId:       string;
+    let resolvedAssetVersionId: string;
+
+    if (requestedVersionId) {
+      // Explicit version — trust it but scope by project + asset to keep
+      // callers from cross-querying.
+      resolvedProjectId      = projectId;
+      resolvedAssetId        = assetId;
+      resolvedAssetVersionId = requestedVersionId;
+    } else {
+      const mapping = findAssetVersionByFrameioFileId(fileId);
+      if (!mapping) {
+        // No version mapping shouldn't happen for an asset with a Frame.io ID,
+        // but degrade gracefully: empty list rather than 500.
+        console.warn(`[frameio/comments GET] no version mapping for file ${fileId} — returning empty`);
+        return NextResponse.json({ comments: [] });
+      }
+      resolvedProjectId      = mapping.projectId;
+      resolvedAssetId        = mapping.assetId;
+      resolvedAssetVersionId = mapping.assetVersionId;
     }
 
     const { comments, rowLookup } = getThreadedCommentsForAssetVersion(
-      mapping.projectId,
-      mapping.assetId,
-      mapping.assetVersionId,
+      resolvedProjectId,
+      resolvedAssetId,
+      resolvedAssetVersionId,
     );
 
     // Resolve author names: LPOS users get their current display name from
@@ -83,8 +97,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     });
 
     // Keep the asset's denormalised commentCount in sync — used by MediaTab
-    // for the badge and by the comments query for completeness checks.
-    patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
+    // for the badge. Only update when the caller is viewing the LATEST
+    // version (no explicit ?version override); otherwise we'd overwrite the
+    // current-version count with whichever older version is being browsed.
+    if (!requestedVersionId) {
+      patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
+    }
 
     return NextResponse.json({ comments: named });
   } catch (err) {

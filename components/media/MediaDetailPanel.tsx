@@ -413,6 +413,22 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [replyingToId,      setReplyingToId]      = useState<string | null>(null);
   const [replyText,         setReplyText]         = useState('');
   const [replyPosting,      setReplyPosting]      = useState(false);
+
+  // Phase 3: version cycler. The panel always opens on the latest version
+  // (the asset's "current" version per the legacy contract). Users can
+  // click chips at the top of the comment section to view older versions'
+  // threads. Comments are pinned to a specific asset_version_id (locked
+  // §11 #1), so each version has its own list.
+  interface VersionInfo {
+    assetVersionId: string;
+    versionNumber:  number;
+    createdAt:      string;
+    commentCount:   number;
+    isLatest:       boolean;
+  }
+  const [versions,           setVersions]          = useState<VersionInfo[]>([]);
+  const [selectedVersionId,  setSelectedVersionId] = useState<string | null>(null);
+
   // Holds an optimistic completed-toggle until a refetch confirms Frame.io has
   // caught up. The webhook echo (comment.completed) arrives a beat *after* our
   // PATCH resolves, and Frame.io's read API briefly lags its own webhook, so a
@@ -425,7 +441,11 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     if (!asset?.frameio.assetId) return;
     setCommentsLoading(true);
     try {
-      const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`);
+      // Phase 3: ?version=<id> scopes the read to a specific version when
+      // the user is browsing an older one via the chips. No param → latest
+      // (preserves legacy contract for callers that don't know about chips).
+      const qs   = selectedVersionId ? `?version=${encodeURIComponent(selectedVersionId)}` : '';
+      const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments${qs}`);
       const data = await res.json() as { comments?: CommentRow[]; error?: string };
       if (data.comments) {
         const pending = pendingTogglesRef.current;
@@ -442,17 +462,46 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     } catch { /* ignore */ } finally {
       setCommentsLoading(false);
     }
-  }, [asset?.assetId, asset?.frameio.assetId, projectId]);
+  }, [asset?.assetId, asset?.frameio.assetId, projectId, selectedVersionId]);
 
-  // Load comments when panel opens and asset has a Frame.io file ID
+  // Phase 3: fetch the version list when the asset opens. Default the
+  // selected version to the latest (matches what the user sees today before
+  // they touch the chips).
+  const fetchVersions = useCallback(async () => {
+    if (!asset?.assetId) return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/versions`);
+      const data = await res.json() as { versions?: VersionInfo[]; error?: string };
+      if (data.versions) {
+        setVersions(data.versions);
+        // Only set selected on initial load — don't clobber a user pick when
+        // refresh-fired versions list comes back. setSelectedVersionId
+        // becomes null only when the asset id changes (see effect below).
+        setSelectedVersionId((prev) => prev ?? data.versions?.find((v) => v.isLatest)?.assetVersionId ?? null);
+      }
+    } catch { /* ignore */ }
+  }, [asset?.assetId, projectId]);
+
+  // Load comments + versions when panel opens. Also clear selected version
+  // when switching between assets so the new asset opens on its latest.
   useEffect(() => {
     if (asset?.frameio.assetId) {
       setComments([]);
-      void fetchComments();
+      setSelectedVersionId(null);    // reset; fetchVersions will populate
+      void fetchVersions();
     } else {
       setComments([]);
+      setVersions([]);
+      setSelectedVersionId(null);
     }
-  }, [asset?.frameio.assetId, fetchComments]);
+  }, [asset?.frameio.assetId, fetchVersions]);
+
+  // Whenever the selected version changes, refetch comments.
+  useEffect(() => {
+    if (asset?.frameio.assetId && selectedVersionId) {
+      void fetchComments();
+    }
+  }, [asset?.frameio.assetId, selectedVersionId, fetchComments]);
 
   // Real-time comment refresh via Frame.io webhook → Socket.io push.
   // The server emits 'frameio:comments:refresh' whenever Frame.io fires any
@@ -922,6 +971,56 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       </svg>
                     </button>
                   </div>
+
+                  {/* Phase 3: version cycler. Only renders when the asset
+                       has more than one version — single-version assets
+                       don't need a chip strip. Comments are pinned per
+                       version (locked §11 #1) so each chip represents a
+                       distinct thread. */}
+                  {versions.length > 1 && (
+                    <div className="mad-version-chips">
+                      {versions.map((v) => (
+                        <button
+                          key={v.assetVersionId}
+                          type="button"
+                          className={`mad-version-chip${selectedVersionId === v.assetVersionId ? ' mad-version-chip--active' : ''}${v.isLatest ? ' mad-version-chip--latest' : ''}`}
+                          onClick={() => setSelectedVersionId(v.assetVersionId)}
+                          title={`Version ${v.versionNumber}${v.isLatest ? ' (latest)' : ''} — ${v.commentCount} comment${v.commentCount === 1 ? '' : 's'}`}
+                        >
+                          v{v.versionNumber}
+                          {v.commentCount > 0 && (
+                            <span className="mad-version-chip-count">{v.commentCount}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Phase 3: cross-version rollup chip. When the user is
+                       on the latest version AND an older version has
+                       comments, surface a discovery hint. Click jumps the
+                       view to that older version. Only shown when there's
+                       a single older version with comments — multi-older-
+                       version case is covered by the chip strip above. */}
+                  {(() => {
+                    const onLatest = selectedVersionId && versions.find((v) => v.assetVersionId === selectedVersionId)?.isLatest;
+                    if (!onLatest || versions.length < 2) return null;
+                    const olderWithComments = versions.filter((v) => !v.isLatest && v.commentCount > 0);
+                    if (olderWithComments.length === 0) return null;
+                    // Single older version with comments → direct chip.
+                    // Multiple → just point to the first; chips above handle the rest.
+                    const first = olderWithComments[0];
+                    return (
+                      <button
+                        type="button"
+                        className="mad-version-rollup"
+                        onClick={() => setSelectedVersionId(first.assetVersionId)}
+                        title={`v${first.versionNumber} had ${first.commentCount} comment${first.commentCount === 1 ? '' : 's'} — click to view`}
+                      >
+                        v{first.versionNumber} had {first.commentCount} comment{first.commentCount === 1 ? '' : 's'} → show
+                      </button>
+                    );
+                  })()}
 
                   {commentsLoading && comments.length === 0 && (
                     <p className="mad-comments-empty">Loading…</p>
