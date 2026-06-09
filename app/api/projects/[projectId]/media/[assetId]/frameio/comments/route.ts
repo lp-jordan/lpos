@@ -15,6 +15,14 @@ import { getUserById } from '@/lib/store/user-store';
 import { getCommentAuthor, setCommentAuthor, removeCommentAuthor } from '@/lib/store/comment-authors-store';
 import { getAllReplyParents, setReplyParent, removeReplyParent } from '@/lib/store/comment-replies-store';
 import { notifyCommentReply } from '@/lib/services/comment-notification-service';
+import { findAssetVersionByFrameioFileId } from '@/lib/store/canonical-asset-store';
+import {
+  insertMediaComment,
+  updateMediaCommentTextByFrameioId,
+  setMediaCommentCompletedByFrameioId,
+  softDeleteMediaCommentByFrameioId,
+  getMediaCommentByFrameioId,
+} from '@/lib/store/media-comment-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -105,6 +113,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       if (lposUser) setCommentAuthor(projectId, reply.id, { name: lposUser.name, userId: lposUser.id });
       patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
 
+      // Phase 0 shadow capture: dual-write to media_comments so the local
+      // table mirrors every LPOS-side comment write. Wrapped — never blocks.
+      shadowCaptureLposReply({ projectId, fileId, reply, parentFrameioCommentId: body.parentId, text: body.text.trim(), lposUser });
+
       // Notify the original commenter — only when the parent was authored inside
       // LPOS (we have their userId). External Frame.io reviewers have no in-app
       // recipient. Skip self-replies. Best-effort; never blocks the response.
@@ -130,6 +142,11 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     const comment = await postComment(fileId, body.text.trim(), body.timestamp ?? null, body.duration ?? null);
     patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
     if (lposUser) setCommentAuthor(projectId, comment.id, { name: lposUser.name, userId: lposUser.id });
+
+    // Phase 0 shadow capture: dual-write to media_comments. Wrapped so a
+    // shadow failure never breaks the user's successful Frame.io post.
+    shadowCaptureLposTopLevel({ projectId, fileId, comment, body: body.text.trim(), timestamp: body.timestamp ?? null, duration: body.duration ?? null, lposUser });
+
     const named = { ...comment, ...(lposUser ? { authorName: lposUser.name } : {}), fromFrame: false };
     return NextResponse.json({ comment: named }, { status: 201 });
   } catch (err) {
@@ -155,6 +172,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     if (typeof body.completed === 'boolean') {
       // Any authenticated LPOS user can mark a comment complete/incomplete
       await toggleCommentCompleted(body.commentId, body.completed);
+      // Phase 0 shadow capture
+      try { setMediaCommentCompletedByFrameioId(body.commentId, body.completed, session.userId); }
+      catch (err) { console.warn(`[frameio/comments PATCH] shadow setCompleted failed: ${(err as Error).message}`); }
       return NextResponse.json({ ok: true });
     }
 
@@ -165,6 +185,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         return NextResponse.json({ error: 'Not authorised to edit this comment' }, { status: 403 });
       }
       await updateComment(body.commentId, body.text.trim());
+      // Phase 0 shadow capture
+      try { updateMediaCommentTextByFrameioId(body.commentId, body.text.trim()); }
+      catch (err) { console.warn(`[frameio/comments PATCH] shadow update failed: ${(err as Error).message}`); }
       return NextResponse.json({ ok: true });
     }
 
@@ -190,8 +213,84 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     patchAsset(projectId, assetId, {
       frameio: { commentCount: Math.max(0, asset.frameio.commentCount - 1) },
     });
+    // Phase 0 shadow capture: soft delete (locked §11 #8)
+    try { softDeleteMediaCommentByFrameioId(commentId); }
+    catch (err) { console.warn(`[frameio/comments DELETE] shadow soft-delete failed: ${(err as Error).message}`); }
     return new NextResponse(null, { status: 204 });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  }
+}
+
+// ── Phase 0 shadow capture helpers ────────────────────────────────────────────
+//
+// Dual-write LPOS-side comment posts into media_comments. Wrapped — a shadow
+// failure logs but never affects the Frame.io response the user is waiting on.
+
+interface FrameIOCommentLike { id: string; text: string }
+interface FrameIOCommentReplyLike { id: string; text: string }
+interface LposUserLike { id: string; name: string }
+
+function shadowCaptureLposTopLevel(args: {
+  projectId: string;
+  fileId:    string;
+  comment:   FrameIOCommentLike;
+  body:      string;
+  timestamp: number | null;
+  duration:  number | null;
+  lposUser:  LposUserLike | null;
+}): void {
+  try {
+    const mapping = findAssetVersionByFrameioFileId(args.fileId);
+    if (!mapping) {
+      console.warn(`[frameio/comments POST] shadow: no version mapping for file ${args.fileId} — skipping`);
+      return;
+    }
+    insertMediaComment({
+      projectId:        mapping.projectId,
+      assetId:          mapping.assetId,
+      assetVersionId:   mapping.assetVersionId,
+      parentCommentId:  null,
+      body:             args.body,
+      timestampSeconds: args.timestamp,
+      durationSeconds:  args.duration,
+      authorUserId:     args.lposUser?.id ?? null,
+      source:           'lpos',
+      frameioCommentId: args.comment.id,
+      frameioFileId:    args.fileId,
+    });
+  } catch (err) {
+    console.warn(`[frameio/comments POST] shadow top-level write failed: ${(err as Error).message}`);
+  }
+}
+
+function shadowCaptureLposReply(args: {
+  projectId:              string;
+  fileId:                 string;
+  reply:                  FrameIOCommentReplyLike;
+  parentFrameioCommentId: string;
+  text:                   string;
+  lposUser:               LposUserLike | null;
+}): void {
+  try {
+    const mapping = findAssetVersionByFrameioFileId(args.fileId);
+    if (!mapping) {
+      console.warn(`[frameio/comments POST] shadow reply: no version mapping for file ${args.fileId} — skipping`);
+      return;
+    }
+    const parent = getMediaCommentByFrameioId(args.parentFrameioCommentId);
+    insertMediaComment({
+      projectId:        mapping.projectId,
+      assetId:          mapping.assetId,
+      assetVersionId:   mapping.assetVersionId,
+      parentCommentId:  parent?.commentId ?? null,
+      body:             args.text,
+      authorUserId:     args.lposUser?.id ?? null,
+      source:           'lpos',
+      frameioCommentId: args.reply.id,
+      frameioFileId:    args.fileId,
+    });
+  } catch (err) {
+    console.warn(`[frameio/comments POST] shadow reply write failed: ${(err as Error).message}`);
   }
 }

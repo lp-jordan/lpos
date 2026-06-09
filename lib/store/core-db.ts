@@ -439,6 +439,52 @@ function initSchema(db: DatabaseSync): void {
       value      TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    -- Local-first media comments. Phase 0 of the local-comments refactor
+    -- (docs/local-comments-refactor-spec.md): shadow-captures all comment
+    -- writes (from both Frame.io webhooks AND LPOS-side posts) so we can
+    -- verify capture before switching the UI's read path in Phase 1.
+    --
+    -- asset_id and asset_version_id are application-layer references to
+    -- the canonical-asset store in lpos-canonical-assets.sqlite — no FK
+    -- enforcement (different sqlite file). Application enforces integrity
+    -- at insert time.
+    --
+    -- source='lpos' rows come from LPOS-side comment posts; source='frameio'
+    -- rows come from webhook ingestion (external reviewers OR our own LPOS
+    -- writes echoed back). Idempotency on frameio_comment_id UNIQUE.
+    --
+    -- All §11 design decisions are LOCKED — see spec §11.
+    CREATE TABLE IF NOT EXISTS media_comments (
+      comment_id            TEXT PRIMARY KEY,
+      project_id            TEXT NOT NULL,
+      asset_id              TEXT NOT NULL,
+      asset_version_id      TEXT NOT NULL,                          -- locked §11 #1: version-scoped
+      parent_comment_id     TEXT,                                   -- null = top-level; set = reply (LPOS-only, locked §11 #2)
+      thread_root_id        TEXT NOT NULL,                          -- denormalised root for fast thread fetch (self for top-level)
+      body                  TEXT NOT NULL,
+      timestamp_seconds     REAL,                                   -- NDF seconds; null = global
+      duration_seconds      REAL,                                   -- range; requires timestamp_seconds
+      author_user_id        TEXT,                                   -- LPOS user; null when external Frame.io reviewer
+      author_external_name  TEXT,
+      author_external_email TEXT,
+      author_avatar_url     TEXT,
+      source                TEXT NOT NULL CHECK (source IN ('lpos', 'frameio')),
+      frameio_comment_id    TEXT UNIQUE,                            -- the tether: present when mirrored to/from Frame.io
+      frameio_file_id       TEXT,                                   -- denormalised Frame.io file the mirror landed on
+      completed             INTEGER NOT NULL DEFAULT 0,
+      completed_at          TEXT,
+      completed_by_user_id  TEXT,
+      created_at            TEXT NOT NULL,
+      updated_at            TEXT NOT NULL,
+      deleted_at            TEXT,                                   -- soft delete (locked §11 #8)
+      FOREIGN KEY (parent_comment_id) REFERENCES media_comments(comment_id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_media_comments_asset      ON media_comments(asset_id, deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_media_comments_project    ON media_comments(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_media_comments_thread     ON media_comments(thread_root_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_media_comments_frameio_id ON media_comments(frameio_comment_id) WHERE frameio_comment_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_media_comments_version    ON media_comments(asset_version_id);
   `);
 }
 
@@ -905,6 +951,48 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`ALTER TABLE prospects ADD COLUMN prospect_stage TEXT`);
   } catch {
     // Column already exists
+  }
+
+  // v23: Local-first media comments — Phase 0 shadow capture
+  // (docs/local-comments-refactor-spec.md). CREATE TABLE IF NOT EXISTS is
+  // idempotent so this is safe to re-run; older DBs get the table on first
+  // boot after deploy. Fresh DBs see it at initSchema time. See the
+  // initSchema definition above for the full column commentary.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS media_comments (
+        comment_id            TEXT PRIMARY KEY,
+        project_id            TEXT NOT NULL,
+        asset_id              TEXT NOT NULL,
+        asset_version_id      TEXT NOT NULL,
+        parent_comment_id     TEXT,
+        thread_root_id        TEXT NOT NULL,
+        body                  TEXT NOT NULL,
+        timestamp_seconds     REAL,
+        duration_seconds      REAL,
+        author_user_id        TEXT,
+        author_external_name  TEXT,
+        author_external_email TEXT,
+        author_avatar_url     TEXT,
+        source                TEXT NOT NULL CHECK (source IN ('lpos', 'frameio')),
+        frameio_comment_id    TEXT UNIQUE,
+        frameio_file_id       TEXT,
+        completed             INTEGER NOT NULL DEFAULT 0,
+        completed_at          TEXT,
+        completed_by_user_id  TEXT,
+        created_at            TEXT NOT NULL,
+        updated_at            TEXT NOT NULL,
+        deleted_at            TEXT,
+        FOREIGN KEY (parent_comment_id) REFERENCES media_comments(comment_id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_media_comments_asset      ON media_comments(asset_id, deleted_at);
+      CREATE INDEX IF NOT EXISTS idx_media_comments_project    ON media_comments(project_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_media_comments_thread     ON media_comments(thread_root_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_media_comments_frameio_id ON media_comments(frameio_comment_id) WHERE frameio_comment_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_media_comments_version    ON media_comments(asset_version_id);
+    `);
+  } catch (err) {
+    console.warn('[core-db v23] media_comments create skipped:', (err as Error).message);
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

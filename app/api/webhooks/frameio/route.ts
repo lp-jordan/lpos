@@ -17,6 +17,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore, getIo } from '@/lib/services/container';
 import { readRegistry, getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getActivityMonitorService } from '@/lib/services/activity-monitor-service';
+import { findAssetVersionByFrameioFileId } from '@/lib/store/canonical-asset-store';
+import {
+  insertMediaComment,
+  updateMediaCommentTextByFrameioId,
+  setMediaCommentCompletedByFrameioId,
+  softDeleteMediaCommentByFrameioId,
+  getMediaCommentByFrameioId,
+} from '@/lib/store/media-comment-store';
 
 // ── Signature verification ────────────────────────────────────────────────────
 
@@ -149,6 +157,18 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
     }
   }
 
+  // ── Phase 0 shadow capture (local-comments refactor) ──────────────────────
+  // Mirror every comment event into `media_comments` so we can verify capture
+  // before Phase 1 swaps the UI's read path. No reader consumes this yet —
+  // wrapped in its own try/catch so a shadow-capture failure never breaks
+  // the existing activity/refresh-broadcast paths above.
+  // See docs/local-comments-refactor-spec.md §12 Phase 0.
+  try {
+    shadowCaptureComment(payload);
+  } catch (err) {
+    console.warn(`[webhooks/frameio] shadow-capture failed for ${payload.type} ${data.id}: ${(err as Error).message}`);
+  }
+
   // Only record activity for comment.created events (not edits/completions/deletions).
   if (payload.type !== 'comment.created') return;
 
@@ -220,5 +240,79 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
       },
       dedupe_key: `frameio-comment:${fileId}:${data.id}`,
     });
+  }
+}
+
+// ── Phase 0 shadow capture ────────────────────────────────────────────────────
+//
+// Inserts/updates a `media_comments` row from each Frame.io webhook event.
+// All §11 design decisions in docs/local-comments-refactor-spec.md are baked in:
+//   #1 — version-scoped (asset_version_id NOT NULL, resolved via fileId join)
+//   #2 — replies are stored locally; outbound mirror won't push them (Phase 2)
+//   #6 — LWW: webhook updates overwrite local row's body/completion
+//   #8 — comment.deleted → soft delete (deleted_at set, row preserved)
+//
+// Idempotency on `frameio_comment_id UNIQUE`: webhook echoes of comments we
+// just posted via LPOS get short-circuited inside insertMediaComment.
+function shadowCaptureComment(payload: FrameIoWebhookPayload): void {
+  const { data } = payload;
+  const frameioCommentId = data.id;
+  const fileId           = data.file_id;
+  if (!frameioCommentId) return;
+
+  switch (payload.type) {
+    case 'comment.created': {
+      if (!fileId) return;
+      const mapping = findAssetVersionByFrameioFileId(fileId);
+      if (!mapping) {
+        console.warn(`[webhooks/frameio] shadow-capture: no version mapping for file ${fileId} — skipping`);
+        return;
+      }
+
+      // Resolve the local parent comment_id for replies. Webhook payload's
+      // parent_id is a Frame.io comment ID; we look up the local row.
+      let parentCommentId: string | null = null;
+      if (data.parent_id) {
+        const parent = getMediaCommentByFrameioId(data.parent_id);
+        parentCommentId = parent?.commentId ?? null;
+      }
+
+      const author = data.author ?? data.owner;
+      insertMediaComment({
+        projectId:          mapping.projectId,
+        assetId:            mapping.assetId,
+        assetVersionId:     mapping.assetVersionId,
+        parentCommentId,
+        body:               data.text ?? '',
+        timestampSeconds:   typeof data.timestamp === 'number' ? data.timestamp / 24 : null,  // frames → NDF seconds (matches frameio.ts convention)
+        durationSeconds:    null,
+        authorExternalName: author?.name ?? null,
+        authorAvatarUrl:    author?.avatar_url ?? null,
+        source:             'frameio',
+        frameioCommentId,
+        frameioFileId:      fileId,
+        completed:          Boolean(data.completed),
+        createdAtOverride:  data.inserted_at ?? undefined,
+      });
+      break;
+    }
+    case 'comment.updated': {
+      if (typeof data.text === 'string') {
+        updateMediaCommentTextByFrameioId(frameioCommentId, data.text);
+      }
+      break;
+    }
+    case 'comment.completed': {
+      setMediaCommentCompletedByFrameioId(frameioCommentId, true, null);
+      break;
+    }
+    case 'comment.uncompleted': {
+      setMediaCommentCompletedByFrameioId(frameioCommentId, false, null);
+      break;
+    }
+    case 'comment.deleted': {
+      softDeleteMediaCommentByFrameioId(frameioCommentId);
+      break;
+    }
   }
 }

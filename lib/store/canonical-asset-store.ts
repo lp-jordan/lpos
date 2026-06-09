@@ -1331,3 +1331,36 @@ export function isExactHashMatch(assetId: string, contentHash: string): boolean 
   const media = getPrimaryMediaFileForVersion(version.asset_version_id);
   return Boolean(media?.content_hash && media.content_hash === contentHash);
 }
+
+/**
+ * Resolve a Frame.io file ID to the LPOS (projectId, assetId, assetVersionId)
+ * triple that owns it. Used by the local-comments refactor (Phase 0 shadow
+ * capture, Phase 1 reads, and the backfill script — see
+ * docs/local-comments-refactor-spec.md §5.5, §10.1) to pin each comment to a
+ * specific asset_version_id (locked decision §11 #1: version-scoped comments).
+ *
+ * A Frame.io file ID maps to exactly one distribution_records row when the
+ * file came from LPOS; if Frame.io has files we don't track (e.g. external
+ * uploads), this returns null and the caller logs + skips.
+ */
+export function findAssetVersionByFrameioFileId(fileId: string): {
+  projectId:      string;
+  assetId:        string;
+  assetVersionId: string;
+} | null {
+  if (!fileId) return null;
+  const db = getCanonicalAssetDb();
+  const row = db.prepare(
+    `SELECT av.asset_id        AS asset_id,
+            av.asset_version_id AS asset_version_id,
+            a.project_id       AS project_id
+       FROM distribution_records dr
+       JOIN asset_versions av  ON av.asset_version_id = dr.asset_version_id
+       JOIN assets        a   ON a.asset_id          = av.asset_id
+      WHERE dr.provider = 'frameio'
+        AND dr.provider_asset_id = ?
+      LIMIT 1`,
+  ).get(fileId) as { asset_id: string; asset_version_id: string; project_id: string } | undefined;
+  if (!row) return null;
+  return { projectId: row.project_id, assetId: row.asset_id, assetVersionId: row.asset_version_id };
+}
