@@ -1041,32 +1041,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   )}
 
-                  {/* Phase 3: cross-version rollup chip. When the user is
-                       on the latest version AND an older version has
-                       comments, surface a discovery hint. Click jumps the
-                       view to that older version. Only shown when there's
-                       a single older version with comments — multi-older-
-                       version case is covered by the chip strip above. */}
-                  {(() => {
-                    const onLatest = selectedVersionId && versions.find((v) => v.assetVersionId === selectedVersionId)?.isLatest;
-                    if (!onLatest || versions.length < 2) return null;
-                    const olderWithComments = versions.filter((v) => !v.isLatest && v.commentCount > 0);
-                    if (olderWithComments.length === 0) return null;
-                    // Single older version with comments → direct chip.
-                    // Multiple → just point to the first; chips above handle the rest.
-                    const first = olderWithComments[0];
-                    return (
-                      <button
-                        type="button"
-                        className="mad-version-rollup"
-                        onClick={() => setSelectedVersionId(first.assetVersionId)}
-                        title={`v${first.versionNumber} had ${first.commentCount} comment${first.commentCount === 1 ? '' : 's'} — click to view`}
-                      >
-                        v{first.versionNumber} had {first.commentCount} comment{first.commentCount === 1 ? '' : 's'} → show
-                      </button>
-                    );
-                  })()}
-
                   {commentsLoading && comments.length === 0 && (
                     <p className="mad-comments-empty">Loading…</p>
                   )}

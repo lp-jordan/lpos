@@ -5047,29 +5047,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   color: rgba(99, 155, 255, 1);
   background: rgba(99, 155, 255, 0.25);
 }
-/* Cross-version rollup chip — discovery hint surfaced when the user is on
- * the latest version and an older version has comments. Single-click jumps
- * to that older version. Muted styling so it doesn't compete with the main
- * comment list. */
-.mad-version-rollup {
-  display: block;
-  margin: 0 0 10px 0;
-  padding: 5px 10px;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-.mad-version-rollup:hover {
-  color: var(--text-primary);
-  background: rgba(99, 155, 255, 0.08);
-  border-color: rgba(99, 155, 255, 0.3);
-}
 /* Phase 2 of the local-comments refactor: the outbound mirror to Frame.io
  * gave up after the 3-hour abandonment ceiling (locked decision §11 #7).
  * Surfaces to LPOS users so they know clients viewing the review link

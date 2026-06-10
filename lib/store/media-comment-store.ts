@@ -548,8 +548,7 @@ export function getThreadedCommentsForAssetVersion(
 /**
  * Phase 3 supporting query: how many (non-deleted) comments exist per
  * version of one asset? Drives the version-cycler chip badges in
- * MediaDetailPanel and the cross-version rollup chip ("v1 had N
- * comments → show").
+ * MediaDetailPanel.
  */
 export function getCommentCountsByVersion(projectId: string, assetId: string): Map<string, number> {
   const result = new Map<string, number>();
