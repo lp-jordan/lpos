@@ -11,14 +11,37 @@ import { projectHref } from '@/lib/urls/project-url';
  *
  * Bookmarks, external links (notifications, emails), and integrations that
  * predate the client-prefixed URL keep working. Kept indefinitely.
+ *
+ * The query string is preserved so asset deep-links like
+ * `/projects/<id>?assetId=<asset>` still open the asset sidebar after the
+ * redirect — MediaTab reads `?assetId=` to drive `setSelectedAsset`. (URL
+ * hash fragments are not sent to the server, so the browser carries those
+ * across the redirect on its own.)
  */
 export default async function ProjectRedirectShim({
   params,
-}: Readonly<{ params: Promise<{ projectId: string; sub?: string[] }> }>) {
+  searchParams,
+}: Readonly<{
+  params: Promise<{ projectId: string; sub?: string[] }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}>) {
   const { projectId, sub } = await params;
   const project = getProjectById(projectId);
   if (!project) notFound();
 
   const subPath = sub && sub.length > 0 ? sub.join('/') : undefined;
-  redirect(projectHref(project.clientName, projectId, subPath));
+  const target = projectHref(project.clientName, projectId, subPath);
+
+  const sp = await searchParams;
+  const usp = new URLSearchParams();
+  for (const [key, value] of Object.entries(sp)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) usp.append(key, v);
+    } else {
+      usp.append(key, value);
+    }
+  }
+  const qs = usp.toString();
+  redirect(qs ? `${target}?${qs}` : target);
 }
