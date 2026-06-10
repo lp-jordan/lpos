@@ -3116,7 +3116,13 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .ma-badge--review    { background: rgba(100,149,237,0.14); color: #6495ed; }
 .ma-badge--version   { font-weight: 700; letter-spacing: 0.02em; }
 
-/* Cloudflare staleness indicator — yellow dot (row/card) + small inline pill (detail panel) */
+/* Cloudflare staleness indicator — gold dot (row/card) + small inline pill (detail panel).
+   Pinned to the top-right corner of .ma-row / .ma-card so it reads as a status pip
+   instead of getting wrapped onto its own line under the "Not Pushed" / LeaderPass
+   badge when the badges flex row runs out of horizontal space. The card's menu
+   button overlays the dot on hover, which is intentional (menu wins when reaching
+   for it). Both .ma-row and .ma-card are positioned containers; the modifier
+   resolves to whichever ancestor it lands in. */
 .ma-cf-stale-dot {
   display: inline-block;
   width: 8px;
@@ -3126,6 +3132,15 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   box-shadow: 0 0 0 2px rgba(219,175,95,0.18);
   cursor: help;
   align-self: center;
+}
+.ma-cf-stale-dot--corner {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  box-shadow: 0 0 0 2px rgba(219,175,95,0.22), 0 0 6px rgba(219,175,95,0.5);
 }
 .mad-cf-stale-dot {
   display: inline-block;
@@ -3167,6 +3182,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   gap: 14px;
   grid-template-columns: 28px 52px 1fr auto auto auto;
   padding: 11px 14px;
+  position: relative; /* anchors .ma-cf-stale-dot--corner to the row */
   transition: border-color 0.15s;
 }
 .ma-row:hover { border-color: var(--line-strong); }

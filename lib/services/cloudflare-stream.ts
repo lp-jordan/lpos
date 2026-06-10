@@ -198,6 +198,7 @@ async function uploadTusChunk(
   config: CloudflareConfig,
   body: Buffer,
   offset: number,
+  signal?: AbortSignal,
 ): Promise<Response> {
   return fetch(uploadUrl, {
     method: 'PATCH',
@@ -209,6 +210,7 @@ async function uploadTusChunk(
       'Content-Length': String(body.byteLength),
     },
     body,
+    signal,
   });
 }
 
@@ -295,11 +297,27 @@ export async function uploadFileToCloudflareTus(
   const buffer = Buffer.allocUnsafe(chunkSize);
   let offset = 0;
 
+  // Cancel responsiveness: chunks default to 32 MB, so the gate at the top of
+  // the loop is too coarse to tear down a chunk that's actively flying over a
+  // slow uplink. Poll isCancelled() every 250ms; when it flips, abort the
+  // in-flight fetch at the socket so the error path runs immediately instead
+  // of waiting for the current chunk to finish.
+  const controller = new AbortController();
+  const cancelPoll = options?.isCancelled
+    ? setInterval(() => {
+        if (options.isCancelled!() && !controller.signal.aborted) {
+          controller.abort();
+        }
+      }, 250)
+    : null;
+
+  const ensureNotCancelled = () => {
+    if (options?.isCancelled?.()) throw new Error('Cancelled');
+  };
+
   try {
     while (offset < stat.size) {
-      if (options?.isCancelled?.()) {
-        throw new Error('Cancelled');
-      }
+      ensureNotCancelled();
 
       const bytesToRead = Math.min(chunkSize, stat.size - offset);
       const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
@@ -308,7 +326,19 @@ export async function uploadFileToCloudflareTus(
       let lastErrorText = '';
 
       for (let attempt = 0; attempt <= DEFAULT_UPLOAD_RETRIES; attempt += 1) {
-        response = await uploadTusChunk(uploadUrl, config, body, offset);
+        ensureNotCancelled();
+        try {
+          response = await uploadTusChunk(uploadUrl, config, body, offset, controller.signal);
+        } catch (err) {
+          // AbortController-driven cancellation surfaces as an AbortError —
+          // map it to our 'Cancelled' contract so the catch site can clean up
+          // the Cloudflare-side video and asset record. Re-throw any other
+          // fetch error (network, DNS, etc.) to let the retry loop handle it.
+          if (controller.signal.aborted || options?.isCancelled?.()) {
+            throw new Error('Cancelled');
+          }
+          throw err;
+        }
 
         if (response.ok) {
           break;
@@ -338,6 +368,7 @@ export async function uploadFileToCloudflareTus(
       options?.onProgress?.(Math.min(100, Math.round((offset / stat.size) * 100)));
     }
   } finally {
+    if (cancelPoll) clearInterval(cancelPoll);
     fs.closeSync(fd);
   }
 }

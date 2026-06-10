@@ -337,13 +337,6 @@ function AssetRow({
         <TranscriptionBadge status={asset.transcription.status} />
         <VersionBadge version={asset.frameio.version} />
         <LeaderPassBadge status={asset.leaderpass.status} />
-        {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
-          <span
-            className="ma-cf-stale-dot"
-            title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
-            aria-label="Cloudflare publication is stale"
-          />
-        )}
       </div>
       <button
         type="button"
@@ -355,6 +348,13 @@ function AssetRow({
           <circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>
         </svg>
       </button>
+      {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
+        <span
+          className="ma-cf-stale-dot ma-cf-stale-dot--corner"
+          title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
+          aria-label="Cloudflare publication is stale"
+        />
+      )}
     </div>
   );
 }
@@ -437,15 +437,15 @@ function AssetCard({
           <TranscriptionBadge status={asset.transcription.status} />
           <VersionBadge version={asset.frameio.version} />
           <LeaderPassBadge status={asset.leaderpass.status} />
-          {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
-            <span
-              className="ma-cf-stale-dot"
-              title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
-              aria-label="Cloudflare publication is stale"
-            />
-          )}
         </div>
       </div>
+      {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
+        <span
+          className="ma-cf-stale-dot ma-cf-stale-dot--corner"
+          title={`Cloudflare reflects v${asset.cloudflare.versionNumber}; current LPOS version is v${asset.frameio.version}. Re-push to update.`}
+          aria-label="Cloudflare publication is stale"
+        />
+      )}
       <button
         type="button"
         className="ma-card-menu-btn"

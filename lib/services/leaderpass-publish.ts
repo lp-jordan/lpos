@@ -160,12 +160,17 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     details_json: { filename },
   });
 
+  // Hoisted so the catch block can clean up the Cloudflare-side video when the
+  // user cancels mid-upload — otherwise the half-uploaded (or fully-uploaded,
+  // not-yet-publish-ready) Stream video lingers on the CF account as a true
+  // orphan that nothing in LPOS knows about. See catch branch below.
+  let prepared: { uid: string; uploadUrl: string } | null = null;
   try {
     const fileSize = asset.fileSize ?? getCloudflareFileSize(asset.filePath);
     const priorCloudflare = getLatestDistributionInfoForAsset(assetId, 'cloudflare');
     const priorLeaderPass = getLatestDistributionInfoForAsset(assetId, 'leaderpass');
     console.log(`[leaderpass] creating Cloudflare upload for asset ${assetId} (${fileSize} bytes)`);
-    const prepared = await createCloudflareTusUpload(asset);
+    prepared = await createCloudflareTusUpload(asset);
     console.log(`[leaderpass] Cloudflare upload initialized for asset ${assetId}; uid=${prepared.uid}`);
 
     patchAsset(projectId, assetId, {
@@ -361,11 +366,52 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     const cancelled = message === 'Cancelled';
     console.error(`[leaderpass] publish failed for asset ${assetId}: ${message}`);
 
+    // On cancel, delete the Cloudflare-side video so we don't leave a half-
+    // uploaded (or fully-uploaded, awaiting-encode) orphan on the CF account.
+    // The asset record's cloudflare.uid is also cleared so a re-push isn't
+    // confused by a dead reference (and the stale-version dot can't trip on
+    // an unfindable uid). One retry, then record to cloudflare_orphans so an
+    // admin can purge it later — never block the cancel return path on this.
+    if (cancelled && prepared?.uid) {
+      const orphanUid = prepared.uid;
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          await deleteCloudflareVideo(orphanUid);
+          console.log(`[leaderpass] deleted cancelled Cloudflare video uid=${orphanUid} for asset ${assetId} (attempt ${attempt})`);
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          console.warn(`[leaderpass] failed to delete cancelled Cloudflare video uid=${orphanUid} (attempt ${attempt}):`, lastErr);
+        }
+      }
+      if (lastErr) {
+        try {
+          recordOrphan({
+            uid: orphanUid,
+            assetId,
+            projectId,
+            name: filename,
+            reason: 'delete_failed',
+            attempts: 2,
+            lastError: `cancel: ${lastErr}`,
+          });
+          console.warn(`[leaderpass] recorded cancelled uid=${orphanUid} as Cloudflare orphan for manual purge`);
+        } catch (recordErr) {
+          console.error(`[leaderpass] failed to record cancel-orphan uid=${orphanUid}:`, recordErr);
+        }
+      }
+    }
+
     patchAsset(projectId, assetId, {
       cloudflare: {
         status: cancelled ? 'none' : 'failed',
         progress: 0,
         lastError: cancelled ? null : message,
+        // Clear the dead uid/uploadUrl on cancel so the next publish creates a
+        // fresh CF video instead of trying to resume a torn-down upload.
+        ...(cancelled ? { uid: null, uploadUrl: null } : {}),
       },
       leaderpass: {
         status: cancelled ? 'none' : 'failed',
