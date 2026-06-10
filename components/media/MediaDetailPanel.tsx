@@ -31,6 +31,7 @@ type CommentRow = FrameIOComment & { canEdit?: boolean; fromFrame?: boolean; mir
 import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
 import { DeliverableModal } from '@/components/projects/DeliverableModal';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
+import { DomainRestrictionsModal } from '@/components/media/DomainRestrictionsModal';
 
 // ── Theater mode error boundary ────────────────────────────────────────────
 // VideoTheaterMode renders untrusted comment text and does live DOM mutations
@@ -311,6 +312,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [cfEmbedCopied,    setCfEmbedCopied]    = useState(false);
   const [assetLinkCopied,  setAssetLinkCopied]  = useState(false);
   const [showThumbModal,   setShowThumbModal]   = useState(false);
+  const [showDomainsModal, setShowDomainsModal] = useState(false);
   const [cfResetConfirm,   setCfResetConfirm]   = useState(false);
 
   async function handlePushToLeaderPass() {
@@ -1414,6 +1416,23 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       <p className="mad-hint">Prepared {formatDate(asset.leaderpass.lastPreparedAt)}</p>
                     )}
 
+                    {/* ── Domain Restrictions — limit which sites can embed the Cloudflare video ── */}
+                    {isReady && asset.cloudflare.uid && (
+                      <button
+                        type="button"
+                        className="mad-action-btn"
+                        onClick={() => setShowDomainsModal(true)}
+                        title="Limit which domains may embed and play this Cloudflare Stream video"
+                        style={{ marginTop: 6 }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, verticalAlign: 'text-bottom' }}>
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                        Domain Restrictions
+                      </button>
+                    )}
+
                     {(lpError || asset.leaderpass.lastError || asset.cloudflare.lastError) && (() => {
                       const message  = lpError ?? asset.leaderpass.lastError ?? asset.cloudflare.lastError ?? '';
                       const preview  = summarizeError(message);
@@ -1614,6 +1633,18 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           assetIds={[asset.assetId]}
           onClose={() => setShowThumbModal(false)}
           onDone={() => { setShowThumbModal(false); onUpdated(); }}
+        />
+      )}
+
+      {/* Per-asset Cloudflare allowedOrigins editor. Reads current value from
+          the Cloudflare API on open and POSTs the full list on save. */}
+      {showDomainsModal && asset && (
+        <DomainRestrictionsModal
+          projectId={projectId}
+          assetId={asset.assetId}
+          assetName={asset.name}
+          onClose={() => setShowDomainsModal(false)}
+          onSaved={() => { setShowDomainsModal(false); onUpdated(); }}
         />
       )}
     </>

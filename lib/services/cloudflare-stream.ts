@@ -460,6 +460,24 @@ export async function applyVideoSettings(uid: string, settings: VideoSettings): 
 }
 
 /**
+ * Reads the current per-video metadata Cloudflare Stream is holding for `uid`.
+ * We only expose the fields the UI needs — extend the return type as more get
+ * surfaced. Throws on non-success response.
+ */
+export async function getVideoDetails(uid: string): Promise<{ allowedOrigins: string[] }> {
+  const config = getConfig();
+  const response = await withRetry(() =>
+    fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
+      method: 'GET',
+      headers: authHeaders(config),
+    }),
+  );
+
+  const result = await parseCloudflareResponse<{ allowedOrigins?: string[] | null }>(response);
+  return { allowedOrigins: Array.isArray(result.allowedOrigins) ? result.allowedOrigins : [] };
+}
+
+/**
  * Uploads a WebVTT file as captions for an existing Cloudflare Stream video.
  * Uses PUT /accounts/{id}/stream/{uid}/captions/{language} with multipart/form-data.
  * Errors are thrown so callers can decide whether to swallow them.
