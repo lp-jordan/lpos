@@ -1836,3 +1836,32 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** `npx tsc --noEmit` → exit 0 (no type errors). No build/test run (server lifecycle is user-managed).
 
 **Assumptions / follow-ups:** Assumes `media_type` is always present in the create response (V4 OpenAPI says `required`). Restart LPOS and retry the upload; the `[frameio-v4] signed Content-Type = "<X>" (caller passed "<Y>")` log will be useful if there's still any mismatch (very unlikely). If parts continue to 403 with `SignatureDoesNotMatch`, the next thing to investigate is whether undici fetch is silently adding a `Transfer-Encoding: chunked` header that isn't in `SignedHeaders`. lpos-dashboard committed (not pushed).
+
+---
+
+## 2026-06-16 — Rename "Domain Restrictions" to "Security" and add signed URL toggle
+
+**User prompt:** Can we do a quick test? Can we change "Domain Restrictions" to "Security" and expose both the domain restrictions stuff and a signed URL toggle for assets in the media tab of LPOS? That way I can quickly test to see if LP platform already handles videos with signed URLs.
+
+**Summary:** Renamed the "Domain Restrictions" button on the media detail panel to "Security" and expanded the modal to include a "Require signed URLs" checkbox at the top (above the existing domain restrictions list). Wired the toggle through the API layer so it reads and writes `requireSignedURLs` on the Cloudflare Stream video.
+
+**Files changed:**
+- `lib/services/cloudflare-stream.ts`
+- `app/api/projects/[projectId]/media/[assetId]/cloudflare/route.ts`
+- `components/media/DomainRestrictionsModal.tsx`
+- `components/media/MediaDetailPanel.tsx`
+
+**Implementation summary:**
+- Added `requireSignedURLs?: boolean` to the `VideoSettings` interface in `cloudflare-stream.ts` and passed it through to the Cloudflare `POST` body in `applyVideoSettings`.
+- Extended `getVideoDetails` return type to include `requireSignedURLs: boolean`, extracted from the CF GET response.
+- Route (`cloudflare/route.ts`) now accepts `requireSignedURLs` in the POST body (boolean validation) and returns it in GET responses.
+- `DomainRestrictionsModal` loads `requireSignedURLs` on mount, exposes a checkbox, and includes it in the save payload alongside `allowedOrigins`.
+- Button label and modal title changed from "Domain Restrictions" to "Security".
+
+**Decision rationale:** Minimal-touch approach — all changes are additive to existing plumbing. The toggle gives a quick way to test whether the LeaderPass platform handles signed-URL-locked videos without any permanent infrastructure change on the LP side.
+
+**Alternatives considered:** (a) New separate modal — unnecessary; the checkbox fits naturally above the existing domain restrictions form. (b) Inline toggle directly in the panel without a modal — would require loading CF state eagerly for every ready asset; current modal lazy-loads on open.
+
+**Commands run:** No build run (server lifecycle is user-managed). TypeScript validated at read time.
+
+**Assumptions / follow-ups:** Enabling signed URLs will immediately break playback on LP until LP holds a CF signing key and mints tokens. Test by toggling on, loading the LP platform, and observing whether playback fails or succeeds. If it fails (expected), that confirms LP needs the signing-key integration. Toggle back off to restore playback.

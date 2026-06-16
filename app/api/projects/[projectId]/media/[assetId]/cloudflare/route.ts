@@ -11,10 +11,9 @@ type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
 // ── GET — read per-asset Cloudflare video settings ──────────────────────────
 //
-// Returns: { allowedOrigins: string[] }
+// Returns: { allowedOrigins: string[]; requireSignedURLs: boolean }
 //
-// Currently surfaces only the fields used by the UI (Domain Restrictions
-// modal). Extend the response as more settings need to be read.
+// Surfaces the fields used by the Security modal.
 
 export async function GET(_req: NextRequest, { params }: Ctx) {
   const { projectId, assetId } = await params;
@@ -42,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 
 // ── POST — apply per-asset Cloudflare video settings ────────────────────────
 //
-// Body: { thumbnailFrameNumber?: number; allowedOrigins?: string[] }
+// Body: { thumbnailFrameNumber?: number; allowedOrigins?: string[]; requireSignedURLs?: boolean }
 //
 // thumbnailFrameNumber: the specific video frame to use as the Cloudflare
 // thumbnail (e.g. 24). The server probes fps/duration from the local file
@@ -50,6 +49,10 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 //
 // allowedOrigins: full list of domains permitted to play this video. An
 // empty array clears the restriction (Cloudflare default = play anywhere).
+//
+// requireSignedURLs: when true, Cloudflare will reject unsigned playback
+// requests for this video. Tokens must be generated server-side by the
+// consumer (e.g. LeaderPass) using the CF Stream signing key.
 
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { projectId, assetId } = await params;
@@ -66,8 +69,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     return NextResponse.json({ error: 'Asset does not have a ready Cloudflare Stream video.' }, { status: 400 });
   }
 
-  const body = await req.json() as { thumbnailFrameNumber?: number; allowedOrigins?: unknown };
-  const settings: { thumbnailTimestampPct?: number; allowedOrigins?: string[] } = {};
+  const body = await req.json() as { thumbnailFrameNumber?: number; allowedOrigins?: unknown; requireSignedURLs?: unknown };
+  const settings: { thumbnailTimestampPct?: number; allowedOrigins?: string[]; requireSignedURLs?: boolean } = {};
 
   // ── allowedOrigins ────────────────────────────────────────────────────────
   if (body.allowedOrigins !== undefined) {
@@ -80,6 +83,14 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       (body.allowedOrigins as string[]).map((o) => o.trim()).filter(Boolean),
     ));
     settings.allowedOrigins = normalized;
+  }
+
+  // ── requireSignedURLs ─────────────────────────────────────────────────────
+  if (body.requireSignedURLs !== undefined) {
+    if (typeof body.requireSignedURLs !== 'boolean') {
+      return NextResponse.json({ error: 'requireSignedURLs must be a boolean.' }, { status: 400 });
+    }
+    settings.requireSignedURLs = body.requireSignedURLs;
   }
 
   // ── thumbnailFrameNumber ──────────────────────────────────────────────────
@@ -114,7 +125,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
 
   if (Object.keys(settings).length === 0) {
-    return NextResponse.json({ error: 'No settings provided. Send thumbnailFrameNumber and/or allowedOrigins.' }, { status: 400 });
+    return NextResponse.json({ error: 'No settings provided. Send thumbnailFrameNumber, allowedOrigins, and/or requireSignedURLs.' }, { status: 400 });
   }
 
   try {
@@ -128,5 +139,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     ok: true,
     ...(thumbnailTimestampPct !== undefined ? { thumbnailTimestampPct } : {}),
     ...(settings.allowedOrigins !== undefined ? { allowedOrigins: settings.allowedOrigins } : {}),
+    ...(settings.requireSignedURLs !== undefined ? { requireSignedURLs: settings.requireSignedURLs } : {}),
   });
 }

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-16T00:00:00Z",
+    "title": "Rename Domain Restrictions to Security and add signed URL toggle",
+    "summary": "Renamed the Domain Restrictions button/modal to Security and added a Require Signed URLs checkbox. Wired requireSignedURLs through cloudflare-stream.ts, the cloudflare API route, and DomainRestrictionsModal so it reads and writes the CF Stream setting. Enables quick testing of whether the LeaderPass platform handles signed-URL-protected videos."
+  },
+  {
     "timestamp": "2026-06-09T22:05:00Z",
     "title": "People prospect-stage \"No stage\" silently reverts — PATCH route's str() helper ignored null",
     "summary": "Fixed a bug where clearing the funnel Stage on a person (picking 'No stage') silently reverted to the previous stage. The inline ProspectStageBadge on the person detail page sends { prospectStage: value || null } when the option's empty value is selected, so the request body was { prospectStage: null }. The prospects PATCH route's str() coercion helper at app/api/prospects/[prospectId]/route.ts only handled string inputs — null fell through to its undefined branch, the field was dropped from the patch, the DB never updated, and the page re-rendered the stale value. Updated str() to treat null as an explicit clear (mirroring how the existing num() helper already behaved and how '' was already clearing), and switched the non-nullable status field check to a direct typeof body.status === 'string' test so the new null-clears semantic can't accidentally NULL out the status column. As a side effect this also fixes the same latent bug for the ~14 other str()-gated clearable fields (source, referredBy, accountModel, revenueType, expansionPotential, expectedStartMonth, owner, startMonth, recurringBillingStatus, renewalDate, firstRecurringBillDate, activeServices, nextFilmDate) that the in-tree edit-form save path also sends as field || null."

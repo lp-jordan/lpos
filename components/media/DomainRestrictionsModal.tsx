@@ -31,20 +31,21 @@ function isValidOrigin(value: string): boolean {
 }
 
 export function DomainRestrictionsModal({ projectId, assetId, assetName, onClose, onSaved }: Readonly<Props>) {
-  const [phase, setPhase]     = useState<Phase>('loading');
-  const [origins, setOrigins] = useState<string[]>([]);
-  const [draft, setDraft]     = useState('');
-  const [error, setError]     = useState<string | null>(null);
-  const [dirty, setDirty]     = useState(false);
+  const [phase, setPhase]               = useState<Phase>('loading');
+  const [origins, setOrigins]           = useState<string[]>([]);
+  const [requireSigned, setRequireSigned] = useState(false);
+  const [draft, setDraft]               = useState('');
+  const [error, setError]               = useState<string | null>(null);
+  const [dirty, setDirty]               = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // ── Load current allowedOrigins from Cloudflare ───────────────────────────
+  // ── Load current settings from Cloudflare ────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}/media/${assetId}/cloudflare`, { method: 'GET' });
-        const data = await res.json() as { allowedOrigins?: string[]; error?: string };
+        const data = await res.json() as { allowedOrigins?: string[]; requireSignedURLs?: boolean; error?: string };
         if (cancelled) return;
         if (!res.ok) {
           setPhase('error');
@@ -52,6 +53,7 @@ export function DomainRestrictionsModal({ projectId, assetId, assetName, onClose
           return;
         }
         setOrigins(Array.isArray(data.allowedOrigins) ? data.allowedOrigins : []);
+        setRequireSigned(data.requireSignedURLs === true);
         setPhase('idle');
         setTimeout(() => inputRef.current?.focus(), 0);
       } catch (err) {
@@ -92,7 +94,7 @@ export function DomainRestrictionsModal({ projectId, assetId, assetName, onClose
       const res = await fetch(`/api/projects/${projectId}/media/${assetId}/cloudflare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ allowedOrigins: origins }),
+        body: JSON.stringify({ allowedOrigins: origins, requireSignedURLs: requireSigned }),
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) {
@@ -130,10 +132,10 @@ export function DomainRestrictionsModal({ projectId, assetId, assetName, onClose
   return (
     <>
       <div className="sardius-modal-backdrop" onClick={tryClose} aria-hidden="true" />
-      <div className="sardius-modal" role="dialog" aria-label="Domain Restrictions" aria-modal="true">
+      <div className="sardius-modal" role="dialog" aria-label="Security" aria-modal="true">
         <div className="sardius-modal-header">
           <span className="sardius-modal-title">
-            Domain Restrictions
+            Security
             {assetName && <span className="sardius-modal-count"> — {assetName}</span>}
           </span>
           <button
@@ -150,8 +152,31 @@ export function DomainRestrictionsModal({ projectId, assetId, assetName, onClose
 
         <div className="sardius-modal-body">
           <div className="sardius-section">
-            <p className="proj-upload-zone-hint" style={{ marginTop: 0 }}>
-              Limit which domains may embed and play this Cloudflare Stream video. Leave the list
+
+            {/* ── Signed URLs toggle ── */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18, paddingBottom: 18, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <input
+                id="cf-require-signed"
+                type="checkbox"
+                checked={requireSigned}
+                disabled={isBusy}
+                onChange={(e) => { setRequireSigned(e.target.checked); setDirty(true); }}
+                style={{ marginTop: 2, flexShrink: 0 }}
+              />
+              <label htmlFor="cf-require-signed" style={{ cursor: 'pointer' }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>Require signed URLs</span>
+                <p className="proj-upload-zone-hint" style={{ marginTop: 3, marginBottom: 0 }}>
+                  When enabled, Cloudflare rejects unsigned playback requests. The consumer (e.g. LeaderPass) must hold the Stream signing key and generate short-lived tokens to play this video.
+                </p>
+              </label>
+            </div>
+
+            {/* ── Domain restrictions ── */}
+            <p className="proj-upload-zone-hint" style={{ marginTop: 0, fontWeight: 600, fontSize: 13, color: 'inherit' }}>
+              Domain Restrictions
+            </p>
+            <p className="proj-upload-zone-hint" style={{ marginTop: 2 }}>
+              Limit which domains may embed and play this video. Leave the list
               empty to allow playback from anywhere (Cloudflare default). Wildcards like
               <code style={{ margin: '0 4px' }}>*.example.com</code> are supported.
             </p>

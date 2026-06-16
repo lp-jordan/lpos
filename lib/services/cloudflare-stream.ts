@@ -464,6 +464,7 @@ export function getCloudflareFileSize(filePath: string): number {
 interface VideoSettings {
   allowedOrigins?: string[];
   thumbnailTimestampPct?: number;
+  requireSignedURLs?: boolean;
 }
 
 /**
@@ -475,6 +476,7 @@ export async function applyVideoSettings(uid: string, settings: VideoSettings): 
   const body: Record<string, unknown> = {};
   if (settings.allowedOrigins !== undefined) body.allowedOrigins = settings.allowedOrigins;
   if (settings.thumbnailTimestampPct !== undefined) body.thumbnailTimestampPct = settings.thumbnailTimestampPct;
+  if (settings.requireSignedURLs !== undefined) body.requireSignedURLs = settings.requireSignedURLs;
 
   const response = await withRetry(() =>
     fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
@@ -495,7 +497,7 @@ export async function applyVideoSettings(uid: string, settings: VideoSettings): 
  * We only expose the fields the UI needs — extend the return type as more get
  * surfaced. Throws on non-success response.
  */
-export async function getVideoDetails(uid: string): Promise<{ allowedOrigins: string[] }> {
+export async function getVideoDetails(uid: string): Promise<{ allowedOrigins: string[]; requireSignedURLs: boolean }> {
   const config = getConfig();
   const response = await withRetry(() =>
     fetch(`https://api.cloudflare.com/client/v4/accounts/${config.accountId}/stream/${uid}`, {
@@ -504,8 +506,11 @@ export async function getVideoDetails(uid: string): Promise<{ allowedOrigins: st
     }),
   );
 
-  const result = await parseCloudflareResponse<{ allowedOrigins?: string[] | null }>(response);
-  return { allowedOrigins: Array.isArray(result.allowedOrigins) ? result.allowedOrigins : [] };
+  const result = await parseCloudflareResponse<{ allowedOrigins?: string[] | null; requireSignedURLs?: boolean }>(response);
+  return {
+    allowedOrigins: Array.isArray(result.allowedOrigins) ? result.allowedOrigins : [],
+    requireSignedURLs: result.requireSignedURLs === true,
+  };
 }
 
 /**
