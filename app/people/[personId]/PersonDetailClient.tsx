@@ -24,25 +24,30 @@ const STATUS_STYLE: Record<ProspectStatus, { bg: string; border: string; color: 
 };
 
 
-// ── Prospect stage badge (header) ─────────────────────────────────────────────
+// ── Prospect stage tracker ────────────────────────────────────────────────────
 
-/** Inline stage badge that doubles as a stage picker. Mirrors the active-client
- *  status select's "pill-with-arrow" look so the header reads consistently
- *  whether the person is a prospect or active. Free-select — no funnel
- *  enforcement; PATCHes prospectStage on every change. */
-function ProspectStageBadge({ person, onUpdated }: { person: Prospect; onUpdated: (p: Prospect) => void }) {
-  const cfg = PROSPECT_STAGES.find((s) => s.value === person.prospectStage);
-  const color = cfg?.color ?? '#94a3b8';
-  const bg = `${color}22`; // ~13% alpha
+const STAGE_STEPS = [
+  { value: null,                   label: 'Not Started' },
+  ...PROSPECT_STAGES.map((s) => ({ value: s.value as string | null, label: s.label })),
+];
+
+function ProspectStageTracker({ person, onUpdated }: { person: Prospect; onUpdated: (p: Prospect) => void }) {
   const [saving, setSaving] = useState(false);
+  const currentIdx = person.prospectStage === null
+    ? 0
+    : STAGE_STEPS.findIndex((s) => s.value === person.prospectStage);
+  const activeIdx = currentIdx === -1 ? 0 : currentIdx;
+  const currentLabel = STAGE_STEPS[activeIdx]?.label ?? 'Not Started';
 
-  async function handleChange(value: string) {
+  async function handleClick(idx: number) {
+    if (saving) return;
+    const next = STAGE_STEPS[idx];
     setSaving(true);
     try {
       const res = await fetch(`/api/prospects/${person.prospectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prospectStage: value || null }),
+        body: JSON.stringify({ prospectStage: next.value ?? null }),
       });
       const data = await res.json() as { prospect?: Prospect };
       if (res.ok && data.prospect) onUpdated(data.prospect);
@@ -50,24 +55,54 @@ function ProspectStageBadge({ person, onUpdated }: { person: Prospect; onUpdated
   }
 
   return (
-    <select
-      value={person.prospectStage ?? ''}
-      onChange={(e) => void handleChange(e.target.value)}
-      disabled={saving}
-      style={{
-        padding: '0.28rem 2rem 0.28rem 0.7rem', borderRadius: 999,
-        border: `1px solid ${color}`, backgroundColor: bg, color,
-        fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
-        appearance: 'none',
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(color)}' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`,
-        backgroundPosition: 'right 8px center', backgroundRepeat: 'no-repeat',
-      }}
-    >
-      <option value="">No stage</option>
-      {PROSPECT_STAGES.map((s) => (
-        <option key={s.value} value={s.value}>{s.label}</option>
-      ))}
-    </select>
+    <div style={{ padding: '20px 0 24px', borderBottom: '1px solid var(--line)' }}>
+      {/* Stage label */}
+      <p style={{
+        textAlign: 'center', margin: '0 0 14px',
+        fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em',
+        textTransform: 'uppercase', color: 'var(--accent)',
+      }}>
+        {currentLabel}
+      </p>
+
+      {/* Track */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+        {STAGE_STEPS.map((step, idx) => {
+          const isPast    = idx < activeIdx;
+          const isCurrent = idx === activeIdx;
+          const isFuture  = idx > activeIdx;
+
+          const dotColor   = isPast ? 'var(--success)' : isCurrent ? 'var(--accent)' : 'transparent';
+          const ringColor  = isPast ? 'var(--success)' : isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.15)';
+          const lineColor  = idx < STAGE_STEPS.length - 1
+            ? (idx < activeIdx ? 'var(--success)' : 'rgba(255,255,255,0.1)')
+            : 'transparent';
+
+          return (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center' }}>
+              <button
+                type="button"
+                title={step.label}
+                onClick={() => void handleClick(idx)}
+                disabled={saving}
+                style={{
+                  width: 14, height: 14, borderRadius: '50%',
+                  border: `2px solid ${ringColor}`,
+                  background: dotColor,
+                  cursor: saving ? 'default' : 'pointer',
+                  padding: 0, flexShrink: 0,
+                  boxShadow: isCurrent ? `0 0 0 3px rgba(219,175,95,0.2)` : 'none',
+                  transition: 'box-shadow 0.15s, background 0.15s',
+                }}
+              />
+              {idx < STAGE_STEPS.length - 1 && (
+                <div style={{ width: 36, height: 2, background: lineColor, flexShrink: 0, transition: 'background 0.15s' }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -844,13 +879,7 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
             {person.company}
           </h1>
 
-          {/* Status display / toggle. The dedicated "Prospect" pill was dropped
-              (the Promote → button already signals state, and the people-list
-              card stripe carries the type at a glance) — only the editable
-              stage badge remains for prospects. */}
-          {isProspect ? (
-            <ProspectStageBadge person={person} onUpdated={setPerson} />
-          ) : (
+          {!isProspect && (
             <select
               value={person.status}
               onChange={(e) => handleStatusChange(e.target.value as ProspectStatus)}
@@ -890,6 +919,11 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
           </span>
         )}
       </div>
+
+      {/* ── Prospect stage tracker ── */}
+      {isProspect && (
+        <ProspectStageTracker person={person} onUpdated={setPerson} />
+      )}
 
       {/* ── Two-column body ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24, alignItems: 'start' }}>
