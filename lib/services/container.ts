@@ -196,7 +196,9 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   }
 
   registry = new ServiceRegistry(io);
-  slateService = new SlateService(io, registry, globalThis.__lpos_projectStore);
+  if (!process.env.LPOS_DISABLE_ATEM) {
+    slateService = new SlateService(io, registry, globalThis.__lpos_projectStore);
+  }
 
   transcripterService = new TranscripterService(io, registry);
   globalThis.__lpos_transcripterService = transcripterService;
@@ -296,7 +298,7 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   monitors.startAll();
 
   await Promise.all([
-    slateService.start(),
+    slateService?.start() ?? Promise.resolve(),
     transcripterService.start(),
     passPrepService.start(),
     cameraControlService.start(),
