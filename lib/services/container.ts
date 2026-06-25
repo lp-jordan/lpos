@@ -195,8 +195,13 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     globalThis.__lpos_projectStore = new ProjectStore(io);
   }
 
+  // LPOS_DISABLE_HARDWARE=1 skips all services that talk to physical hardware
+  // (ATEM, cameras, Amaran, WLED). Set this in dev to prevent the dev server
+  // from competing with prod for the same devices on the LAN.
+  const hardwareEnabled = !process.env.LPOS_DISABLE_HARDWARE;
+
   registry = new ServiceRegistry(io);
-  if (!process.env.LPOS_DISABLE_ATEM) {
+  if (hardwareEnabled) {
     slateService = new SlateService(io, registry, globalThis.__lpos_projectStore);
   }
 
@@ -244,12 +249,14 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   pipelineTracker.start();
   globalThis.__lpos_pipelineTracker = pipelineTracker;
 
-  cameraControlService = new CameraControlService(io, registry);
-  globalThis.__lpos_cameraControlService = cameraControlService;
-  amaranService = new AmaranService(io);
-  globalThis.__lpos_amaranService = amaranService;
-  wledService = new WledService(io);
-  globalThis.__lpos_wledService = wledService;
+  if (hardwareEnabled) {
+    cameraControlService = new CameraControlService(io, registry);
+    globalThis.__lpos_cameraControlService = cameraControlService;
+    amaranService = new AmaranService(io);
+    globalThis.__lpos_amaranService = amaranService;
+    wledService = new WledService(io);
+    globalThis.__lpos_wledService = wledService;
+  }
   activityMonitorService = new ActivityMonitorService(io, registry);
   globalThis.__lpos_activityMonitorService = activityMonitorService;
   setActivityMonitorService(activityMonitorService);
@@ -298,12 +305,12 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   monitors.startAll();
 
   await Promise.all([
-    slateService?.start() ?? Promise.resolve(),
+    slateService?.start()          ?? Promise.resolve(),
     transcripterService.start(),
     passPrepService.start(),
-    cameraControlService.start(),
-    amaranService.start(),
-    wledService.start(),
+    cameraControlService?.start()  ?? Promise.resolve(),
+    amaranService?.start()         ?? Promise.resolve(),
+    wledService?.start()           ?? Promise.resolve(),
     activityMonitorService.start(),
     driveWatcherService?.start() ?? Promise.resolve(),
   ]);
