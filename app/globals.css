@@ -3776,7 +3776,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .ivp-video {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: auto;
   background: #000;
   pointer-events: none;
 }
