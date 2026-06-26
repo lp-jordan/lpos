@@ -3356,17 +3356,13 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   overflow: hidden;
   margin-bottom: 0.25rem;
   width: 100%;
-  /* 16:9 placeholder so the box is visible before metadata loads; once the
-     video reports its true dimensions the component overrides aspect-ratio
-     inline so non-16:9 sources don't get pillarbox/letterbox black bars. */
-  aspect-ratio: 16 / 9;
+  padding-top: 56.25%; /* 16:9 — always visible even before metadata loads */
 }
 .mad-video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain; /* never crop the frame */
   background: #000;
 }
 .mad-video::-webkit-media-controls-fullscreen-button       { display: none; }

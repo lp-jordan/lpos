@@ -1,10 +1,5 @@
 [
   {
-    "timestamp": "2026-06-26T19:29:01Z",
-    "title": "Sidebar video preview no longer adds black bars to non-16:9 assets",
-    "summary": "Fixed pillarbox/letterbox black bars on the media sidebar video preview. The preview box (MediaDetailPanel .mad-video-wrap) was locked to a 16:9 frame (padding-top: 56.25%) with the video fitting inside via the default object-fit: contain, so any source that wasn't exactly 16:9 showed black bars — surfaced when the custom-player transition replaced the old Frame.io iframe embed with our own proxied <video>. The box now adopts the video's true aspect ratio once metadata loads (videoWidth/videoHeight read on loadedmetadata, applied as an inline aspect-ratio), keeping 16:9 only as the pre-load placeholder, with object-fit: contain so the frame is never cropped. If bars persist they're baked into the Cloudflare/Frame.io transcode rather than the CSS."
-  },
-  {
     "timestamp": "2026-06-16T00:00:00Z",
     "title": "Rename Domain Restrictions to Security and add signed URL toggle",
     "summary": "Renamed the Domain Restrictions button/modal to Security and added a Require Signed URLs checkbox. Wired requireSignedURLs through cloudflare-stream.ts, the cloudflare API route, and DomainRestrictionsModal so it reads and writes the CF Stream setting. Enables quick testing of whether the LeaderPass platform handles signed-URL-protected videos."
