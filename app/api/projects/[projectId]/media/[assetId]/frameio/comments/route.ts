@@ -12,7 +12,7 @@ import { getAsset, patchAsset } from '@/lib/store/media-registry';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById } from '@/lib/store/user-store';
 import { notifyCommentReply } from '@/lib/services/comment-notification-service';
-import { findAssetVersionByFrameioFileId } from '@/lib/store/canonical-asset-store';
+import { findAssetVersionByFrameioFileId, getCurrentAssetVersion } from '@/lib/store/canonical-asset-store';
 import {
   insertMediaComment,
   getMediaCommentByEitherId,
@@ -25,16 +25,38 @@ import {
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
+/**
+ * Resolve the (project, asset, version) scope a comment read/write targets.
+ *
+ * LPOS owns comments, so this works whether or not the asset is on Frame.io:
+ * when a Frame.io file id exists we honour its version mapping (keeps inbound
+ * webhook captures and outbound mirrors on the same version row), otherwise we
+ * fall back to the asset's current LPOS version. Returns null only when the
+ * asset has no versions at all (shouldn't happen for a registered asset).
+ */
+function resolveCommentScope(
+  projectId: string,
+  assetId:   string,
+  fileId:    string | null,
+): { projectId: string; assetId: string; assetVersionId: string } | null {
+  if (fileId) {
+    const mapping = findAssetVersionByFrameioFileId(fileId);
+    if (mapping) return mapping;
+  }
+  const version = getCurrentAssetVersion(assetId);
+  if (version) return { projectId, assetId, assetVersionId: version.asset_version_id };
+  return null;
+}
+
 export async function GET(req: NextRequest, { params }: Ctx) {
   const { projectId, assetId } = await params;
 
   const asset = getAsset(projectId, assetId);
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
 
+  // Frame.io optional: fileId may be null. The scope resolver falls back to
+  // the asset's current LPOS version when there's no Frame.io mapping.
   const fileId = asset.frameio.assetId;
-  if (!fileId) {
-    return NextResponse.json({ comments: [] });
-  }
 
   const cookieStore = await cookies();
   const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
@@ -42,7 +64,8 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   // Phase 1: read from media_comments instead of Frame.io.
   // Phase 3: accept ?version=<assetVersionId> to scope comments to one
   // version (used by the sidebar version cycler in MediaDetailPanel). When
-  // absent, defaults to the latest version via the current Frame.io file id.
+  // absent, defaults to the asset's current version (via Frame.io mapping if
+  // present, else the LPOS-native current version).
   const requestedVersionId = new URL(req.url).searchParams.get('version');
   try {
     let resolvedProjectId:     string;
@@ -56,16 +79,15 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       resolvedAssetId        = assetId;
       resolvedAssetVersionId = requestedVersionId;
     } else {
-      const mapping = findAssetVersionByFrameioFileId(fileId);
-      if (!mapping) {
-        // No version mapping shouldn't happen for an asset with a Frame.io ID,
-        // but degrade gracefully: empty list rather than 500.
-        console.warn(`[frameio/comments GET] no version mapping for file ${fileId} — returning empty`);
+      const scope = resolveCommentScope(projectId, assetId, fileId);
+      if (!scope) {
+        // Asset has no versions at all — degrade gracefully to an empty list.
+        console.warn(`[frameio/comments GET] no version for asset ${assetId} — returning empty`);
         return NextResponse.json({ comments: [] });
       }
-      resolvedProjectId      = mapping.projectId;
-      resolvedAssetId        = mapping.assetId;
-      resolvedAssetVersionId = mapping.assetVersionId;
+      resolvedProjectId      = scope.projectId;
+      resolvedAssetId        = scope.assetId;
+      resolvedAssetVersionId = scope.assetVersionId;
     }
 
     const { comments, rowLookup } = getThreadedCommentsForAssetVersion(
@@ -123,10 +145,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const asset = getAsset(projectId, assetId);
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
 
+  // Frame.io optional: an asset that was never pushed to Frame.io can still be
+  // commented on. fileId may be null; the scope resolver and mirror enqueue
+  // below both handle that.
   const fileId = asset.frameio.assetId;
-  if (!fileId) {
-    return NextResponse.json({ error: 'Asset has not been uploaded to Frame.io yet' }, { status: 400 });
-  }
 
   const body = await req.json() as {
     text?:      string;
@@ -142,13 +164,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const session     = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
   const lposUser    = session ? getUserById(session.userId) : null;
 
-  // Resolve which asset_version this comment is being posted against. The
-  // GET handler always uses the current Frame.io file id → asset_version_id
-  // mapping; POSTs use the same so a comment posted "now" pins to the
-  // current version (locked decision §11 #1 — version-scoped).
-  const mapping = findAssetVersionByFrameioFileId(fileId);
+  // Resolve which asset_version this comment pins to (locked decision §11 #1 —
+  // version-scoped). Mirrors the GET handler: Frame.io mapping when the asset
+  // is on Frame.io, else the asset's current LPOS version.
+  const mapping = resolveCommentScope(projectId, assetId, fileId);
   if (!mapping) {
-    return NextResponse.json({ error: 'No version mapping for this asset' }, { status: 500 });
+    return NextResponse.json({ error: 'Asset has no version to attach the comment to' }, { status: 500 });
   }
 
   try {
@@ -228,7 +249,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       frameioFileId:    fileId,
     });
 
-    enqueueMediaCommentMirrorJob(comment.commentId, 'create');
+    // Only mirror outbound when the asset is actually on Frame.io — LPOS-only
+    // assets keep comments local (nothing to mirror to). The mirror worker
+    // also can't post without a Frame.io file id.
+    if (fileId) enqueueMediaCommentMirrorJob(comment.commentId, 'create');
 
     patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
 

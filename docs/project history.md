@@ -1865,3 +1865,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** No build run (server lifecycle is user-managed). TypeScript validated at read time.
 
 **Assumptions / follow-ups:** Enabling signed URLs will immediately break playback on LP until LP holds a CF signing key and mints tokens. Test by toggling on, loading the LP platform, and observing whether playback fails or succeeds. If it fails (expected), that confirms LP needs the signing-key integration. Toggle back off to restore playback.
+
+---
+
+## 2026-06-26 — Frame.io comment decoupling, Step 1: LPOS-native version resolution (comments no longer gated on Frame.io)
+
+**User prompt:** "Let's assume we're going to finish all this on the production branch. I just ported over all the new player logic so we should be safe to complete our comment frame decoupling there." (Following a three-part audit that found the comment system's only hard chokepoints on Frame.io were: API/UI gating on `asset.frameio.assetId`, version resolution exclusively via `findAssetVersionByFrameioFileId`, the `frameio_comment_id ?? comment_id` identity flip, and comment count stored under `frameio.commentCount`. The mirror/webhook layer is already Frame.io-optional.)
+
+**Summary:** First of a sequenced decoupling. Removed the Frame.io hard-gates in the comments API route and added an LPOS-native version resolver so an asset that was never uploaded to Frame.io can still be read/written for comments. Verified the prod tree already received the ported player components (`MediaPlayer.tsx` now present alongside `VideoTheaterMode`/`InlineVideoPlayer`).
+
+**Files changed:**
+- `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts` — (1) imported `getCurrentAssetVersion`; (2) added a `resolveCommentScope(projectId, assetId, fileId)` helper that returns `{projectId, assetId, assetVersionId}` from the Frame.io file-id mapping when a fileId exists, else from `getCurrentAssetVersion(assetId).asset_version_id`; (3) GET: removed the `if (!fileId) return {comments:[]}` gate and switched the default-version branch to `resolveCommentScope`; (4) POST: removed the `if (!fileId) 400 "not uploaded to Frame.io yet"` gate and switched version resolution to `resolveCommentScope`; (5) made the outbound top-level mirror enqueue conditional on `fileId` being present (LPOS-only assets keep comments local — the mirror worker can't post without a Frame.io file id anyway).
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** A single shared resolver keeps GET and POST consistent and preserves existing Frame.io behaviour exactly (when a fileId exists, the file-id mapping still wins, so inbound webhook captures and outbound mirrors stay on the same version row). The LPOS-native fallback (`getCurrentAssetVersion`, which already existed but was never wired into the comment path) is the minimal enabler. Replies were already LPOS-only; this change extends the same "local-first" posture to top-level comments on non-Frame assets. Conditional enqueue avoids piling un-sendable jobs into the mirror queue for assets with no Frame.io target.
+
+**Alternatives considered:** (a) Resolve the version inline in each handler — rejected, duplicates logic and risks GET/POST drift. (b) Always enqueue the mirror and let the worker no-op when there's no fileId — rejected; the worker would burn retries/backoff and eventually mark jobs abandoned (the `!` indicator), which is misleading for an asset that was never meant to be on Frame.io. (c) Rename the route off `/frameio/comments` now — deferred to a later step to avoid touching every caller mid-refactor.
+
+**Commands run:** `npx tsc --noEmit` → exit 0, 0 errors. No build/dev run (server lifecycle is user-managed; prod runs live from this tree).
+
+**Assumptions / follow-ups:** This is Step 1 of 4. Remaining: Step 2 — drop the UI gates (`{asset.frameio.assetId && …}` in MediaDetailPanel + the player components) so the compose/reply UI renders for non-Frame assets; Step 3 — stabilise comment identity on `comment_id` (retire the `frameio_comment_id ?? comment_id` flip that causes the reply-vanish race); Step 4 — move comment count off `frameio.commentCount` to a top-level field. Not yet runtime-verified against a live non-Frame asset — worth a manual check (open an asset that was never pushed to Frame.io and confirm comments load + post). Committed to prod, not pushed.
