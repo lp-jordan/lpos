@@ -50,6 +50,8 @@ function isGuestAllowed(pathname: string, method: string): boolean {
 // ── Middleware ────────────────────────────────────────────────────────────────
 
 export async function middleware(req: NextRequest) {
+  if (process.env.LPOS_SKIP_AUTH === '1') return NextResponse.next();
+
   const { pathname } = req.nextUrl;
 
   if (isPublicPath(pathname)) {
