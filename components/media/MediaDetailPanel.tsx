@@ -66,7 +66,7 @@ class TheaterErrorBoundary extends Component<
   }
 }
 import { VideoTheaterMode } from './VideoTheaterMode';
-import { useHlsPlayer } from '@/hooks/useHlsPlayer';
+import { MediaPlayer } from './MediaPlayer';
 
 
 interface Props {
@@ -152,30 +152,23 @@ function TitleRenameInput({ initial, onCommit, onCancel }: { initial: string; on
 
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
-  const sidebarVideoRef = useRef<HTMLVideoElement>(null);
-
-  // Derive the sidebar video src so the HLS hook can be called unconditionally
-  // at the top level (hooks must not be called inside conditionals).
-  const sidebarVideoSrc = asset?.frameio.assetId
-    ? `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`
-    : asset?.filePath
-      ? `/api/projects/${projectId}/media/${asset.assetId}/stream?v=${asset.frameio?.version ?? 0}`
-      : '';
-  useHlsPlayer(sidebarVideoRef, sidebarVideoSrc);
+  // Latest playhead time reported by the compact MediaPlayer (via onCurrentTimeChange).
+  // Lets the sidebar compose box capture "comment at current playhead" without
+  // holding a ref to the video element, which now lives inside MediaPlayer.
+  const sidebarTimeRef = useRef(0);
 
   const { toast } = useToast();
   const [renamingTitle,               setRenamingTitle]               = useState(false);
   const [showLeaderPassErrorDetails, setShowLeaderPassErrorDetails] = useState(false);
   const [theaterSrc,                 setTheaterSrc]                 = useState<string | null>(null);
   const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
+  const [sidebarSeekTarget,          setSidebarSeekTarget]          = useState<number | null>(null);
   const [advancedOpen,               setAdvancedOpen]               = useState(false);
   const [reviewLinksOpen,            setReviewLinksOpen]            = useState(false);
 
-  function openTheater(src: string) {
-    const t = sidebarVideoRef.current?.currentTime ?? 0;
-    sidebarVideoRef.current?.pause();
+  function openTheater(src: string, currentTime = 0) {
     setTheaterSrc(src);
-    if (t > 0) setTheaterSeekTarget(t);
+    if (currentTime > 0) setTheaterSeekTarget(currentTime);
   }
 
   // ── Metadata edit ──────────────────────────────────────────────────────────
@@ -683,7 +676,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
             frameioAssetId={asset.frameio.assetId}
             comments={comments}
             seekTarget={theaterSeekTarget}
-            onClose={() => setTheaterSrc(null)}
+            onClose={t => { setSidebarSeekTarget(t > 0 ? t : null); setTheaterSrc(null); }}
             onCommentPosted={(comment) => setComments(prev => [...prev, comment])}
             onCommentCompleted={(id, completed) => {
               // Theater mode toggles via its own PATCH (already succeeded here);
@@ -821,16 +814,19 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   ) : (
                     <>
-                      <div className="mad-video-wrap">
-                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
-                      </div>
+                      <MediaPlayer
+                        variant="compact"
+                        src={src}
+                        assetId={asset.assetId}
+                        projectId={projectId}
+                        frameioAssetId={asset.frameio.assetId ?? null}
+                        comments={comments}
+                        seekTarget={sidebarSeekTarget}
+                        onSeekHandled={() => setSidebarSeekTarget(null)}
+                        onTheaterOpen={t => openTheater(src, t)}
+                        onCurrentTimeChange={t => { sidebarTimeRef.current = t; }}
+                      />
                       <div className="mad-video-theater-row">
-                        <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-                          </svg>
-                          Theater mode
-                        </button>
                         {/* Review links dropdown */}
                         {existingShareLinks.length > 0 && (
                           <div className="mad-review-links-wrap">
@@ -903,17 +899,20 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   ) : (
                     <>
-                      <div className="mad-video-wrap">
-                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
-                      </div>
-                      <div className="mad-video-theater-row">
-                        <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-                          </svg>
-                          Theater mode
-                        </button>
-                        {existingShareLinks.length > 0 && (
+                      <MediaPlayer
+                        variant="compact"
+                        src={src}
+                        assetId={asset.assetId}
+                        projectId={projectId}
+                        frameioAssetId={null}
+                        comments={comments}
+                        seekTarget={sidebarSeekTarget}
+                        onSeekHandled={() => setSidebarSeekTarget(null)}
+                        onTheaterOpen={t => openTheater(src, t)}
+                        onCurrentTimeChange={t => { sidebarTimeRef.current = t; }}
+                      />
+                      {existingShareLinks.length > 0 && (
+                        <div className="mad-video-theater-row">
                           <div className="mad-review-links-wrap">
                             <button
                               type="button"
@@ -953,8 +952,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                               </>
                             )}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </>
                   );
                 }
@@ -1230,11 +1229,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         placeholder="Add a timed comment…"
                         value={composeText}
                         onFocus={() => {
-                          const v = sidebarVideoRef.current;
-                          if (!v) return;
-                          // Round to nearest NDF frame boundary (real seconds → frame → NDF seconds)
-                          setComposeTime(Math.round(v.currentTime * 24000 / 1001) / 24);
-                          if (!v.paused) v.pause();
+                          // currentTime now comes from the MediaPlayer (reported via
+                          // onCurrentTimeChange → sidebarTimeRef). Round to the nearest
+                          // NDF frame boundary (real seconds → frame → NDF seconds).
+                          setComposeTime(Math.round(sidebarTimeRef.current * 24000 / 1001) / 24);
                         }}
                         onChange={e => setComposeText(e.target.value)}
                         onKeyDown={e => {
