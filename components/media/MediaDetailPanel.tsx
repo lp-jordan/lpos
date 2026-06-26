@@ -170,6 +170,21 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
   const [advancedOpen,               setAdvancedOpen]               = useState(false);
   const [reviewLinksOpen,            setReviewLinksOpen]            = useState(false);
+  // True intrinsic aspect ratio (w/h) of the loaded video; null until metadata
+  // arrives. Used to size the preview box to the real frame so non-16:9 sources
+  // don't get pillarbox/letterbox black bars in a forced 16:9 container.
+  const [videoAspect,                setVideoAspect]                = useState<number | null>(null);
+
+  // Reset the measured aspect whenever we switch to a different asset, so the
+  // box falls back to the 16:9 placeholder until the new file's metadata loads.
+  useEffect(() => { setVideoAspect(null); }, [asset?.assetId]);
+
+  function handleVideoMeta() {
+    const v = sidebarVideoRef.current;
+    if (v && v.videoWidth > 0 && v.videoHeight > 0) {
+      setVideoAspect(v.videoWidth / v.videoHeight);
+    }
+  }
 
   function openTheater(src: string) {
     const t = sidebarVideoRef.current?.currentTime ?? 0;
@@ -821,8 +836,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   ) : (
                     <>
-                      <div className="mad-video-wrap">
-                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
+                      <div className="mad-video-wrap" style={videoAspect ? { aspectRatio: videoAspect } : undefined}>
+                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" onLoadedMetadata={handleVideoMeta} />
                       </div>
                       <div className="mad-video-theater-row">
                         <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>
@@ -903,8 +918,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </div>
                   ) : (
                     <>
-                      <div className="mad-video-wrap">
-                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" />
+                      <div className="mad-video-wrap" style={videoAspect ? { aspectRatio: videoAspect } : undefined}>
+                        <video ref={sidebarVideoRef} key={asset.assetId} className="mad-video" src={src} controls preload="metadata" onLoadedMetadata={handleVideoMeta} />
                       </div>
                       <div className="mad-video-theater-row">
                         <button type="button" className="mad-action-btn" onClick={() => openTheater(src)}>

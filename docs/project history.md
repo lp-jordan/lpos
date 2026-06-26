@@ -1865,3 +1865,24 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** No build run (server lifecycle is user-managed). TypeScript validated at read time.
 
 **Assumptions / follow-ups:** Enabling signed URLs will immediately break playback on LP until LP holds a CF signing key and mints tokens. Test by toggling on, loading the LP platform, and observing whether playback fails or succeeds. If it fails (expected), that confirms LP needs the signing-key integration. Toggle back off to restore playback.
+
+---
+
+## 2026-06-26 — Sidebar video preview: black bars on non-16:9 assets (forced 16:9 box)
+
+**User prompt:** "I'm having issues with the formatting of video assets that started during our new custom player transition. We need to scan the player, the sidebar, and any important cloudflare or frame.io" (clarified via follow-up: symptom = video aspect / black bars; surface = sidebar detail panel).
+
+**Summary:** Scanned the player components, the sidebar detail panel, and the Cloudflare/Frame.io integration. Root cause of the black bars: the sidebar video preview (`MediaDetailPanel` → `.mad-video-wrap`/`.mad-video`) hard-codes a 16:9 box (`padding-top: 56.25%`) and the `<video>` fits inside it with the browser default `object-fit: contain`, so any source whose intrinsic aspect ratio isn't exactly 16:9 gets pillarbox/letterbox black bars. The "custom player transition" replaced the old Frame.io iframe embed (which auto-fit any aspect) with our own proxied `<video>` locked to 16:9, which is why it surfaced then. Fix: the preview box now adopts the video's true aspect ratio once metadata loads (16:9 retained only as the pre-load placeholder), with `object-fit: contain` so the frame is never cropped.
+
+**Files changed:**
+- `components/media/MediaDetailPanel.tsx` — added `videoAspect` state + `handleVideoMeta()` (reads `videoWidth/videoHeight` on `loadedmetadata`) + a reset effect keyed on `asset?.assetId`; both `.mad-video-wrap` blocks now take `style={{ aspectRatio: videoAspect }}` (when known) and the `<video>` elements get `onLoadedMetadata={handleVideoMeta}`.
+- `app/globals.css` — `.mad-video-wrap` switched from `padding-top: 56.25%` to `aspect-ratio: 16 / 9` (so the inline override applies cleanly); `.mad-video` gains explicit `object-fit: contain`.
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** Sizing the box to the real frame eliminates bars for every aspect ratio without ever cropping the picture — the correct behavior for a review surface. Switching the wrap from `padding-top` to `aspect-ratio` lets a single inline `aspectRatio` value override the default cleanly (mixing a dynamic ratio with the padding-hack would have required recomputing padding in JS). The 16:9 default is kept purely as a pre-metadata placeholder so the box still reserves space before the file loads.
+
+**Alternatives considered:** (a) `object-fit: cover` to fill the 16:9 box — rejected, it crops the frame, unacceptable for review. (b) Wiring up the dormant `InlineVideoPlayer` component — out of scope and wouldn't have helped: it hard-codes `aspect-ratio: 16/9` on `.ivp-video` too, so it carries the same bug. (c) Leaving CSS alone and only setting inline style — the `padding-top` hack can't be overridden by `aspect-ratio` alone, so the CSS had to change.
+
+**Commands run:** None (server lifecycle is user-managed; change is a self-contained CSS/JSX edit). Not yet visually verified against a live non-16:9 asset.
+
+**Assumptions / follow-ups:** This fixes the case where the bars come from the **CSS container** (the source frame is non-16:9). If bars persist after deploy, the bars are **baked into the transcoded proxy pixels** by Cloudflare Stream / Frame.io (e.g. a vertical source padded to 16:9 at encode time) — that would be an encode-settings issue, not a CSS one, and the next step would be to inspect the proxy's actual dimensions vs. the source. The dormant `InlineVideoPlayer`/`VideoTheaterMode` carry the same forced-16:9 assumption and should get the same treatment if/when wired in. No commit pushed (committed locally per workspace convention).
