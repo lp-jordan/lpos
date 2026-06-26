@@ -444,7 +444,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const pendingTogglesRef = useRef<Map<string, boolean>>(new Map());
 
   const fetchComments = useCallback(async () => {
-    if (!asset?.frameio.assetId) return;
+    // Frame.io optional: comments load for any asset, not just Frame.io ones.
+    if (!asset?.assetId) return;
     setCommentsLoading(true);
     try {
       // Phase 3: ?version=<id> scopes the read to a specific version when
@@ -491,23 +492,22 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   // Load comments + versions when panel opens. Also clear selected version
   // when switching between assets so the new asset opens on its latest.
   useEffect(() => {
-    if (asset?.frameio.assetId) {
-      setComments([]);
-      setSelectedVersionId(null);    // reset; fetchVersions will populate
+    // Frame.io optional: load versions for any asset so its comments resolve.
+    setComments([]);
+    setSelectedVersionId(null);    // reset; fetchVersions will populate
+    if (asset?.assetId) {
       void fetchVersions();
     } else {
-      setComments([]);
       setVersions([]);
-      setSelectedVersionId(null);
     }
-  }, [asset?.frameio.assetId, fetchVersions]);
+  }, [asset?.assetId, fetchVersions]);
 
   // Whenever the selected version changes, refetch comments.
   useEffect(() => {
-    if (asset?.frameio.assetId && selectedVersionId) {
+    if (asset?.assetId && selectedVersionId) {
       void fetchComments();
     }
-  }, [asset?.frameio.assetId, selectedVersionId, fetchComments]);
+  }, [asset?.assetId, selectedVersionId, fetchComments]);
 
   // Real-time comment refresh via Frame.io webhook → Socket.io push.
   // The server emits 'frameio:comments:refresh' whenever Frame.io fires any
@@ -602,7 +602,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   // Optimistically appends to the local list so it appears immediately even
   // though Frame.io won't have mirrored yet.
   async function handlePostComment() {
-    if (!asset || !composeText.trim() || !asset.frameio.assetId) return;
+    if (!asset || !composeText.trim()) return;
     setComposePosting(true);
     setComposeError(null);
     try {
@@ -996,8 +996,8 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 </div>
               )}
 
-              {/* ── Frame.io Comments ── */}
-              {asset.frameio.assetId && (
+              {/* ── Comments (LPOS-owned; Frame.io optional) ── */}
+              {(
                 <div className="mad-section mad-comments-section">
                   <div className="mad-section-head">
                     <span className="mad-section-title">Comments</span>

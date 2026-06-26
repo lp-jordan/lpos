@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-26T21:16:27Z",
+    "title": "Frame.io comment decoupling Step 2 — comment UI now shows for non-Frame assets",
+    "summary": "Removed the Frame.io render/handler gates so the comment UI works on assets that were never uploaded to Frame.io. In MediaDetailPanel: fetchComments and the load effects now key on asset.assetId (not frameio.assetId), the open effect always fetches versions, the sidebar compose handler dropped its Frame.io bail, and the Comments section render gate was removed. In MediaPlayer (theater): dropped frameioAssetId from the comment compose handler, the comments-icon render, and the timed-comment compose footer (the comments panel was already gated on panelContainer, not Frame.io). Pairs with Step 1's API change to make commenting on non-Frame assets work end to end. The real-time socket listener stays gated on Frame.io since those refresh events only come from Frame.io webhooks. Type-checked clean. The MediaTab grid count badge is still Frame.io-gated (Step 4). Steps 3-4 still to come."
+  },
+  {
     "timestamp": "2026-06-26T21:10:59Z",
     "title": "Frame.io comment decoupling Step 1 — comments no longer require a Frame.io upload",
     "summary": "First step of making Frame.io optional for comments. The comments API route (frameio/comments) no longer hard-gates on asset.frameio.assetId: GET dropped its empty-list gate and POST dropped its 'not uploaded to Frame.io yet' 400. Added a shared resolveCommentScope helper that resolves the target asset_version from the Frame.io file-id mapping when present, else from the asset's current LPOS version via getCurrentAssetVersion. Outbound mirror enqueue is now conditional on the asset actually being on Frame.io, so LPOS-only assets keep their comments local instead of piling un-sendable jobs into the mirror queue. Existing Frame.io-backed assets behave exactly as before. Type-checked clean. Steps 2-4 (UI gate removal, stable comment identity, comment-count relocation) still to come."

@@ -1885,3 +1885,24 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** `npx tsc --noEmit` → exit 0, 0 errors. No build/dev run (server lifecycle is user-managed; prod runs live from this tree).
 
 **Assumptions / follow-ups:** This is Step 1 of 4. Remaining: Step 2 — drop the UI gates (`{asset.frameio.assetId && …}` in MediaDetailPanel + the player components) so the compose/reply UI renders for non-Frame assets; Step 3 — stabilise comment identity on `comment_id` (retire the `frameio_comment_id ?? comment_id` flip that causes the reply-vanish race); Step 4 — move comment count off `frameio.commentCount` to a top-level field. Not yet runtime-verified against a live non-Frame asset — worth a manual check (open an asset that was never pushed to Frame.io and confirm comments load + post). Committed to prod, not pushed.
+
+---
+
+## 2026-06-26 — Frame.io comment decoupling, Step 2: drop the UI gates (comment UI renders for non-Frame assets)
+
+**User prompt:** (Continuation of the production decoupling — Step 2 of the sequenced plan.)
+
+**Summary:** Removed the `asset.frameio.assetId` / `frameioAssetId` render + handler gates so the comment UI (sidebar section, theater comments icon + panel + compose, version chips) appears and works for assets that were never uploaded to Frame.io. Pairs with Step 1's API change to make commenting on non-Frame assets fully functional end-to-end.
+
+**Files changed:**
+- `components/media/MediaDetailPanel.tsx` — (1) `fetchComments` now guards on `asset?.assetId` instead of `asset?.frameio.assetId`; (2) the open effect always calls `fetchVersions()` for any asset (was: only when on Frame.io); (3) the version-change effect fires on `asset?.assetId && selectedVersionId`; (4) the sidebar compose handler dropped the `!asset.frameio.assetId` bail; (5) the Comments section render gate `{asset.frameio.assetId && (…)}` is removed so the section always renders.
+- `components/media/MediaPlayer.tsx` — dropped `frameioAssetId` from three theater gates: the comment compose handler, the comments-icon render (`isTheater && frameioAssetId` → `isTheater`), and the timed-comment compose footer. The comments panel itself was already gated on `panelContainer` (not Frame.io), so it needed no change. `frameioAssetId` remains a prop (now unused internally; harmless).
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** The comments section is pure comment UI (header, version chips, list, compose) — no Frame.io-only review-link controls are bundled inside it — so unhiding it exposes nothing Frame.io-specific. Version discovery uses the LPOS-native `/versions` endpoint (`listAssetVersionsWithFrameioFileId`, which returns versions with null Frame.io ids), so the chips + per-version comment scoping work without Frame.io. The real-time socket listener (`frameio:comments:refresh`) was intentionally LEFT gated on `frameio.assetId` — those events only originate from Frame.io webhooks, so non-Frame assets have no external source to listen for (no behaviour lost).
+
+**Alternatives considered:** (a) Gate the section on "asset has ≥1 version" instead of always rendering — rejected as unnecessary; an asset with no version just shows "No comments yet" and the compose 500s only in the narrow still-uploading window (noted as a follow-up). (b) Remove the `frameioAssetId` prop entirely — deferred; it's still threaded by callers and harmless, and removing it is churn better folded into a later cleanup.
+
+**Commands run:** `npx tsc --noEmit` → exit 0, 0 errors. No build/dev run (prod runs live; server lifecycle is user-managed).
+
+**Assumptions / follow-ups:** Step 2 of 4. The MediaTab grid comment-count badge is still gated on `asset.frameio.assetId` (non-Frame assets won't show a count chip in the grid) — that's covered by Step 4 (move count off `frameio.commentCount`). Edge: posting on an asset that has no asset_version yet (still uploading) returns 500 from the route — acceptable for now. Still to do: Step 3 (stable comment identity on `comment_id`) and Step 4 (comment-count relocation). Not yet runtime-verified — please open a never-uploaded-to-Frame asset and confirm the comments section appears, loads, and accepts a comment + reply in both the sidebar and theater. Committed to prod, not pushed.

@@ -407,7 +407,7 @@ export function MediaPlayer({
 
   // ── Comments (theater only) ───────────────────────────────────────────────
   async function handlePostComment() {
-    if (!commentText.trim() || !frameioAssetId) return;
+    if (!commentText.trim()) return;
     setCommentPosting(true); setCommentError(null);
     try {
       const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/frameio/comments`, {
@@ -470,7 +470,7 @@ export function MediaPlayer({
       onPointerCancel={handleContainerPointerUp}
     >
       {/* Theater: comments icon top-right */}
-      {isTheater && frameioAssetId && (
+      {isTheater && (
         <button
           type="button"
           className={`mp-comments-icon-btn${panelOpen ? ' mp-comments-icon-btn--active' : ''}`}
@@ -780,7 +780,7 @@ export function MediaPlayer({
             ))}
           </div>
 
-          {frameioAssetId && (
+          {(
             <div className="mp-compose">
               <div className="mp-compose-ts">@ {formatTimecode(commentTime)}</div>
               <div className="mp-compose-row">
