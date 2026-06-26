@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFileMediaLinks } from '@/lib/services/frameio';
 import { readRegistry } from '@/lib/store/media-registry';
+import { isCloudflareStreamConfigured } from '@/lib/services/cloudflare-stream';
 
 type Params = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -32,23 +33,58 @@ type Params = { params: Promise<{ projectId: string; assetId: string }> };
 const urlCache = new Map<string, { url: string; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-async function resolveStreamUrl(projectId: string, assetId: string): Promise<string | null> {
+// Sentinel stored in cache to indicate "use local /stream fallback"
+const LOCAL_STREAM_SENTINEL = '__local__';
+
+type ResolvedSource =
+  | { kind: 'redirect'; url: string }
+  | { kind: 'local' }
+  | null;
+
+async function resolveStreamUrl(projectId: string, assetId: string): Promise<ResolvedSource> {
   const hit = urlCache.get(assetId);
-  if (hit && Date.now() < hit.expiresAt) return hit.url;
+  if (hit && Date.now() < hit.expiresAt) {
+    return hit.url === LOCAL_STREAM_SENTINEL
+      ? { kind: 'local' }
+      : { kind: 'redirect', url: hit.url };
+  }
 
-  const assets        = readRegistry(projectId);
-  const asset         = assets.find((a) => a.assetId === assetId);
+  const assets = readRegistry(projectId);
+  const asset  = assets.find((a) => a.assetId === assetId);
+
+  // ── 1. Frame.io ───────────────────────────────────────────────────────────
   const frameioFileId = asset?.frameio?.assetId;
-  if (!frameioFileId) return null;
+  if (frameioFileId) {
+    try {
+      const links = await getFileMediaLinks(frameioFileId);
+      const url   = links.highQualityUrl ?? links.originalUrl;
+      if (url) {
+        urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+        return { kind: 'redirect', url };
+      }
+    } catch {
+      // Fall through to next source
+    }
+  }
 
-  const links = await getFileMediaLinks(frameioFileId);
-  // Prefer the H.264 1080p transcode — works for all original formats including
-  // .mov. Falls back to inline_url (original file) if transcode isn't ready yet.
-  const url = links.highQualityUrl ?? links.originalUrl;
-  if (!url) return null;
+  // ── 2. Cloudflare Stream HLS ──────────────────────────────────────────────
+  const cfUid = asset?.cloudflare?.uid;
+  if (cfUid && isCloudflareStreamConfigured()) {
+    const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
+    if (sub) {
+      const url = `https://customer-${sub}.cloudflarestream.com/${cfUid}/manifest/video.m3u8`;
+      urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+      return { kind: 'redirect', url };
+    }
+  }
 
-  urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
-  return url;
+  // ── 3. Local disk stream ──────────────────────────────────────────────────
+  if (asset?.filePath) {
+    urlCache.set(assetId, { url: LOCAL_STREAM_SENTINEL, expiresAt: Date.now() + CACHE_TTL_MS });
+    return { kind: 'local' };
+  }
+
+  return null;
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────
@@ -56,26 +92,34 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<str
 export async function GET(req: NextRequest, { params }: Params) {
   try {
     const { projectId, assetId } = await params;
+    const isRaw = req.nextUrl.searchParams.has('raw');
 
-    const streamUrl = await resolveStreamUrl(projectId, assetId);
+    const source = await resolveStreamUrl(projectId, assetId);
 
-    if (!streamUrl) {
+    if (!source) {
       return NextResponse.json(
         { error: 'No stream URL available yet — Frame.io may still be processing' },
         { status: 404 },
       );
     }
 
+    if (source.kind === 'local') {
+      const localUrl = `/api/projects/${projectId}/media/${assetId}/stream`;
+      if (isRaw) return NextResponse.json({ url: localUrl });
+      return NextResponse.redirect(new URL(localUrl, req.url), {
+        status: 302,
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
+
     // ?raw — return the CDN URL as JSON instead of redirecting.
     // Used by the hls.js client path to avoid the Firefox Origin:null CORS block
     // that occurs when hls.js follows a same-origin → cross-origin 302 redirect.
-    if (req.nextUrl.searchParams.has('raw')) {
-      return NextResponse.json({ url: streamUrl });
-    }
+    if (isRaw) return NextResponse.json({ url: source.url });
 
     // 302 so the browser re-checks on each new session — CDN pre-signed URLs
     // rotate and must not be cached by the browser past their expiry.
-    return NextResponse.redirect(streamUrl, {
+    return NextResponse.redirect(source.url, {
       status: 302,
       headers: { 'Cache-Control': 'no-store' },
     });
