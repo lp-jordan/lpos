@@ -3768,10 +3768,10 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .ivp-video-wrap {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
   background: #000;
   cursor: pointer;
   overflow: hidden;
+  min-height: 120px; /* prevents collapse before video metadata loads */
 }
 .ivp-video {
   display: block;
