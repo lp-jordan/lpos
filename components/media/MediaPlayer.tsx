@@ -410,7 +410,7 @@ export function MediaPlayer({
     if (!commentText.trim()) return;
     setCommentPosting(true); setCommentError(null);
     try {
-      const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/frameio/comments`, {
+      const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/comments`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: commentText.trim(), timestamp: commentTime }),
       });
@@ -424,7 +424,7 @@ export function MediaPlayer({
   async function handleToggleComplete(commentId: string, completed: boolean) {
     setTogglingId(commentId);
     try {
-      await fetch(`/api/projects/${projectId}/media/${assetId}/frameio/comments`, {
+      await fetch(`/api/projects/${projectId}/media/${assetId}/comments`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ commentId, completed }),
       });
@@ -436,7 +436,7 @@ export function MediaPlayer({
     if (!replyText.trim()) return;
     setReplyPosting(true);
     try {
-      const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/frameio/comments`, {
+      const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/comments`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: replyText.trim(), parentId }),
       });

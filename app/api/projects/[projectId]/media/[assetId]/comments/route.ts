@@ -1,9 +1,9 @@
 /**
- * GET  /api/projects/[projectId]/media/[assetId]/frameio/comments
- *   → Fetch all comments for this asset from Frame.io
+ * GET  /api/projects/[projectId]/media/[assetId]/comments
+ *   → Fetch all comments for this asset (LPOS-owned; Frame.io optional)
  *
- * POST /api/projects/[projectId]/media/[assetId]/frameio/comments
- *   → Post a new comment { text, timestamp? }
+ * POST /api/projects/[projectId]/media/[assetId]/comments
+ *   → Post a new comment { text, timestamp?, duration?, parentId? }
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       const scope = resolveCommentScope(projectId, assetId, fileId);
       if (!scope) {
         // Asset has no versions at all — degrade gracefully to an empty list.
-        console.warn(`[frameio/comments GET] no version for asset ${assetId} — returning empty`);
+        console.warn(`[comments GET] no version for asset ${assetId} — returning empty`);
         return NextResponse.json({ comments: [] });
       }
       resolvedProjectId      = scope.projectId;
@@ -269,7 +269,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     };
     return NextResponse.json({ comment: named }, { status: 201 });
   } catch (err) {
-    console.error('[frameio/comments POST]', (err as Error).message);
+    console.error('[comments POST]', (err as Error).message);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }

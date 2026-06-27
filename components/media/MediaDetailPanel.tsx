@@ -452,7 +452,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
       // the user is browsing an older one via the chips. No param → latest
       // (preserves legacy contract for callers that don't know about chips).
       const qs   = selectedVersionId ? `?version=${encodeURIComponent(selectedVersionId)}` : '';
-      const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio/comments${qs}`);
+      const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/comments${qs}`);
       const data = await res.json() as { comments?: CommentRow[]; error?: string };
       if (data.comments) {
         const pending = pendingTogglesRef.current;
@@ -539,7 +539,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     if (!asset || !editText.trim()) return;
     try {
       const res = await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        `/api/projects/${projectId}/media/${asset.assetId}/comments`,
         {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -559,7 +559,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setDeletingCommentId(commentId);
     try {
       await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        `/api/projects/${projectId}/media/${asset.assetId}/comments`,
         {
           method:  'DELETE',
           headers: { 'Content-Type': 'application/json' },
@@ -577,7 +577,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setReplyPosting(true);
     try {
       const res  = await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        `/api/projects/${projectId}/media/${asset.assetId}/comments`,
         {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -607,7 +607,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setComposeError(null);
     try {
       const res  = await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        `/api/projects/${projectId}/media/${asset.assetId}/comments`,
         {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -637,7 +637,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setComments(prev => prev.map(c => c.id === commentId ? { ...c, completed } : c));
     try {
       const res = await fetch(
-        `/api/projects/${projectId}/media/${asset.assetId}/frameio/comments`,
+        `/api/projects/${projectId}/media/${asset.assetId}/comments`,
         {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json' },

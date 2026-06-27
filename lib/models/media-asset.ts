@@ -23,11 +23,6 @@ export interface FrameIOInfo {
   playerUrl: string | null;
   status: FrameIOStatus;
   version: number;
-  /** @deprecated No longer maintained as of decoupling Step 4. Comment counts
-   *  are computed on read by the media-list route (getCommentCountByAssetForProject).
-   *  Field retained (defaults 0) to avoid churn across FrameIOInfo construction
-   *  sites; do not read it — it will be stale. */
-  commentCount: number;
   uploadedAt: string | null;
   lastError: string | null;
 }
@@ -40,7 +35,6 @@ export function defaultFrameIO(): FrameIOInfo {
     playerUrl: null,
     status: 'none',
     version: 1,
-    commentCount: 0,
     uploadedAt: null,
     lastError: null,
   };

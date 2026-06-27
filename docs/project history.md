@@ -1954,3 +1954,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** `npx tsc --noEmit` → exit 0, 0 errors (run repeatedly through the change). Verified the now-unused `patchAsset`/`getAsset` imports were trimmed (grep usage counts) before the final clean typecheck.
 
 **Assumptions / follow-ups:** **Decoupling Steps 1–4 are now COMPLETE** — Frame.io is optional for comments end to end: any asset can be commented on (Step 1+2), `comment_id` is the stable sole identity (Step 3), and counts are computed not denormalised (Step 4). Remaining cleanups (non-blocking): (a) the deferred EditPanel-client change to read `frameioCommentId` for its marker tether; (b) optionally rename the `/frameio/comments` route to `/comments`; (c) optionally remove the deprecated `FrameIOInfo.commentCount` field. None of Steps 1–4 are runtime-verified yet — recommend a smoke test on a normal Frame-backed asset (post/reply/complete/delete + new-comment toast) before relying on it. Committed to prod, not pushed.
+
+---
+
+## 2026-06-27 — Frame.io comment decoupling, Step 5 (cleanup): route rename + dead-code removal
+
+**User prompt:** "Can you create a sub task to fix the editpanel comment system? Also, yes I would like to rename the routes and remove any dead frame.io code. Once that's all done we can push"
+
+**Summary:** Final cleanup after the decoupling. (1) Renamed the comments route off the Frame.io-branded path, since it now reads local `media_comments`. (2) Removed the dead `FrameIOInfo.commentCount` field retired in Step 4. (3) Spawned a separate sub-task to fix the editpanel marker tether (the deferred Step-3 break).
+
+**Files changed:**
+- Renamed `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts` → `app/api/projects/[projectId]/media/[assetId]/comments/route.ts` (git mv; the sibling `frameio/route.ts` upload-trigger route stays put). Updated the moved file's header docstring + the `[frameio/comments …]` log tags.
+- `components/media/MediaDetailPanel.tsx` — 6 fetch URLs updated `/frameio/comments` → `/comments`.
+- `components/media/MediaPlayer.tsx` — 3 fetch URLs updated (only the URL strings; the concurrently-edited speed-hold work was untouched).
+- `lib/models/media-asset.ts` — removed the deprecated `FrameIOInfo.commentCount` field and its `defaultFrameIO()` default. The canonical projection builds `frameio` via `...defaultFrameIO()`, so no other construction site referenced it (tsc confirmed zero source errors).
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** The route was named `/frameio/comments` from when it proxied Frame.io; it now reads the local table, so the name was actively misleading. `git mv` preserves history. The `commentCount` field was genuinely dead after Step 4 (nothing reads it; computed-on-read replaced it) — removing it (vs. leaving the deprecated stub) was explicitly requested. EditPanel's marker-tether fix lives in a separate repo with its own auto-push workflow, so it's a spawned sub-task (task_cbd682fe) rather than an inline edit.
+
+**Alternatives considered:** (a) Leave the route name — rejected; the user asked for the rename and the Frame.io brand is now wrong. (b) Keep the deprecated `commentCount` stub — rejected; user wanted dead code gone. (c) Broader Frame.io dead-code sweep — deliberately NOT done; the remaining `*ByFrameioId` store helpers and frameio service functions are still used (webhook reconciliation, mirror, shares), so removing them would break things. Only code made dead BY this decoupling was removed.
+
+**Commands run:** `npx tsc --noEmit` → exit 0, 0 errors (after clearing a stale `.next/types` artifact that still referenced the old route path — a build-cache file, not source). Verified no remaining `frameio/comments` references in app/components/lib.
+
+**Operational note — route move needs the server to pick up the new path:** because routing is file-based, the running prod server serves the OLD `/frameio/comments` path until it reloads the moved file (hot-reload if running via `tsx server.ts` dev-mode; a rebuild + restart if it's a production build). The frontend (now calling `/comments`) and backend (now serving `/comments`) deploy together from this tree, so they align on the user's next server reload/restart — but until that reload, the new frontend bundle would 404 against an un-reloaded old server. Coordinate the restart with the deploy.
+
+**Assumptions / follow-ups:** Decoupling is functionally complete (Steps 1–5). Outstanding: the spawned editpanel sub-task (task_cbd682fe) must land so Resolve markers re-tether on `frameioCommentId`. User intends to push after this. Per workspace convention pushing is normally user-initiated; the user authorized the push here. Committed to prod.
