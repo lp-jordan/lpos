@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getProjectStore, getIngestQueueService } from '@/lib/services/container';
 import { readRegistry, migrateLooseFiles } from '@/lib/store/media-registry';
-import { getLatestMediaCommentByAssetForProject } from '@/lib/store/media-comment-store';
+import { getLatestMediaCommentByAssetForProject, getCommentCountByAssetForProject } from '@/lib/store/media-comment-store';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
 import { finalizeUploadedAsset } from '@/lib/services/media-finalization';
@@ -36,7 +36,14 @@ export async function GET(
     const latestCommentMap = getLatestMediaCommentByAssetForProject(projectId);
     const latestComments: Record<string, string> = {};
     for (const [assetId, ts] of latestCommentMap) latestComments[assetId] = ts;
-    return NextResponse.json({ assets, latestComments });
+
+    // Per-asset comment counts, computed (no denormalised drift) and ungated by
+    // Frame.io — drives MediaTab's new-comment toast for every asset.
+    const commentCountMap = getCommentCountByAssetForProject(projectId);
+    const commentCounts: Record<string, number> = {};
+    for (const [assetId, n] of commentCountMap) commentCounts[assetId] = n;
+
+    return NextResponse.json({ assets, latestComments, commentCounts });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

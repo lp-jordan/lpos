@@ -15,7 +15,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore, getIo } from '@/lib/services/container';
-import { readRegistry, getAsset, patchAsset } from '@/lib/store/media-registry';
+import { readRegistry } from '@/lib/store/media-registry';
 import { getActivityMonitorService } from '@/lib/services/activity-monitor-service';
 import { findAssetVersionByFrameioFileId } from '@/lib/store/canonical-asset-store';
 import {
@@ -147,16 +147,6 @@ function handleEvent(payload: FrameIoWebhookPayload): void {
     projectId: tracked.project_id,
     assetId:   tracked.asset_id,
   });
-
-  // Only comment.created affects the count; the others don't add new comments.
-  if (payload.type === 'comment.created') {
-    const currentAsset = getAsset(tracked.project_id, tracked.asset_id);
-    if (currentAsset) {
-      patchAsset(tracked.project_id, tracked.asset_id, {
-        frameio: { commentCount: (currentAsset.frameio.commentCount ?? 0) + 1 },
-      });
-    }
-  }
 
   // ── Phase 0 shadow capture (local-comments refactor) ──────────────────────
   // Mirror every comment event into `media_comments` so we can verify capture

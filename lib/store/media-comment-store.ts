@@ -605,6 +605,28 @@ export function getLatestMediaCommentByAssetForProject(projectId: string): Map<s
   return result;
 }
 
+/**
+ * Per-asset comment count for a whole project, computed in ONE query (no N+1).
+ * Counts non-deleted comments across ALL versions of each asset — same scoping
+ * as getLatestMediaCommentByAssetForProject so the count and the recency sort
+ * agree. Computed on read, so it can never drift (unlike the legacy
+ * denormalised frameio.commentCount). Assets with zero comments aren't keyed.
+ */
+export function getCommentCountByAssetForProject(projectId: string): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!projectId) return result;
+  const db = getCoreDb();
+  const rows = db.prepare(
+    `SELECT asset_id AS assetId, COUNT(*) AS count
+       FROM media_comments
+      WHERE project_id = ?
+        AND deleted_at IS NULL
+      GROUP BY asset_id`,
+  ).all(projectId) as Array<{ assetId: string; count: number }>;
+  for (const row of rows) result.set(row.assetId, row.count);
+  return result;
+}
+
 // ── Admin shadow-status ──────────────────────────────────────────────────────
 
 export interface MediaCommentShadowStatus {

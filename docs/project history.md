@@ -1929,3 +1929,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands run:** `npx tsc --noEmit` → exit 0, 0 errors (run twice during the change). Verified no `frameio_comment_id ?? comment_id` / `frameioCommentId ?? commentId` outward-id patterns remain anywhere in app/ or lib/.
 
 **Assumptions / follow-ups:** **EditPanel client follow-up (deferred, known break):** the editpanel app reads `id` for its `frameio:{id}` Resolve-marker tag — it must switch to reading `frameioCommentId`. Until it ships that change, existing markers won't match (the LPOS route now returns `comment_id` as `id`), and new marker placement keys off a value that's now the local id. This is the accepted break the user signed off on. Step 4 (move comment count off `frameio.commentCount` to a top-level field; fixes the MediaTab grid badge for non-Frame assets) is the remaining decoupling step. Not yet runtime-verified — worth confirming comment post/reply/complete/delete + the EditPanel comment pull still round-trip on a normal Frame-backed asset. Committed to prod, not pushed.
+
+---
+
+## 2026-06-27 — Frame.io comment decoupling, Step 4: comment count computed on read (off frameio.commentCount)
+
+**User prompt:** "Explain the risk here - I'd always rather do the proper way" (chose the computed-on-read approach over the denormalised field, after I laid out the N+1 risk and the version-scoping semantics).
+
+**Summary:** Final decoupling step. Replaced the drift-prone denormalised `asset.frameio.commentCount` with a per-asset count computed on read in a single batched query. While wiring it, found the count had NO rendered grid badge — its only consumer was MediaTab's "New Comment" toast detection, which was gated on `asset.frameio.assetId` (so non-Frame assets never toasted) and compared the denormalised value. Now the toast is driven by the computed, ungated count, and the denormalised write-paths are removed entirely.
+
+**Files changed:**
+- `lib/store/media-comment-store.ts` — new `getCommentCountByAssetForProject(projectId): Map<string,number>` — one `GROUP BY asset_id COUNT(*)` over non-deleted `media_comments` across all versions (same scoping as the existing `getLatestMediaCommentByAssetForProject`), so no N+1.
+- `app/api/projects/[projectId]/media/route.ts` — GET now returns `commentCounts: Record<assetId, number>` alongside `latestComments`.
+- `components/projects/MediaTab.tsx` — `fetchAssets` reads `data.commentCounts` (ungated) for both the baseline map and the new-comment toast comparison; dropped the `asset.frameio.assetId` gate and the `asset.frameio.commentCount` reads.
+- `app/api/projects/[projectId]/media/[assetId]/frameio/comments/route.ts` — removed all four denormalised `frameio.commentCount` write-patches (GET latest-version sync, POST top-level +1, POST reply +1, DELETE −1); trimmed the now-unused `patchAsset` import.
+- `app/api/webhooks/frameio/route.ts` — removed the inbound `comment.created` count increment; trimmed the now-unused `getAsset`/`patchAsset` imports.
+- `lib/models/media-asset.ts` — `FrameIOInfo.commentCount` marked `@deprecated` (kept, defaults 0, to avoid churn across every FrameIOInfo construction site; flagged do-not-read).
+- `docs/project history.md` + `docs/changelog.json` — this log.
+
+**Decision rationale:** Computed-on-read is the source of truth and can never drift; the denormalised counter was updated across five code paths and was the kind of cruft that silently goes wrong on soft-deletes/version-switches. The N+1 risk (per-asset count query on a grid of N assets) is avoided by reusing the existing single-batched-aggregate pattern already proven by the latest-comment map. Count semantics = all non-deleted comments across all versions per asset, matching the recency aggregate so the two never disagree. Kept the deprecated model field rather than ripping it out of every construction site — that's pure churn with no functional gain and more blast radius on live prod.
+
+**Alternatives considered:** (a) Keep a top-level denormalised `commentCount` patched on mutation — rejected; same drift class, just relocated. (b) Leave the dead write-paths in place — rejected; the user explicitly wanted the proper end-state, and dead maintenance code for an unread field is a future-dev trap. (c) Remove `FrameIOInfo.commentCount` entirely — deferred; broad type churn for no behavioural gain.
+
+**Commands run:** `npx tsc --noEmit` → exit 0, 0 errors (run repeatedly through the change). Verified the now-unused `patchAsset`/`getAsset` imports were trimmed (grep usage counts) before the final clean typecheck.
+
+**Assumptions / follow-ups:** **Decoupling Steps 1–4 are now COMPLETE** — Frame.io is optional for comments end to end: any asset can be commented on (Step 1+2), `comment_id` is the stable sole identity (Step 3), and counts are computed not denormalised (Step 4). Remaining cleanups (non-blocking): (a) the deferred EditPanel-client change to read `frameioCommentId` for its marker tether; (b) optionally rename the `/frameio/comments` route to `/comments`; (c) optionally remove the deprecated `FrameIOInfo.commentCount` field. None of Steps 1–4 are runtime-verified yet — recommend a smoke test on a normal Frame-backed asset (post/reply/complete/delete + new-comment toast) before relying on it. Committed to prod, not pushed.

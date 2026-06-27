@@ -561,20 +561,23 @@ const { openMenu } = useContextMenu();
     try {
       const res  = await fetch(`/api/projects/${projectId}/media`);
       if (!res.ok) return;
-      const data = await res.json() as { assets: MediaAsset[]; latestComments?: Record<string, string> };
+      const data = await res.json() as { assets: MediaAsset[]; latestComments?: Record<string, string>; commentCounts?: Record<string, number> };
 
+      // Computed, drift-free, ungated by Frame.io — works for any asset.
+      const counts = data.commentCounts ?? {};
       const nextCommentCounts = new Map<string, number>();
       data.assets.forEach((asset) => {
-        if (asset.frameio.assetId) nextCommentCounts.set(asset.assetId, asset.frameio.commentCount);
+        const n = counts[asset.assetId] ?? 0;
+        if (n > 0) nextCommentCounts.set(asset.assetId, n);
       });
 
       if (hasCommentBaselineRef.current) {
         data.assets.forEach((asset) => {
-          if (!asset.frameio.assetId) return;
+          const current = counts[asset.assetId] ?? 0;
           const previousCount = commentCountsRef.current.get(asset.assetId);
-          if (previousCount === undefined || asset.frameio.commentCount <= previousCount) return;
+          if (previousCount === undefined || current <= previousCount) return;
           toast({
-            id: `comment:${asset.assetId}:${asset.frameio.commentCount}`,
+            id: `comment:${asset.assetId}:${current}`,
             kind: 'comment',
             tone: 'info',
             title: 'New Comment',

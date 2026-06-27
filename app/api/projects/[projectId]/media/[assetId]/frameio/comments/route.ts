@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getAsset, patchAsset } from '@/lib/store/media-registry';
+import { getAsset } from '@/lib/store/media-registry';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById } from '@/lib/store/user-store';
 import { notifyCommentReply } from '@/lib/services/comment-notification-service';
@@ -125,13 +125,8 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       };
     });
 
-    // Keep the asset's denormalised commentCount in sync — used by MediaTab
-    // for the badge. Only update when the caller is viewing the LATEST
-    // version (no explicit ?version override); otherwise we'd overwrite the
-    // current-version count with whichever older version is being browsed.
-    if (!requestedVersionId) {
-      patchAsset(projectId, assetId, { frameio: { commentCount: comments.length } });
-    }
+    // Comment counts are computed on read by the media-list route now
+    // (getCommentCountByAssetForProject) — no denormalised count to sync here.
 
     return NextResponse.json({ comments: named });
   } catch (err) {
@@ -199,8 +194,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         frameioFileId:    fileId,
       });
 
-      patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
-
       // Notify the original commenter — only when the parent was authored
       // inside LPOS (we have their user id in author_user_id). Skip self-
       // replies. Best-effort.
@@ -257,8 +250,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     // assets keep comments local (nothing to mirror to). The mirror worker
     // also can't post without a Frame.io file id.
     if (fileId) enqueueMediaCommentMirrorJob(comment.commentId, 'create');
-
-    patchAsset(projectId, assetId, { frameio: { commentCount: asset.frameio.commentCount + 1 } });
 
     const named = {
       id:              comment.commentId,
@@ -352,9 +343,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     if (!target.parentCommentId) {
       enqueueMediaCommentMirrorJob(target.commentId, 'delete');
     }
-    patchAsset(projectId, assetId, {
-      frameio: { commentCount: Math.max(0, asset.frameio.commentCount - 1) },
-    });
     return new NextResponse(null, { status: 204 });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
