@@ -314,7 +314,8 @@ function shadowCaptureComment(payload: FrameIoWebhookPayload, tracked: TrackedAs
           projectId:  projectIdLocal,
           assetId:    assetIdLocal,
           assetName:  tracked.asset_name,
-          commentId:  data.parent_id ?? '',
+          // Stable local comment_id (decoupling Step 3), not the Frame.io id.
+          commentId:  parentLocal.commentId,
           fromUserId: undefined,
           fromName:   author?.name ?? 'External reviewer',
           snippet:    (data.text ?? '').slice(0, 140),

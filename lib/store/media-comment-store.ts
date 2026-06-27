@@ -420,7 +420,13 @@ export function getAbandonedMirrorCommentIds(
  * landed).
  */
 export interface ThreadedMediaComment {
+  /** Stable, sole client-facing identity — always the local comment_id. */
   id:           string;
+  /** Internal Frame.io comment id, exposed only for consumers that still tether
+   *  on it (EditPanel review markers). NULL until/unless the comment is mirrored
+   *  outbound (or was captured inbound from Frame.io). Never use this as the
+   *  primary key on the client — it flips from null→set when the mirror lands. */
+  frameioCommentId: string | null;
   text:         string;
   timestamp:    number | null;
   duration:     number | null;
@@ -435,6 +441,7 @@ export interface ThreadedMediaComment {
   mirrorAbandoned?: boolean;
   replies: Array<{
     id:           string;
+    frameioCommentId: string | null;
     text:         string;
     authorName:   string;
     authorAvatar: string | null;
@@ -502,31 +509,34 @@ export function getThreadedCommentsForAssetVersion(
   for (const { root, replies } of byThread.values()) {
     if (!root) continue;  // orphan reply (parent was soft-deleted) — drop for now
 
-    const rootId = root.frameio_comment_id ?? root.comment_id;
-    rowLookup.set(rootId, {
+    // Outward id is ALWAYS the local comment_id (stable). The Frame.io id is
+    // surfaced separately as frameioCommentId for consumers that still tether
+    // on it. rowLookup is keyed by comment_id to match the outward id.
+    rowLookup.set(root.comment_id, {
       authorUserId:       root.author_user_id,
       authorExternalName: root.author_external_name,
       commentId:          root.comment_id,
     });
 
     const replyOut = replies.map((r) => {
-      const rId = r.frameio_comment_id ?? r.comment_id;
-      rowLookup.set(rId, {
+      rowLookup.set(r.comment_id, {
         authorUserId:       r.author_user_id,
         authorExternalName: r.author_external_name,
         commentId:          r.comment_id,
       });
       return {
-        id:           rId,
-        text:         r.body,
-        authorName:   r.author_external_name ?? '',
-        authorAvatar: r.author_avatar_url,
-        createdAt:    r.created_at,
+        id:               r.comment_id,
+        frameioCommentId: r.frameio_comment_id ?? null,
+        text:             r.body,
+        authorName:       r.author_external_name ?? '',
+        authorAvatar:     r.author_avatar_url,
+        createdAt:        r.created_at,
       };
     });
 
     comments.push({
-      id:              rootId,
+      id:              root.comment_id,
+      frameioCommentId: root.frameio_comment_id ?? null,
       text:            root.body,
       timestamp:       root.timestamp_seconds,
       duration:        root.duration_seconds,

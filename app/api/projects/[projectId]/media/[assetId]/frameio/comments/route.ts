@@ -212,7 +212,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
             projectId,
             assetId,
             assetName:  asset.name || asset.originalFilename,
-            commentId:  parent.frameioCommentId ?? parent.commentId,
+            commentId:  parent.commentId,
             fromUserId: session?.userId,
             fromName:   lposUser?.name,
             snippet:    body.text.trim().slice(0, 140),
@@ -221,17 +221,21 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       }
 
       const replyResponse = {
-        id:           reply.commentId,
-        text:         reply.body,
-        authorName:   lposUser?.name ?? reply.authorExternalName ?? '',
+        id:               reply.commentId,
+        frameioCommentId: reply.frameioCommentId ?? null,
+        text:             reply.body,
+        authorName:       lposUser?.name ?? reply.authorExternalName ?? '',
         // Prefer the live user-store avatar so the row shows a real picture
         // even though insert never snapshots author_avatar_url for LPOS users.
-        authorAvatar: lposUser?.avatarUrl ?? reply.authorAvatarUrl,
+        authorAvatar:     lposUser?.avatarUrl ?? reply.authorAvatarUrl,
         createdAt:    reply.createdAt,
       };
       return NextResponse.json({
         reply:    replyResponse,
-        parentId: parent.frameioCommentId ?? parent.commentId,
+        // Stable local id — matches the parent's outward `id` (now always
+        // comment_id), so the client's optimistic insert can't miss. This
+        // permanently retires the reply-vanish race from the id-flip.
+        parentId: parent.commentId,
       }, { status: 201 });
     }
 
@@ -258,6 +262,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
     const named = {
       id:              comment.commentId,
+      frameioCommentId: null,
       text:            comment.body,
       timestamp:       comment.timestampSeconds,
       duration:        comment.durationSeconds,

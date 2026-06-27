@@ -14,11 +14,16 @@ type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
  * these to place review markers on the source Resolve timeline (tagged
  * `frameio:{id}` per locked decision §11 #4 — tether stays through Phase 4).
  *
- * Phase 1: reads from the local `media_comments` table instead of Frame.io.
- * Returned shape is unchanged so editpanel doesn't notice the swap. `id`
- * field returns the Frame.io comment id when present (preserves the marker
- * tether); comments without a Frame.io id (e.g. abandoned mirror jobs) get
- * filtered so editpanel never sees a stale marker reference.
+ * Reads from the local `media_comments` table. Identity model (decoupling
+ * Step 3): `id` is ALWAYS the stable local comment_id; the Frame.io comment id
+ * is a separate `frameioCommentId` field. EditPanel still tethers its Resolve
+ * markers on the Frame.io id, so we (a) return only comments that have a
+ * frameioCommentId, and (b) surface it explicitly.
+ *
+ * EDITPANEL FOLLOW-UP (deferred): the editpanel client currently reads `id`
+ * for its `frameio:{id}` marker tag — it must switch to `frameioCommentId`.
+ * Until it does, existing markers won't match (id is now comment_id). This is
+ * the known, accepted break from the identity stabilization.
  */
 export async function GET(req: NextRequest, { params }: Ctx) {
   const auth = requireEpToken(req);
@@ -45,20 +50,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       mapping.assetVersionId,
     );
 
-    // Resolve author names: LPOS-authored comments get their LPOS user's
-    // current display name; external Frame.io reviewers keep the name we
-    // captured. Then filter out comments without a Frame.io id — editpanel
-    // addresses comments via `frameio:{id}` so it never sees rows that
-    // haven't been mirrored. The store's id-fallback to local comment_id
-    // surfaces unmirrored rows; here we drop them.
+    // EditPanel can only tether markers on comments that exist in Frame.io, so
+    // drop rows that were never mirrored (frameioCommentId === null). Then
+    // resolve author names: LPOS-authored comments get their LPOS user's
+    // current display name; external Frame.io reviewers keep the captured name.
     const named = comments
-      .filter((c) => {
-        const lookup = rowLookup.get(c.id);
-        // Drop if this is a local-only row (no Frame.io id). The lookup's
-        // commentId matching c.id means c.id IS the local comment_id, not a
-        // Frame.io id — those rows are invisible to editpanel.
-        return !lookup || lookup.commentId !== c.id;
-      })
+      .filter((c) => c.frameioCommentId != null)
       .map((c) => {
         const lookup = rowLookup.get(c.id);
         const lposUser = lookup?.authorUserId ? getUserById(lookup.authorUserId) : null;

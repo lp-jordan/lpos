@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-27T02:25:16Z",
+    "title": "Frame.io comment decoupling Step 3 — stable comment identity (comment_id is the sole outward id)",
+    "summary": "Retired the dual-identity model where a comment's outward id was frameio_comment_id ?? comment_id and flipped from local to Frame.io once the mirror landed. The outward id is now always the stable local comment_id; the Frame.io id is exposed as a separate frameioCommentId field for consumers that still tether on it (EditPanel markers). getThreadedCommentsForAssetVersion sets id=comment_id and emits frameioCommentId; the reply POST returns parentId=parent.commentId (permanently killing the reply-vanish race since the optimistic insert can no longer miss); the EP route filters on frameioCommentId != null; webhook + reply notifications reference the local comment_id. Internal frameio_comment_id is untouched (webhook idempotency, outbound mirror tether). Known deferred break: the editpanel client must switch its frameio:{id} marker tag from id to frameioCommentId. Type-checked clean. Step 4 (comment-count relocation) remains."
+  },
+  {
     "timestamp": "2026-06-26T21:16:27Z",
     "title": "Frame.io comment decoupling Step 2 — comment UI now shows for non-Frame assets",
     "summary": "Removed the Frame.io render/handler gates so the comment UI works on assets that were never uploaded to Frame.io. In MediaDetailPanel: fetchComments and the load effects now key on asset.assetId (not frameio.assetId), the open effect always fetches versions, the sidebar compose handler dropped its Frame.io bail, and the Comments section render gate was removed. In MediaPlayer (theater): dropped frameioAssetId from the comment compose handler, the comments-icon render, and the timed-comment compose footer (the comments panel was already gated on panelContainer, not Frame.io). Pairs with Step 1's API change to make commenting on non-Frame assets work end to end. The real-time socket listener stays gated on Frame.io since those refresh events only come from Frame.io webhooks. Type-checked clean. The MediaTab grid count badge is still Frame.io-gated (Step 4). Steps 3-4 still to come."
