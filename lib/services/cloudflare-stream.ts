@@ -63,6 +63,29 @@ function readCloudflareEnv() {
   };
 }
 
+/**
+ * Default playback origins stamped onto every managed Cloudflare upload (auto
+ * upload + manual push). The LPOS host so the in-app player can fetch HLS, plus
+ * the LeaderPass platform domain. Override via CLOUDFLARE_STREAM_ALLOWED_ORIGINS
+ * (comma-separated). Per-video add/remove happens afterward via the Security
+ * modal, which writes allowedOrigins directly on the CF uid.
+ *
+ * NOTE: this is the interim security model — allowedOrigins only, no
+ * requireSignedURLs (see the project_cloudflare_auto_upload plan).
+ */
+const DEFAULT_ALLOWED_ORIGINS = ['lpos.tail856ed3.ts.net', 'app.leaderpass.com'];
+
+/** Reduce a URL or host string to a bare hostname[:port] for Cloudflare allowedOrigins. */
+function normalizeOrigin(raw: string): string {
+  return raw.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+}
+
+export function getDefaultAllowedOrigins(): string[] {
+  const env = process.env.CLOUDFLARE_STREAM_ALLOWED_ORIGINS?.trim();
+  const list = env ? env.split(',') : DEFAULT_ALLOWED_ORIGINS;
+  return list.map(normalizeOrigin).filter(Boolean);
+}
+
 export function getCloudflareStreamConfigDiagnostic(): ConfigDiagnostic {
   const env = readCloudflareEnv();
   const details: string[] = [];

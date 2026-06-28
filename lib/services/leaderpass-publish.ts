@@ -13,13 +13,13 @@ import {
   deleteCloudflareVideo,
   getCloudflareStreamConfigDiagnostic,
   getCloudflareFileSize,
+  getDefaultAllowedOrigins,
   isCloudflareStreamConfigured,
   uploadCaptionsVtt,
   uploadFileToCloudflareTus,
   waitForCloudflareVideoReady,
 } from '@/lib/services/cloudflare-stream';
 
-const CLOUDFLARE_ALLOWED_ORIGINS = ['app.leaderpass.com'];
 const CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME = 24;
 
 type PublishQueueProvider = 'frameio' | 'leaderpass';
@@ -184,8 +184,10 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     });
 
     // Lock allowed origins immediately — before any bytes are transferred.
+    // Shared default (LPOS host + platform) so manually-pushed videos are also
+    // playable by the in-app CF player, not just the LeaderPass platform.
     try {
-      await applyVideoSettings(prepared.uid, { allowedOrigins: CLOUDFLARE_ALLOWED_ORIGINS });
+      await applyVideoSettings(prepared.uid, { allowedOrigins: getDefaultAllowedOrigins() });
       console.log(`[leaderpass] allowedOrigins set for uid=${prepared.uid}`);
     } catch (err) {
       console.warn(`[leaderpass] failed to set allowedOrigins for uid=${prepared.uid}:`, err);

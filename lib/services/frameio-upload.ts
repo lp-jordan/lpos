@@ -40,6 +40,7 @@ import {
   COMPRESS_THRESHOLD_BYTES,
 }                                                  from '@/lib/services/frameio-compress';
 import { triggerCloudflareUpload }                 from '@/lib/services/cloudflare-publish';
+import { getDefaultAllowedOrigins }                from '@/lib/services/cloudflare-stream';
 import { isVideoFile }                             from '@/lib/utils/media-kind';
 
 function getQueue() {
@@ -293,9 +294,10 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
     // sequential (Frame.io is done; CF runs next on its own). Video-only — CF
     // Stream rejects audio/image/docs, which keep their existing playback path.
     // Decoupled from LeaderPass publish; CF becomes the internal playback layer.
-    // (allowedOrigins lock arrives in Phase 2; left open here intentionally.)
+    // Locked to the default origins (LPOS host + platform); per-video tweaks via
+    // the sidebar Security modal afterward.
     if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
-      triggerCloudflareUpload(projectId, assetId);
+      triggerCloudflareUpload(projectId, assetId, { allowedOrigins: getDefaultAllowedOrigins() });
     } else {
       console.log(`[frameio] skipping Cloudflare auto-upload for non-video asset "${filename}"`);
     }
