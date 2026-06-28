@@ -39,6 +39,8 @@ import {
   cancelCompress,
   COMPRESS_THRESHOLD_BYTES,
 }                                                  from '@/lib/services/frameio-compress';
+import { triggerCloudflareUpload }                 from '@/lib/services/cloudflare-publish';
+import { isVideoFile }                             from '@/lib/utils/media-kind';
 
 function getQueue() {
   try { return getUploadQueueService(); } catch { return null; }
@@ -286,6 +288,17 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
       },
     });
     console.log(`[frameio] uploaded "${filename}" → ${result.reviewLink ?? result.frameioAssetId}`);
+
+    // Auto-upload to Cloudflare Stream right after Frame.io, per-asset and
+    // sequential (Frame.io is done; CF runs next on its own). Video-only — CF
+    // Stream rejects audio/image/docs, which keep their existing playback path.
+    // Decoupled from LeaderPass publish; CF becomes the internal playback layer.
+    // (allowedOrigins lock arrives in Phase 2; left open here intentionally.)
+    if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
+      triggerCloudflareUpload(projectId, assetId);
+    } else {
+      console.log(`[frameio] skipping Cloudflare auto-upload for non-video asset "${filename}"`);
+    }
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

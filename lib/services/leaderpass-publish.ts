@@ -103,9 +103,11 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
 
   const alreadyActive = asset.leaderpass.status === 'preparing'
     && (asset.cloudflare.uid !== null || asset.cloudflare.uploadUrl !== null || asset.cloudflare.progress > 0);
-  const cloudflareProcessing = asset.cloudflare.status === 'processing';
+  // Also covers a decoupled CF auto-upload in flight (status 'uploading' before
+  // it reaches 'processing'), so a manual push can't collide with it.
+  const cloudflareBusy = asset.cloudflare.status === 'processing' || asset.cloudflare.status === 'uploading';
 
-  if (alreadyActive || cloudflareProcessing) {
+  if (alreadyActive || cloudflareBusy) {
     console.warn(`[leaderpass] asset ${assetId} is already in progress; skipping duplicate trigger`);
     return;
   }
