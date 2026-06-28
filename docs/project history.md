@@ -1979,3 +1979,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Operational note — route move needs the server to pick up the new path:** because routing is file-based, the running prod server serves the OLD `/frameio/comments` path until it reloads the moved file (hot-reload if running via `tsx server.ts` dev-mode; a rebuild + restart if it's a production build). The frontend (now calling `/comments`) and backend (now serving `/comments`) deploy together from this tree, so they align on the user's next server reload/restart — but until that reload, the new frontend bundle would 404 against an un-reloaded old server. Coordinate the restart with the deploy.
 
 **Assumptions / follow-ups:** Decoupling is functionally complete (Steps 1–5). Outstanding: the spawned editpanel sub-task (task_cbd682fe) must land so Resolve markers re-tether on `frameioCommentId`. User intends to push after this. Per workspace convention pushing is normally user-initiated; the user authorized the push here. Committed to prod.
+
+---
+
+## 2026-06-28T12:30:00Z — Cold storage: true all-version purge deletes + live Backblaze footprint reconciliation
+
+**User prompt:** "I can change the bucket setting to Keep only the last version of the file but yes, ideally LPOS would be able to make meaningful delete decisions so we're not ever needing to go back into backblaze. LPOS is the monitor and the gun when necessary. But our system prevents accidental deletes."
+
+**Decisions (confirmed via question):** (1) LPOS purges all versions itself (self-sufficient, not dependent on the bucket lifecycle rule). (2) Build the monitor + the gun together this pass (deferred the bucket-wide one-time dark-mass cleanup action).
+
+**Assistant response summary:** Implemented two capabilities on the existing cold-storage admin, leaving the accidental-delete safety flow (missing → retainDays → explicit admin Approve/Spare, empty-prefix refusal, admin DM on queue) untouched. **The gun:** rewrote `deleteOne`/`deletePrefix` in `b2-cold-storage-browser.ts` to do a TRUE purge — a shared `purgeVersions()` helper paginates `ListObjectVersions` over the key/prefix and hard-deletes every version AND hide-marker in batches of 1000 via `DeleteObjects`, reclaiming space immediately regardless of bucket lifecycle config. (Previously a versionless `DeleteObject` only wrote a hide-marker, leaving data billing — the root cause of the 819-vs-5000 GB gap diagnosed earlier.) approve-all and the bucket browser inherit the new behavior since they call `deleteOne`/`deletePrefix`. **The monitor:** new `reconcileBucketFootprint()` walks every version in the bucket and tallies current-version bytes vs non-current/hidden (old-version) bytes vs hide-markers vs total billed; exposed at `GET /api/admin/cold-storage/reconcile` (admin-only, on-demand — not on the 60s poll since a full-version walk can be slow). UI: added a "Live Backblaze footprint" panel to `ColdStorageSection.tsx` with a "Check live footprint" button that shows the breakdown next to LPOS's tracked total (current should match) and flags reclaimable old-version mass; updated the per-object and approve-all delete confirmations to say "permanently purge all versions / reclaims space immediately."
+
+**Files changed:**
+- `lpos-dashboard/lib/services/b2-cold-storage-browser.ts` — purgeVersions helper; deleteOne/deletePrefix now purge all versions; reconcileBucketFootprint(); swapped imports (ListObjectVersionsCommand + DeleteObjectsCommand in, DeleteObjectCommand out).
+- `lpos-dashboard/app/api/admin/cold-storage/reconcile/route.ts` — new admin-only GET endpoint.
+- `lpos-dashboard/components/settings/ColdStorageSection.tsx` — footprint panel + state + fetch; purge-aware confirm copy.
+- `docs/README.md` — Raw Footage Cold Storage section: documented version-purge deletes, reconciliation, manual-approval gate; added reconcile route + updated key-files table.
+- `docs/project history.md`, `docs/changelog.json` — this entry.
+
+**Decision rationale:** `ListObjectVersions` + versioned `DeleteObjects` is the only S3-API way to (a) see and (b) reclaim non-current versions on a versioned B2 bucket; `ListObjectsV2` (used elsewhere) is blind to them. Wiring the purge behind the *existing* `deleteOne`/`deletePrefix` signatures meant approve-all, per-object delete, and the browser all became "real" with zero new gating, preserving the safety model. Reconciliation kept on-demand (button) rather than on the auto-poll to avoid a full-version walk every 60s on a large bucket.
+
+**Alternatives considered:** Hide-and-rely-on-bucket-lifecycle (rejected by user — wanted LPOS self-sufficient). Batch `DeleteObjects` chosen over per-object `DeleteObject` loops for throughput on large version sets.
+
+**Commands/checks run:** `npx tsc --noEmit` — 0 errors. No dev server started (per workspace rule). No live B2 calls made from this session.
+
+**Assumptions / follow-ups:** User will set the bucket lifecycle to "Keep only the last version" to bulk-reclaim the pre-existing ~4,200 GB of old versions (the in-app purge only reclaims going forward, per-object as files are retired). Deferred follow-up: a gated one-time "Reclaim old versions" maintenance action that purges only non-current versions bucket-wide without touching live files. The footprint walk is unbounded — fine for current bucket size; revisit if it ever times out the request.

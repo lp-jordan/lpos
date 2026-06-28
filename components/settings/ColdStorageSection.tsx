@@ -59,6 +59,21 @@ interface OverviewResponse {
   missingWithinRetention: ColdStorageObject[];
 }
 
+interface BucketFootprint {
+  currentObjects:    number;
+  currentBytes:      number;
+  noncurrentObjects: number;
+  noncurrentBytes:   number;
+  deleteMarkers:     number;
+  totalBytes:        number;
+  scannedAt:         string;
+}
+
+interface ReconcileResponse {
+  footprint: BucketFootprint;
+  tracked:   { activeObjects: number; activeBytes: number };
+}
+
 function bytesToHuman(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -115,6 +130,10 @@ export function ColdStorageSection() {
   const [pausing,    setPausing]    = useState(false);
   const [reviewBusy,     setReviewBusy]     = useState<string | null>(null); // per-row key being acted on
   const [approveAllBusy, setApproveAllBusy] = useState(false);
+
+  const [footprint,     setFootprint]     = useState<ReconcileResponse | null>(null);
+  const [footprintBusy, setFootprintBusy] = useState(false);
+  const [footprintErr,  setFootprintErr]  = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -205,8 +224,25 @@ export function ColdStorageSection() {
     }
   }
 
+  async function checkFootprint() {
+    setFootprintBusy(true);
+    setFootprintErr(null);
+    try {
+      const res = await fetch('/api/admin/cold-storage/reconcile', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Footprint check failed');
+      }
+      setFootprint(await res.json() as ReconcileResponse);
+    } catch (err) {
+      setFootprintErr((err as Error).message);
+    } finally {
+      setFootprintBusy(false);
+    }
+  }
+
   async function approveOne(key: string) {
-    if (!confirm(`Delete from B2:\n\n${key}\n\nThis is final — once deleted, the cold-storage copy is gone. The source file is already missing locally.`)) return;
+    if (!confirm(`Permanently purge from Backblaze:\n\n${key}\n\nThis deletes EVERY version of the file and reclaims the space immediately. It is final — the cold-storage copy is gone. The source file is already missing locally.`)) return;
     setReviewBusy(key);
     setError(null);
     try {
@@ -244,7 +280,7 @@ export function ColdStorageSection() {
     if (!data) return;
     const count = data.queuedForDeletion.length;
     if (count === 0) return;
-    if (!confirm(`Delete all ${count} files from B2?\n\nThis is final — once deleted, the cold-storage copies are gone. All source files are already missing locally.`)) return;
+    if (!confirm(`Permanently purge all ${count} files from Backblaze?\n\nThis deletes every version and reclaims the space immediately. It is final — the cold-storage copies are gone. All source files are already missing locally.`)) return;
     setApproveAllBusy(true);
     setError(null);
     try {
@@ -379,6 +415,79 @@ export function ColdStorageSection() {
           <strong>{stats.deletedHistory.toLocaleString()}</strong>
           <span className="storage-settings-muted">recent</span>
         </div>
+      </div>
+
+      {/* Live Backblaze footprint — on-demand reconciliation */}
+      <div className="cold-storage-lastrun" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <h3 className="storage-settings-section-title" style={{ fontSize: '1em', marginBottom: 4 }}>
+              Live Backblaze footprint
+            </h3>
+            <p className="storage-settings-muted" style={{ fontSize: '0.85em', maxWidth: 560 }}>
+              The numbers above are what LPOS tracks (current files only). This walks every
+              version in the bucket — including old/hidden ones B2 still bills for — so you can
+              confirm tracked-vs-actual without opening Backblaze.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="storage-settings-secondary"
+            onClick={() => void checkFootprint()}
+            disabled={footprintBusy || !credsOk}
+            title="Scan every object version in the bucket (can take a moment on large buckets)"
+          >
+            {footprintBusy ? 'Scanning…' : 'Check live footprint'}
+          </button>
+        </div>
+
+        {footprintErr && (
+          <p className="storage-settings-muted" style={{ color: '#ffb4ab', marginTop: 8, fontSize: '0.85em' }}>
+            {footprintErr}
+          </p>
+        )}
+
+        {footprint && (() => {
+          const fp = footprint.footprint;
+          const reclaimable = fp.noncurrentBytes;
+          const hasDarkMass = reclaimable > 1024 * 1024 * 1024; // > 1 GB worth of old versions
+          return (
+            <div style={{ marginTop: 12 }}>
+              <div className="cold-storage-stats" style={{ marginTop: 0 }}>
+                <div>
+                  <span className="cold-storage-stat-label">Current versions (live)</span>
+                  <strong>{bytesToHuman(fp.currentBytes)}</strong>
+                  <span className="storage-settings-muted">{fp.currentObjects.toLocaleString()} files</span>
+                </div>
+                <div>
+                  <span className="cold-storage-stat-label">Old / hidden versions</span>
+                  <strong style={{ color: hasDarkMass ? '#ffb4ab' : undefined }}>
+                    {bytesToHuman(fp.noncurrentBytes)}
+                  </strong>
+                  <span className="storage-settings-muted">{fp.noncurrentObjects.toLocaleString()} versions</span>
+                </div>
+                <div>
+                  <span className="cold-storage-stat-label">Hide-markers</span>
+                  <strong>{fp.deleteMarkers.toLocaleString()}</strong>
+                  <span className="storage-settings-muted">hidden keys</span>
+                </div>
+                <div>
+                  <span className="cold-storage-stat-label">Total billed bytes</span>
+                  <strong>{bytesToHuman(fp.totalBytes)}</strong>
+                  <span className="storage-settings-muted">current + old</span>
+                </div>
+              </div>
+              <p className="storage-settings-muted" style={{ fontSize: '0.82em', marginTop: 8 }}>
+                LPOS tracks <strong>{bytesToHuman(footprint.tracked.activeBytes)}</strong> ({footprint.tracked.activeObjects.toLocaleString()} files);
+                live current versions are <strong>{bytesToHuman(fp.currentBytes)}</strong> — these should match.
+                {hasDarkMass
+                  ? ` There is ${bytesToHuman(reclaimable)} of old/hidden versions still billing. New deletes in LPOS now purge all versions, so this drains as files are retired — or set the bucket lifecycle to “Keep only the last version” to reclaim it in bulk.`
+                  : ' No meaningful dark mass — the bucket is clean.'}
+                <span style={{ display: 'block', marginTop: 4 }}>Scanned {relativeTime(fp.scannedAt)}.</span>
+              </p>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Source dirs */}

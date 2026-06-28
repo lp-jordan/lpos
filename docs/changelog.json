@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-28T12:30:00Z",
+    "title": "Cold storage deletes now reclaim space + live Backblaze footprint check",
+    "summary": "Made the Raw Footage Cold Storage admin self-sufficient so you never need to open Backblaze. Deletes (per-object, approve-all, and folder delete in the bucket browser) now permanently purge every version of a file via ListObjectVersions + batched DeleteObjects, reclaiming the space immediately — previously a delete only wrote a hide-marker on the versioned bucket and the data kept billing, which is why LPOS's tracked total read far smaller than Backblaze's. Added a 'Live Backblaze footprint' panel with a 'Check live footprint' button that walks every version in the bucket and shows current vs old/hidden versions vs total billed bytes next to LPOS's tracked total, so tracked-vs-actual is visible in-app. The accidental-delete safety flow (a file must be missing from source for the full retention window, then an admin must explicitly Approve or Spare) is unchanged."
+  },
+  {
     "timestamp": "2026-06-27T14:51:34Z",
     "title": "Frame.io comment decoupling Step 5 (cleanup) — route rename + dead-code removal",
     "summary": "Cleanup after the decoupling. Renamed the comments API route off its Frame.io-branded path (app/api/projects/[projectId]/media/[assetId]/frameio/comments → .../comments) via git mv, since it now reads the local media_comments table; updated the 9 client fetch URLs (6 in MediaDetailPanel, 3 in MediaPlayer) plus the moved route's docstring/log tags. Removed the dead FrameIOInfo.commentCount field and its default (retired in Step 4, computed-on-read replaced it; the canonical projection spreads defaultFrameIO so nothing else referenced it). Spawned a separate sub-task to fix the editpanel Resolve-marker tether (switch from id to frameioCommentId). Type-checked clean. Operational note: the file-based route move needs the running server to reload/rebuild to serve the new /comments path. Deliberately did NOT touch the *ByFrameioId store helpers or frameio service functions — those are still used by the webhook/mirror/shares paths."
