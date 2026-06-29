@@ -52,7 +52,23 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
   const assets = readRegistry(projectId);
   const asset  = assets.find((a) => a.assetId === assetId);
 
-  // ── 1. Frame.io ───────────────────────────────────────────────────────────
+  // ── 1. Cloudflare Stream HLS (primary playback layer) ─────────────────────
+  // CF is the internal playback source once a video is fully processed. Gated
+  // on status==='ready' so a still-uploading/encoding CF video falls through to
+  // Frame.io during the processing window rather than serving a dead manifest.
+  // (allowedOrigins does NOT gate direct HLS — verified — so this plays from the
+  // LPOS origin regardless of a video's leaderpass-only origin lock.)
+  const cf = asset?.cloudflare;
+  if (cf?.uid && cf.status === 'ready' && isCloudflareStreamConfigured()) {
+    const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
+    if (sub) {
+      const url = `https://customer-${sub}.cloudflarestream.com/${cf.uid}/manifest/video.m3u8`;
+      urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+      return { kind: 'redirect', url };
+    }
+  }
+
+  // ── 2. Frame.io (fallback while CF is still processing, or when not on CF) ─
   const frameioFileId = asset?.frameio?.assetId;
   if (frameioFileId) {
     try {
@@ -64,17 +80,6 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
       }
     } catch {
       // Fall through to next source
-    }
-  }
-
-  // ── 2. Cloudflare Stream HLS ──────────────────────────────────────────────
-  const cfUid = asset?.cloudflare?.uid;
-  if (cfUid && isCloudflareStreamConfigured()) {
-    const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
-    if (sub) {
-      const url = `https://customer-${sub}.cloudflarestream.com/${cfUid}/manifest/video.m3u8`;
-      urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
-      return { kind: 'redirect', url };
     }
   }
 

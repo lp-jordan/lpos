@@ -18494,6 +18494,8 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   padding: 16px;
   pointer-events: none;
 }
+.mp-error-title { font-size: 14px; font-weight: 600; color: #ccc; }
+.mp-error-sub   { font-size: 12px; color: #888; margin-top: -4px; }
 .mp-error-retry {
   pointer-events: all;
   background: rgba(255,255,255,0.1);

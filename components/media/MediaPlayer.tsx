@@ -522,7 +522,8 @@ export function MediaPlayer({
         />
         {unavailable && (
           <div className="mp-error-overlay">
-            <span>Preview unavailable — Frame.io may still be processing</span>
+            <span className="mp-error-title">Check back shortly</span>
+            <span className="mp-error-sub">This video is still processing.</span>
             {isTheater && (
               <button type="button" className="mp-error-retry" onClick={() => { setUnavailable(false); setStreamUrl(src + '?retry=' + Date.now()); }}>
                 Retry
