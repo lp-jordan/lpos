@@ -5158,20 +5158,10 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 
 /* ── Distribution bar: status strip + action rail (Option-A redesign) ─────── */
 .mdb { margin: 8px 0 4px; }
-.mdb-strip { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 8px; }
-.mdb-badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
-  border-radius: 11px; border: 1px solid transparent; white-space: nowrap;
-}
-.mdb-badge-ico { display: inline-flex; }
-.mdb-badge--ready      { color: rgba(120, 205, 150, 1); background: rgba(120, 205, 150, 0.12); border-color: rgba(120, 205, 150, 0.28); }
-.mdb-badge--processing { color: rgba(212, 160, 80, 1);  background: rgba(212, 160, 80, 0.13);  border-color: rgba(212, 160, 80, 0.3); }
-.mdb-badge--failed     { color: rgba(224, 110, 110, 1); background: rgba(224, 110, 110, 0.13); border-color: rgba(224, 110, 110, 0.3); }
-.mdb-badge--stale      { color: rgba(212, 160, 80, 1);  background: rgba(212, 160, 80, 0.1);   border-color: rgba(212, 160, 80, 0.26); }
-.mdb-badge--idle       { color: var(--text-muted);      background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.09); }
 
-.mdb-rail { display: flex; gap: 6px; justify-content: center; }
+/* Action rail: buttons centered, roll-up health dot pinned right (absolute so
+   it doesn't pull the centered cluster off-axis). */
+.mdb-rail { position: relative; display: flex; gap: 6px; align-items: center; justify-content: center; }
 .mdb-rail-item { position: relative; display: inline-flex; }
 .mdb-rail-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -5207,6 +5197,27 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px; cursor: pointer;
 }
 .mdb-pop-btn:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* ── Roll-up health dot + per-platform breakdown popout ───────────────────── */
+.mdb-health { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+.mdb-dot-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 30px; padding: 0;
+  background: none; border: none; cursor: pointer;
+}
+.mdb-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.mdb-dot--green { background: rgba(120, 205, 150, 1); box-shadow: 0 0 0 3px rgba(120, 205, 150, 0.18); }
+.mdb-dot--yellow { background: rgba(224, 188, 90, 1);  box-shadow: 0 0 0 3px rgba(224, 188, 90, 0.18); }
+.mdb-dot--amber { background: rgba(224, 188, 90, 1);  box-shadow: 0 0 0 3px rgba(224, 188, 90, 0.18); }
+.mdb-dot--red   { background: rgba(224, 110, 110, 1); box-shadow: 0 0 0 3px rgba(224, 110, 110, 0.2); }
+.mdb-dot--idle  { background: rgba(255, 255, 255, 0.28); }
+
+/* Health popout opens leftward from the right-pinned dot so it stays in-panel. */
+.mdb-health-pop { left: auto; right: 0; width: auto; min-width: 168px; gap: 6px; }
+.mdb-health-row { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; }
+.mdb-health-row .mdb-dot { box-shadow: none; }
+.mdb-health-name { color: var(--text-secondary); }
+.mdb-health-state { margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 /* Phase 2 of the local-comments refactor: the outbound mirror to Frame.io
  * gave up after the 3-hour abandonment ceiling (locked decision §11 #7).
  * Surfaces to LPOS users so they know clients viewing the review link
