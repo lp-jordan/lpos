@@ -19186,3 +19186,108 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .mp-compose-send:disabled { opacity: 0.4; cursor: default; }
 .mp-compose-send:not(:disabled):hover { background: #333; color: #fff; }
 .mp-compose-error { font-size: 10px; color: #c0392b; margin-top: 4px; display: block; }
+
+/* ── Internal Review ─────────────────────────────────────────────────────────
+   The media page, scoped to one bundle and re-skinned near-black + gold. The
+   scoped variable overrides cascade into the reused MediaDetailPanel/player. */
+
+.internal-review-page {
+  --page-bg: #0a0a0a;
+  --page-bg-deep: #050505;
+  --page-glow-gold: rgba(219, 175, 95, 0.22);
+  --surface: #111111;
+  --accent: #e6c24a;
+  --accent-strong: #ffde7a;
+  --accent-soft: rgba(230, 194, 74, 0.18);
+  min-height: 100%;
+  background: var(--page-bg);
+  color: var(--text);
+  padding: 24px 28px 80px;
+}
+
+.ir-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(230, 194, 74, 0.16);
+}
+.ir-header-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0a0a0a;
+  background: var(--accent);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.ir-header-title { font-size: 18px; font-weight: 600; color: var(--accent-strong); margin: 0; }
+.ir-header-count { font-size: 12px; color: rgba(244, 238, 226, 0.55); margin-left: auto; }
+
+.ir-clip-list { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+.ir-clip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid rgba(230, 194, 74, 0.10);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color 0.12s, background 0.12s;
+}
+.ir-clip:hover { border-color: rgba(230, 194, 74, 0.4); background: #161616; }
+.ir-clip--open { border-color: var(--accent); background: #161208; }
+.ir-clip-thumb {
+  width: 64px; height: 38px; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  background: #000; border-radius: 4px; overflow: hidden;
+  color: rgba(230, 194, 74, 0.5);
+}
+.ir-clip-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ir-clip-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ir-clip-name {
+  font-size: 13px; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ir-clip-meta { font-size: 11px; color: rgba(244, 238, 226, 0.5); }
+
+.ir-state { font-size: 13px; color: rgba(244, 238, 226, 0.6); padding: 32px 4px; }
+.ir-state--error { color: #e08585; }
+
+.ir-expired {
+  max-width: 460px; margin: 12vh auto 0; text-align: center;
+}
+.ir-expired-title { font-size: 20px; font-weight: 600; color: var(--accent-strong); margin: 0 0 10px; }
+.ir-expired-body { font-size: 13px; color: rgba(244, 238, 226, 0.6); line-height: 1.5; margin: 0; }
+
+/* ── DeliverableModal: Internal Review toggle ───────────────────────────────── */
+.deliverable-modal-internal-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.deliverable-modal-internal-toggle input { margin-top: 3px; flex: 0 0 auto; }
+.deliverable-modal-internal-toggle-text { display: flex; flex-direction: column; gap: 2px; }
+.deliverable-modal-internal-toggle-title { font-size: 13px; font-weight: 600; }
+.deliverable-modal-internal-toggle-desc { font-size: 11px; opacity: 0.65; line-height: 1.4; }
+
+/* ── DeliverablesPanel: internal-review rows ────────────────────────────────── */
+.deliverable-row-internal-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #0a0a0a; background: var(--accent, #dbaf5f);
+  padding: 2px 6px; border-radius: 3px;
+}
+.deliverable-row-revoked-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #e08585; border: 1px solid rgba(224, 133, 133, 0.4);
+  padding: 1px 5px; border-radius: 3px;
+}
+.deliverable-row--revoked { opacity: 0.55; }
+.deliverable-row--revoked .deliverable-row-name-btn { text-decoration: line-through; }

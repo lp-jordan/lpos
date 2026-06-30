@@ -23,6 +23,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Deliverable } from '@/lib/models/deliverable';
+import type { InternalReview } from '@/lib/models/internal-review';
 
 export interface DeliverableModalAsset {
   assetId: string;
@@ -38,10 +39,15 @@ export interface DeliverableModalProps {
   defaultName?: string;
   onClose: () => void;
   onCreated: (deliverable: Deliverable, shareUrl: string) => void;
+  /** Fired when an *internal* review (not a Frame.io deliverable) is created.
+   *  Only passed by surfaces that list internal reviews (e.g. DeliverablesPanel);
+   *  other entry points omit it and the modal just shows the copy-link pane. */
+  onInternalCreated?: (review: InternalReview, url: string) => void;
 }
 
 interface SuccessState {
-  deliverable: Deliverable;
+  internal: boolean;
+  name: string;
   shareUrl: string;
   skippedAssetIds: string[];
 }
@@ -53,8 +59,10 @@ export function DeliverableModal({
   defaultName = '',
   onClose,
   onCreated,
+  onInternalCreated,
 }: Readonly<DeliverableModalProps>) {
   const [name, setName] = useState(defaultName);
+  const [internal, setInternal] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(
     new Set(initiallySelectedAssetIds.filter((id) =>
       availableAssets.some((a) => a.assetId === id && a.hasFrameio),
@@ -82,6 +90,9 @@ export function DeliverableModal({
     () => availableAssets.filter((a) => a.hasFrameio),
     [availableAssets],
   );
+  // Internal reviews don't need Frame.io, so every asset is selectable; Frame.io
+  // review links stay gated to assets already uploaded to Frame.io.
+  const selectableAssets = internal ? availableAssets : shareableAssets;
   const nonShareableCount = availableAssets.length - shareableAssets.length;
 
   function toggle(assetId: string) {
@@ -92,8 +103,22 @@ export function DeliverableModal({
     });
   }
 
+  function setInternalMode(next: boolean) {
+    setInternal(next);
+    setError(null);
+    // Leaving internal mode: drop any non-Frame.io picks that can't be shared.
+    if (!next) {
+      setSelected((prev) => {
+        const filtered = new Set([...prev].filter((id) =>
+          availableAssets.some((a) => a.assetId === id && a.hasFrameio),
+        ));
+        return filtered;
+      });
+    }
+  }
+
   function selectAll() {
-    setSelected(new Set(shareableAssets.map((a) => a.assetId)));
+    setSelected(new Set(selectableAssets.map((a) => a.assetId)));
   }
   function clearAll() {
     setSelected(new Set());
@@ -113,6 +138,29 @@ export function DeliverableModal({
     }
     setCreating(true);
     try {
+      if (internal) {
+        // LPOS-hosted internal review — no Frame.io. Posts to the separate
+        // internal-reviews store; existing deliverables path is untouched.
+        const res = await fetch(`/api/projects/${projectId}/internal-reviews`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assetIds: Array.from(selected), name: name.trim() }),
+        });
+        const data = await res.json() as {
+          review?: InternalReview;
+          url?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.review || !data.url) {
+          setError(data.error ?? 'Failed to create internal review.');
+          return;
+        }
+        const absoluteUrl = `${window.location.origin}${data.url}`;
+        setSuccess({ internal: true, name: data.review.name, shareUrl: absoluteUrl, skippedAssetIds: [] });
+        onInternalCreated?.(data.review, data.url);
+        return;
+      }
+
       const res = await fetch(`/api/projects/${projectId}/deliverables`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,7 +181,8 @@ export function DeliverableModal({
         return;
       }
       setSuccess({
-        deliverable: data.deliverable,
+        internal: false,
+        name: data.deliverable.name,
         shareUrl: data.shareUrl,
         skippedAssetIds: data.skippedAssetIds ?? [],
       });
@@ -166,11 +215,19 @@ export function DeliverableModal({
         className="sh-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={success ? 'Review link created' : 'Create review link'}
+        aria-label={(() => {
+          const isInternal = success ? success.internal : internal;
+          if (success) return isInternal ? 'Internal review created' : 'Review link created';
+          return isInternal ? 'Create internal review' : 'Create review link';
+        })()}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sh-modal-header">
-          <span>{success ? 'Review link created' : 'Create review link'}</span>
+          <span>{(() => {
+            const isInternal = success ? success.internal : internal;
+            if (success) return isInternal ? 'Internal review created' : 'Review link created';
+            return isInternal ? 'Create internal review' : 'Create review link';
+          })()}</span>
           <button
             type="button"
             className="sh-modal-close"
@@ -187,7 +244,7 @@ export function DeliverableModal({
           <>
             <div className="sh-modal-body">
               <div className="sh-modal-field">
-                <label className="sh-modal-label">Share URL</label>
+                <label className="sh-modal-label">{success.internal ? 'Internal review link' : 'Share URL'}</label>
                 <div className="deliverable-modal-url-row">
                   <input
                     className="sh-modal-input"
@@ -206,10 +263,12 @@ export function DeliverableModal({
                 </div>
               </div>
               <p className="deliverable-modal-success-hint">
-                "{success.deliverable.name}" is ready.
-                {success.skippedAssetIds.length > 0 && (
-                  <> {success.skippedAssetIds.length} asset{success.skippedAssetIds.length === 1 ? '' : 's'} skipped (no Frame.io upload yet).</>
-                )}
+                "{success.name}" is ready.
+                {success.internal
+                  ? ' Share this link with signed-in LPOS teammates — it opens inside LPOS.'
+                  : success.skippedAssetIds.length > 0 && (
+                    <> {success.skippedAssetIds.length} asset{success.skippedAssetIds.length === 1 ? '' : 's'} skipped (no Frame.io upload yet).</>
+                  )}
               </p>
             </div>
             <div className="sh-modal-footer">
@@ -240,12 +299,26 @@ export function DeliverableModal({
                 />
               </div>
 
+              <label className="sh-modal-field deliverable-modal-internal-toggle">
+                <input
+                  type="checkbox"
+                  checked={internal}
+                  onChange={(e) => setInternalMode(e.target.checked)}
+                />
+                <span className="deliverable-modal-internal-toggle-text">
+                  <span className="deliverable-modal-internal-toggle-title">Internal Review</span>
+                  <span className="deliverable-modal-internal-toggle-desc">
+                    Host in LPOS for the team — no Frame.io. Opens an in-app page signed-in teammates can watch and comment on.
+                  </span>
+                </span>
+              </label>
+
               <div className="sh-modal-field">
                 <div className="deliverable-modal-asset-header">
                   <label className="sh-modal-label">
-                    Assets ({selected.size} of {shareableAssets.length} selected)
+                    Assets ({selected.size} of {selectableAssets.length} selected)
                   </label>
-                  {shareableAssets.length > 1 && (
+                  {selectableAssets.length > 1 && (
                     <div className="deliverable-modal-select-controls">
                       <button type="button" className="deliverable-modal-link-btn" onClick={selectAll}>
                         Select all
@@ -260,44 +333,49 @@ export function DeliverableModal({
                   <p className="sh-modal-hint">No assets available.</p>
                 ) : (
                   <div className="sh-modal-asset-list">
-                    {availableAssets.map((a) => (
-                      <label
-                        key={a.assetId}
-                        className={`sh-modal-asset-row${!a.hasFrameio ? ' deliverable-modal-asset-row--disabled' : ''}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected.has(a.assetId)}
-                          disabled={!a.hasFrameio}
-                          onChange={() => toggle(a.assetId)}
-                        />
-                        <span>{a.name}</span>
-                        {!a.hasFrameio && (
-                          <span className="deliverable-modal-asset-note">— not on Frame.io yet</span>
-                        )}
-                      </label>
-                    ))}
+                    {availableAssets.map((a) => {
+                      const disabled = !internal && !a.hasFrameio;
+                      return (
+                        <label
+                          key={a.assetId}
+                          className={`sh-modal-asset-row${disabled ? ' deliverable-modal-asset-row--disabled' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected.has(a.assetId)}
+                            disabled={disabled}
+                            onChange={() => toggle(a.assetId)}
+                          />
+                          <span>{a.name}</span>
+                          {disabled && (
+                            <span className="deliverable-modal-asset-note">— not on Frame.io yet</span>
+                          )}
+                        </label>
+                      );
+                    })}
                   </div>
                 )}
-                {nonShareableCount > 0 && (
+                {!internal && nonShareableCount > 0 && (
                   <p className="sh-modal-hint">
                     {nonShareableCount} asset{nonShareableCount === 1 ? '' : 's'} can't be shared until uploaded to Frame.io.
                   </p>
                 )}
               </div>
 
-              <div className="sh-modal-field">
-                <label className="sh-modal-label" htmlFor="deliverable-expires">
-                  Expiration (optional)
-                </label>
-                <input
-                  id="deliverable-expires"
-                  className="sh-modal-input"
-                  type="date"
-                  value={expiresAt}
-                  onChange={(e) => setExpiresAt(e.target.value)}
-                />
-              </div>
+              {!internal && (
+                <div className="sh-modal-field">
+                  <label className="sh-modal-label" htmlFor="deliverable-expires">
+                    Expiration (optional)
+                  </label>
+                  <input
+                    id="deliverable-expires"
+                    className="sh-modal-input"
+                    type="date"
+                    value={expiresAt}
+                    onChange={(e) => setExpiresAt(e.target.value)}
+                  />
+                </div>
+              )}
 
               {error && <p className="sh-error">{error}</p>}
             </div>
@@ -311,7 +389,7 @@ export function DeliverableModal({
                 onClick={() => void handleCreate()}
                 disabled={creating || selected.size === 0 || !name.trim()}
               >
-                {creating ? 'Creating…' : 'Create review link'}
+                {creating ? 'Creating…' : internal ? 'Create internal review' : 'Create review link'}
               </button>
             </div>
           </>

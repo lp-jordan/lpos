@@ -516,6 +516,37 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_mirror_jobs_pending ON media_comment_mirror_jobs(status, next_attempt_at) WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS idx_mirror_jobs_comment ON media_comment_mirror_jobs(comment_id, status);
+
+    -- Internal Review bundles — LPOS-hosted, authenticated review pages that
+    -- bundle a group of project assets for the internal team to watch & comment
+    -- on, bypassing Frame.io entirely. FULLY ADDITIVE to (and independent of) the
+    -- deliverables / Frame.io-review-link system — see
+    -- docs/internal-review-spec.md. Comments are NOT scoped here: the review page
+    -- reuses the normal media_comments thread per asset, so feedback flows both
+    -- ways with the regular media page. status drives revocation (no time-based
+    -- expiry): a revoked bundle renders a gentle "expired" page.
+    CREATE TABLE IF NOT EXISTS internal_reviews (
+      review_id   TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+      created_by  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      revoked_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_internal_reviews_project ON internal_reviews(project_id, created_at DESC);
+
+    -- Asset membership for an internal review. position preserves the reel
+    -- order shown on the review page.
+    CREATE TABLE IF NOT EXISTS internal_review_assets (
+      review_id  TEXT NOT NULL REFERENCES internal_reviews(review_id) ON DELETE CASCADE,
+      asset_id   TEXT NOT NULL,
+      position   INTEGER NOT NULL DEFAULT 0,
+      added_at   TEXT NOT NULL,
+      PRIMARY KEY (review_id, asset_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_internal_review_assets_asset ON internal_review_assets(asset_id);
   `);
 }
 
