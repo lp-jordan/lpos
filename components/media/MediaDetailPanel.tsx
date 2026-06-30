@@ -19,11 +19,6 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { io as ioClient }                           from 'socket.io-client';
 import { useToast } from '@/contexts/ToastContext';
 import type { MediaAsset } from '@/lib/models/media-asset';
-import {
-  CLOUDFLARE_STREAM_STATUS_LABEL,
-  FRAMEIO_STATUS_LABEL,
-  LEADERPASS_STATUS_LABEL,
-} from '@/lib/models/media-asset';
 import type { FrameIOComment } from '@/lib/services/frameio';
 import { formatTimecode } from '@/lib/utils/time';
 
@@ -67,6 +62,7 @@ class TheaterErrorBoundary extends Component<
 }
 import { VideoTheaterMode } from './VideoTheaterMode';
 import { MediaPlayer } from './MediaPlayer';
+import { MediaDistributionBar } from './MediaDistributionBar';
 
 
 interface Props {
@@ -673,6 +669,16 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const selectedVersion     = versions.find((v) => v.assetVersionId === selectedVersionId) ?? null;
   const isViewingOldVersion = !!selectedVersionId && !!latestVersionId && selectedVersionId !== latestVersionId;
 
+  // ── Cloudflare push/repair state (lifted from the old CF section so the
+  //    distribution bar shows status and the Advanced "Cloudflare" subsection
+  //    can drive the manual push / force-reset). ──────────────────────────────
+  const cfStatus     = asset?.cloudflare.status ?? 'none';
+  const lpStatus     = asset?.leaderpass.status ?? 'none';
+  const cfIsStale    = asset?.cloudflare.isStale ?? false;
+  const cfCurrentVer = asset?.frameio.version ?? 1;
+  const cfIsActive   = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
+  const cfIsPushable = !cfIsActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || cfIsStale);
+
   return (
     <>
       {theaterSrc && asset && (
@@ -882,22 +888,16 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                             )}
                           </div>
                         )}
-                        {/* Frame.io icon link */}
-                        {(asset.frameio.playerUrl || asset.frameio.reviewLink) && (
-                          <a
-                            href={asset.frameio.playerUrl ?? asset.frameio.reviewLink!}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mad-icon-btn"
-                            title="Open in Frame.io"
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                              <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                            </svg>
-                          </a>
-                        )}
                       </div>
+                      <MediaDistributionBar
+                        asset={asset}
+                        isViewingOldVersion={isViewingOldVersion}
+                        streamUrlCopied={cfEmbedCopied}
+                        onCopyStreamUrl={handleCopyEmbedUrl}
+                        onReplaceThumbnail={() => setShowThumbModal(true)}
+                        onSecurity={() => setShowDomainsModal(true)}
+                        frameioLink={asset.frameio.playerUrl ?? asset.frameio.reviewLink ?? null}
+                      />
                     </>
                   );
                 }
@@ -1304,205 +1304,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 </div>
               )}
 
-              {/* ── Cloudflare ── */}
-              {(() => {
-                const cfStatus     = asset.cloudflare.status;
-                const lpStatus     = asset.leaderpass.status;
-                const isStale      = asset.cloudflare.isStale;
-                const currentVer   = asset.frameio.version;
-                const publishedVer = asset.cloudflare.versionNumber;
-                const isActive     = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
-                const isPushable   = !isActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || isStale);
-                const isReady      = cfStatus === 'ready';
-                const hasState     = cfStatus !== 'none';
-                const staleTooltip = isStale && publishedVer != null
-                  ? `Cloudflare reflects v${publishedVer}; current LPOS version is v${currentVer}. Re-push to update.`
-                  : undefined;
-                const embedBase = asset.cloudflare.hlsUrl
-                  ? asset.cloudflare.hlsUrl.replace('/manifest/video.m3u8', '')
-                  : null;
-                const embedSrc = embedBase
-                  ? `${embedBase}/iframe${asset.cloudflare.posterUrl ? `?poster=${encodeURIComponent(asset.cloudflare.posterUrl)}` : ''}`
-                  : null;
-                const posterPreviewUrl = asset.cloudflare.posterUrl
-                  ?? (embedBase ? `${embedBase}/thumbnails/thumbnail.jpg` : null);
-                const cfBadgeClass = cfStatus === 'ready'
-                  ? (isStale ? 'stale' : 'done')
-                  : cfStatus === 'failed' ? 'failed'
-                  : (cfStatus === 'uploading' || cfStatus === 'processing') ? 'processing'
-                  : 'none';
-
-                return (
-                  <div className="mad-section">
-                    {/* ── Head: title · status · preview link · reset icon ── */}
-                    <div className="mad-section-head">
-                      <span className="mad-section-title">Cloudflare</span>
-                      {hasState && (
-                        <span className={`mad-tx-badge mad-tx-badge--${cfBadgeClass}`} title={staleTooltip}>
-                          {CLOUDFLARE_STREAM_STATUS_LABEL[cfStatus]}
-                          {isStale && publishedVer != null && <span className="mad-cf-stale-ver"> v{publishedVer}</span>}
-                        </span>
-                      )}
-                      {asset.leaderpass.playbackUrl && (
-                        <a
-                          href={asset.leaderpass.playbackUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mad-icon-btn"
-                          title="Open Cloudflare preview"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                            <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-                          </svg>
-                        </a>
-                      )}
-                      {(isReady || lpStatus === 'awaiting_platform') && (
-                        <button
-                          type="button"
-                          className="mad-icon-btn"
-                          onClick={() => setCfResetConfirm(true)}
-                          disabled={lpResetting}
-                          title="Reset & Re-push"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* ── Copy Stream URL — dedicated labeled button ── */}
-                    {isReady && embedSrc && (
-                      <button
-                        type="button"
-                        className="mad-action-btn mad-cf-copy-stream-btn"
-                        onClick={() => handleCopyEmbedUrl(embedSrc)}
-                      >
-                        {cfEmbedCopied ? (
-                          <>
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12"/>
-                            </svg>
-                            Copied!
-                          </>
-                        ) : (
-                          <>
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                            </svg>
-                            Copy Stream URL
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                    {/* ── Thumbnail preview + custom-image uploader ── */}
-                    {isReady && posterPreviewUrl && (
-                      <div className="mad-cf-thumb-inline-row">
-                        <span className="mad-cf-thumb-inline-label">Thumbnail</span>
-                        <a href={posterPreviewUrl} target="_blank" rel="noreferrer" className="mad-cf-thumb-preview-link" title="View full size">
-                          <img className="mad-cf-thumb-preview-img" src={posterPreviewUrl} alt="Current poster" />
-                        </a>
-                        <div className="mad-cf-thumb-setter">
-                          <button
-                            type="button"
-                            className="mad-action-btn"
-                            onClick={() => setShowThumbModal(true)}
-                            title="Upload a custom thumbnail image (JPG or PNG)"
-                          >
-                            Replace…
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* ── Push button (unpushed / failed / stale) ── */}
-                    {isPushable && (
-                      <button
-                        type="button"
-                        className="mad-action-btn mad-action-btn--primary"
-                        onClick={() => void handlePushToLeaderPass()}
-                        disabled={lpPublishing || !asset.filePath}
-                        title={!asset.filePath ? 'No local file — cannot upload' : undefined}
-                      >
-                        {lpPublishing
-                          ? 'Queuing…'
-                          : isStale
-                            ? `Push v${currentVer} to Cloudflare`
-                            : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare Push' : 'Push to Cloudflare'}
-                      </button>
-                    )}
-
-                    {/* ── Upload in progress ── */}
-                    {isActive && (
-                      <div className="mad-uploading-row">
-                        <span className="mad-spinner" aria-hidden="true" />
-                        <span className="mad-uploading-label">
-                          {cfStatus === 'processing'
-                            ? 'Cloudflare is processing the asset…'
-                            : `Uploading to Cloudflare… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
-                        </span>
-                        <button
-                          type="button"
-                          className="mad-lp-force-reset"
-                          onClick={() => void handleResetLeaderPass()}
-                          disabled={lpResetting}
-                          title="Force-reset if the upload is stuck"
-                        >
-                          {lpResetting ? 'Resetting…' : 'Force reset'}
-                        </button>
-                      </div>
-                    )}
-
-                    {asset.leaderpass.lastPreparedAt && (
-                      <p className="mad-hint">Prepared {formatDate(asset.leaderpass.lastPreparedAt)}</p>
-                    )}
-
-                    {/* ── Security — domain restrictions + signed URL toggle ── */}
-                    {isReady && asset.cloudflare.uid && (
-                      <button
-                        type="button"
-                        className="mad-action-btn"
-                        onClick={() => setShowDomainsModal(true)}
-                        title="Configure domain restrictions and signed URL requirements for this Cloudflare Stream video"
-                        style={{ marginTop: 6 }}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, verticalAlign: 'text-bottom' }}>
-                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                        </svg>
-                        Security
-                      </button>
-                    )}
-
-                    {(lpError || asset.leaderpass.lastError || asset.cloudflare.lastError) && (() => {
-                      const message  = lpError ?? asset.leaderpass.lastError ?? asset.cloudflare.lastError ?? '';
-                      const preview  = summarizeError(message);
-                      const truncated = preview !== message;
-                      return (
-                        <div className="mad-error-block">
-                          <p className={`mad-error ${showLeaderPassErrorDetails ? 'mad-error--expanded' : 'mad-error--clamped'}`}>
-                            {showLeaderPassErrorDetails ? message : preview}
-                          </p>
-                          {truncated && (
-                            <button
-                              type="button"
-                              className="mad-error-toggle"
-                              onClick={() => setShowLeaderPassErrorDetails(c => !c)}
-                            >
-                              {showLeaderPassErrorDetails ? 'Show less' : 'Show full error'}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                );
-              })()}
-
               {/* ── Transcription ── */}
               <div className="mad-section">
                 <div className="mad-section-head">
@@ -1582,6 +1383,82 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
 
                 {advancedOpen && (
                   <div className="mad-advanced-content">
+
+                    {/* Cloudflare repair — auto-upload handles the happy path;
+                         this is the manual push / force-reset fallback. */}
+                    <div className="mad-more-info-sub">
+                      <span className="mad-section-title">Cloudflare</span>
+                      {cfIsPushable && (
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => void handlePushToLeaderPass()}
+                          disabled={lpPublishing || !asset.filePath}
+                          title={!asset.filePath ? 'No local file — cannot upload' : undefined}
+                          style={{ marginTop: 8 }}
+                        >
+                          {lpPublishing
+                            ? 'Queuing…'
+                            : cfIsStale
+                              ? `Push v${cfCurrentVer} to Cloudflare`
+                              : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare push' : 'Push to Cloudflare'}
+                        </button>
+                      )}
+                      {cfIsActive && (
+                        <div className="mad-uploading-row" style={{ marginTop: 8 }}>
+                          <span className="mad-spinner" aria-hidden="true" />
+                          <span className="mad-uploading-label">
+                            {cfStatus === 'processing'
+                              ? 'Cloudflare is processing…'
+                              : `Uploading… ${asset.cloudflare.progress ? `${asset.cloudflare.progress}%` : ''}`.trim()}
+                          </span>
+                          <button
+                            type="button"
+                            className="mad-lp-force-reset"
+                            onClick={() => void handleResetLeaderPass()}
+                            disabled={lpResetting}
+                            title="Force-reset if the upload is stuck"
+                          >
+                            {lpResetting ? 'Resetting…' : 'Force reset'}
+                          </button>
+                        </div>
+                      )}
+                      {!cfIsPushable && !cfIsActive && (cfStatus === 'ready' || lpStatus === 'awaiting_platform') && (
+                        <button
+                          type="button"
+                          className="mad-action-btn"
+                          onClick={() => setCfResetConfirm(true)}
+                          disabled={lpResetting}
+                          style={{ marginTop: 8 }}
+                        >
+                          Reset &amp; re-push
+                        </button>
+                      )}
+                      {asset.leaderpass.lastPreparedAt && (
+                        <p className="mad-hint">Prepared {formatDate(asset.leaderpass.lastPreparedAt)}</p>
+                      )}
+                      {(lpError || asset.leaderpass.lastError || asset.cloudflare.lastError) && (() => {
+                        const message   = lpError ?? asset.leaderpass.lastError ?? asset.cloudflare.lastError ?? '';
+                        const preview   = summarizeError(message);
+                        const truncated = preview !== message;
+                        return (
+                          <div className="mad-error-block">
+                            <p className={`mad-error ${showLeaderPassErrorDetails ? 'mad-error--expanded' : 'mad-error--clamped'}`}>
+                              {showLeaderPassErrorDetails ? message : preview}
+                            </p>
+                            {truncated && (
+                              <button
+                                type="button"
+                                className="mad-error-toggle"
+                                onClick={() => setShowLeaderPassErrorDetails(c => !c)}
+                              >
+                                {showLeaderPassErrorDetails ? 'Show less' : 'Show full error'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
 
                     <div className="mad-more-info-sub">
                       <div className="mad-section-head">
