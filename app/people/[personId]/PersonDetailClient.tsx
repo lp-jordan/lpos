@@ -145,6 +145,35 @@ function Dash() {
   return <span style={{ color: 'var(--muted)' }}>—</span>;
 }
 
+// Render a website value as a clickable link with an abbreviated label.
+// The href is always a fully-qualified URL (prepend https:// when the user
+// left off the scheme); the visible text drops the scheme/www and trailing
+// slash, then truncates the middle with an ellipsis when it's long.
+function WebsiteLink({ value }: { value: string }) {
+  const raw  = value.trim();
+  const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+
+  let label = raw.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/$/, '');
+  const MAX = 32;
+  if (label.length > MAX) {
+    const head = label.slice(0, MAX - 12);
+    const tail = label.slice(-9);
+    label = `${head}…${tail}`;
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={raw}
+      style={{ ...valueStyle, color: 'var(--accent-strong)', textDecoration: 'none' }}
+    >
+      {label}
+    </a>
+  );
+}
+
 function labelFor(options: readonly { value: string; label: string }[], value: string | null): string | null {
   if (!value) return null;
   return options.find((o) => o.value === value)?.label ?? value;
@@ -254,7 +283,7 @@ function OverviewPanel({ person, onUpdated, readOnly }: { person: Prospect; onUp
           <span style={labelStyle}>Website</span>
           {editing
             ? <input style={inputStyle} value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="acme.io" disabled={saving} />
-            : <span style={valueStyle}>{person.website || <Dash />}</span>}
+            : (person.website ? <WebsiteLink value={person.website} /> : <span style={valueStyle}><Dash /></span>)}
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>Industry</span>
