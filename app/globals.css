@@ -5155,6 +5155,58 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   cursor: pointer;
 }
 .mad-version-back:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* ── Distribution bar: status strip + action rail (Option-A redesign) ─────── */
+.mdb { margin: 8px 0 4px; }
+.mdb-strip { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.mdb-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
+  border-radius: 11px; border: 1px solid transparent; white-space: nowrap;
+}
+.mdb-badge-ico { display: inline-flex; }
+.mdb-badge--ready      { color: rgba(120, 205, 150, 1); background: rgba(120, 205, 150, 0.12); border-color: rgba(120, 205, 150, 0.28); }
+.mdb-badge--processing { color: rgba(212, 160, 80, 1);  background: rgba(212, 160, 80, 0.13);  border-color: rgba(212, 160, 80, 0.3); }
+.mdb-badge--failed     { color: rgba(224, 110, 110, 1); background: rgba(224, 110, 110, 0.13); border-color: rgba(224, 110, 110, 0.3); }
+.mdb-badge--stale      { color: rgba(212, 160, 80, 1);  background: rgba(212, 160, 80, 0.1);   border-color: rgba(212, 160, 80, 0.26); }
+.mdb-badge--idle       { color: var(--text-muted);      background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.09); }
+
+.mdb-rail { display: flex; gap: 6px; }
+.mdb-rail-item { position: relative; display: inline-flex; }
+.mdb-rail-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 30px; padding: 0;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px; cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.mdb-rail-btn:hover, .mdb-rail-btn.is-open { background: rgba(255, 255, 255, 0.09); color: var(--text-primary); border-color: rgba(255, 255, 255, 0.18); }
+
+.mdb-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 42;
+  width: 208px; padding: 10px;
+  background: #1b1b1b; border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column; gap: 8px;
+  animation: mdb-pop-in 120ms ease both;
+}
+@keyframes mdb-pop-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+.mdb-pop-title { font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+.mdb-pop-url {
+  font-size: 0.64rem; line-height: 1.4; color: var(--text-secondary);
+  word-break: break-all; max-height: 48px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.04); border-radius: 5px; padding: 5px 6px;
+}
+.mdb-pop-note { font-size: 0.68rem; line-height: 1.45; color: var(--text-secondary); }
+.mdb-pop-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 5px; background: #111; }
+.mdb-pop-btn {
+  padding: 6px; font-size: 0.7rem; font-weight: 600;
+  color: var(--text-primary); background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px; cursor: pointer;
+}
+.mdb-pop-btn:hover { background: rgba(255, 255, 255, 0.14); }
 /* Phase 2 of the local-comments refactor: the outbound mirror to Frame.io
  * gave up after the 3-hour abandonment ceiling (locked decision §11 #7).
  * Surfaces to LPOS users so they know clients viewing the review link
