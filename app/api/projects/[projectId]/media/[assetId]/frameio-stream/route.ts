@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFileMediaLinks } from '@/lib/services/frameio';
 import { readRegistry } from '@/lib/store/media-registry';
+import { listAssetVersionsWithFrameioFileId } from '@/lib/store/canonical-asset-store';
 
 type Params = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -40,12 +41,45 @@ type ResolvedSource =
   | { kind: 'local' }
   | null;
 
-async function resolveStreamUrl(projectId: string, assetId: string): Promise<ResolvedSource> {
-  const hit = urlCache.get(assetId);
+async function resolveStreamUrl(
+  projectId: string,
+  assetId: string,
+  versionId?: string | null,
+): Promise<ResolvedSource> {
+  const cacheKey = `${assetId}:${versionId ?? 'latest'}`;
+  const hit = urlCache.get(cacheKey);
   if (hit && Date.now() < hit.expiresAt) {
     return hit.url === LOCAL_STREAM_SENTINEL
       ? { kind: 'local' }
       : { kind: 'redirect', url: hit.url };
+  }
+
+  // ── Old-version playback ──────────────────────────────────────────────────
+  // Only the CURRENT version lives on Cloudflare (the prior CF video is deleted
+  // on each new version), so when a specific *older* version is requested we
+  // serve its own Frame.io file from the version stack. A request for the
+  // latest version falls through to the normal CF-first resolution below.
+  if (versionId) {
+    const versions = listAssetVersionsWithFrameioFileId(assetId);
+    const latestId = versions[0]?.assetVersionId ?? null; // ordered version_number DESC
+    if (latestId && versionId !== latestId) {
+      const requested = versions.find((v) => v.assetVersionId === versionId);
+      if (requested?.frameioFileId) {
+        try {
+          const links = await getFileMediaLinks(requested.frameioFileId);
+          const url   = links.highQualityUrl ?? links.originalUrl;
+          if (url) {
+            urlCache.set(cacheKey, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+            return { kind: 'redirect', url };
+          }
+        } catch {
+          // Fall through — this version isn't playable
+        }
+      }
+      // Requested an older version with no usable Frame.io file → unavailable.
+      return null;
+    }
+    // versionId === latest → continue to the current-version resolution.
   }
 
   const assets = readRegistry(projectId);
@@ -63,7 +97,7 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
   // CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN, which isn't reliably set in every env.
   const cf = asset?.cloudflare;
   if (cf?.uid && cf.status === 'ready' && cf.hlsUrl) {
-    urlCache.set(assetId, { url: cf.hlsUrl, expiresAt: Date.now() + CACHE_TTL_MS });
+    urlCache.set(cacheKey, { url: cf.hlsUrl, expiresAt: Date.now() + CACHE_TTL_MS });
     return { kind: 'redirect', url: cf.hlsUrl };
   }
 
@@ -74,7 +108,7 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
       const links = await getFileMediaLinks(frameioFileId);
       const url   = links.highQualityUrl ?? links.originalUrl;
       if (url) {
-        urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
+        urlCache.set(cacheKey, { url, expiresAt: Date.now() + CACHE_TTL_MS });
         return { kind: 'redirect', url };
       }
     } catch {
@@ -84,7 +118,7 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
 
   // ── 3. Local disk stream ──────────────────────────────────────────────────
   if (asset?.filePath) {
-    urlCache.set(assetId, { url: LOCAL_STREAM_SENTINEL, expiresAt: Date.now() + CACHE_TTL_MS });
+    urlCache.set(cacheKey, { url: LOCAL_STREAM_SENTINEL, expiresAt: Date.now() + CACHE_TTL_MS });
     return { kind: 'local' };
   }
 
@@ -96,9 +130,10 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
 export async function GET(req: NextRequest, { params }: Params) {
   try {
     const { projectId, assetId } = await params;
-    const isRaw = req.nextUrl.searchParams.has('raw');
+    const isRaw     = req.nextUrl.searchParams.has('raw');
+    const versionId = req.nextUrl.searchParams.get('version');
 
-    const source = await resolveStreamUrl(projectId, assetId);
+    const source = await resolveStreamUrl(projectId, assetId, versionId);
 
     if (!source) {
       return NextResponse.json(
