@@ -2216,6 +2216,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   display: grid;
   gap: 6px;
   max-width: 300px;
+  align-self: center;   /* center the preview within the modal body */
 }
 
 .bst-current-cell {
