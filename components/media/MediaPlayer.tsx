@@ -197,7 +197,10 @@ export function MediaPlayer({
     const savedTime = v?.currentTime ?? 0;
     const wasPlay   = v ? !v.paused && !v.ended : false;
     try {
-      const res  = await fetch(`/api/projects/${projectId}/media/${assetId}/frameio-stream?raw=1`);
+      // Derive the raw-refetch URL from src so a version-scoped src (?version=)
+      // recovers the same version, not the latest.
+      const rawUrl = src.includes('?') ? `${src}&raw=1` : `${src}?raw=1`;
+      const res  = await fetch(rawUrl);
       if (!res.ok) { setUnavailable(true); return; }
       const data = await res.json() as { url?: string };
       if (!data.url) { setUnavailable(true); return; }

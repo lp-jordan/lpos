@@ -434,6 +434,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   }
   const [versions,           setVersions]          = useState<VersionInfo[]>([]);
   const [selectedVersionId,  setSelectedVersionId] = useState<string | null>(null);
+  const [versionMenuOpen,    setVersionMenuOpen]   = useState(false);
 
   // Holds an optimistic completed-toggle until a refetch confirms Frame.io has
   // caught up. The webhook echo (comment.completed) arrives a beat *after* our
@@ -665,6 +666,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const fioStatus  = asset?.frameio.status ?? 'none';
   const isUploading = fioStatus === 'uploading' || fioUploading;
 
+  // ── Version selection (drives both the comment thread and the player) ──────
+  // Only the latest version is on Cloudflare; older versions play from their
+  // own Frame.io file via ?version= on the stream route (see frameio-stream).
+  const latestVersionId     = versions.find((v) => v.isLatest)?.assetVersionId ?? null;
+  const selectedVersion     = versions.find((v) => v.assetVersionId === selectedVersionId) ?? null;
+  const isViewingOldVersion = !!selectedVersionId && !!latestVersionId && selectedVersionId !== latestVersionId;
+
   return (
     <>
       {theaterSrc && asset && (
@@ -804,7 +812,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
               {(() => {
                 const audio = isAudioFile(asset.originalFilename ?? asset.name);
                 if (asset.frameio.assetId) {
-                  const src = `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`;
+                  // When viewing an older version, request it explicitly so the
+                  // route serves that version's Frame.io file (the latest's CF
+                  // video is the only one on Cloudflare). Latest → no param → CF.
+                  const src = isViewingOldVersion
+                    ? `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream?version=${encodeURIComponent(selectedVersionId!)}`
+                    : `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`;
                   return audio ? (
                     <div className="mad-audio-wrap">
                       <svg className="mad-audio-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1004,6 +1017,47 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     {comments.length > 0 && (
                       <span className="mad-comments-count">{comments.length}</span>
                     )}
+                    <span className="mad-head-spacer" />
+
+                    {/* Version selector — right-justified. Switching a version
+                         swaps both this comment thread AND the player (older
+                         versions play from Frame.io; latest plays from CF). */}
+                    {versions.length > 1 && (
+                      <div className="mad-version-select">
+                        <button
+                          type="button"
+                          className={`mad-version-select-btn${isViewingOldVersion ? ' mad-version-select-btn--old' : ''}`}
+                          onClick={() => setVersionMenuOpen((o) => !o)}
+                          title="Switch version"
+                          aria-haspopup="listbox"
+                          aria-expanded={versionMenuOpen}
+                        >
+                          v{selectedVersion?.versionNumber ?? '?'}{isViewingOldVersion ? '' : ' · latest'}
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        {versionMenuOpen && (
+                          <>
+                            <div className="mad-version-menu-backdrop" onClick={() => setVersionMenuOpen(false)} />
+                            <div className="mad-version-menu" role="listbox">
+                              {versions.map((v) => (
+                                <button
+                                  key={v.assetVersionId}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={selectedVersionId === v.assetVersionId}
+                                  className={`mad-version-menu-item${selectedVersionId === v.assetVersionId ? ' is-active' : ''}`}
+                                  onClick={() => { setSelectedVersionId(v.assetVersionId); setVersionMenuOpen(false); }}
+                                >
+                                  <span>v{v.versionNumber}{v.isLatest ? ' · latest' : ''}</span>
+                                  {v.commentCount > 0 && <span className="mad-version-menu-count">{v.commentCount}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+
                     <button
                       type="button"
                       className="mad-icon-btn"
@@ -1018,27 +1072,20 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                     </button>
                   </div>
 
-                  {/* Phase 3: version cycler. Only renders when the asset
-                       has more than one version — single-version assets
-                       don't need a chip strip. Comments are pinned per
-                       version (locked §11 #1) so each chip represents a
-                       distinct thread. */}
-                  {versions.length > 1 && (
-                    <div className="mad-version-chips">
-                      {versions.map((v) => (
-                        <button
-                          key={v.assetVersionId}
-                          type="button"
-                          className={`mad-version-chip${selectedVersionId === v.assetVersionId ? ' mad-version-chip--active' : ''}${v.isLatest ? ' mad-version-chip--latest' : ''}`}
-                          onClick={() => setSelectedVersionId(v.assetVersionId)}
-                          title={`Version ${v.versionNumber}${v.isLatest ? ' (latest)' : ''} — ${v.commentCount} comment${v.commentCount === 1 ? '' : 's'}`}
-                        >
-                          v{v.versionNumber}
-                          {v.commentCount > 0 && (
-                            <span className="mad-version-chip-count">{v.commentCount}</span>
-                          )}
-                        </button>
-                      ))}
+                  {/* Viewing an older version → make it obvious + one-click back. */}
+                  {isViewingOldVersion && (
+                    <div className="mad-version-banner">
+                      <span className="mad-version-banner-label">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Viewing v{selectedVersion?.versionNumber} · Frame.io
+                      </span>
+                      <button
+                        type="button"
+                        className="mad-version-back"
+                        onClick={() => latestVersionId && setSelectedVersionId(latestVersionId)}
+                      >
+                        Back to current
+                      </button>
                     </div>
                   )}
 
