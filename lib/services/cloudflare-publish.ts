@@ -57,6 +57,14 @@ function getQueue() {
   }
 }
 
+// Orchestration-level retry. The low-level cloudflare-stream fetches already
+// retry transient 5xx/409 per-chunk; this is the outer safety net for a whole-
+// upload failure (e.g. the create-upload call, or a ready-poll timeout). In-
+// memory (per assetId) — a process restart resets it, which is fine.
+const MAX_CF_RETRIES   = 2;
+const CF_RETRY_DELAY_MS = 30_000;
+const cfRetryAttempts  = new Map<string, number>();
+
 /** Pull the custom poster URL out of a prior CF distribution's metadata_json, if any. */
 function readPriorPosterUrl(prior: { metadata_json: string | null } | null): string | null {
   if (!prior?.metadata_json) return null;
@@ -303,6 +311,7 @@ export async function runCloudflareUpload(
     }
 
     if (jobId) queue?.complete(jobId);
+    cfRetryAttempts.delete(assetId);
     console.log(`[cloudflare-publish] asset ${assetId} uploaded to Cloudflare and ready`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -335,6 +344,22 @@ export async function runCloudflareUpload(
     if (jobId) {
       if (wasCancelled) queue?.cancel(jobId);
       else queue?.fail(jobId, message);
+    }
+
+    // Transient-failure retry: re-trigger after a backoff, capped. A deliberate
+    // cancel is never retried. The retry re-enters with a clean guard (status is
+    // now 'failed'), and its prior-uid delete cleans up this failed attempt's
+    // partial CF video.
+    if (!wasCancelled) {
+      const attempts = cfRetryAttempts.get(assetId) ?? 0;
+      if (attempts < MAX_CF_RETRIES) {
+        cfRetryAttempts.set(assetId, attempts + 1);
+        console.warn(`[cloudflare-publish] transient failure for ${assetId}; retry ${attempts + 1}/${MAX_CF_RETRIES} in ${CF_RETRY_DELAY_MS / 1000}s`);
+        setTimeout(() => triggerCloudflareUpload(projectId, assetId, options), CF_RETRY_DELAY_MS);
+      } else {
+        cfRetryAttempts.delete(assetId);
+        console.error(`[cloudflare-publish] giving up on ${assetId} after ${MAX_CF_RETRIES} retries`);
+      }
     }
   }
 }
