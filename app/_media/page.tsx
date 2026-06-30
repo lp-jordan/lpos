@@ -62,15 +62,16 @@ function FioBadge({ status }: { status: MediaAsset['frameio']['status'] }) {
   return <span className={`gm-badge ${cls[status]}`}>{FRAMEIO_STATUS_LABEL[status]}</span>;
 }
 
-function LeaderPassBadge({ status }: { status: MediaAsset['leaderpass']['status'] }) {
-  if (status === 'none') return <span />;
-  const map: Record<Exclude<typeof status, 'none'>, [string, string]> = {
-    preparing:         ['gm-badge--active',  'Preparing…'],
-    awaiting_platform: ['gm-badge--review',  'Awaiting'],
-    published:         ['gm-badge--success', 'Published'],
-    failed:            ['gm-badge--error',   'LP Failed'],
-  };
-  const [cls, label] = map[status];
+function CloudflareBadge({ cf }: { cf: MediaAsset['cloudflare'] }) {
+  // Replaces the old LeaderPass "Awaiting" badge. CF is the default for every
+  // asset now, so only surface notable states (encoding / stale / failed).
+  if (cf.status === 'none') return <span />;
+  if (cf.status === 'ready' && !cf.isStale) return <span />;
+  const [cls, label]: [string, string] =
+    cf.status === 'failed'                                    ? ['gm-badge--error',  'CF failed']
+    : cf.isStale                                              ? ['gm-badge--review', 'Stale']
+    : (cf.status === 'uploading' || cf.status === 'processing') ? ['gm-badge--active', 'Encoding']
+    : ['gm-badge--active', 'CF'];
   return <span className={`gm-badge ${cls}`}>{label}</span>;
 }
 
@@ -113,7 +114,7 @@ function AssetRow({
       <span className="gm-asset-date">{formatDate(asset.registeredAt)}</span>
       <TxBadge  status={asset.transcription.status} />
       <FioBadge status={asset.frameio.status} />
-      <LeaderPassBadge status={asset.leaderpass.status} />
+      <CloudflareBadge cf={asset.cloudflare} />
 
       {/* Delete — stops propagation so it doesn't open the detail panel */}
       <button

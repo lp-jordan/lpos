@@ -1,4 +1,4 @@
-export type PipelineStageType = 'ingest' | 'transcript' | 'upload:frameio' | 'upload:leaderpass' | 'upload:sardius' | 'upload:delivery' | 'promotion';
+export type PipelineStageType = 'ingest' | 'transcript' | 'upload:frameio' | 'upload:cloudflare' | 'upload:leaderpass' | 'upload:sardius' | 'upload:delivery' | 'promotion';
 
 export interface PipelineStage {
   type: PipelineStageType;
@@ -17,6 +17,7 @@ export type PipelineOverallStatus =
   | 'ingesting'
   | 'transcribing'
   | 'uploading_frameio'
+  | 'uploading_cloudflare'
   | 'uploading_leaderpass'
   | 'uploading_sardius'
   | 'uploading_delivery'

@@ -15,6 +15,7 @@ export function stageLabel(type: PipelineStageType): string {
     case 'ingest':            return 'Ingest';
     case 'transcript':        return 'Transcript';
     case 'upload:frameio':    return 'Frame.io';
+    case 'upload:cloudflare': return 'Cloudflare';
     case 'upload:leaderpass': return 'LeaderPass';
     case 'upload:sardius':    return 'Sardius';
     case 'upload:delivery':   return 'Delivery';
@@ -46,6 +47,14 @@ export function phaseLabel(stage: PipelineStage): string {
       if (status === 'compressing') return progress > 0 ? `Compressing ${progress}%` : 'Compressing';
       if (status === 'uploading')   return progress > 0 ? `Uploading ${progress}%` : 'Uploading';
       if (status === 'done')        return 'Done';
+      if (status === 'failed')      return 'Failed';
+      if (status === 'cancelled')   return 'Cancelled';
+      return status;
+    case 'upload:cloudflare':
+      if (status === 'queued')      return 'Queued';
+      if (status === 'uploading')   return progress > 0 ? `Uploading ${progress}%` : 'Uploading';
+      if (status === 'processing')  return 'Encoding';
+      if (status === 'done')        return 'Ready';
       if (status === 'failed')      return 'Failed';
       if (status === 'cancelled')   return 'Cancelled';
       return status;
@@ -89,6 +98,7 @@ export function overallLabel(status: PipelineEntry['overallStatus']): string {
     case 'ingesting':           return 'Ingesting';
     case 'transcribing':        return 'Transcribing';
     case 'uploading_frameio':    return 'Uploading';
+    case 'uploading_cloudflare': return 'Uploading to Cloudflare';
     case 'uploading_leaderpass': return 'Publishing';
     case 'uploading_sardius':    return 'Uploading to Sardius';
     case 'uploading_delivery':   return 'Creating Delivery';

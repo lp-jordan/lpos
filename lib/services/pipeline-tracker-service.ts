@@ -34,6 +34,7 @@ const STALL_THRESHOLDS: Record<PipelineStageType, number> = {
   'ingest':             2 * 60_000,
   'transcript':         5 * 60_000,
   'upload:frameio':     2 * 60_000,
+  'upload:cloudflare':  2 * 60_000,
   'upload:leaderpass':  2 * 60_000,
   'upload:sardius':    15 * 60_000, // FTP uploads of large files are slow — 15 min stall threshold
   'upload:delivery':   30 * 60_000, // large video files uploaded to R2 — generous threshold
@@ -58,13 +59,16 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
   const active = stages.filter((s) => !isStageTerminal(s.status));
   if (active.length > 0) {
     // Return the highest-priority active stage label
-    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion'] as PipelineStageType[]) {
+    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion'] as PipelineStageType[]) {
       const match = active.find((s) => s.type === type);
       if (match) {
         if (type === 'ingest') return 'ingesting';
         if (type === 'transcript') return 'transcribing';
         if (type === 'upload:frameio') {
           return match.status === 'processing' ? 'processing' : 'uploading_frameio';
+        }
+        if (type === 'upload:cloudflare') {
+          return match.status === 'processing' ? 'processing' : 'uploading_cloudflare';
         }
         if (type === 'upload:leaderpass') {
           return match.status === 'processing' ? 'processing' : 'uploading_leaderpass';
@@ -247,7 +251,7 @@ export class PipelineTrackerService {
       if (pipelineId) {
         const entry = this.pipelines.get(pipelineId);
         if (entry) {
-          const stageType: PipelineStageType = job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio';
+          const stageType: PipelineStageType = job.provider === 'cloudflare' ? 'upload:cloudflare' : job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio';
           // Don't add duplicate stage type for same job
           if (!entry.stages.some((s) => s.jobId === job.jobId)) {
             entry.stages.push(this.uploadToStage(job));
@@ -276,7 +280,7 @@ export class PipelineTrackerService {
         projectId: job.projectId,
         projectName,
         filename: job.filename,
-        overallStatus: job.provider === 'delivery' ? 'uploading_delivery' : 'uploading_frameio',
+        overallStatus: job.provider === 'delivery' ? 'uploading_delivery' : job.provider === 'cloudflare' ? 'uploading_cloudflare' : 'uploading_frameio',
         stages: [this.uploadToStage(job)],
         createdAt: job.queuedAt,
         updatedAt: job.updatedAt,
@@ -410,7 +414,7 @@ export class PipelineTrackerService {
 
   private uploadToStage(job: UploadJob): PipelineStage {
     return {
-      type: job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio',
+      type: job.provider === 'cloudflare' ? 'upload:cloudflare' : job.provider === 'leaderpass' ? 'upload:leaderpass' : job.provider === 'sardius' ? 'upload:sardius' : job.provider === 'delivery' ? 'upload:delivery' : 'upload:frameio',
       jobId: job.jobId,
       status: job.status,
       progress: job.progress,
@@ -530,6 +534,7 @@ export class PipelineTrackerService {
               this.ingestService?.fail(stage.jobId, reason);
               break;
             case 'upload:frameio':
+            case 'upload:cloudflare':
             case 'upload:leaderpass':
             case 'upload:sardius':
             case 'upload:delivery':
@@ -671,6 +676,7 @@ export class PipelineTrackerService {
         this.ingestService?.cancel(stage.jobId);
         break;
       case 'upload:frameio':
+      case 'upload:cloudflare':
       case 'upload:leaderpass':
         this.uploadService?.cancel(stage.jobId);
         break;
@@ -731,7 +737,7 @@ export class PipelineTrackerService {
             projectId: job.projectId,
             projectName,
             filename: job.filename,
-            overallStatus: type === 'upload' ? ((job as UploadJob).provider === 'delivery' ? 'uploading_delivery' : 'uploading_frameio') : 'transcribing',
+            overallStatus: type === 'upload' ? ((job as UploadJob).provider === 'delivery' ? 'uploading_delivery' : (job as UploadJob).provider === 'cloudflare' ? 'uploading_cloudflare' : 'uploading_frameio') : 'transcribing',
             stages: [stage],
             createdAt: job.queuedAt,
             updatedAt: job.updatedAt,

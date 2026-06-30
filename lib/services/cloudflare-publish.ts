@@ -3,6 +3,7 @@ import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
 import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
 import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
+import { getUploadQueueService } from '@/lib/services/container';
 import { probeMediaInfo } from '@/lib/services/media-probe';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
 import {
@@ -46,6 +47,15 @@ import {
  */
 
 const CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME = 24;
+
+/** Upload-queue accessor — the pipeline tracker surfaces our job as a stage. */
+function getQueue() {
+  try {
+    return getUploadQueueService();
+  } catch {
+    return null;
+  }
+}
 
 /** Pull the custom poster URL out of a prior CF distribution's metadata_json, if any. */
 function readPriorPosterUrl(prior: { metadata_json: string | null } | null): string | null {
@@ -146,12 +156,21 @@ export async function runCloudflareUpload(
   const priorCloudflare = getLatestDistributionInfoForAsset(assetId, 'cloudflare');
   const priorPosterUrl  = readPriorPosterUrl(priorCloudflare);
 
+  // Register a queue job so this upload shows as a "Cloudflare" stage in the
+  // pipeline (the tracker is queue-job-driven, not status-driven).
+  const queue    = getQueue();
+  const filename = asset.name || asset.originalFilename;
+  const jobId    = queue?.add(projectId, assetId, filename, 'cloudflare') ?? null;
+  const cancelled = () => (jobId ? queue?.isCancelled(jobId) ?? false : false);
+
   patchAsset(projectId, assetId, {
     cloudflare: { status: 'uploading', progress: 0, lastError: null, readyAt: null },
   });
 
+  // Hoisted so the catch block can tear down a half-uploaded CF video on cancel.
+  let prepared: { uid: string; uploadUrl: string } | null = null;
   try {
-    const prepared = await createCloudflareTusUpload(asset);
+    prepared = await createCloudflareTusUpload(asset);
     console.log(`[cloudflare-publish] upload initialized for asset ${assetId}; uid=${prepared.uid}`);
 
     patchAsset(projectId, assetId, {
@@ -171,16 +190,27 @@ export async function runCloudflareUpload(
 
     await uploadFileToCloudflareTus(prepared.uploadUrl, asset.filePath, {
       onProgress: (progress) => {
+        if (jobId) queue?.setProgress(jobId, progress);
         patchAsset(projectId, assetId, { cloudflare: { progress } });
       },
+      isCancelled: jobId ? cancelled : undefined,
     });
 
     console.log(`[cloudflare-publish] upload complete for asset ${assetId}; waiting for Cloudflare processing`);
     patchAsset(projectId, assetId, {
       cloudflare: { status: 'processing', progress: 100, uploadedAt: new Date().toISOString() },
     });
+    if (jobId) queue?.setProcessing(jobId, 'Waiting for Cloudflare Stream processing');
 
-    const ready = await waitForCloudflareVideoReady(prepared.uid);
+    // Heartbeat the queue job during the encode wait so the stale-job sweep
+    // doesn't auto-fail us while Cloudflare is legitimately processing.
+    const heartbeat = jobId ? setInterval(() => queue?.heartbeat(jobId), 60_000) : null;
+    let ready;
+    try {
+      ready = await waitForCloudflareVideoReady(prepared.uid, { isCancelled: jobId ? cancelled : undefined });
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
     console.log(`[cloudflare-publish] Cloudflare asset ready for ${assetId}; uid=${ready.uid}`);
 
     // Default thumbnail frame — probe fps fresh since it may not have been
@@ -272,12 +302,39 @@ export async function runCloudflareUpload(
       }
     }
 
+    if (jobId) queue?.complete(jobId);
     console.log(`[cloudflare-publish] asset ${assetId} uploaded to Cloudflare and ready`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[cloudflare-publish] upload failed for asset ${assetId}: ${message}`);
+    const wasCancelled = message === 'Cancelled';
+    console.error(`[cloudflare-publish] upload ${wasCancelled ? 'cancelled' : 'failed'} for asset ${assetId}: ${message}`);
+
+    // On cancel, delete the half-uploaded CF video so it doesn't linger as an
+    // orphan, and clear the dead uid so a re-trigger starts fresh.
+    if (wasCancelled && prepared?.uid) {
+      try {
+        await deleteCloudflareVideo(prepared.uid);
+        console.log(`[cloudflare-publish] deleted cancelled Cloudflare video uid=${prepared.uid} for asset ${assetId}`);
+      } catch (err) {
+        const e = err instanceof Error ? err.message : String(err);
+        try {
+          recordOrphan({ uid: prepared.uid, assetId, projectId, name: filename, reason: 'delete_failed', attempts: 1, lastError: `cancel: ${e}` });
+        } catch { /* best effort */ }
+      }
+    }
+
     patchAsset(projectId, assetId, {
-      cloudflare: { status: 'failed', progress: 0, lastError: message },
+      cloudflare: {
+        status: wasCancelled ? 'none' : 'failed',
+        progress: 0,
+        lastError: wasCancelled ? null : message,
+        ...(wasCancelled ? { uid: null, uploadUrl: null } : {}),
+      },
     });
+
+    if (jobId) {
+      if (wasCancelled) queue?.cancel(jobId);
+      else queue?.fail(jobId, message);
+    }
   }
 }

@@ -143,15 +143,19 @@ function VersionBadge({ version }: { version: number }) {
   );
 }
 
-function LeaderPassBadge({ status }: { status: MediaAsset['leaderpass']['status'] }) {
-  const cls: Record<typeof status, string> = {
-    none: 'ma-badge--neutral',
-    preparing: 'ma-badge--active',
-    awaiting_platform: 'ma-badge--review',
-    published: 'ma-badge--success',
-    failed: 'ma-badge--error',
-  };
-  return <span className={`ma-badge ${cls[status]}`}>{LEADERPASS_STATUS_LABEL[status]}</span>;
+function CloudflareBadge({ cf }: { cf: MediaAsset['cloudflare'] }) {
+  // Every asset auto-uploads to Cloudflare now, so a "ready" badge would be
+  // noise — only surface notable states (encoding / stale / failed). This
+  // replaces the old LeaderPass "Awaiting Platform" badge, which used to proxy
+  // "is this on Cloudflare yet".
+  if (cf.status === 'none') return null;
+  if (cf.status === 'ready' && !cf.isStale) return null;
+  const [cls, label]: [string, string] =
+    cf.status === 'failed'                                    ? ['ma-badge--error',  'CF failed']
+    : cf.isStale                                              ? ['ma-badge--review', 'Stale']
+    : (cf.status === 'uploading' || cf.status === 'processing') ? ['ma-badge--active', 'Encoding']
+    : ['ma-badge--neutral', 'CF'];
+  return <span className={`ma-badge ${cls}`}>{label}</span>;
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -336,7 +340,7 @@ function AssetRow({
       <div className="ma-row-badges">
         <TranscriptionBadge status={asset.transcription.status} />
         <VersionBadge version={asset.frameio.version} />
-        <LeaderPassBadge status={asset.leaderpass.status} />
+        <CloudflareBadge cf={asset.cloudflare} />
       </div>
       <button
         type="button"
@@ -436,7 +440,7 @@ function AssetCard({
         <div className="ma-card-badges">
           <TranscriptionBadge status={asset.transcription.status} />
           <VersionBadge version={asset.frameio.version} />
-          <LeaderPassBadge status={asset.leaderpass.status} />
+          <CloudflareBadge cf={asset.cloudflare} />
         </div>
       </div>
       {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (

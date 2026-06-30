@@ -12,7 +12,7 @@ const TIMEOUT_SWEEP_MS      = 30_000;       // check every 30s
 const TERMINAL_STATUSES     = new Set(['done', 'failed', 'cancelled']);
 
 export type UploadJobStatus = 'queued' | 'compressing' | 'uploading' | 'processing' | 'done' | 'failed' | 'cancelled';
-export type UploadJobProvider = 'frameio' | 'leaderpass' | 'sardius' | 'delivery';
+export type UploadJobProvider = 'frameio' | 'cloudflare' | 'leaderpass' | 'sardius' | 'delivery';
 
 export interface UploadJob {
   jobId: string;
