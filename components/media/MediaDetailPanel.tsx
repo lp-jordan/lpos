@@ -1127,15 +1127,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                                 <button
                                   type="button"
                                   className="mad-comment-time mad-comment-time--seek"
-                                  title="Open in theater at this timestamp"
+                                  title="Jump to this timestamp"
                                   onClick={() => {
-                                    setTheaterSeekTarget(c.timestamp);
-                                    if (!theaterSrc) {
-                                      const src = asset.frameio.assetId
-                                        ? `/api/projects/${projectId}/media/${asset.assetId}/frameio-stream`
-                                        : asset.filePath ?? null;
-                                      if (src) setTheaterSrc(src);
-                                    }
+                                    // Seek the sidebar player in place. Don't auto-open
+                                    // theater — let the user decide when to do that
+                                    // (avoids two players playing at once).
+                                    setSidebarSeekTarget(c.timestamp);
                                   }}
                                 >
                                   {label}

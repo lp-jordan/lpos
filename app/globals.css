@@ -19188,8 +19188,42 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .mp-compose-error { font-size: 10px; color: #c0392b; margin-top: 4px; display: block; }
 
 /* ── Internal Review ─────────────────────────────────────────────────────────
-   The media page, scoped to one bundle and re-skinned near-black + gold. The
-   scoped variable overrides cascade into the reused MediaDetailPanel/player. */
+   A focused, full-bleed black + gold environment. The shell (app-internal-review)
+   paints the whole viewport black; the page scopes the gold accent variables,
+   which cascade into the reused MediaDetailPanel/player. */
+
+.app-internal-review {
+  --accent: #e6c24a;
+  --accent-strong: #ffde7a;
+  --accent-soft: rgba(230, 194, 74, 0.18);
+  min-height: 100vh;
+  background: #0a0a0a;
+  color: var(--text);
+}
+
+.ir-nav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: rgba(10, 10, 10, 0.92);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid rgba(230, 194, 74, 0.14);
+}
+.ir-nav-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: 6px;
+  background: #161616;
+  border: 1px solid rgba(230, 194, 74, 0.18);
+  color: #e6c24a;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.ir-nav-btn:hover { background: #1e1a0c; border-color: rgba(230, 194, 74, 0.5); }
 
 .internal-review-page {
   --page-bg: #0a0a0a;
@@ -19199,8 +19233,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   --accent: #e6c24a;
   --accent-strong: #ffde7a;
   --accent-soft: rgba(230, 194, 74, 0.18);
-  min-height: 100%;
-  background: var(--page-bg);
+  background: transparent;
   color: var(--text);
   padding: 24px 28px 80px;
 }
@@ -19269,6 +19302,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 /* ── DeliverableModal: Internal Review toggle ───────────────────────────────── */
 .deliverable-modal-internal-toggle {
   display: flex;
+  flex-direction: row;       /* override .sh-modal-field's column so the box is inline */
   align-items: flex-start;
   gap: 10px;
   cursor: pointer;

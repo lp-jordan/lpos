@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { NavBar } from '@/components/shell/NavBar';
 import { Breadcrumb } from '@/components/shell/Breadcrumb';
 import { PipelineTray } from '@/components/shell/PipelineTray';
@@ -82,11 +82,49 @@ export function AppShell({
   version: AppVersion;
 }>) {
   const pathname = usePathname();
+  const router = useRouter();
   const isHome = pathname === '/';
   const isStudio = pathname.startsWith('/slate');
   const isSignIn = pathname === '/signin';
+  const isInternalReview = pathname.startsWith('/internal-review');
 
   const isGuest = currentUser?.isGuest ?? false;
+
+  // Internal Review is a focused, full-bleed black/gold environment: no NavBar
+  // or breadcrumb (the /internal-review crumb is a dead link), just a small
+  // back + home control floating over the review.
+  if (isInternalReview) {
+    return (
+      <ToastProvider>
+        <ContextMenuProvider>
+          <VersionConfirmProvider>
+            <div className="app-internal-review" data-guest={isGuest || undefined}>
+              <PresenceReporter />
+              <RestartCountdownBanner />
+              <nav className="ir-nav" aria-label="Internal review navigation">
+                <button
+                  type="button"
+                  className="ir-nav-btn"
+                  onClick={() => router.back()}
+                  aria-label="Go back"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                </button>
+                <Link href="/" className="ir-nav-btn" aria-label="Home">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+                    <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                  </svg>
+                </Link>
+              </nav>
+              {children}
+            </div>
+          </VersionConfirmProvider>
+        </ContextMenuProvider>
+      </ToastProvider>
+    );
+  }
 
   if (isHome) {
     return (
