@@ -24,7 +24,7 @@ import { FillSlider, cctFillColor, PowerIcon } from '@/components/slate/lighting
 import { useLightingPresets, snapshotAmaran } from '@/hooks/useLightingPresets';
 import type { PresetWledState } from '@/lib/store/lighting-presets-store';
 import {
-  PresetsModal, EditingBar, PresetsTrigger, NameDialog,
+  PresetsModal, EditingBar, PresetsTrigger, NameDialog, AllPowerToggle,
 } from '@/components/slate/LightingPresets';
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -449,11 +449,27 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const [refreshing,      setRefreshing]      = useState(false);
   const [arrangementMode, setArrangementMode] = useState(false);
+  const [bulkBusy,        setBulkBusy]        = useState(false);
 
   async function handleRefresh() {
     setRefreshing(true);
     await rediscover();
     setRefreshing(false);
+  }
+
+  /** Turn every fixture on or off. Sequential — the Amaran service keys pending
+   *  requests by action only, so concurrent setPower calls would collide on the
+   *  shared 'set_sleep' key. */
+  async function handleAllPower(on: boolean) {
+    if (bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      for (const f of fixtures) {
+        await sendCommand('setPower', f.nodeId, { on });
+      }
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -526,6 +542,10 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
 
   // Fixtures not yet assigned to any group
   const ungrouped = fixtures.filter((f) => !arrangement.fixtureGroups[f.nodeId]);
+
+  // Master toggle reflects "all on" — the thumb sits right only when every
+  // fixture is powered; otherwise a tap turns the whole rig on.
+  const allOn = fixtures.length > 0 && fixtures.every((f) => status?.states[f.nodeId]?.power === true);
 
   return (
     <div className="lp-lighting-tab">
@@ -657,9 +677,17 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {/* ═══ Presets trigger ═══ */}
+      {/* ═══ Presets trigger + master power toggle ═══ */}
       {showSections && (
-        <PresetsTrigger onClick={() => setPresetsOpen(true)} />
+        <div className="lp-lighting-actions-row">
+          <PresetsTrigger onClick={() => setPresetsOpen(true)} />
+          <AllPowerToggle
+            on={allOn}
+            busy={bulkBusy}
+            disabled={!connected || fixtures.length === 0}
+            onToggle={(next) => void handleAllPower(next)}
+          />
+        </div>
       )}
 
       {/* ═══ Ungrouped (unassigned) fixtures ═══ */}

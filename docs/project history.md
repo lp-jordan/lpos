@@ -2004,3 +2004,43 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit` — 0 errors. No dev server started (per workspace rule). No live B2 calls made from this session.
 
 **Assumptions / follow-ups:** User will set the bucket lifecycle to "Keep only the last version" to bulk-reclaim the pre-existing ~4,200 GB of old versions (the in-app purge only reclaims going forward, per-object as files are retired). Deferred follow-up: a gated one-time "Reclaim old versions" maintenance action that purges only non-current versions bucket-wide without touching live files. The footprint walk is unbounded — fine for current bucket size; revisit if it ever times out the request.
+
+---
+
+## 2026-06-30T21:05:00Z — Internal Review: layout resolved to "scoped media page"
+
+**User prompt:** "I'm imagining the UI will basically look like the media page - a card or list view of the selected videos (the bundle) the user can review one at a time in the sidebar (or theater mode). We're basically just giving them a dedicated environment to watch the isolated group of videos in the same way they would in the media page. Make sense?"
+
+**Assistant response summary:** Confirmed — the review page is the media page scoped to the bundle, not a bespoke reel. Identified `components/projects/MediaTab.tsx` as the component that renders the media list/card view + `MediaDetailPanel` sidebar + `VideoTheaterMode`, so the build is "render `MediaTab` filtered to the bundle's asset set, themed near-black/gold." Updated `docs/internal-review-spec.md`: replaced the prior left-rail-reel recommendation with reuse of `MediaTab` (parameterized to accept an explicit asset list/filter rather than always loading the full project); updated the files-touched table and resolved the previously-open layout question.
+
+**Files changed:**
+- `docs/internal-review-spec.md` — layout section reworked to "scoped media page"; `MediaTab` added to files-touched as the parameterization point; `MediaDetailPanel`/`VideoTheaterMode` noted as reused unchanged.
+- `docs/project history.md`, `docs/changelog.json` — this log.
+
+**Decision rationale:** Reusing `MediaTab` scoped to the bundle removes the last net-new UI piece (no custom reel/navigation); the asset set is the only thing that differs from the normal media page. Parameterize rather than fork `MediaTab` to avoid a near-duplicate that drifts.
+
+**Commands run:** grep to confirm the media list/detail/theater components (`MediaTab`, `MediaDetailPanel`, `VideoTheaterMode`). No code/tests/builds.
+
+**Assumptions / follow-ups:** Spec now has no open design questions — only the implementation detail of how to scope `MediaTab` to an explicit asset set. No production code touched.
+
+---
+
+## 2026-06-30T21:40:00Z — Studio Lighting: master All On/Off toggle next to Presets
+
+**User prompt:** "Can you put a little "All On/Off" toggle next to presets in the lighting page of studio in lpos? This should disable and enable all lights."
+
+**Assistant response summary:** Added a master power toggle beside the Presets trigger on the studio lighting page (`/slate`). New `AllPowerToggle` switch component in `LightingPresets.tsx` (track + thumb + "All On"/"All Off" label, green when on, "Working…" while busy). `LightingPanel` wraps the existing `PresetsTrigger` and the new toggle in a `lp-lighting-actions-row` flex row, computes `allOn` (true only when every fixture's `state.power === true`), and on tap runs `handleAllPower(on)` which loops all fixtures issuing `sendCommand('setPower', nodeId, { on })`. The loop is sequential (awaited per fixture) because the Amaran service keys its pending WebSocket requests by action name only, so concurrent `set_sleep` calls would collide. Toggle is disabled when disconnected or no fixtures; `bulkBusy` guards re-entrancy. Added matching CSS.
+
+**Files changed:**
+- `lpos-dashboard/components/slate/LightingPresets.tsx` — new exported `AllPowerToggle` component + props interface.
+- `lpos-dashboard/components/slate/LightingPanel.tsx` — import `AllPowerToggle`; `bulkBusy` state + `handleAllPower`; `allOn` derivation; render trigger+toggle in a `lp-lighting-actions-row`.
+- `lpos-dashboard/app/globals.css` — `.lp-lighting-actions-row` + `.lp-all-power-toggle` / track / thumb / label styles.
+- `docs/project history.md`, `docs/changelog.json` — this entry.
+
+**Decision rationale:** Reused the existing per-fixture `sendCommand('setPower', …)` path rather than adding a new bulk API method/route — no server change needed, and it inherits the service's state-emit + socket broadcast so the UI and individual ON/OFF buttons stay in sync. Sequential dispatch is required by the service's action-keyed pending map (same constraint preset-apply already follows). Toggle reflects `allOn` (thumb-right only when truly all on) so the label is always honest; from a mixed state a tap turns everything on.
+
+**Alternatives considered:** A new `/api/studio/lighting` bulk `setAllPower` method that loops server-side (rejected — more surface area for no real gain; the client loop reuses existing emit/broadcast). `anyOn` semantics for the thumb (rejected — would show "All On" while only some are lit).
+
+**Commands/checks run:** `npx tsc --noEmit` — no errors in the changed files. No dev server started (per workspace rule).
+
+**Assumptions / follow-ups:** During a bulk run the per-fixture status updates stream in as each command resolves (sequential), so a large rig visibly cascades rather than flipping instantly — acceptable and matches preset-apply behavior. No follow-ups.

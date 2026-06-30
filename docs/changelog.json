@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-06-30T21:40:00Z",
+    "title": "Studio lighting: master All On/Off toggle next to Presets",
+    "summary": "Added a little All On/Off switch beside the Presets button on the studio lighting page. Flipping it turns every paired fixture on or off in one tap — it loops the existing per-fixture power command across all lights, so the individual ON/OFF buttons and live status stay in sync. The switch sits 'on' (green) only when every fixture is on, shows 'Working…' while a bulk run is in flight, and is disabled when lighting is disconnected or no fixtures are present."
+  },
+  {
     "timestamp": "2026-06-28T12:30:00Z",
     "title": "Cold storage deletes now reclaim space + live Backblaze footprint check",
     "summary": "Made the Raw Footage Cold Storage admin self-sufficient so you never need to open Backblaze. Deletes (per-object, approve-all, and folder delete in the bucket browser) now permanently purge every version of a file via ListObjectVersions + batched DeleteObjects, reclaiming the space immediately — previously a delete only wrote a hide-marker on the versioned bucket and the data kept billing, which is why LPOS's tracked total read far smaller than Backblaze's. Added a 'Live Backblaze footprint' panel with a 'Check live footprint' button that walks every version in the bucket and shows current vs old/hidden versions vs total billed bytes next to LPOS's tracked total, so tracked-vs-actual is visible in-app. The accidental-delete safety flow (a file must be missing from source for the full retention window, then an admin must explicitly Approve or Spare) is unchanged."

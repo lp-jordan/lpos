@@ -231,6 +231,34 @@ export function PresetsTrigger({ onClick }: PresetsTriggerProps) {
   );
 }
 
+// ── Master All On/Off toggle ──────────────────────────────────────────────────
+
+export interface AllPowerToggleProps {
+  /** True when every fixture is currently powered on. Drives the thumb position. */
+  on:       boolean;
+  /** A bulk command is in flight. */
+  busy:     boolean;
+  /** Disabled when disconnected or no fixtures present. */
+  disabled: boolean;
+  onToggle: (next: boolean) => void;
+}
+
+export function AllPowerToggle({ on, busy, disabled, onToggle }: AllPowerToggleProps) {
+  return (
+    <button
+      type="button"
+      className={`lp-all-power-toggle${on ? ' lp-all-power-toggle--on' : ''}`}
+      onClick={() => onToggle(!on)}
+      disabled={disabled || busy}
+      aria-pressed={on}
+      title={on ? 'Turn all lights off' : 'Turn all lights on'}
+    >
+      <span className="lp-all-power-track"><span className="lp-all-power-thumb" /></span>
+      <span className="lp-all-power-label">{busy ? 'Working…' : on ? 'All On' : 'All Off'}</span>
+    </button>
+  );
+}
+
 // ── Orchestrator: wires everything together for LightingPanel ─────────────────
 
 export interface LightingPresetsControllerProps {
