@@ -19,6 +19,7 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { io as ioClient }                           from 'socket.io-client';
 import { useToast } from '@/contexts/ToastContext';
 import type { MediaAsset } from '@/lib/models/media-asset';
+import { cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
 import type { FrameIOComment } from '@/lib/services/frameio';
 import { formatTimecode } from '@/lib/utils/time';
 
@@ -1555,6 +1556,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
         <BatchSetThumbnailModal
           projectId={projectId}
           assetIds={[asset.assetId]}
+          currentThumbnails={[cloudflarePosterPreviewUrl(asset.cloudflare)].filter((u): u is string => Boolean(u))}
           onClose={() => setShowThumbModal(false)}
           onDone={() => { setShowThumbModal(false); onUpdated(); }}
         />

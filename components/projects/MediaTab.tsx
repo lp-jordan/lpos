@@ -18,7 +18,7 @@ import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import type { MediaAsset } from '@/lib/models/media-asset';
-import { LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
+import { LEADERPASS_STATUS_LABEL, cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
 import { isVideoFile } from '@/lib/utils/media-kind';
 import { UPLOAD_CHUNK_SIZE_BYTES } from '@/lib/upload-constants';
 
@@ -1801,6 +1801,9 @@ const { openMenu } = useContextMenu();
         <BatchSetThumbnailModal
           projectId={projectId}
           assetIds={thumbnailBatchAssets.map((a) => a.assetId)}
+          currentThumbnails={thumbnailBatchAssets
+            .map((a) => cloudflarePosterPreviewUrl(a.cloudflare))
+            .filter((u): u is string => Boolean(u))}
           onClose={() => setThumbnailBatchAssets(null)}
           onDone={() => { void fetchAssets(); }}
         />

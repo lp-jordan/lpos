@@ -5,8 +5,8 @@ import type { MediaAsset } from '@/lib/models/media-asset';
 
 /**
  * Compact distribution bar for the media detail sidebar. An icon action-rail
- * (Copy stream URL = single click; Replace thumbnail + Security reveal on a 1s
- * hover; Frame.io link) with a right-justified roll-up health dot:
+ * (Copy stream URL, Replace thumbnail, Security — each a single click straight
+ * to its action/modal; Frame.io link) with a right-justified roll-up health dot:
  *   red    — something failed
  *   yellow — something is in progress or stale (CF reflects an older version)
  *   green  — everything settled
@@ -14,8 +14,7 @@ import type { MediaAsset } from '@/lib/models/media-asset';
  * Transcription). Control LOGIC stays in MediaDetailPanel (modals, push, copy).
  */
 
-const HOVER_OPEN_MS  = 1000; // deliberate hold before a rail control reveals
-const HOVER_CLOSE_MS = 160;  // grace so moving icon → popover doesn't dismiss
+const HOVER_CLOSE_MS = 160;  // grace so moving icon → health popover doesn't dismiss
 
 type Tone = 'ready' | 'processing' | 'failed' | 'stale' | 'idle';
 
@@ -49,10 +48,6 @@ export function MediaDistributionBar({
     if (openTimerRef.current)  { clearTimeout(openTimerRef.current);  openTimerRef.current = null; }
     if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
   }
-  function scheduleOpen(key: string) {
-    clearTimers();
-    openTimerRef.current = setTimeout(() => setOpenItem(key), HOVER_OPEN_MS);
-  }
   function scheduleClose() {
     if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = null; }
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
@@ -69,7 +64,6 @@ export function MediaDistributionBar({
   const embedSrc  = embedBase
     ? `${embedBase}/iframe${cf.posterUrl ? `?poster=${encodeURIComponent(cf.posterUrl)}` : ''}`
     : null;
-  const posterPreviewUrl = cf.posterUrl ?? (embedBase ? `${embedBase}/thumbnails/thumbnail.jpg` : null);
 
   const cfTone: Tone =
     cf.status === 'ready'      ? (isStale ? 'stale' : 'ready')
@@ -113,29 +107,6 @@ export function MediaDistributionBar({
   // CF-backed actions only make sense for the current (CF) version.
   const showCfActions = cfReady && !isViewingOldVersion;
 
-  function railItem(key: string, label: string, icon: React.ReactNode, popover: React.ReactNode) {
-    const open = openItem === key;
-    return (
-      <div className="mdb-rail-item" onMouseEnter={() => scheduleOpen(key)} onMouseLeave={scheduleClose}>
-        <button
-          type="button"
-          className={`mdb-rail-btn${open ? ' is-open' : ''}`}
-          aria-label={label}
-          aria-expanded={open}
-          onClick={() => toggle(key)}
-        >
-          {icon}
-        </button>
-        {open && (
-          <div className="mdb-pop" role="dialog" aria-label={label}>
-            <div className="mdb-pop-title">{label}</div>
-            {popover}
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className="mdb">
       <div className="mdb-rail">
@@ -156,24 +127,32 @@ export function MediaDistributionBar({
           </div>
         )}
 
-        {showCfActions && posterPreviewUrl && railItem(
-          'thumb',
-          'Thumbnail',
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>,
-          <>
-            <img className="mdb-pop-thumb" src={posterPreviewUrl} alt="Current poster" />
-            <button type="button" className="mdb-pop-btn" onClick={onReplaceThumbnail}>Replace…</button>
-          </>,
+        {showCfActions && (
+          <div className="mdb-rail-item">
+            <button
+              type="button"
+              className="mdb-rail-btn"
+              onClick={onReplaceThumbnail}
+              aria-label="Replace thumbnail"
+              title="Replace thumbnail"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </button>
+          </div>
         )}
 
-        {showCfActions && cf.uid && railItem(
-          'security',
-          'Security',
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
-          <>
-            <div className="mdb-pop-note">Domain restrictions and signed-URL requirements for this video.</div>
-            <button type="button" className="mdb-pop-btn" onClick={onSecurity}>Open security</button>
-          </>,
+        {showCfActions && cf.uid && (
+          <div className="mdb-rail-item">
+            <button
+              type="button"
+              className="mdb-rail-btn"
+              onClick={onSecurity}
+              aria-label="Security"
+              title="Security — domain restrictions & signed-URL requirements"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </button>
+          </div>
         )}
 
         {frameioLink && (

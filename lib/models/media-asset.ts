@@ -96,6 +96,19 @@ export function defaultCloudflareStream(): CloudflareStreamInfo {
   };
 }
 
+/**
+ * Resolve the URL to show as a video's *current* player poster: the custom
+ * poster if one was set, otherwise Cloudflare Stream's auto-generated frame.
+ * Returns null when the video isn't on Cloudflare yet. Single source of truth
+ * for the distribution bar, the Set Thumbnail modal preview, etc.
+ */
+export function cloudflarePosterPreviewUrl(cf: CloudflareStreamInfo): string | null {
+  if (cf.posterUrl) return cf.posterUrl;
+  if (!cf.hlsUrl) return null;
+  const base = cf.hlsUrl.replace('/manifest/video.m3u8', '');
+  return `${base}/thumbnails/thumbnail.jpg`;
+}
+
 export type LeaderPassStatus =
   | 'none'
   | 'preparing'

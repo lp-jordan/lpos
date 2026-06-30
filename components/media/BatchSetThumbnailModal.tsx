@@ -5,6 +5,11 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 interface Props {
   projectId: string;
   assetIds: string[];
+  /**
+   * Current poster URLs of the targeted assets, shown as a preview above the
+   * upload zone. Aligned to the assets being set (nulls already filtered out).
+   */
+  currentThumbnails?: string[];
   onClose: () => void;
   onDone: (result: { updated: number; failed: { assetId: string; reason: string }[] }) => void;
 }
@@ -13,8 +18,9 @@ type Phase = 'idle' | 'uploading' | 'applying' | 'done' | 'error';
 
 const ACCEPT = 'image/jpeg,image/png';
 const MAX_BYTES = 8 * 1024 * 1024;
+const THUMB_GRID_MAX = 9; // 3×3; beyond this the last cell rolls up as "+N more"
 
-export function BatchSetThumbnailModal({ projectId, assetIds, onClose, onDone }: Readonly<Props>) {
+export function BatchSetThumbnailModal({ projectId, assetIds, currentThumbnails, onClose, onDone }: Readonly<Props>) {
   const [phase, setPhase]       = useState<Phase>('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError]       = useState<string | null>(null);
@@ -126,6 +132,14 @@ export function BatchSetThumbnailModal({ projectId, assetIds, onClose, onDone }:
   else if (phase === 'applying') phaseLabel = `Applying to ${assetIds.length} asset${assetIds.length === 1 ? '' : 's'}…`;
   else if (phase === 'done') phaseLabel = 'Done.';
 
+  // Current-thumbnail preview: 1 → single, 2 → side-by-side, 3 → a row, 4–9 →
+  // fill a 3×3, 10+ → first 8 then a "+N more" tile in the 9th cell.
+  const thumbs        = (currentThumbnails ?? []).filter(Boolean);
+  const hasOverflow   = thumbs.length > THUMB_GRID_MAX;
+  const shownThumbs   = hasOverflow ? thumbs.slice(0, THUMB_GRID_MAX - 1) : thumbs;
+  const overflowCount = hasOverflow ? thumbs.length - (THUMB_GRID_MAX - 1) : 0;
+  const gridCols      = Math.min(shownThumbs.length + (hasOverflow ? 1 : 0), 3);
+
   return (
     <>
       <div className="sardius-modal-backdrop" onClick={tryClose} aria-hidden="true" />
@@ -150,6 +164,23 @@ export function BatchSetThumbnailModal({ projectId, assetIds, onClose, onDone }:
           <div className="sardius-section">
             {phase === 'idle' || phase === 'error' ? (
               <>
+                {thumbs.length > 0 && (
+                  <div className="bst-current">
+                    <span className="bst-current-label">
+                      {thumbs.length === 1 ? 'Current thumbnail' : 'Current thumbnails'}
+                    </span>
+                    <div className="bst-current-grid" style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}>
+                      {shownThumbs.map((url, i) => (
+                        <div className="bst-current-cell" key={`${url}-${i}`}>
+                          <img src={url} alt="" />
+                        </div>
+                      ))}
+                      {hasOverflow && (
+                        <div className="bst-current-cell bst-current-more">+{overflowCount} more</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div
                   className={`proj-upload-zone${isDragOver ? ' proj-upload-zone--active' : ''}`}
                   role="button"
