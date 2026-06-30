@@ -606,13 +606,18 @@ export function MediaPlayer({
             })}
           </div>
 
-          {/* Scrub thumbnail preview */}
+          {/* Scrub thumbnail preview — image hides itself when there's no CF
+              thumbnail (404), leaving just the timecode. key per-second so a
+              fresh element retries each frame and recovers. */}
           {scrubPreview && (
             <div className="mp-scrub-thumb-wrap" style={{ left: scrubPreview.x }} aria-hidden>
               <img
+                key={Math.round(scrubPreview.t)}
                 className="mp-scrub-thumb"
                 src={`/api/projects/${projectId}/media/${assetId}/thumbnail?time=${Math.round(scrubPreview.t)}`}
                 alt=""
+                onError={e => { e.currentTarget.style.display = 'none'; }}
+                onLoad={e => { e.currentTarget.style.display = 'block'; }}
               />
               <span className="mp-scrub-thumb-tc">{fmtTc(scrubPreview.t)}</span>
             </div>

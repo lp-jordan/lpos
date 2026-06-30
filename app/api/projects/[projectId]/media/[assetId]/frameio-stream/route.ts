@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFileMediaLinks } from '@/lib/services/frameio';
 import { readRegistry } from '@/lib/store/media-registry';
-import { isCloudflareStreamConfigured } from '@/lib/services/cloudflare-stream';
 
 type Params = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -58,14 +57,14 @@ async function resolveStreamUrl(projectId: string, assetId: string): Promise<Res
   // Frame.io during the processing window rather than serving a dead manifest.
   // (allowedOrigins does NOT gate direct HLS — verified — so this plays from the
   // LPOS origin regardless of a video's leaderpass-only origin lock.)
+  //
+  // Use the STORED hlsUrl (captured from the CF API at upload time, already
+  // carrying the customer subdomain) rather than rebuilding from
+  // CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN, which isn't reliably set in every env.
   const cf = asset?.cloudflare;
-  if (cf?.uid && cf.status === 'ready' && isCloudflareStreamConfigured()) {
-    const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
-    if (sub) {
-      const url = `https://customer-${sub}.cloudflarestream.com/${cf.uid}/manifest/video.m3u8`;
-      urlCache.set(assetId, { url, expiresAt: Date.now() + CACHE_TTL_MS });
-      return { kind: 'redirect', url };
-    }
+  if (cf?.uid && cf.status === 'ready' && cf.hlsUrl) {
+    urlCache.set(assetId, { url: cf.hlsUrl, expiresAt: Date.now() + CACHE_TTL_MS });
+    return { kind: 'redirect', url: cf.hlsUrl };
   }
 
   // ── 2. Frame.io (fallback while CF is still processing, or when not on CF) ─
