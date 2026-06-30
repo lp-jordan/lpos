@@ -62,14 +62,32 @@ export function triggerFrameIOUpload(projectId: string, assetId: string, context
 }
 
 async function runUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): Promise<void> {
-  // Guard: Frame.io must be connected
-  if (!isConnected()) return;
-
   const asset = getAsset(projectId, assetId);
   if (!asset || !asset.filePath) return;
 
-  // Guard: don't re-upload if already uploaded or in progress
+  // Guard: don't re-upload if already uploaded or in progress (CF already handled too)
   if (asset.frameio.status !== 'none') return;
+
+  // Cloudflare upload is INDEPENDENT of Frame.io's outcome — a fresh video asset
+  // gets onto CF whether Frame.io succeeds, fails, or is unreachable. Defined
+  // here so every exit path below can fire it after the Frame.io attempt.
+  // Frame.io is still attempted first when connected (preserving sequencing so
+  // the same file isn't uploading to both at once); the cloudflare-publish guard
+  // prevents a duplicate in-flight CF upload.
+  const fireCloudflare = () => {
+    if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
+      triggerCloudflareUpload(projectId, assetId, { allowedOrigins: getDefaultAllowedOrigins() });
+    } else {
+      console.log(`[frameio] skipping Cloudflare auto-upload for non-video asset "${asset.name}"`);
+    }
+  };
+
+  // Frame.io disconnected — skip the Frame.io attempt, but still get CF.
+  if (!isConnected()) {
+    console.warn(`[frameio-upload] Frame.io disconnected — uploading "${asset.name}" to Cloudflare only`);
+    fireCloudflare();
+    return;
+  }
 
   const queue    = getQueue();
   const filename = asset.name || asset.originalFilename;
@@ -290,17 +308,8 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
     });
     console.log(`[frameio] uploaded "${filename}" → ${result.reviewLink ?? result.frameioAssetId}`);
 
-    // Auto-upload to Cloudflare Stream right after Frame.io, per-asset and
-    // sequential (Frame.io is done; CF runs next on its own). Video-only — CF
-    // Stream rejects audio/image/docs, which keep their existing playback path.
-    // Decoupled from LeaderPass publish; CF becomes the internal playback layer.
-    // Locked to the default origins (LPOS host + platform); per-video tweaks via
-    // the sidebar Security modal afterward.
-    if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
-      triggerCloudflareUpload(projectId, assetId, { allowedOrigins: getDefaultAllowedOrigins() });
-    } else {
-      console.log(`[frameio] skipping Cloudflare auto-upload for non-video asset "${filename}"`);
-    }
+    // Frame.io succeeded → upload to Cloudflare (sequential, after Frame.io).
+    fireCloudflare();
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -344,6 +353,8 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
         source_service: 'frameio-upload',
         details_json: { provider: 'frameio', error: message },
       });
+      // Frame.io upload failed — still get the asset onto Cloudflare.
+      fireCloudflare();
     }
 
   } finally {
