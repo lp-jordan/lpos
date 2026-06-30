@@ -4983,6 +4983,10 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 
 /* ── Comments ── */
 .mad-comments-section { gap: 0.5rem; }
+/* Keep the count next to the "Comments" label instead of letting the title's
+   flex:1 (used by other sections to push right-side controls over) shove it to
+   the far edge. */
+.mad-comments-section .mad-section-title { flex: 0 0 auto; }
 .mad-comments-count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 1.2rem; height: 1.2rem; padding: 0 0.3rem;
