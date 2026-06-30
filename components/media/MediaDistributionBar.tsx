@@ -151,19 +151,17 @@ export function MediaDistributionBar({
         <StatusBadge
           tone={fioTone}
           label={fioLabel}
-          title="Frame.io — client review &amp; comments. Where reviewers watch and leave timestamped notes."
           icon={<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>}
         />
         <StatusBadge
           tone={cfTone}
           label={cfLabel}
-          title={isStale ? 'Cloudflare — in-app playback. Reflects an older version; re-push from Advanced to update.' : 'Cloudflare — in-app playback. Streams this video in the LPOS player and powers scrub thumbnails.'}
+          title={isStale ? 'Cloudflare reflects an older version — re-push from Advanced to update.' : undefined}
           icon={<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
         />
         <StatusBadge
           tone={txTone}
           label={txLabel}
-          title="Transcription — captions/subtitles. A text transcript generated from the audio."
           icon={<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></svg>}
         />
       </div>
