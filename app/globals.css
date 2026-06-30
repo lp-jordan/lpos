@@ -5157,11 +5157,26 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .mad-version-back:hover { background: rgba(255, 255, 255, 0.14); }
 
 /* ── Distribution bar: status strip + action rail (Option-A redesign) ─────── */
-.mdb { margin: 8px 0 4px; }
+/* z-index lifts the bar (and its hover popouts) above the comments header below
+   it, so the health/thumbnail/security popouts cover the version selector. */
+.mdb { position: relative; z-index: 20; margin: 8px 0 4px; }
 
 /* Action rail: buttons centered, roll-up health dot pinned right (absolute so
    it doesn't pull the centered cluster off-axis). */
 .mdb-rail { position: relative; display: flex; gap: 6px; align-items: center; justify-content: center; }
+.mdb-rail-btn--ok { color: rgba(120, 205, 150, 1); background: rgba(120, 205, 150, 0.14); border-color: rgba(120, 205, 150, 0.4); }
+
+/* Copy confirmation — floating pill above the copy button. */
+.mdb-copied {
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; pointer-events: none; z-index: 50;
+  font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
+  color: rgba(120, 205, 150, 1);
+  background: rgba(120, 205, 150, 0.16);
+  border: 1px solid rgba(120, 205, 150, 0.4);
+  padding: 2px 8px; border-radius: 10px;
+  animation: mdb-pop-in 120ms ease both;
+}
 .mdb-rail-item { position: relative; display: inline-flex; }
 .mdb-rail-btn {
   display: inline-flex; align-items: center; justify-content: center;

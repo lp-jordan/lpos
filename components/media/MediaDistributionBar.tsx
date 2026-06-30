@@ -140,17 +140,20 @@ export function MediaDistributionBar({
     <div className="mdb">
       <div className="mdb-rail">
         {showCfActions && embedSrc && (
-          <button
-            type="button"
-            className="mdb-rail-btn"
-            onClick={() => onCopyStreamUrl(embedSrc)}
-            aria-label="Copy stream URL"
-            title={streamUrlCopied ? 'Copied!' : 'Copy stream URL'}
-          >
-            {streamUrlCopied
-              ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>}
-          </button>
+          <div className="mdb-rail-item">
+            <button
+              type="button"
+              className={`mdb-rail-btn${streamUrlCopied ? ' mdb-rail-btn--ok' : ''}`}
+              onClick={() => onCopyStreamUrl(embedSrc)}
+              aria-label="Copy stream URL"
+              title="Copy stream URL"
+            >
+              {streamUrlCopied
+                ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>}
+            </button>
+            {streamUrlCopied && <span className="mdb-copied" role="status">Copied!</span>}
+          </div>
         )}
 
         {showCfActions && posterPreviewUrl && railItem(
