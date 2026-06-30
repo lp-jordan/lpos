@@ -144,26 +144,32 @@ function VersionBadge({ version }: { version: number }) {
   );
 }
 
-function CloudflareBadge({ cf, isVideo }: { cf: MediaAsset['cloudflare']; isVideo: boolean }) {
+function CloudflareBadge({ cf, isVideo, frameioStatus }: {
+  cf: MediaAsset['cloudflare'];
+  isVideo: boolean;
+  frameioStatus: MediaAsset['frameio']['status'];
+}) {
   // Cloudflare is the internal playback layer, and every *video* asset
-  // auto-uploads to it (chained after the Frame.io attempt). This badge is an
-  // always-on "where is this video on Cloudflare" indicator — it replaces the
-  // old LeaderPass "Awaiting Platform" badge. It reads "Ready" the vast majority
-  // of the time; the other states only show if you catch an asset mid-pipeline.
+  // auto-uploads to it (the CF upload is chained right after the Frame.io
+  // attempt). This is an always-on "where is this video on Cloudflare"
+  // indicator — it replaces the old LeaderPass "Awaiting Platform" badge and
+  // reads "Ready" the vast majority of the time.
   //
-  // Non-video assets (images/PDFs/audio) are never sent to Cloudflare, so they
-  // sit at status 'none' forever — show nothing for them rather than a "Queued"
-  // pill that never resolves.
+  // Non-video assets (images/PDFs/audio) are never sent to Cloudflare.
   if (!isVideo) return null;
+  // cf.status 'none' is overloaded: it's transient for a video on its way to CF,
+  // but permanent for one that will never go (legacy/registered-only). Don't
+  // infer "Queued" from 'none' — only show it while Frame.io is actively
+  // uploading (CF's turn is next). Anything else with no CF publication is
+  // honestly "Not in Cloudflare", not queued.
   const [cls, label]: [string, string] =
     cf.status === 'failed'      ? ['ma-badge--error',   'CF failed']
     : cf.isStale                ? ['ma-badge--review',  'Stale']
     : cf.status === 'uploading' ? ['ma-badge--active',  cf.progress ? `Uploading ${cf.progress}%` : 'Uploading']
     : cf.status === 'processing' ? ['ma-badge--active', 'Encoding']
     : cf.status === 'ready'     ? ['ma-badge--success', 'Ready']
-    // 'none' on a video = registered but CF not started yet (still on Frame.io,
-    // or in the brief gap before the CF upload kicks off).
-    : ['ma-badge--pending', 'Queued'];
+    : frameioStatus === 'uploading' ? ['ma-badge--pending', 'Queued']
+    : ['ma-badge--neutral', 'Not in Cloudflare'];
   return <span className={`ma-badge ${cls}`}>{label}</span>;
 }
 
@@ -349,7 +355,7 @@ function AssetRow({
       <div className="ma-row-badges">
         <TranscriptionBadge status={asset.transcription.status} />
         <VersionBadge version={asset.frameio.version} />
-        <CloudflareBadge cf={asset.cloudflare} isVideo={isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)} />
+        <CloudflareBadge cf={asset.cloudflare} isVideo={isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)} frameioStatus={asset.frameio.status} />
       </div>
       <button
         type="button"
@@ -449,7 +455,7 @@ function AssetCard({
         <div className="ma-card-badges">
           <TranscriptionBadge status={asset.transcription.status} />
           <VersionBadge version={asset.frameio.version} />
-          <CloudflareBadge cf={asset.cloudflare} isVideo={isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)} />
+          <CloudflareBadge cf={asset.cloudflare} isVideo={isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)} frameioStatus={asset.frameio.status} />
         </div>
       </div>
       {asset.cloudflare.isStale && asset.cloudflare.versionNumber != null && (
