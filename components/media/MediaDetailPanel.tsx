@@ -1304,64 +1304,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 </div>
               )}
 
-              {/* ── Transcription ── */}
-              <div className="mad-section">
-                <div className="mad-section-head">
-                  <span className="mad-section-title">Transcription</span>
-                  <div className="mad-tx-status-group">
-                    <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
-                      {{
-                        none:       'Not Transcribed',
-                        queued:     'Queued',
-                        processing: 'Transcribing…',
-                        done:       'Done',
-                        failed:     'Failed',
-                      }[asset.transcription.status]}
-                    </span>
-                    {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
-                      <span
-                        className="mad-tx-version-pill"
-                        title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
-                      >
-                        v{asset.transcription.sourceVersionNumber ?? '?'}
-                      </span>
-                    )}
-                  </div>
-                  {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
-                    <button
-                      type="button"
-                      className="mad-icon-btn"
-                      onClick={handleRetranscribe}
-                      disabled={!asset.filePath}
-                      title={!asset.filePath ? 'No local file path' : asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start transcription'}
-                      aria-label="Re-transcribe"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                        <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-                      </svg>
-                    </button>
-                  )}
-                </div>
-                {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
-                  <button
-                    type="button"
-                    className="mad-action-btn mad-action-btn--primary"
-                    onClick={() => onGoToTranscript(asset.transcription.jobId!)}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                      <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-                    </svg>
-                    Go to Transcript
-                  </button>
-                )}
-                {asset.transcription.completedAt && (
-                  <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
-                )}
-              </div>
-
               {/* ── Advanced (collapsible) ── */}
               <div className="mad-section mad-advanced-section">
                 <button
@@ -1458,6 +1400,66 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           </div>
                         );
                       })()}
+                    </div>
+
+                    {/* Transcription — moved out of the main sidebar; the strip
+                         badge under the player carries the at-a-glance status. */}
+                    <div className="mad-more-info-sub">
+                      <div className="mad-section-head">
+                        <span className="mad-section-title">Transcription</span>
+                        <div className="mad-tx-status-group">
+                          <span className={`mad-tx-badge mad-tx-badge--${asset.transcription.status}`}>
+                            {{
+                              none:       'Not Transcribed',
+                              queued:     'Queued',
+                              processing: 'Transcribing…',
+                              done:       'Done',
+                              failed:     'Failed',
+                            }[asset.transcription.status]}
+                          </span>
+                          {asset.transcription.fromPriorVersion && asset.transcription.status !== 'none' && (
+                            <span
+                              className="mad-tx-version-pill"
+                              title={`Transcription is from version ${asset.transcription.sourceVersionNumber ?? '?'} of this asset`}
+                            >
+                              v{asset.transcription.sourceVersionNumber ?? '?'}
+                            </span>
+                          )}
+                        </div>
+                        {asset.transcription.status !== 'queued' && asset.transcription.status !== 'processing' && (
+                          <button
+                            type="button"
+                            className="mad-icon-btn"
+                            onClick={handleRetranscribe}
+                            disabled={!asset.filePath}
+                            title={!asset.filePath ? 'No local file path' : asset.transcription.status === 'done' ? 'Re-transcribe' : 'Start transcription'}
+                            aria-label="Re-transcribe"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {asset.transcription.status === 'done' && asset.transcription.jobId && onGoToTranscript && (
+                        <button
+                          type="button"
+                          className="mad-action-btn mad-action-btn--primary"
+                          onClick={() => onGoToTranscript(asset.transcription.jobId!)}
+                          style={{ marginTop: 8 }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                          </svg>
+                          Go to Transcript
+                        </button>
+                      )}
+                      {asset.transcription.completedAt && (
+                        <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
+                      )}
                     </div>
 
                     <div className="mad-more-info-sub">

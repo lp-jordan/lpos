@@ -5158,7 +5158,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 
 /* ── Distribution bar: status strip + action rail (Option-A redesign) ─────── */
 .mdb { margin: 8px 0 4px; }
-.mdb-strip { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.mdb-strip { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 8px; }
 .mdb-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 8px; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
@@ -5171,7 +5171,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .mdb-badge--stale      { color: rgba(212, 160, 80, 1);  background: rgba(212, 160, 80, 0.1);   border-color: rgba(212, 160, 80, 0.26); }
 .mdb-badge--idle       { color: var(--text-muted);      background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.09); }
 
-.mdb-rail { display: flex; gap: 6px; }
+.mdb-rail { display: flex; gap: 6px; justify-content: center; }
 .mdb-rail-item { position: relative; display: inline-flex; }
 .mdb-rail-btn {
   display: inline-flex; align-items: center; justify-content: center;
