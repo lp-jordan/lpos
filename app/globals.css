@@ -5222,14 +5222,18 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 
 /* Copy confirmation — floating pill above the copy button. */
 .mdb-copied {
-  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  position: absolute; right: calc(100% + 6px); top: 50%; transform: translateY(-50%);
   white-space: nowrap; pointer-events: none; z-index: 50;
   font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
   color: rgba(120, 205, 150, 1);
   background: rgba(120, 205, 150, 0.16);
   border: 1px solid rgba(120, 205, 150, 0.4);
   padding: 2px 8px; border-radius: 10px;
-  animation: mdb-pop-in 120ms ease both;
+  animation: mdb-pop-in-left 120ms ease both;
+}
+@keyframes mdb-pop-in-left {
+  from { opacity: 0; transform: translate(3px, -50%); }
+  to   { opacity: 1; transform: translate(0, -50%); }
 }
 .mdb-rail-item { position: relative; display: inline-flex; }
 .mdb-rail-btn {
@@ -16368,6 +16372,59 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   transition: background 0.12s, border-color 0.12s;
 }
 .lp-presets-trigger:hover { background: var(--surface); border-color: var(--accent); }
+
+/* Row holding the Presets trigger + master All On/Off toggle */
+.lp-lighting-actions-row {
+  align-items: center;
+  align-self: flex-start;
+  display: flex;
+  gap: 10px;
+}
+
+/* Master All On/Off toggle */
+.lp-all-power-toggle {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted-soft);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 500;
+  gap: 8px;
+  padding: 6px 12px 6px 10px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.lp-all-power-toggle:not(:disabled):hover { background: var(--surface); border-color: var(--accent); }
+.lp-all-power-toggle:disabled { cursor: default; opacity: 0.5; }
+.lp-all-power-toggle--on { color: var(--text); }
+
+.lp-all-power-track {
+  background: var(--line);
+  border-radius: 999px;
+  display: inline-block;
+  flex: none;
+  height: 14px;
+  position: relative;
+  transition: background 0.14s;
+  width: 26px;
+}
+.lp-all-power-toggle--on .lp-all-power-track { background: #34d399; }
+
+.lp-all-power-thumb {
+  background: #fff;
+  border-radius: 50%;
+  height: 10px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: left 0.14s;
+  width: 10px;
+}
+.lp-all-power-toggle--on .lp-all-power-thumb { left: 14px; }
+
+.lp-all-power-label { white-space: nowrap; }
 
 /* Modal overlay */
 .lp-preset-modal-overlay {
