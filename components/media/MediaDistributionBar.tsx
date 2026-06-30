@@ -95,7 +95,7 @@ export function MediaDistributionBar({
     : fio === 'uploading' ? 'Uploading'
     : fio === 'rejected' ? 'Rejected'
     : fio === 'needs_changes' ? 'Changes requested'
-    : 'In review';
+    : 'Ready';
 
   const tx = asset.transcription.status;
   const txTone: Tone =
