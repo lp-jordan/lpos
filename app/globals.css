@@ -5089,6 +5089,11 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   background: rgba(212, 160, 80, 0.14);
   border-color: rgba(212, 160, 80, 0.4);
 }
+.mad-version-select-btn--latest {
+  color: rgba(99, 155, 255, 1);
+  background: rgba(99, 155, 255, 0.14);
+  border-color: rgba(99, 155, 255, 0.4);
+}
 .mad-version-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
 .mad-version-menu {
   position: absolute;

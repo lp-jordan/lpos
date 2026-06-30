@@ -1026,13 +1026,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                       <div className="mad-version-select">
                         <button
                           type="button"
-                          className={`mad-version-select-btn${isViewingOldVersion ? ' mad-version-select-btn--old' : ''}`}
+                          className={`mad-version-select-btn${isViewingOldVersion ? ' mad-version-select-btn--old' : ' mad-version-select-btn--latest'}`}
                           onClick={() => setVersionMenuOpen((o) => !o)}
-                          title="Switch version"
+                          title={isViewingOldVersion ? `Viewing v${selectedVersion?.versionNumber} — switch version` : 'Latest version — switch version'}
                           aria-haspopup="listbox"
                           aria-expanded={versionMenuOpen}
                         >
-                          v{selectedVersion?.versionNumber ?? '?'}{isViewingOldVersion ? '' : ' · latest'}
+                          v{selectedVersion?.versionNumber ?? '?'}
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         </button>
                         {versionMenuOpen && (
