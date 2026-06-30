@@ -19246,8 +19246,9 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   display: flex;
   align-items: center;
   gap: 12px;
+  max-width: 720px;
+  margin: 0 auto 18px;
   padding-bottom: 16px;
-  margin-bottom: 18px;
   border-bottom: 1px solid rgba(230, 194, 74, 0.16);
 }
 .ir-header-badge {
@@ -19263,7 +19264,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .ir-header-title { font-size: 18px; font-weight: 600; color: var(--accent-strong); margin: 0; }
 .ir-header-count { font-size: 12px; color: rgba(244, 238, 226, 0.55); margin-left: auto; }
 
-.ir-clip-list { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+.ir-clip-list { display: flex; flex-direction: column; gap: 8px; max-width: 720px; margin: 0 auto; }
 .ir-clip {
   display: flex;
   align-items: center;
