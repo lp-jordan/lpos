@@ -34,6 +34,13 @@ const SPEED_LEVELS  = [1, 1.25, 1.5, 2] as const;
 const SPEED_LOCK_PX = 25;   // downward drag to lock speed
 const SPEED_HOLD_MS = 200;  // press must exceed this to start a speed hold; shorter = tap (play/pause)
 
+// Scrub thumbnails: prefetch a capped-interval grid (instant, coarse) then
+// refine the exact frame on settle. N = clamp(ceil(duration/TARGET), FLOOR, CAP).
+const THUMB_TARGET_S = 2.5;  // ideal seconds between grid thumbnails
+const THUMB_GRID_CAP = 60;   // hard ceiling on prefetched count (bounds load)
+const THUMB_GRID_MIN = 8;    // floor so short clips still get a few
+const THUMB_SETTLE_MS = 150; // pause-on-a-spot before fetching the exact frame
+
 /** MM:SS:FF timecode at 24 fps */
 function fmtTc(s: number): string {
   if (!isFinite(s) || s < 0) return '00:00:00';
@@ -78,6 +85,9 @@ export function MediaPlayer({
   const wasPlayingRef     = useRef(false);
   const movedRef          = useRef(false);
   const speedGestureRef   = useRef(false);
+  // Scrub-thumbnail prefetch grid (coarse, instant) + settle timer (exact refine)
+  const gridTimesRef      = useRef<number[]>([]);
+  const settleTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [streamUrl,      setStreamUrl]     = useState(src);
@@ -86,6 +96,7 @@ export function MediaPlayer({
   const [duration,       setDuration]      = useState(0);
   const [videoAspect,    setVideoAspect]   = useState<number | null>(null);
   const [scrubPreview,   setScrubPreview]  = useState<{ t: number; x: number } | null>(null);
+  const [scrubExact,     setScrubExact]    = useState(false);
   const [buffered,       setBuffered]      = useState(0);
   const [muted,          setMuted]         = useState(false);
   const [volume,         setVolume]        = useState(1);
@@ -114,9 +125,35 @@ export function MediaPlayer({
     setCurrentTime(0);
     setDuration(0);
     setVideoAspect(null);
+    gridTimesRef.current = [];   // new source → rebuild the thumbnail grid
   }, [src]);
 
   useHlsPlayer(videoRef, streamUrl);
+
+  const thumbnailUrl = useCallback(
+    (t: number) => `/api/projects/${projectId}/media/${assetId}/thumbnail?time=${Math.round(t)}`,
+    [projectId, assetId],
+  );
+
+  // Prefetch a capped-interval thumbnail grid once duration is known. Probe one
+  // first — if the asset has no CF thumbnails (404), skip the grid so we don't
+  // fire dozens of wasted requests. The grid warms the browser cache for an
+  // instant snap during scrub; the exact frame is fetched on settle.
+  useEffect(() => {
+    if (!duration || duration <= 0) return;
+    const n = Math.max(THUMB_GRID_MIN, Math.min(THUMB_GRID_CAP, Math.ceil(duration / THUMB_TARGET_S)));
+    const times = Array.from({ length: n }, (_, i) => Math.round(((i + 0.5) / n) * duration));
+    let cancelled = false;
+    const probe = new Image();
+    probe.onload = () => {
+      if (cancelled) return;
+      gridTimesRef.current = times;
+      for (const t of times) { const img = new Image(); img.src = thumbnailUrl(t); }
+    };
+    probe.onerror = () => { if (!cancelled) gridTimesRef.current = []; };
+    probe.src = thumbnailUrl(times[Math.floor(n / 2)]);
+    return () => { cancelled = true; };
+  }, [duration, thumbnailUrl]);
 
   // ── Controls visibility ───────────────────────────────────────────────────
   const scheduleHide = useCallback(() => {
@@ -149,8 +186,9 @@ export function MediaPlayer({
 
   // Clear speed timers on unmount so a pending hold/escalation can't setState after teardown
   useEffect(() => () => {
-    if (holdTimerRef.current)  clearTimeout(holdTimerRef.current);
-    if (speedTimerRef.current) clearInterval(speedTimerRef.current);
+    if (holdTimerRef.current)   clearTimeout(holdTimerRef.current);
+    if (speedTimerRef.current)  clearInterval(speedTimerRef.current);
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
   }, []);
 
   const ctrlsShown = ctrlsVisible;
@@ -237,6 +275,33 @@ export function MediaPlayer({
     return Math.max(THUMB_HALF_W, Math.min(rect.width - THUMB_HALF_W, clientX - rect.left));
   }
 
+  // Nearest prefetched grid timestamp (instant snap); falls back to t when there
+  // is no grid (no CF thumbnails) so the exact path still tries.
+  function nearestGridTime(t: number): number {
+    const grid = gridTimesRef.current;
+    if (grid.length === 0) return t;
+    let best = grid[0], bestD = Math.abs(t - best);
+    for (let i = 1; i < grid.length; i += 1) {
+      const d = Math.abs(t - grid[i]);
+      if (d < bestD) { bestD = d; best = grid[i]; }
+    }
+    return best;
+  }
+
+  // While dragging, show the nearest grid frame instantly; once the pointer
+  // settles, fetch the exact frame for that timecode and swap it in.
+  function scheduleSettle() {
+    setScrubExact(false);
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => setScrubExact(true), THUMB_SETTLE_MS);
+  }
+
+  function endScrubPreview() {
+    setScrubPreview(null);
+    setScrubExact(false);
+    if (settleTimerRef.current) { clearTimeout(settleTimerRef.current); settleTimerRef.current = null; }
+  }
+
   function handleScrubPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     const v = videoRef.current;
     if (!v || !duration) return;
@@ -252,6 +317,7 @@ export function MediaPlayer({
     v.currentTime = t;
     setCurrentTime(t);
     setScrubPreview({ t, x: scrubPreviewX(e.clientX) });
+    scheduleSettle();
   }
 
   function handleScrubPointerMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -264,7 +330,7 @@ export function MediaPlayer({
     if (e.buttons === 0) {
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
       draggingRef.current = false;
-      setScrubPreview(null);
+      endScrubPreview();
       return;
     }
     const v = videoRef.current;
@@ -275,13 +341,14 @@ export function MediaPlayer({
     v.currentTime = t;
     setCurrentTime(t);
     setScrubPreview({ t, x: scrubPreviewX(e.clientX) });
+    scheduleSettle();
   }
 
   function endScrubDrag(e: React.PointerEvent<HTMLDivElement>) {
     if (!draggingRef.current) return;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
     draggingRef.current = false;
-    setScrubPreview(null);
+    endScrubPreview();
     const v = videoRef.current;
     if (!v) return;
     if (!movedRef.current || wasPlayingRef.current) void v.play();
@@ -609,22 +676,28 @@ export function MediaPlayer({
             })}
           </div>
 
-          {/* Scrub thumbnail preview — image hides itself when there's no CF
-              thumbnail (404), leaving just the timecode. key per-second so a
-              fresh element retries each frame and recovers. */}
-          {scrubPreview && (
-            <div className="mp-scrub-thumb-wrap" style={{ left: scrubPreview.x }} aria-hidden>
-              <img
-                key={Math.round(scrubPreview.t)}
-                className="mp-scrub-thumb"
-                src={`/api/projects/${projectId}/media/${assetId}/thumbnail?time=${Math.round(scrubPreview.t)}`}
-                alt=""
-                onError={e => { e.currentTarget.style.display = 'none'; }}
-                onLoad={e => { e.currentTarget.style.display = 'block'; }}
-              />
-              <span className="mp-scrub-thumb-tc">{fmtTc(scrubPreview.t)}</span>
-            </div>
-          )}
+          {/* Scrub thumbnail preview. While dragging, snap to the nearest
+              prefetched grid frame (instant, from cache); on settle, show the
+              exact frame for the timecode. Image hides itself on a 404 (no CF
+              thumbnail), leaving just the timecode. */}
+          {scrubPreview && (() => {
+            const previewT = scrubExact ? scrubPreview.t : nearestGridTime(scrubPreview.t);
+            return (
+              <div className="mp-scrub-thumb-wrap" style={{ left: scrubPreview.x }} aria-hidden>
+                {/* No key: keep one persistent <img> and just swap src, so the
+                    browser holds the current frame until the next loads (no
+                    blank on the grid→exact settle). Hides itself on a 404. */}
+                <img
+                  className="mp-scrub-thumb"
+                  src={thumbnailUrl(previewT)}
+                  alt=""
+                  onError={e => { e.currentTarget.style.display = 'none'; }}
+                  onLoad={e => { e.currentTarget.style.display = 'block'; }}
+                />
+                <span className="mp-scrub-thumb-tc">{fmtTc(scrubPreview.t)}</span>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Button row */}
