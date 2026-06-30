@@ -47,6 +47,17 @@ import {
 
 const CLOUDFLARE_DEFAULT_THUMBNAIL_FRAME = 24;
 
+/** Pull the custom poster URL out of a prior CF distribution's metadata_json, if any. */
+function readPriorPosterUrl(prior: { metadata_json: string | null } | null): string | null {
+  if (!prior?.metadata_json) return null;
+  try {
+    const meta = JSON.parse(prior.metadata_json) as { posterUrl?: unknown };
+    return typeof meta.posterUrl === 'string' && meta.posterUrl ? meta.posterUrl : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface CloudflareUploadOptions {
   /**
    * Origins permitted to play this video (LPOS host + any downstream platform
@@ -127,12 +138,19 @@ export async function runCloudflareUpload(
 
   console.log(`[cloudflare-publish] starting upload for asset ${assetId} (${asset.originalFilename})`);
 
+  // Capture the prior CF distribution BEFORE the 'uploading' patch creates a new
+  // record. Otherwise getLatestDistributionInfoForAsset returns the just-made
+  // (uid-null) uploading record and the old uid is never deleted on a version
+  // replace. We also carry the custom poster forward (it lives in the prior
+  // record's metadata_json and a new version starts a fresh record without it).
+  const priorCloudflare = getLatestDistributionInfoForAsset(assetId, 'cloudflare');
+  const priorPosterUrl  = readPriorPosterUrl(priorCloudflare);
+
   patchAsset(projectId, assetId, {
     cloudflare: { status: 'uploading', progress: 0, lastError: null, readyAt: null },
   });
 
   try {
-    const priorCloudflare = getLatestDistributionInfoForAsset(assetId, 'cloudflare');
     const prepared = await createCloudflareTusUpload(asset);
     console.log(`[cloudflare-publish] upload initialized for asset ${assetId}; uid=${prepared.uid}`);
 
@@ -213,6 +231,10 @@ export async function runCloudflareUpload(
         progress: 100,
         readyAt,
         lastError: null,
+        // Carry the custom poster forward to this version's fresh record so a
+        // version replace doesn't silently drop the user's chosen thumbnail.
+        // (posterUrl is a uid-independent Cloudflare Images URL.)
+        ...(priorPosterUrl ? { posterUrl: priorPosterUrl } : {}),
       },
     });
 
