@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-01T00:00:00Z",
+    "title": "Transcription quality upgrade: selectable whisper model + word-level timecodes",
+    "summary": "Transcription accuracy is now tunable from admin Settings without a redeploy. A new Transcription (Whisper) card lets you pick the whisper.cpp model — base (fast, the safe default), large-v3-turbo (recommended: near large-v3 accuracy, much faster), or large-v3 (highest accuracy) — and set worker count and per-job timeout, including a 'scale timeout with video length' option so long videos no longer trip the old fixed 15-minute cap. The card warns when a chosen model file isn't installed and when big models are run with more than one worker (they contend for the single GPU). Under the hood, every transcription now also writes an additive word-level timing sidecar (one entry per word with millisecond offsets) alongside the existing txt/srt/vtt/json outputs, feeding downstream products that need word-accurate timecodes; the existing Transcripts UI is completely unaffected. Requires the large model file to be downloaded onto the host before selecting it."
+  },
+  {
     "timestamp": "2026-06-30T21:40:00Z",
     "title": "Studio lighting: master All On/Off toggle next to Presets",
     "summary": "Added a little All On/Off switch beside the Presets button on the studio lighting page. Flipping it turns every paired fixture on or off in one tap — it loops the existing per-fixture power command across all lights, so the individual ON/OFF buttons and live status stay in sync. The switch sits 'on' (green) only when every fixture is on, shows 'Working…' while a bulk run is in flight, and is disabled when lighting is disconnected or no fixtures are present."

@@ -246,6 +246,74 @@ The top-left **breadcrumb bar** (`Breadcrumb.tsx`) hosts the back arrow + home i
 - [ ] Visually verified that the breadcrumb bar still reads cleanly when this overlay is open (the backdrop blur + tint should handle it).
 - [ ] If the overlay is "blocking" (e.g. mid-upload), the breadcrumb is dimmed via `.breadcrumb-bar--locked` while the operation is in flight — never by raising the overlay above it.
 
+## Transcription (whisper.cpp)
+
+### What it does
+Extracts audio from uploaded video (ffmpeg-static) and transcribes it with whisper.cpp
+(`whisper-cli`) on the Metal GPU. Produces the operator-facing transcript outputs (txt / srt /
+vtt / segment-level JSON) plus an **additive word-level timing sidecar** for downstream
+products that need word timecodes.
+
+### Key files and entry points
+| File | Role |
+|------|------|
+| `lib/services/media-processor.ts` | ffmpeg extract + whisper spawn. `runWhisper` does the primary run (unchanged outputs) then an additive word-level pass. |
+| `lib/services/transcripter-service.ts` | Queue/worker. `enqueue()` → `processNext()` → `MediaProcessor.process()`. Reads worker count + timeout live per job. |
+| `lib/services/transcription-config.ts` | Resolves model / workers / timeout from admin Settings (env-var → Setting → default). Single source of validation. |
+| `lib/store/lpos-settings-store.ts` | SQLite `lpos_settings` KV. Transcription keys + `TRANSCRIPTION_MODEL_OPTIONS`. `base` is the fallback default. |
+| `lib/services/runtime-dependencies.ts` | Resolves whisper binary + model dir (`runtime/whisper-models/`). |
+| `app/api/admin/transcription-config/route.ts` | Admin GET/PUT for model, workers, timeout. Reports which model files are installed. |
+| `components/settings/TranscriptionConfigCard.tsx` | Admin Settings UI card (model dropdown, workers, timeout + length-aware toggle). |
+
+### Model selection
+Configured in admin **Settings → Transcription (Whisper)** (SQLite-backed, no redeploy). Options:
+- `base` — fast, lower accuracy. **Fallback default** — behavior is unchanged until an admin opts up.
+- `large-v3-turbo` — **recommended.** Near large-v3 accuracy at a fraction of the runtime.
+- `large-v3` — highest accuracy, slowest.
+
+Precedence: `LPOS_WHISPER_MODEL` env var → admin Setting → `base`. An unknown/typo'd stored
+value falls back to `base` rather than selecting a missing model file. Each model requires
+`runtime/whisper-models/ggml-<name>.bin` to be present.
+
+### Word-level timing sidecar (additive)
+The primary whisper run (`-oj -otxt -osrt -ovtt`) is untouched — the Transcripts UI enumerates
+`.txt` and reads `.txt/.json/.srt/.vtt/.meta.json`, so nothing there changes. A **second** whisper
+invocation runs with `-ml 1 -sow` (max-len 1 char + split-on-word → one JSON entry per word, each
+with `offsets.{from,to}` in ms) and writes `<jobId>.words.json`. That filename does not end in
+`.txt/.srt/.vtt`, so the UI never surfaces it. The word pass is best-effort: if it fails, the
+primary transcript still succeeds. (`-ml 1 -sow` was chosen over `-ojf -dtw <model>` because `-dtw`
+needs a compiled alignment-heads preset whose name must exactly match the model — a mismatch aborts
+the run — whereas `-ml 1 -sow` is model-agnostic and reuses the existing JSON shape. Tradeoff:
+timing is decode-derived, slightly looser than DTW.)
+
+### Workers & timeout (ops)
+Both configurable in the same Settings card (live per job, no restart):
+- **Workers** — default 2. For `large-v3` / `large-v3-turbo` set to **1**: concurrent jobs contend
+  for the single Metal GPU and slow each other down. Env override: `LPOS_TRANSCRIPTION_WORKERS`.
+- **Per-job timeout** — default 15 min. The old fixed 15-min cap trips on >30–45 min videos under
+  large models. Enable **"Scale timeout with video length"** so the timeout scales with media
+  duration (≈4× real-time + 5-min overhead, capped at 6 h); the configured minutes act as a floor.
+  Duration is passed from the retranscribe route (`asset.duration`); the fresh-upload path probes
+  duration asynchronously so it falls back to the fixed floor there.
+
+### Downloading a model file (manual step)
+Model binaries are gitignored (`runtime/whisper-models/**`) and live only on the host machine.
+Download `large-v3-turbo` (~1.6 GB) from the official whisper.cpp HuggingFace repo into the
+**production tree's** model dir:
+
+```bash
+curl -L -o /Users/lpos/lp-app-ecosystem/lpos-dashboard/runtime/whisper-models/ggml-large-v3-turbo.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+```
+
+For highest accuracy also fetch `ggml-large-v3.bin` (~3.1 GB) from the same repo. After the file
+lands, select the model in Settings — the card shows a "NOT INSTALLED" warning until it exists.
+
+### Current status / known gaps
+- Word-level sidecar is written but not yet consumed by any downstream product (separate effort).
+- Fresh-upload path does not pass duration to the length-aware timeout (duration is probed in
+  parallel); only the manual retranscribe path is length-aware today.
+
 ## Build / Version Tag
 
 ### What it does

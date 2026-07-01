@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-07-01 — Transcription quality upgrade: settings-selectable whisper model + word-level sidecar + length-aware timeout
+
+**Timestamp:** 2026-07-01T00:00:00Z
+
+**User prompt (summary):** Implement a transcription-quality upgrade in `lpos-dashboard` (in an isolated `whisper-upgrade` git worktree, do not touch `leaderpass-ai`). Stay on whisper.cpp/Metal (no WhisperX). Three parts: (1) make the whisper model selectable via SQLite-backed admin Settings, defaulting safely to `base`, exposing `large-v3` and `large-v3-turbo` (turbo recommended); (2) add whisper.cpp word-level timestamps as an ADDITIVE sidecar output while keeping the existing txt/srt/vtt/json outputs untouched; (3) make worker count and per-job timeout configurable, with guidance that big models want workers=1 and a longer/length-aware timeout. Document the turbo model download. Typecheck. Commit on the branch, do not push/merge.
+
+**Response summary:** Worked in worktree `/Users/lpos/lp-app-ecosystem/lpos-dashboard-whisper-upgrade` on branch `whisper-upgrade`. Added transcription knobs (model, workers, timeout minutes, length-aware toggle) to the existing `lpos_settings` KV store with `base` as the fallback default, plus a `TRANSCRIPTION_MODEL_OPTIONS` allowlist. Added `lib/services/transcription-config.ts` as the single resolver (env → Setting → default, with validation/clamping and a length-aware timeout that scales ≈4× real-time when a duration is known). Resolved the model inside `MediaProcessor.process()` so all three enqueue call sites pick it up without threading. Added an additive word-level whisper pass in `runWhisper` (`-ml 1 -sow` → `<jobId>.words.json`) that never fails the job and is invisible to the `.txt`-based Transcripts enumeration. Made worker count and timeout read live from settings in `transcripter-service.ts`; threaded optional `durationSec` through `enqueue()` and wired it from the retranscribe route. Added admin API route + Settings UI card. Extended cleanup/prune paths to remove the new sidecar. Typecheck (`tsc --noEmit`) passed clean.
+
+**Files changed:**
+- `lib/store/lpos-settings-store.ts` — added transcription SETTING_KEYS + SETTING_DEFAULTS (`base`, workers 2, timeout 15 min, length-aware false) and `TRANSCRIPTION_MODEL_OPTIONS` allowlist.
+- `lib/services/transcription-config.ts` — NEW. `getTranscriptionModel/Workers/TimeoutMs` resolvers.
+- `lib/services/media-processor.ts` — model default now from settings resolver; `runWhisper` refactored to primary pass (unchanged outputs) + additive `-ml 1 -sow` word pass writing `<jobId>.words.json`; new `spawnWhisper` helper; `wordsPath` added to `ProcessorResult`.
+- `lib/services/transcripter-service.ts` — removed fixed `MAX_WORKERS`/`TRANSCRIPT_TIMEOUT_MS`; workers + timeout now resolved live; `enqueue()` gained optional `durationSec`; `wordsPath` added to outputs; cleanup/prune delete `.words.json`.
+- `app/api/projects/[projectId]/media/[assetId]/retranscribe/route.ts` — passes `asset.duration` into `enqueue()` for length-aware timeout.
+- `app/api/admin/transcription-config/route.ts` — NEW. Admin GET/PUT for the knobs; reports installed model files.
+- `components/settings/TranscriptionConfigCard.tsx` — NEW. Settings UI (model dropdown w/ installed check, workers, timeout + length-aware toggle, big-model warnings).
+- `app/settings/page.tsx` — mounts the new card (admin-only).
+- `lib/transcripts/store.ts` — delete-by-asset also removes `.words.json`.
+- `docs/README.md` — new "Transcription (whisper.cpp)" section (model selection, word sidecar, ops, model download).
+
+**Implementation summary:**
+- Model resolution lives in `MediaProcessor.process()` (per-job override → settings → env → `base`), so no enqueue call site needed the model threaded through it.
+- Word-level output is a SECOND whisper invocation to a distinct `.words.json` prefix so the primary segment-level outputs the UI depends on are byte-for-byte unchanged; best-effort (a failure logs and is swallowed).
+- Workers/timeout are read live each job so admin changes apply without a restart. Length-aware timeout: floor = configured minutes; when enabled and duration known, scales to ≈4× real-time + 5-min overhead, capped at 6 h.
+
+**Decision rationale:**
+- Chose `-ml 1 -sow` over `-ojf -dtw <model>` because `-dtw` requires a compiled alignment-heads preset whose name must exactly match the model (mismatch aborts the run); `-ml 1 -sow` is model-agnostic and reuses the existing JSON shape. Tradeoff: decode-derived timing is slightly looser than DTW — acceptable for a word-timecode feed.
+- Kept `base` as the fallback everywhere so enabling the feature never silently changes transcription behavior.
+- Reused the existing `lpos_settings` KV pattern (per workspace guidance: operational knobs in SQLite Settings, not Doppler/env).
+
+**Alternatives considered:** WhisperX (rejected per brief — CPU-only on Apple Silicon, slower). Threading `model` through every enqueue call site (rejected — resolving in `process()` is a single choke point). Reordering the fresh-upload duration probe to precede enqueue (rejected as risky; length-aware falls back to the fixed floor there).
+
+**Commands/checks run:** `git worktree add -b whisper-upgrade …`; `tsc --noEmit` (exit 0, no errors) using the main tree's `node_modules` via a temporary symlink that was removed before commit; `curl -I` to confirm the turbo model URL + size (~1.6 GB).
+
+**Assumptions / follow-ups / open questions:**
+- Word sidecar is produced but not yet consumed by any downstream product (separate `leaderpass-ai` effort).
+- MANUAL steps remain: download `ggml-large-v3-turbo.bin` (and optionally `ggml-large-v3.bin`) into the production tree's `runtime/whisper-models/`; flip the model in Settings; set workers=1 + enable length-aware timeout for big models; test one real long video.
+- Fresh-upload path is not length-aware (duration probed in parallel); only manual retranscribe is today.
+
 ## 2026-06-09 — People prospect-stage "No stage" silently reverts — PATCH route's `str()` helper ignored `null`
 
 **Timestamp:** 2026-06-09T22:05:00Z

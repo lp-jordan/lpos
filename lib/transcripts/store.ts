@@ -139,7 +139,7 @@ export function deleteTranscriptsByAsset(projectId: string, assetId: string): nu
     const meta  = readTranscriptMeta(projectId, jobId);
     if (meta?.assetId !== assetId) continue;
 
-    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.meta.json`]) {
+    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.words.json`, `${jobId}.meta.json`]) {
       try { fs.unlinkSync(path.join(transcriptsDir, name)); } catch { /* already gone */ }
     }
     for (const name of [`${jobId}.srt`, `${jobId}.vtt`]) {
