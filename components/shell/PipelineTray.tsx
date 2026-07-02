@@ -68,7 +68,7 @@ function StageRow({
             <RetryIcon /> Retry
           </button>
         )}
-        {active && (
+        {active && stage.type !== 'upload:lpai' && (
           <button
             type="button"
             className="tt-cancel-btn"

@@ -20,6 +20,7 @@ export function stageLabel(type: PipelineStageType): string {
     case 'upload:sardius':    return 'Sardius';
     case 'upload:delivery':   return 'Delivery';
     case 'promotion':         return 'Transfer';
+    case 'upload:lpai':       return 'LP.AI';
   }
 }
 
@@ -89,6 +90,12 @@ export function phaseLabel(stage: PipelineStage): string {
       if (status === 'done')          return 'Transferred';
       if (status === 'failed')        return 'Failed';
       if (status === 'cancelled')     return 'Cancelled';
+      return status;
+    case 'upload:lpai':
+      if (status === 'queued')     return 'Queued';
+      if (status === 'processing') return stage.detail ?? 'Provisioning';
+      if (status === 'done')       return 'Provisioned';
+      if (status === 'failed')     return 'Failed';
       return status;
   }
 }

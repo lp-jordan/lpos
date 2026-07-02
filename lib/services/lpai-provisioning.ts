@@ -38,6 +38,7 @@ import { readRegistry, getAsset } from '@/lib/store/media-registry';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
 import { getSetting, setSetting } from '@/lib/store/lpos-settings-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
+import { lpaiProvisioningStatus } from '@/lib/services/lpai-provisioning-status';
 import { getProjectStore, getTranscripterService } from '@/lib/services/container';
 import type { TranscriptJob } from '@/lib/services/transcripter-service';
 
@@ -312,6 +313,10 @@ export async function ensureTurboTranscript(projectId: string, asset: MediaAsset
     displayName,
   });
 
+  // Surface the transcribing phase in the pipeline tray (live % is fed from this
+  // sidecar job by the tracker). Only reached on a real transcribe, not cache hit.
+  lpaiProvisioningStatus.markTranscribing(assetId, job.jobId);
+
   console.log(`[lpai] awaiting turbo transcript for asset ${assetId} (job ${job.jobId}, model ${LPAI_TURBO_MODEL})`);
 
   const completed = await waitForJob(transcripter, job.jobId);
@@ -466,8 +471,11 @@ export async function provisionAssetToLpai(
   // a video LP.AI can't ingest yet (the contract requires a Cloudflare UID).
   const eligibility = checkCloudflareEligible(asset);
   if (eligibility.skip) {
+    // Not provisionable yet (video not on Cloudflare) — no pipeline row for it.
     return { assetId, title, ok: false, skippedReason: eligibility.skip };
   }
+
+  lpaiProvisioningStatus.markQueued(assetId, projectId, title);
 
   // Produce (or reuse the cached) high-quality turbo word-level transcript. This
   // is the turbo-on-provision step: normal ingest stays on `base`; only here do we
@@ -483,12 +491,15 @@ export async function provisionAssetToLpai(
 
   const { payload, skip } = buildPayload(projectName, asset, turboJobId);
   if (!payload) {
+    lpaiProvisioningStatus.markFailed(assetId, skip ?? 'Could not build LP.AI payload');
     return { assetId, title, ok: false, skippedReason: skip };
   }
 
   const actor = serviceActor('LeaderPass AI', 'lpai-provisioning');
   try {
+    lpaiProvisioningStatus.markPushing(assetId);
     await postIngest(config, payload);
+    lpaiProvisioningStatus.markDone(assetId);
     recordActivity({
       ...actor,
       occurred_at: new Date().toISOString(),
@@ -514,6 +525,7 @@ export async function provisionAssetToLpai(
     return { assetId, title, ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    lpaiProvisioningStatus.markFailed(assetId, message);
     recordActivity({
       ...actor,
       occurred_at: new Date().toISOString(),

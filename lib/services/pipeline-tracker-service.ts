@@ -20,6 +20,7 @@ import type { PromotionQueueService } from '@/lib/services/promotion-queue-servi
 import { patchAsset } from '@/lib/store/media-registry';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 import { triggerLeaderPassPublish } from '@/lib/services/leaderpass-publish';
+import { lpaiProvisioningStatus, type LpaiProvisioningRecord } from '@/lib/services/lpai-provisioning-status';
 import type {
   PipelineEntry,
   PipelineOverallStatus,
@@ -39,6 +40,7 @@ const STALL_THRESHOLDS: Record<PipelineStageType, number> = {
   'upload:sardius':    15 * 60_000, // FTP uploads of large files are slow — 15 min stall threshold
   'upload:delivery':   30 * 60_000, // large video files uploaded to R2 — generous threshold
   'promotion':          5 * 60_000,
+  'upload:lpai':       20 * 60_000, // turbo transcription of a long video can run many minutes
 };
 const PROCESSING_STALL_MS    = 10 * 60_000;
 const HARD_TIMEOUT_MULT      = 2;      // auto-fail at 2x stall threshold
@@ -59,11 +61,12 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
   const active = stages.filter((s) => !isStageTerminal(s.status));
   if (active.length > 0) {
     // Return the highest-priority active stage label
-    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion'] as PipelineStageType[]) {
+    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion', 'upload:lpai'] as PipelineStageType[]) {
       const match = active.find((s) => s.type === type);
       if (match) {
         if (type === 'ingest') return 'ingesting';
         if (type === 'transcript') return 'transcribing';
+        if (type === 'upload:lpai') return 'processing';
         if (type === 'upload:frameio') {
           return match.status === 'processing' ? 'processing' : 'uploading_frameio';
         }
@@ -157,6 +160,10 @@ export class PipelineTrackerService {
         this.clearCancelled();
       });
     });
+
+    // LP.AI provisioning status → an `upload:lpai` stage on the asset's pipeline.
+    lpaiProvisioningStatus.onChange((rec) => this.syncProvisioning(rec));
+    for (const rec of lpaiProvisioningStatus.all()) this.syncProvisioning(rec);
 
     this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
     this.purgeTimer = setInterval(() => this.purge(), PURGE_INTERVAL_MS);
@@ -338,9 +345,13 @@ export class PipelineTrackerService {
     let changed = false;
     for (const job of jobs) {
       // LP.AI turbo sidecar jobs are a background quality pass for provisioning,
-      // not part of the user-facing ingest pipeline. Skipping them here prevents
-      // a second "transcribing" stage from reopening an asset's completed pipeline.
-      if (job.purpose === 'lpai_sidecar') continue;
+      // not a standalone transcript stage (that would reopen an asset's completed
+      // pipeline). Instead, feed their live progress into the asset's LP.AI
+      // provisioning stage, if one is being tracked.
+      if (job.purpose === 'lpai_sidecar') {
+        if (this.updateProvisioningProgressFromSidecar(job)) changed = true;
+        continue;
+      }
 
       const existingByJob = this.jobIndex.get(job.jobId);
       if (existingByJob) {
@@ -458,6 +469,97 @@ export class PipelineTrackerService {
       completedAt: job.completedAt,
       stalled:     false,
     };
+  }
+
+  // ── LP.AI provisioning ─────────────────────────────────────────────────────
+
+  private provisioningToStage(rec: LpaiProvisioningRecord): PipelineStage {
+    const status =
+      rec.phase === 'queued' ? 'queued' :
+      rec.phase === 'done'   ? 'done' :
+      rec.phase === 'failed' ? 'failed' :
+      'processing'; // transcribing | pushing
+    return {
+      type: 'upload:lpai',
+      jobId: rec.jobId,
+      status,
+      progress: rec.progress,
+      error: rec.error,
+      detail: rec.detail,
+      queuedAt: rec.queuedAt,
+      updatedAt: rec.updatedAt,
+      completedAt: rec.completedAt,
+      stalled: false,
+    };
+  }
+
+  /**
+   * A provisioning status change → create/update an `upload:lpai` stage. Attaches
+   * to the asset's existing pipeline when one is live (provisioning right after
+   * upload), otherwise stands up its own pipeline entry — the common case, since
+   * re-provisioning usually happens long after the original pipeline was purged.
+   */
+  private syncProvisioning(rec: LpaiProvisioningRecord): void {
+    const stage = this.provisioningToStage(rec);
+
+    const attach = (pipelineId: string): boolean => {
+      const entry = this.pipelines.get(pipelineId);
+      if (!entry) return false;
+      const existing = entry.stages.find((s) => s.jobId === rec.jobId);
+      if (existing) Object.assign(existing, stage);
+      else entry.stages.push(stage);
+      this.jobIndex.set(rec.jobId, pipelineId);
+      this.refreshEntry(entry);
+      this.broadcast();
+      return true;
+    };
+
+    // 1. Pipeline already carrying this provisioning stage.
+    const byJob = this.jobIndex.get(rec.jobId);
+    if (byJob && attach(byJob)) return;
+
+    // 2. The asset's live pipeline (upload still in the tray).
+    const byAsset = this.assetIndex.get(rec.assetId);
+    if (byAsset && attach(byAsset)) return;
+
+    // 3. Standalone provisioning pipeline.
+    const projectName = this.buildProjectMap().get(rec.projectId) ?? rec.projectId;
+    const entry: PipelineEntry = {
+      pipelineId: rec.jobId,
+      assetId: rec.assetId,
+      projectId: rec.projectId,
+      projectName,
+      filename: rec.filename,
+      overallStatus: 'processing',
+      stages: [stage],
+      createdAt: rec.queuedAt,
+      updatedAt: rec.updatedAt,
+    };
+    this.pipelines.set(entry.pipelineId, entry);
+    this.jobIndex.set(rec.jobId, entry.pipelineId);
+    this.assetIndex.set(rec.assetId, entry.pipelineId);
+    this.refreshEntry(entry);
+    this.broadcast();
+  }
+
+  /**
+   * Push a turbo sidecar job's live progress onto the asset's provisioning stage
+   * while it's transcribing. Returns true if something changed (caller broadcasts).
+   */
+  private updateProvisioningProgressFromSidecar(job: TranscriptJob): boolean {
+    const rec = lpaiProvisioningStatus.get(job.assetId);
+    if (!rec || rec.phase !== 'transcribing') return false;
+    const pipelineId = this.jobIndex.get(rec.jobId) ?? this.assetIndex.get(job.assetId);
+    if (!pipelineId) return false;
+    const entry = this.pipelines.get(pipelineId);
+    if (!entry) return false;
+    const stage = entry.stages.find((s) => s.jobId === rec.jobId);
+    if (!stage) return false;
+    stage.progress = job.progress;
+    stage.detail = job.progress > 0 ? `Transcribing ${job.progress}%` : 'Transcribing (turbo)';
+    stage.updatedAt = new Date().toISOString();
+    this.refreshEntry(entry);
+    return true;
   }
 
   // ── Entry refresh ────────────────────────────────────────────────────────
@@ -593,6 +695,7 @@ export class PipelineTrackerService {
   // ── Purge ────────────────────────────────────────────────────────────────
 
   private purge(): void {
+    lpaiProvisioningStatus.prune();
     const cutoff = Date.now() - PURGE_AFTER_MS;
     let changed = false;
     for (const [id, entry] of this.pipelines) {
