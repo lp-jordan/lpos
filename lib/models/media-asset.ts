@@ -109,6 +109,18 @@ export function cloudflarePosterPreviewUrl(cf: CloudflareStreamInfo): string | n
   return `${base}/thumbnails/thumbnail.jpg`;
 }
 
+/**
+ * The Cloudflare Stream embed ("stream") URL for an asset — the `/iframe` player
+ * page, with the custom poster appended when present. Returns null when the asset
+ * has no ready Cloudflare publication (no hlsUrl). Single source of truth for both
+ * the MediaDistributionBar "Copy stream URL" action and the media-list context menu.
+ */
+export function cloudflareStreamEmbedUrl(cf: CloudflareStreamInfo): string | null {
+  if (!cf.hlsUrl) return null;
+  const base = cf.hlsUrl.replace('/manifest/video.m3u8', '');
+  return `${base}/iframe${cf.posterUrl ? `?poster=${encodeURIComponent(cf.posterUrl)}` : ''}`;
+}
+
 export type LeaderPassStatus =
   | 'none'
   | 'preparing'

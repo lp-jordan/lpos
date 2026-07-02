@@ -18,7 +18,7 @@ import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import type { MediaAsset } from '@/lib/models/media-asset';
-import { LEADERPASS_STATUS_LABEL, cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
+import { LEADERPASS_STATUS_LABEL, cloudflarePosterPreviewUrl, cloudflareStreamEmbedUrl } from '@/lib/models/media-asset';
 import { isVideoFile } from '@/lib/utils/media-kind';
 import { UPLOAD_CHUNK_SIZE_BYTES } from '@/lib/upload-constants';
 
@@ -179,6 +179,12 @@ const IconFolderOpen = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
     <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+  </svg>
+);
+const IconLink = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
+    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
   </svg>
 );
 const IconFrameIO = () => (
@@ -1198,6 +1204,22 @@ const { openMenu } = useContextMenu();
         onClick: () => setSelectedAsset(asset),
       },
       { type: 'separator' as const },
+      {
+        type: 'item' as const,
+        label: 'Copy Stream URL',
+        icon: <IconLink />,
+        disabled: !cloudflareStreamEmbedUrl(asset.cloudflare),
+        onClick: async () => {
+          const url = cloudflareStreamEmbedUrl(asset.cloudflare);
+          if (!url) return;
+          try {
+            await navigator.clipboard.writeText(url);
+            toast({ id: `copy-stream:${asset.assetId}`, kind: 'publish', tone: 'info', title: 'Stream URL copied', body: asset.name || asset.originalFilename });
+          } catch {
+            toast({ id: `copy-stream-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard.' });
+          }
+        },
+      },
       {
         type: 'item' as const,
         label: 'Open File Location',

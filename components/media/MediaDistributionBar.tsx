@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { MediaAsset } from '@/lib/models/media-asset';
+import { cloudflareStreamEmbedUrl } from '@/lib/models/media-asset';
 
 /**
  * Compact distribution bar for the media detail sidebar. An icon action-rail
@@ -60,10 +61,7 @@ export function MediaDistributionBar({
   const cf        = asset.cloudflare;
   const cfReady   = cf.status === 'ready';
   const isStale   = cf.isStale;
-  const embedBase = cf.hlsUrl ? cf.hlsUrl.replace('/manifest/video.m3u8', '') : null;
-  const embedSrc  = embedBase
-    ? `${embedBase}/iframe${cf.posterUrl ? `?poster=${encodeURIComponent(cf.posterUrl)}` : ''}`
-    : null;
+  const embedSrc  = cloudflareStreamEmbedUrl(cf);
 
   const cfTone: Tone =
     cf.status === 'ready'      ? (isStale ? 'stale' : 'ready')
