@@ -7,6 +7,7 @@ import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
 import { probeMediaInfo } from '@/lib/services/media-probe';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
+import { triggerAutoProvisionOnFinalize } from '@/lib/services/lpai-provisioning';
 import {
   applyVideoSettings,
   createCloudflareTusUpload,
@@ -365,6 +366,12 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
       },
     });
     console.log(`[leaderpass] asset ${assetId} prepared for LeaderPass handoff`);
+
+    // Auto-provision to LeaderPass AI if this project is toggled on. This is the
+    // first moment the asset has a Cloudflare UID (which LP.AI's ingest contract
+    // requires), so it's the natural "video finalized" hook. No-op when the
+    // toggle is off or LP.AI is unconfigured. Never blocks the publish flow.
+    triggerAutoProvisionOnFinalize(projectId, assetId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cancelled = message === 'Cancelled';

@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-07-02 — LPOS → LeaderPass AI provisioning (per-project "Use in LeaderPass AI" toggle + ingest push)
+
+**Timestamp:** 2026-07-02T00:00:00Z
+
+**User prompt (summary):** Implement the LPOS side of the LPOS↔LeaderPass-AI provisioning contract in an isolated `lpai-provisioning` worktree. A per-project "Use in LeaderPass AI" toggle that, when enabled, pushes the project's videos to LP.AI's ingest endpoint (`POST ${LPAI_BASE_URL}/api/ingest`, `Authorization: Bearer ${LPAI_INGEST_SECRET}`, one JSON request per video: `{ pass, cloudflareUid, title, transcript: [{startMs,endMs,text}] }`). Discover the data model; persist the toggle; build the provisioning function (prefer word-level `<jobId>.words.json`, else segment-level `<jobId>.json`); triggers on toggle-ON + manual re-provision + auto on new-video finalize; guard behind config, tolerate per-video failures, log via the activity logger. Do not touch the leaderpass-ai project; do not push/merge.
+
+**Response summary:** Built the provisioning half end-to-end. New `lib/services/lpai-provisioning.ts` reads `LPAI_BASE_URL`/`LPAI_INGEST_SECRET` from env/Doppler (no-op if unset), stores the per-project toggle as an operational knob in `lpos_settings` (`lpai.enabled.<projectId>`), loads each video's transcript (word-level `.words.json` preferred, whisper.cpp segment `.json` fallback — both mapped to ms `{startMs,endMs,text}` cues via `offsets`), and POSTs one request per Cloudflare-ready video. Two API routes (`GET/PUT .../lpai` for the toggle with toggle-ON batch provisioning; `POST .../lpai/reprovision` for the manual action with a per-video summary). A `LeaderPassAiToggle` client component in the project header. Auto-provision is hooked into the LeaderPass publish completion path — the first moment a video has a Cloudflare UID (which the LP.AI contract requires). Per-video failures are isolated; all pushes log `lpai.ingest.*` / `lpai.project.*` activity events.
+
+**Files changed:**
+- `lib/services/lpai-provisioning.ts` (new) — config read + toggle KV + transcript mapping + single/batch/auto provisioning + activity logging.
+- `app/api/projects/[projectId]/lpai/route.ts` (new) — GET toggle state, PUT set toggle (+ on-enable batch provision).
+- `app/api/projects/[projectId]/lpai/reprovision/route.ts` (new) — POST manual re-provision, awaits + returns pushed/skipped/failed counts.
+- `components/projects/LeaderPassAiToggle.tsx` (new) — header control: checkbox + Re-provision button + summary/error line.
+- `components/projects/ProjectDetail.tsx` — render the toggle in the project header (right-aligned).
+- `lib/services/leaderpass-publish.ts` — call `triggerAutoProvisionOnFinalize(projectId, assetId)` after a successful publish (auto-provision hook).
+
+**Data-model findings (where the pieces live):**
+- Cloudflare Stream UID: `MediaAsset.cloudflare.uid` (canonical DB `distribution_records.provider_asset_id` where `provider='cloudflare'`). Populated only after a LeaderPass/Cloudflare publish, so LP.AI provisioning can only run post-publish.
+- Transcript files: `${LPOS_DATA_DIR}/projects/<projectId>/transcripts/<jobId>.json` (whisper.cpp `-oj`: `transcription[].offsets.{from,to}` in ms + `.text`); word-level `<jobId>.words.json` is the (not-yet-shipped) whisper-upgrade output, consumed preferentially when present. `jobId` = `MediaAsset.transcription.jobId`.
+- Title = `MediaAsset.name` (fallback `originalFilename`); duration = `MediaAsset.duration`. Project↔asset: `readRegistry(projectId)` / `assets.project_id`.
+
+**Implementation summary / rationale:**
+- Toggle stored in `lpos_settings` (per `feedback_doppler_vs_admin_settings` — operational knobs in SQLite, admin-tunable without redeploy) rather than the `projects` table, avoiding a core-db migration for a single boolean and keying cleanly per project.
+- Credentials (`LPAI_BASE_URL`, `LPAI_INGEST_SECRET`) in env/Doppler (per `feedback_doppler_secrets`); `getLpaiConfig()` returns null when either is unset and every entry point no-ops, so the code ships dark until Doppler is populated.
+- Auto-provision hooked at LeaderPass-publish completion (not at upload finalize) because the CF UID — required by the contract — does not exist until Cloudflare processing completes. Finalize-time hooking would push videos with a null `cloudflareUid`.
+- Transcript loader tolerates several plausible `.words.json` shapes (bare word array, `{words:[…]}`, or a `transcription[]` payload) so it keeps working whichever shape the separate whisper-upgrade lands on; falls back to the known segment format.
+- Toggle-OFF only stops future pushes; removal from LP.AI is explicitly deferred (noted, not built) per the brief.
+
+**Commands / checks run:** `tsc --noEmit -p tsconfig.json` via the main tree's TypeScript (the worktree has no `node_modules`; symlinked temporarily then removed) — 0 errors across the project. Dev server NOT started; no live LP.AI called (none running).
+
+**Assumptions / follow-ups / open questions:**
+- Requires Doppler vars `LPAI_BASE_URL` and `LPAI_INGEST_SECRET` (the latter == LP.AI's `INGEST_SECRET`) before provisioning does anything.
+- LP.AI-side removal on toggle-OFF / asset delete is a later concern.
+- Auto-provision fires only through the LeaderPass publish path; a video that gets a CF UID by some other route would rely on the manual Re-provision action.
+- The word-level `.words.json` format is inferred (that work is owned elsewhere); may need a shape tweak once it ships.
+
+---
+
 ## 2026-06-09 — People prospect-stage "No stage" silently reverts — PATCH route's `str()` helper ignored `null`
 
 **Timestamp:** 2026-06-09T22:05:00Z
