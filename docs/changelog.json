@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-02T00:00:00Z",
+    "title": "Analysis: promoted clients/projects skip Assets-tab drive sync",
+    "summary": "Investigation (no code changed). Confirmed that projects auto-created via prospect promotion do NOT get the Google Drive folder tree that direct project creation sets up. Direct creation (POST /api/projects) calls setupProjectDriveFolders after create(), building the LPOS/{client}/{project}/{Scripts,Transcripts,Assets,Workbooks} tree and caching folder IDs. The promotion route (POST /api/prospects/[id]/promote) auto-creates a project via the same store.create() in both branches but never calls setupProjectDriveFolders, so no folders are created or cached. Because folders are resolved at runtime from the clientName+projectName cache (not stored on the project row), a promoted project's Assets tab has nothing to resolve — promoteToDrive() then throws 'Drive folders not set up for this project'. Suggested fix: call setupProjectDriveFolders in both promotion branches, or move it into the shared store create()/post-create hook so all creation paths stay in sync. Already-promoted projects would need a backfill."
+  },
+  {
     "timestamp": "2026-06-30T21:40:00Z",
     "title": "Studio lighting: master All On/Off toggle next to Presets",
     "summary": "Added a little All On/Off switch beside the Presets button on the studio lighting page. Flipping it turns every paired fixture on or off in one tap — it loops the existing per-fixture power command across all lights, so the individual ON/OFF buttons and live status stay in sync. The switch sits 'on' (green) only when every fixture is on, shows 'Working…' while a bulk run is in flight, and is disabled when lighting is disconnected or no fixtures are present."

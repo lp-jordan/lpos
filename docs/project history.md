@@ -2044,3 +2044,19 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit` — no errors in the changed files. No dev server started (per workspace rule).
 
 **Assumptions / follow-ups:** During a bulk run the per-fixture status updates stream in as each command resolves (sequential), so a large rig visibly cascades rather than flipping instantly — acceptable and matches preset-apply behavior. No follow-ups.
+
+---
+
+## 2026-07-02T00:00:00Z — Analysis: do promoted clients/projects get Assets-tab drive sync?
+
+**User prompt:** "Can we confirm that promoted clients/projects get a drive sync for the assets tab like all directly created clients/projects in LPOS?"
+
+**Assistant response summary:** Analysis-only, no code changed. Confirmed the answer is **no** — promoted projects do NOT get the Drive folder setup that direct creation does. Direct project creation (`POST /api/projects`) calls `getProjectStore().create()` and then `setupProjectDriveFolders(project)` (`app/api/projects/route.ts:29`, impl at `:39-54`), which ensures the LPOS root, creates the `Scripts/Transcripts/Assets/Workbooks` tree in the Shared Drive, and adopts any orphaned folder. The prospect-promotion route (`app/api/prospects/[prospectId]/promote/route.ts`) auto-creates a project via the same `getProjectStore().create()` in both branches — Path A (fold into existing client, lines 54-58) and Path B (new standalone client, lines 77-81) — but neither branch calls `setupProjectDriveFolders`. Drive folders are not stored on the project row; they're resolved at runtime from the folder cache keyed by clientName+projectName, so a promoted project has no folders to resolve. Downstream, `PromotionProcessor.promoteToDrive()` calls `getCachedProjectFolders()` (`lib/services/promotion-processor.ts:138`), gets null, and throws "Drive folders not set up for this project — open the Assets tab first to initialise them" (`:139`). The Assets tab does not lazily initialise folders on open, so promoted projects stay broken until setup is triggered another way. Suggested fix (not applied): call `setupProjectDriveFolders` in both promotion branches, or move the drive-folder setup into `getProjectStore().create()` / a shared post-create hook so every creation path stays in sync.
+
+**Files changed:** None (analysis only). `docs/project history.md` + `docs/changelog.json` — this log entry.
+
+**Decision rationale:** N/A — investigative. Recommended fix location is the shared store/post-create hook rather than duplicating the call, to prevent future creation paths from drifting again.
+
+**Commands/checks run:** Read of `app/api/projects/route.ts` and `app/api/prospects/[prospectId]/promote/route.ts`; Explore agent traced `setupProjectDriveFolders`, `drive-folder-service`, `promotion-processor`, and the projects DB schema. No code, tests, or server touched.
+
+**Assumptions / follow-ups:** Follow-up available if the user wants the fix implemented. Existing already-promoted projects would also need their folders backfilled (they won't self-heal on Assets-tab open under current behavior).
