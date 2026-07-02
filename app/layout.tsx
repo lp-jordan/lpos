@@ -30,13 +30,14 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const epDownload    = session
     ? hasEditpanelAccess(session.userId, session.role === 'admin')
     : false;
+  const isAdmin = session?.role === 'admin';
   const version = getAppVersion();
 
   return (
     <html lang="en">
       <body>
         <ServiceWorkerRegistrar />
-        <AppShell currentUser={currentUser} hasProspects={hasProspects} epDownload={epDownload} version={version}>{children}</AppShell>
+        <AppShell currentUser={currentUser} hasProspects={hasProspects} epDownload={epDownload} isAdmin={isAdmin} version={version}>{children}</AppShell>
       </body>
     </html>
   );

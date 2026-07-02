@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
+import { requireRole } from '@/lib/services/api-auth';
 import {
   isLpaiConfigured,
   triggerProjectProvisioning,
@@ -18,9 +19,12 @@ type Ctx = { params: Promise<{ projectId: string }> };
  * push/skip/fail land on the activity timeline (`lpai.ingest.*`).
  *
  * Does not require the toggle to be ON (explicit operator action) but does require
- * LP.AI to be configured.
+ * LP.AI to be configured. Admin-only.
  */
-export async function POST(_req: NextRequest, { params }: Ctx) {
+export async function POST(req: NextRequest, { params }: Ctx) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   const { projectId } = await params;
 
   const project = getProjectStore().getById(projectId);

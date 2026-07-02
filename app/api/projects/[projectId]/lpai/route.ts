@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
+import { requireRole } from '@/lib/services/api-auth';
 import {
   isLpaiConfigured,
   isProjectLpaiEnabled,
@@ -11,8 +12,11 @@ import {
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
-/** Read the current "Use in LeaderPass AI" toggle state for a project. */
-export async function GET(_req: NextRequest, { params }: Ctx) {
+/** Read the current "Use in LeaderPass AI" toggle state for a project. Admin-only. */
+export async function GET(req: NextRequest, { params }: Ctx) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   const { projectId } = await params;
   return NextResponse.json({
     enabled: isProjectLpaiEnabled(projectId),
@@ -20,8 +24,11 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   });
 }
 
-/** Set the toggle. On toggle-ON, provisions all current videos in the project. */
+/** Set the toggle. On toggle-ON, provisions all current videos in the project. Admin-only. */
 export async function PUT(req: NextRequest, { params }: Ctx) {
+  const deny = await requireRole(req, 'admin');
+  if (deny) return deny;
+
   const { projectId } = await params;
   const body = await req.json() as { enabled?: boolean };
   const enabled = body.enabled === true;

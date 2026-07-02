@@ -17,10 +17,10 @@ import { PresenceReporter } from '@/components/PresenceReporter';
 import type { UserSummary } from '@/lib/models/user';
 import type { AppVersion } from '@/lib/version';
 
-function TrayGroup() {
+function TrayGroup({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="tray-group">
-      <PipelineTray />
+      <PipelineTray isAdmin={isAdmin} />
     </div>
   );
 }
@@ -73,12 +73,14 @@ export function AppShell({
   currentUser,
   hasProspects = false,
   epDownload = false,
+  isAdmin = false,
   version,
 }: Readonly<{
   children: React.ReactNode;
   currentUser: UserSummary | null;
   hasProspects?: boolean;
   epDownload?: boolean;
+  isAdmin?: boolean;
   version: AppVersion;
 }>) {
   const pathname = usePathname();
@@ -142,7 +144,7 @@ export function AppShell({
               {currentUser && !isGuest && epDownload && <EditpanelButton home />}
               {isGuest && <GuestSignOutButton />}
               {!isGuest && <StorageGear home />}
-              {!isGuest && <TrayGroup />}
+              {!isGuest && <TrayGroup isAdmin={isAdmin} />}
             </div>
           </VersionConfirmProvider>
         </ContextMenuProvider>
@@ -168,7 +170,7 @@ export function AppShell({
             </main>
             {currentUser && !isSignIn && !isGuest && <WishListButton currentUser={currentUser} />}
             {!isGuest && <StorageGear />}
-            {!isGuest && !isStudio && <TrayGroup />}
+            {!isGuest && !isStudio && <TrayGroup isAdmin={isAdmin} />}
           </div>
         </VersionConfirmProvider>
       </ContextMenuProvider>

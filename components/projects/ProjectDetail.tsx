@@ -31,6 +31,7 @@ type Tab = 'scripts' | 'media' | 'photos' | 'transcripts' | 'assets' | 'passPrep
 interface Props {
   project: Project;
   assets: Asset[];
+  isAdmin?: boolean;
 }
 
 function Checkbox({ checked }: Readonly<{ checked: boolean }>) {
@@ -43,7 +44,7 @@ function Checkbox({ checked }: Readonly<{ checked: boolean }>) {
   );
 }
 
-export function ProjectDetail({ project, assets }: Readonly<Props>) {
+export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Props>) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('media');
@@ -105,9 +106,11 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
             <span>{project.createdAt}</span>
           </div>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
-          <LeaderPassAiToggle projectId={project.projectId} />
-        </div>
+        {isAdmin && (
+          <div style={{ marginLeft: 'auto' }}>
+            <LeaderPassAiToggle projectId={project.projectId} />
+          </div>
+        )}
       </div>
 
       <div className="proj-tabs">

@@ -132,7 +132,7 @@ function PipelineRow({
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export function PipelineTray() {
+export function PipelineTray({ isAdmin = false }: { isAdmin?: boolean }) {
   const { pipelines: allPipelines, retry, cancel, isRetryPending } = usePipelineQueue();
   const [open, setOpen] = useState(false);
   const trayRef = useRef<HTMLDivElement>(null);
@@ -140,7 +140,20 @@ export function PipelineTray() {
   const [now, setNow] = useState(() => Date.now());
   const [waitingExpanded, setWaitingExpanded] = useState(false);
 
-  const pipelines = useMemo(() => allPipelines.filter((p) => !cleared.has(p.pipelineId)), [allPipelines, cleared]);
+  const pipelines = useMemo(() => {
+    const visible = allPipelines.filter((p) => !cleared.has(p.pipelineId));
+    if (isAdmin) return visible;
+    // LP.AI provisioning is admin-only. Strip `upload:lpai` stages for everyone
+    // else, and drop entries that were nothing but provisioning (standalone
+    // re-provision rows). Mixed pipelines keep their real stages.
+    return visible
+      .map((p) =>
+        p.stages.some((s) => s.type === 'upload:lpai')
+          ? { ...p, stages: p.stages.filter((s) => s.type !== 'upload:lpai') }
+          : p,
+      )
+      .filter((p) => p.stages.length > 0);
+  }, [allPipelines, cleared, isAdmin]);
 
   const waitingPipelines = pipelines.filter((p) => isActive(p) && isWaiting(p));
   const collapseWaiting = waitingPipelines.length >= 4;

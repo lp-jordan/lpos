@@ -256,8 +256,21 @@ function ProjectGroup({
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-export function QueueView() {
-  const { pipelines, retry, cancel, clearFailed, clearCancelled } = usePipelineQueue();
+export function QueueView({ isAdmin = false }: { isAdmin?: boolean }) {
+  const { pipelines: allPipelines, retry, cancel, clearFailed, clearCancelled } = usePipelineQueue();
+  // LP.AI provisioning is admin-only: strip `upload:lpai` stages for everyone
+  // else and drop provisioning-only entries, so the whole view (list + totals)
+  // respects it.
+  const pipelines = useMemo(() => {
+    if (isAdmin) return allPipelines;
+    return allPipelines
+      .map((p) =>
+        p.stages.some((s) => s.type === 'upload:lpai')
+          ? { ...p, stages: p.stages.filter((s) => s.type !== 'upload:lpai') }
+          : p,
+      )
+      .filter((p) => p.stages.length > 0);
+  }, [allPipelines, isAdmin]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [now, setNow] = useState(() => Date.now());
