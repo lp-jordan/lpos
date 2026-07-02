@@ -11,6 +11,7 @@ import { ScriptsTab } from '@/components/projects/ScriptsTab';
 import { PassPrepTab } from '@/components/projects/PassPrepTab';
 import { ClientAssetsTab } from '@/components/projects/ClientAssetsTab';
 import { AssetsTab } from '@/components/projects/AssetsTab';
+import { LeaderPassAiToggle } from '@/components/projects/LeaderPassAiToggle';
 import { TranscriptViewerPanel } from '@/components/media/TranscriptViewerPanel';
 import type { TranscriptEntry } from '@/app/api/projects/[projectId]/transcripts/route';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
@@ -103,6 +104,9 @@ export function ProjectDetail({ project, assets }: Readonly<Props>) {
           <div className="project-header-meta">
             <span>{project.createdAt}</span>
           </div>
+        </div>
+        <div style={{ marginLeft: 'auto' }}>
+          <LeaderPassAiToggle projectId={project.projectId} />
         </div>
       </div>
 

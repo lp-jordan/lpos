@@ -118,6 +118,44 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 
 ---
 
+## LeaderPass AI Provisioning
+
+Pushes a project's videos into LeaderPass AI ("LP.AI") for search / Q&A. The LP.AI side is a separate project; LPOS only implements the provisioning (push) half of the contract.
+
+### What it does
+A per-project **"Use in LeaderPass AI"** toggle. When ON, each Cloudflare-ready video in the project is POSTed to LP.AI's ingest endpoint — one request per video — carrying the project name (`pass`), the Cloudflare Stream UID, the title, and the transcript mapped to millisecond `{startMs,endMs,text}` cues.
+
+### Key files
+| File | Role |
+|------|------|
+| `lib/services/lpai-provisioning.ts` | Config read, per-project toggle KV, transcript→cue mapping, single/batch/auto push, activity logging |
+| `app/api/projects/[projectId]/lpai/route.ts` | GET toggle state; PUT set toggle (toggle-ON triggers batch provisioning) |
+| `app/api/projects/[projectId]/lpai/reprovision/route.ts` | POST manual re-provision; returns pushed/skipped/failed counts |
+| `components/projects/LeaderPassAiToggle.tsx` | Header control (checkbox + Re-provision + summary) |
+| `lib/services/leaderpass-publish.ts` | Calls `triggerAutoProvisionOnFinalize` after a successful CF publish |
+
+### Config
+- **Credentials (Doppler/env):** `LPAI_BASE_URL`, `LPAI_INGEST_SECRET` (== LP.AI's `INGEST_SECRET`). If either is unset the whole feature is a silent no-op.
+- **Per-project toggle (SQLite `lpos_settings`):** key `lpai.enabled.<projectId>`, default OFF.
+
+### Contract (do not change — target it)
+`POST ${LPAI_BASE_URL}/api/ingest`, header `Authorization: Bearer ${LPAI_INGEST_SECRET}`, body `{ pass, cloudflareUid, title, transcript: [{startMs,endMs,text}] }`.
+
+### Data flow (inputs → outputs)
+Toggle-ON / Re-provision / CF-publish-complete → read project assets (`readRegistry`) → for each asset with `cloudflare.uid` + `status==='ready'`: load transcript (word-level `<jobId>.words.json` preferred, whisper segment `<jobId>.json` fallback) → map to ms cues → POST to LP.AI ingest. Per-video failures are isolated; each push logs `lpai.ingest.*` / `lpai.project.*` activity events.
+
+### Triggers
+- **Toggle-ON:** provisions all current videos (fire-and-forget).
+- **Manual Re-provision:** awaits the batch, returns a summary.
+- **Auto on finalize:** hooked at LeaderPass-publish completion (first moment a CF UID exists), gated on the toggle + config.
+
+### Current status / known gaps
+- Auto-provision only fires via the LeaderPass publish path.
+- Toggle-OFF stops future pushes only; LP.AI-side removal is not implemented.
+- The word-level `.words.json` format is inferred from the separate whisper-upgrade work; the loader tolerates several shapes but may need a tweak once that ships.
+
+---
+
 ## Authentication & Access Control
 
 ### Roles
