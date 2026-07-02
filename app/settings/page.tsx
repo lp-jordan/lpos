@@ -18,6 +18,7 @@ import { PreprodBoardAccessPanel } from '@/components/settings/PreprodBoardAcces
 import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
+import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConfigCard';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -67,6 +68,7 @@ export default async function SettingsPage() {
       )}
 
       {role === 'admin' && <EpTokensPanel />}
+      {role === 'admin' && <TranscriptionConfigCard />}
       {role === 'admin' && <StorageMapCard />}
       {role === 'admin' && <WhatsNewTestCard />}
       {role === 'admin' && <LpReleasesCard />}

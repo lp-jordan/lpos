@@ -18,6 +18,7 @@ import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import ffmpegPath from 'ffmpeg-static';
 import { getWhisperModelDir, resolveWhisperBinaryPath } from './runtime-dependencies';
+import { getTranscriptionModel } from './transcription-config';
 
 export type ProcessorPhase =
   | 'queued'
@@ -37,6 +38,8 @@ export interface ProcessorResult {
   srtPath?: string;
   vttPath?: string;
   jsonPath?: string;
+  /** Word-level timing sidecar (whisper.cpp JSON, one entry per word). Additive; UI ignores it. */
+  wordsPath?: string;
 }
 
 function resolveWhisperBinary(): string {
@@ -62,7 +65,10 @@ export class MediaProcessor extends EventEmitter {
     projectDir: string;
     model?: string;
   }): Promise<ProcessorResult> {
-    const model = job.model ?? process.env.LPOS_WHISPER_MODEL ?? 'base';
+    // Per-job override wins; otherwise resolve from admin Settings (falls back to
+    // env var then "base"). Resolving here means every enqueue path picks up the
+    // configured model without threading it through each call site.
+    const model = job.model ?? getTranscriptionModel();
     const tmpWav = path.join(os.tmpdir(), `lpos-${job.jobId}.wav`);
 
     try {
@@ -86,7 +92,11 @@ export class MediaProcessor extends EventEmitter {
       // ── Phase 3: Organise outputs ───────────────────────────────────
       this.emit('progress', { phase: 'writing_outputs', percent: 93 } satisfies ProcessorProgress);
 
-      const result: ProcessorResult = { txtPath: raw.txtPath, jsonPath: raw.jsonPath };
+      const result: ProcessorResult = {
+        txtPath:   raw.txtPath,
+        jsonPath:  raw.jsonPath,
+        wordsPath: raw.wordsPath,
+      };
 
       // Move SRT / VTT into the subtitles folder
       for (const key of ['srtPath', 'vttPath'] as const) {
@@ -166,42 +176,89 @@ export class MediaProcessor extends EventEmitter {
     });
   }
 
-  private runWhisper(wavPath: string, outputPrefix: string, model: string): Promise<ProcessorResult> {
-    return new Promise((resolve, reject) => {
-      const whisperBin = resolveWhisperBinary();
-      if (!whisperBin) {
-        reject(new Error(
-          'Whisper runtime is not configured. Set LPOS_WHISPER_BINARY or stage files into runtime/whisper-runtime.'
-        ));
-        return;
-      }
+  private async runWhisper(wavPath: string, outputPrefix: string, model: string): Promise<ProcessorResult> {
+    const whisperBin = resolveWhisperBinary();
+    if (!whisperBin) {
+      throw new Error(
+        'Whisper runtime is not configured. Set LPOS_WHISPER_BINARY or stage files into runtime/whisper-runtime.'
+      );
+    }
 
-      const modelDir  = resolveModelDir();
-      const modelPath = path.join(modelDir, `ggml-${model}.bin`);
-      if (!fs.existsSync(modelPath)) {
-        reject(new Error(`Whisper model not found: ${modelPath}. Set LPOS_WHISPER_MODEL_DIR or stage files into runtime/whisper-models.`));
-        return;
-      }
+    const modelDir  = resolveModelDir();
+    const modelPath = path.join(modelDir, `ggml-${model}.bin`);
+    if (!fs.existsSync(modelPath)) {
+      throw new Error(`Whisper model not found: ${modelPath}. Set LPOS_WHISPER_MODEL_DIR or stage files into runtime/whisper-models.`);
+    }
 
-      const proc = spawn(whisperBin, [
+    // ── Primary run — the outputs the Transcripts UI depends on. UNCHANGED. ──
+    // Segment-level JSON (`-oj`) + txt/srt/vtt at the canonical `${jobId}.*`
+    // prefix. These are enumerated by lib/transcripts/store.ts.
+    await this.spawnWhisper(whisperBin, [
+      '-m', modelPath,
+      '-f', wavPath,
+      '-oj',   // output JSON (segment-level, ms offsets)
+      '-otxt', // output plain text
+      '-osrt', // output SRT subtitles
+      '-ovtt', // output VTT subtitles
+      '-of', outputPrefix,
+    ], 20, 82);
+
+    if (this.aborted) throw new Error('Job canceled');
+
+    const result: ProcessorResult = {
+      txtPath:  `${outputPrefix}.txt`,
+      jsonPath: `${outputPrefix}.json`,
+      srtPath:  `${outputPrefix}.srt`,
+      vttPath:  `${outputPrefix}.vtt`,
+    };
+
+    // ── Additive word-level pass — writes a SEPARATE sidecar. ────────────────
+    // Approach: `-ml 1 -sow` (max-len 1 char, split-on-word) makes whisper emit
+    // one JSON segment per WORD, each with `offsets.{from,to}` in ms. Chosen over
+    // `-ojf -dtw <model>` because -dtw requires a compiled alignment-heads preset
+    // whose name must exactly match the model (base / large.v3 / large.v3.turbo);
+    // a mismatch aborts the run. `-ml 1 -sow` is model-agnostic and reuses the
+    // JSON shape the rest of the stack already understands. The tradeoff is
+    // per-word timing is decode-derived (slightly looser than DTW), which is
+    // acceptable for a downstream word-timecode feed.
+    // Written to `${jobId}.words.json` — does NOT end with `.txt`/`.srt`/`.vtt`,
+    // so store.ts's `.txt`-based enumeration never surfaces it. Best-effort:
+    // a failure here must not fail the job, since the primary outputs succeeded.
+    const wordsPrefix = `${outputPrefix}.words`;
+    try {
+      await this.spawnWhisper(whisperBin, [
         '-m', modelPath,
         '-f', wavPath,
-        '-oj',   // output JSON
-        '-otxt', // output plain text
-        '-osrt', // output SRT subtitles
-        '-ovtt', // output VTT subtitles
-        '-of', outputPrefix,
-      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        '-ml', '1',   // max segment length: 1 character → one entry per word
+        '-sow',       // split on word boundaries rather than tokens
+        '-oj',        // JSON output (word-granular given -ml 1 -sow)
+        '-of', wordsPrefix,
+      ], 82, 92);
+      const wordsJson = `${wordsPrefix}.json`;
+      if (fs.existsSync(wordsJson)) result.wordsPath = wordsJson;
+    } catch (e) {
+      console.warn('[media-processor] word-level pass failed (primary transcript unaffected):', (e as Error).message);
+    }
 
+    return result;
+  }
+
+  /**
+   * Spawn a single whisper.cpp invocation, emitting `transcribing` progress that
+   * ramps between `pctFrom` and `pctTo`. Resolves on exit code 0, rejects otherwise.
+   */
+  private spawnWhisper(whisperBin: string, args: string[], pctFrom: number, pctTo: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(whisperBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       this.currentProc = proc;
 
       let stderrBuf = '';
       proc.stderr?.on('data', (chunk: Buffer) => { stderrBuf += chunk.toString(); });
       proc.stdout?.on('data', () => { /* suppress — whisper writes progress to stdout */ });
 
-      let pct = 20;
+      let pct = pctFrom;
       const timer = setInterval(() => {
-        pct = Math.min(pct + 1, 88);
+        pct = Math.min(pct + 1, pctTo);
         this.emit('progress', { phase: 'transcribing', percent: pct } satisfies ProcessorProgress);
       }, 2000);
 
@@ -210,12 +267,7 @@ export class MediaProcessor extends EventEmitter {
         clearInterval(timer);
         if (this.aborted) { reject(new Error('Job canceled')); return; }
         if (code === 0) {
-          resolve({
-            txtPath:  `${outputPrefix}.txt`,
-            jsonPath: `${outputPrefix}.json`,
-            srtPath:  `${outputPrefix}.srt`,
-            vttPath:  `${outputPrefix}.vtt`,
-          });
+          resolve();
         } else {
           const reason = signal ? `killed by signal ${signal}` : `exited with code ${code}`;
           const detail = stderrBuf.trim();

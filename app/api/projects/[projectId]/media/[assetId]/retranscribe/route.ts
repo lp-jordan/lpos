@@ -13,7 +13,11 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
       return NextResponse.json({ error: 'No file path — update the asset path before re-transcribing' }, { status: 400 });
     }
 
-    const job = getTranscripterService().enqueue(projectId, asset.filePath, assetId);
+    // Pass the known media duration so the length-aware timeout (if enabled in
+    // admin Settings) scales for long videos — the fixed floor otherwise trips
+    // on >30–45 min files under large-v3.
+    const durationSec = typeof asset.duration === 'number' && asset.duration > 0 ? asset.duration : undefined;
+    const job = getTranscripterService().enqueue(projectId, asset.filePath, assetId, undefined, durationSec);
 
     patchAsset(projectId, assetId, {
       transcription: { status: 'queued', jobId: job.jobId, completedAt: null },

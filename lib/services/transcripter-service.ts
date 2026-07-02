@@ -5,9 +5,12 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
 import type { ServiceRegistry } from './registry';
 import { MediaProcessor, type ProcessorPhase } from './media-processor';
+import {
+  getTranscriptionWorkers,
+  getTranscriptionTimeoutMs,
+} from './transcription-config';
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const TRANSCRIPT_TIMEOUT_MS = 15 * 60_000; // 15 minutes max per job
 
 export type TranscriptJobStatus =
   | 'queued'
@@ -28,14 +31,13 @@ export interface TranscriptJob {
   progress: number;
   error?: string;
   outputFiles?: string[];
+  /** Optional source media duration (seconds); feeds the length-aware timeout. */
+  durationSec?: number;
   queuedAt: string;
   updatedAt: string;
 }
 
 type JobCompleteCallback = (job: TranscriptJob) => void;
-
-// Maximum concurrent whisper.cpp workers. Default 2; override with LPOS_TRANSCRIPTION_WORKERS.
-const MAX_WORKERS = Math.max(1, parseInt(process.env.LPOS_TRANSCRIPTION_WORKERS ?? '2', 10));
 
 export class TranscripterService {
   private jobs = new Map<string, TranscriptJob>();
@@ -77,7 +79,7 @@ export class TranscripterService {
 
   // ── Public API (called by upload route) ──────────────────────────────────
 
-  enqueue(projectId: string, filePath: string, assetId: string, displayName?: string): TranscriptJob {
+  enqueue(projectId: string, filePath: string, assetId: string, displayName?: string, durationSec?: number): TranscriptJob {
     const job: TranscriptJob = {
       jobId:      randomUUID(),
       assetId,
@@ -86,6 +88,7 @@ export class TranscripterService {
       sourcePath: filePath,
       status:     'queued',
       progress:   0,
+      durationSec: (typeof durationSec === 'number' && durationSec > 0) ? durationSec : undefined,
       queuedAt:   new Date().toISOString(),
       updatedAt:  new Date().toISOString(),
     };
@@ -108,7 +111,7 @@ export class TranscripterService {
       details_json: { filename: job.filename, sourcePath: filePath },
     });
 
-    if (this.activeProcessors.size < MAX_WORKERS) setImmediate(() => this.processNext());
+    if (this.activeProcessors.size < getTranscriptionWorkers()) setImmediate(() => this.processNext());
 
     console.log(`[transcripter] enqueued "${job.filename}" (${job.jobId})`);
     return job;
@@ -148,7 +151,7 @@ export class TranscripterService {
 
   private async processNext(): Promise<void> {
     const next = Array.from(this.jobs.values()).find((j) => j.status === 'queued');
-    if (!next || this.activeProcessors.size >= MAX_WORKERS) return;
+    if (!next || this.activeProcessors.size >= getTranscriptionWorkers()) return;
 
     this.updateJob(next.jobId, { status: 'extracting_audio', progress: 5 });
     recordActivity({
@@ -175,13 +178,18 @@ export class TranscripterService {
       this.updateJob(next.jobId, { status: phase as TranscriptJobStatus, progress: percent });
     });
 
+    // Length-aware (or fixed-floor) timeout resolved live from admin Settings.
+    // Big models (large-v3*) on long videos routinely exceed the old fixed 15-min
+    // cap, so enabling length-aware mode scales the budget with media duration.
+    const timeoutMs = getTranscriptionTimeoutMs(next.durationSec);
+
     let processingTimeout: ReturnType<typeof setTimeout> | null = null;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
         processingTimeout = setTimeout(() => {
           processor.abort();
-          reject(new Error(`Transcription timed out after ${TRANSCRIPT_TIMEOUT_MS / 60_000} minutes`));
-        }, TRANSCRIPT_TIMEOUT_MS);
+          reject(new Error(`Transcription timed out after ${Math.round(timeoutMs / 60_000)} minutes`));
+        }, timeoutMs);
       });
       const result = await Promise.race([
         processor.process({
@@ -196,7 +204,7 @@ export class TranscripterService {
       this.updateJob(next.jobId, {
         status:      'done',
         progress:    100,
-        outputFiles: [result.txtPath, result.srtPath, result.vttPath, result.jsonPath]
+        outputFiles: [result.txtPath, result.srtPath, result.vttPath, result.jsonPath, result.wordsPath]
           .filter(Boolean) as string[],
       });
 
@@ -234,7 +242,7 @@ export class TranscripterService {
         source_service: 'transcripter',
         details_json: {
           filename: next.filename,
-          outputFiles: [result.txtPath, result.srtPath, result.vttPath, result.jsonPath].filter(Boolean),
+          outputFiles: [result.txtPath, result.srtPath, result.vttPath, result.jsonPath, result.wordsPath].filter(Boolean),
         },
       });
       console.log(`[transcripter] ✓ completed "${next.filename}"`);
@@ -292,7 +300,7 @@ export class TranscripterService {
   private cleanupJobFiles(projectId: string, jobId: string): void {
     const transcriptsDir = path.join(DATA_DIR, 'projects', projectId, 'transcripts');
     const subtitlesDir   = path.join(DATA_DIR, 'projects', projectId, 'subtitles');
-    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.meta.json`]) {
+    for (const name of [`${jobId}.txt`, `${jobId}.json`, `${jobId}.words.json`, `${jobId}.meta.json`]) {
       try { fs.unlinkSync(path.join(transcriptsDir, name)); } catch { /* already gone */ }
     }
     for (const name of [`${jobId}.srt`, `${jobId}.vtt`]) {
@@ -361,7 +369,7 @@ export class TranscripterService {
           continue;
         }
 
-        for (const name of [`${oldJobId}.txt`, `${oldJobId}.json`, `${oldJobId}.meta.json`]) {
+        for (const name of [`${oldJobId}.txt`, `${oldJobId}.json`, `${oldJobId}.words.json`, `${oldJobId}.meta.json`]) {
           try { await fs.promises.unlink(path.join(transcriptsDir, name)); } catch { /* already gone */ }
         }
         for (const name of [`${oldJobId}.srt`, `${oldJobId}.vtt`]) {
