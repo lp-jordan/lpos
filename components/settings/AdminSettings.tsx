@@ -1,6 +1,3 @@
-'use client';
-
-import { useEffect, useState } from 'react';
 import { AdminsPanel } from '@/components/settings/AdminsPanel';
 import { CloudflareOrphansPanel } from '@/components/settings/CloudflareOrphansPanel';
 import { TaskCategoriesPanel } from '@/components/settings/TaskCategoriesPanel';
@@ -20,20 +17,7 @@ import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConf
 import { StorageSettingsClient } from '@/components/settings/StorageSettingsClient';
 import { ColdStorageSection } from '@/components/settings/ColdStorageSection';
 import { DriveSettingsClient } from '@/components/settings/DriveSettingsClient';
-
-const TABS = [
-  { id: 'storage',      label: 'Storage' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'access',       label: 'Access' },
-  { id: 'media',        label: 'Media' },
-  { id: 'system',       label: 'System' },
-] as const;
-
-type TabId = (typeof TABS)[number]['id'];
-
-function isTabId(value: string): value is TabId {
-  return TABS.some((t) => t.id === value);
-}
+import { SettingsTabs, type SettingsSection } from '@/components/settings/SettingsTabs';
 
 function GroupHeading({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
@@ -59,34 +43,20 @@ const HERO = (
 /**
  * Admin Settings surface. Replaces the former flat stack of ~20 role-gated
  * panels (rendered in add-order) with five grouped tabs. Panels themselves are
- * unchanged — only relocated. The tab is reflected in the URL hash so sections
- * are linkable and survive a refresh (e.g. the B2 cold-storage notification
- * deep-links to /settings#storage).
+ * unchanged — only relocated.
+ *
+ * This is a SERVER component: it renders every panel (including server-only ones
+ * like GuestPinCard / StorageMapCard that import node:crypto / node:process) and
+ * hands the per-tab content to the client `SettingsTabs` shell as ReactNodes.
+ * Keeping the container server-side is what prevents those node: modules from
+ * being pulled into the client bundle (which broke the build when this was a
+ * client component).
  *
  * Non-admins only ever had access to local drive allocation, so they see just
  * that — no tab strip.
  */
 export function AdminSettings({ role }: { role: string }) {
-  const isAdmin = role === 'admin';
-  const [tab, setTab] = useState<TabId>('storage');
-
-  useEffect(() => {
-    const applyHash = () => {
-      const fromHash = window.location.hash.replace('#', '');
-      if (isTabId(fromHash)) setTab(fromHash);
-    };
-    applyHash();
-    window.addEventListener('hashchange', applyHash);
-    return () => window.removeEventListener('hashchange', applyHash);
-  }, []);
-
-  function selectTab(id: TabId) {
-    setTab(id);
-    // Update the hash without triggering a scroll-to-anchor jump.
-    window.history.replaceState(null, '', `#${id}`);
-  }
-
-  if (!isAdmin) {
+  if (role !== 'admin') {
     return (
       <section className="storage-settings-page">
         {HERO}
@@ -95,74 +65,76 @@ export function AdminSettings({ role }: { role: string }) {
     );
   }
 
+  const sections: SettingsSection[] = [
+    {
+      id: 'storage',
+      label: 'Storage',
+      content: (
+        <>
+          <StorageSettingsClient />
+          <StorageMapCard />
+          <ColdStorageSection />
+        </>
+      ),
+    },
+    {
+      id: 'integrations',
+      label: 'Integrations',
+      content: (
+        <>
+          <DriveSettingsClient />
+          <GroupHeading title="Slack" subtitle="Crash alerts and per-user delivery." />
+          <ConsoleAlertsCard />
+          <SlackUsersCard />
+        </>
+      ),
+    },
+    {
+      id: 'access',
+      label: 'Access',
+      content: (
+        <>
+          <AdminsPanel />
+          <EpTokensPanel />
+          <GroupHeading title="Feature access" subtitle="Who can see and use each feature." />
+          <EditpanelAccessPanel />
+          <ProspectsAccessPanel />
+          <PreprodBoardAccessPanel />
+          <NasIngestPanel />
+        </>
+      ),
+    },
+    {
+      id: 'media',
+      label: 'Media',
+      content: (
+        <>
+          <TranscriptionConfigCard />
+          <CloudflareOrphansPanel />
+          <TaskCategoriesPanel />
+        </>
+      ),
+    },
+    {
+      id: 'system',
+      label: 'System',
+      content: (
+        <>
+          <GroupHeading title="App releases" subtitle="Auto-update distribution for the desktop clients." />
+          <LpReleasesCard />
+          <EpReleasesCard />
+          <GroupHeading title="Operations" />
+          <ActiveClientsCard />
+          <GuestPinCard />
+        </>
+      ),
+    },
+  ];
+
   return (
     <section className="storage-settings-page">
       {HERO}
-
-      <div className="proj-tabs settings-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`proj-tab${tab === t.id ? ' active' : ''}`}
-            onClick={() => selectTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="settings-tab-panels">
-        {tab === 'storage' && (
-          <>
-            <StorageSettingsClient />
-            <StorageMapCard />
-            <ColdStorageSection />
-          </>
-        )}
-
-        {tab === 'integrations' && (
-          <>
-            <DriveSettingsClient />
-            <GroupHeading title="Slack" subtitle="Crash alerts and per-user delivery." />
-            <ConsoleAlertsCard />
-            <SlackUsersCard />
-          </>
-        )}
-
-        {tab === 'access' && (
-          <>
-            <AdminsPanel />
-            <EpTokensPanel />
-            <GroupHeading title="Feature access" subtitle="Who can see and use each feature." />
-            <EditpanelAccessPanel />
-            <ProspectsAccessPanel />
-            <PreprodBoardAccessPanel />
-            <NasIngestPanel />
-          </>
-        )}
-
-        {tab === 'media' && (
-          <>
-            <TranscriptionConfigCard />
-            <CloudflareOrphansPanel />
-            <TaskCategoriesPanel />
-          </>
-        )}
-
-        {tab === 'system' && (
-          <>
-            <GroupHeading title="App releases" subtitle="Auto-update distribution for the desktop clients." />
-            <LpReleasesCard />
-            <EpReleasesCard />
-            <GroupHeading title="Operations" />
-            <ActiveClientsCard />
-            <GuestPinCard />
-          </>
-        )}
-      </div>
+      <SettingsTabs sections={sections} />
     </section>
   );
 }
