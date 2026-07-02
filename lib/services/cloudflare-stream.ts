@@ -350,30 +350,49 @@ export async function uploadFileToCloudflareTus(
 
       for (let attempt = 0; attempt <= DEFAULT_UPLOAD_RETRIES; attempt += 1) {
         ensureNotCancelled();
+        let networkErr: unknown = null;
         try {
           response = await uploadTusChunk(uploadUrl, config, body, offset, controller.signal);
         } catch (err) {
           // AbortController-driven cancellation surfaces as an AbortError —
           // map it to our 'Cancelled' contract so the catch site can clean up
-          // the Cloudflare-side video and asset record. Re-throw any other
-          // fetch error (network, DNS, etc.) to let the retry loop handle it.
+          // the Cloudflare-side video and asset record.
           if (controller.signal.aborted || options?.isCancelled?.()) {
             throw new Error('Cancelled');
           }
-          throw err;
+          // Any other throw is a transport-level failure (undici 'fetch failed':
+          // ECONNRESET, socket hang up, connect timeout, DNS, TLS). TUS is
+          // resumable, so fall through to the SAME back-off/offset-resync path
+          // as a 5xx response instead of failing the whole upload. Previously
+          // this re-threw and skipped the retry loop entirely, so a single
+          // transient reset killed the upload with a bare "fetch failed".
+          networkErr = err;
+          response = null;
         }
 
-        if (response.ok) {
+        if (response && response.ok) {
           break;
         }
 
-        lastErrorText = await response.text();
-        const retryable = response.status >= 500 || response.status === 409;
+        // A thrown network error and a retryable HTTP status are both transient.
+        const retryable = networkErr !== null || response!.status >= 500 || response!.status === 409;
         if (!retryable || attempt === DEFAULT_UPLOAD_RETRIES) {
-          throw new Error(lastErrorText || `Cloudflare upload chunk failed (${response.status}).`);
+          if (networkErr !== null) {
+            const cause = (networkErr as { cause?: unknown }).cause;
+            const detail = cause instanceof Error ? cause.message : cause ? String(cause) : '';
+            throw new Error(
+              `Cloudflare upload chunk network error after ${attempt + 1} attempt(s)${detail ? ` (${detail})` : ''}`,
+              { cause: networkErr },
+            );
+          }
+          lastErrorText = await response!.text();
+          throw new Error(lastErrorText || `Cloudflare upload chunk failed (${response!.status}).`);
         }
 
-        const remoteOffset = await getTusUploadOffset(uploadUrl, config);
+        // Resume from wherever Cloudflare actually stopped receiving. Best-effort:
+        // if the offset probe itself fails (e.g. still mid-outage), fall through
+        // to the back-off and retry the same chunk.
+        const remoteOffset = await getTusUploadOffset(uploadUrl, config).catch(() => null);
         if (remoteOffset !== null && remoteOffset > offset) {
           offset = remoteOffset;
           break;

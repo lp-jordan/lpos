@@ -41,29 +41,55 @@ interface LeaderPassPublishContext {
   actor?: ActivityActor;
 }
 
+// How many assets upload to Cloudflare at once from a batch push. Firing all of
+// them concurrently saturates the uplink and Cloudflare's connection pool, which
+// itself triggers 'fetch failed' socket resets mid-upload. A small pool keeps the
+// batch moving without stampeding. Override via env if a host has more headroom.
+const MAX_CONCURRENT_PUBLISH = Math.max(1, Number(process.env.LEADERPASS_MAX_CONCURRENT_PUBLISH ?? 3));
+
+async function runLeaderPassPublishSafe(
+  projectId: string,
+  assetId: string,
+  context?: LeaderPassPublishContext,
+): Promise<void> {
+  try {
+    await runLeaderPassPublish(projectId, assetId, context);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[leaderpass] unhandled publish failure for asset ${assetId}: ${message}`);
+    patchAsset(projectId, assetId, {
+      cloudflare: {
+        status: 'failed',
+        progress: 0,
+        lastError: message,
+      },
+      leaderpass: {
+        status: 'failed',
+        lastError: message,
+      },
+    });
+  }
+}
+
 export function triggerLeaderPassPublish(projectId: string, assetId: string, context?: LeaderPassPublishContext): void {
   setImmediate(() => {
-    void runLeaderPassPublish(projectId, assetId, context).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[leaderpass] unhandled publish failure for asset ${assetId}: ${message}`);
-      patchAsset(projectId, assetId, {
-        cloudflare: {
-          status: 'failed',
-          progress: 0,
-          lastError: message,
-        },
-        leaderpass: {
-          status: 'failed',
-          lastError: message,
-        },
-      });
-    });
+    void runLeaderPassPublishSafe(projectId, assetId, context);
   });
 }
 
 export function triggerLeaderPassBatchPublish(projectId: string, assetIds: string[]): void {
-  for (const assetId of assetIds) {
-    triggerLeaderPassPublish(projectId, assetId);
+  // Drain the asset list with a bounded worker pool rather than firing every
+  // upload at once. Each worker pulls the next asset when its current one settles.
+  const queue = [...assetIds];
+  const runNext = async (): Promise<void> => {
+    const assetId = queue.shift();
+    if (assetId === undefined) return;
+    await runLeaderPassPublishSafe(projectId, assetId);
+    await runNext();
+  };
+  const workerCount = Math.min(MAX_CONCURRENT_PUBLISH, queue.length);
+  for (let i = 0; i < workerCount; i += 1) {
+    void runNext();
   }
 }
 
