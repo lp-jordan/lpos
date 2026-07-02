@@ -2060,3 +2060,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** Read of `app/api/projects/route.ts` and `app/api/prospects/[prospectId]/promote/route.ts`; Explore agent traced `setupProjectDriveFolders`, `drive-folder-service`, `promotion-processor`, and the projects DB schema. No code, tests, or server touched.
 
 **Assumptions / follow-ups:** Follow-up available if the user wants the fix implemented. Existing already-promoted projects would also need their folders backfilled (they won't self-heal on Assets-tab open under current behavior).
+
+---
+
+## 2026-07-02T00:30:00Z — Fix: promoted clients/projects now get Drive folder tree + real backfill audit
+
+**User prompt:** "We need to fix that and do a one-time check to ensure all current clients have proper folder structure in drive"
+
+**Assistant response summary:** Fixed the root cause and upgraded the existing admin backfill into a real one-time audit. (1) Extracted the previously route-local `setupProjectDriveFolders` into a shared exported helper in `drive-folder-service.ts` — it ensures the LPOS root, ensures the per-project `{Scripts,Transcripts,Assets,Workbooks}` tree, adopts any orphaned Drive folder, and returns `{status: created|existing|skipped|error}`. (2) `POST /api/projects` now imports that shared helper (removed the duplicate). (3) `POST /api/prospects/[prospectId]/promote` now captures the auto-created project and calls `setupProjectDriveFolders` in BOTH branches (fold-into-existing-client and new-standalone-client), fire-and-forget with a `.catch`. (4) `ensureAllProjectFolders(projects)` now returns a `BackfillReport` (processed/created/existing/skipped/failed + per-project results) instead of a bare count, and internally reuses `setupProjectDriveFolders` so backfill also adopts orphans; the `/api/admin/drive/backfill` route returns the report. (5) `DriveSettingsClient.tsx` renders the breakdown ("N checked · X created · Y already set up · …") and lists each newly-created/failed project. The existing "Create All Project Folders" button (relabeled "Check / Create All Project Folders") is the one-time check — idempotent, admin-only, repairs any pre-existing promoted projects.
+
+**Files changed:**
+- `lib/services/drive-folder-service.ts` — new `setupProjectDriveFolders` shared helper + `ProjectFolderSetupResult`/`BackfillReport` types; `ensureAllProjectFolders` signature changed from `(driveId, rootFolderId, projects)→number` to `(projects)→BackfillReport`; imported orphan helpers from drive-sync-db.
+- `app/api/projects/route.ts` — dropped the local `setupProjectDriveFolders` dup + now-unused imports; imports the shared helper.
+- `app/api/prospects/[prospectId]/promote/route.ts` — both promotion branches capture the created project and call `setupProjectDriveFolders`.
+- `app/api/admin/drive/backfill/route.ts` — calls new `ensureAllProjectFolders(projects)` and returns the audit report.
+- `components/settings/DriveSettingsClient.tsx` — `BackfillResult` type + handler updated to the report shape; result summary + per-project created/failed list; button relabeled.
+- `docs/README.md` — new "Google Drive Folder Provisioning" section.
+- `docs/project history.md`, `docs/changelog.json` — this entry.
+
+**Decision rationale:** Centralised provisioning in one shared `setupProjectDriveFolders` so every creation path (direct, both promotion branches, backfill) funnels through identical logic — prevents the exact drift that caused this bug from recurring when a future creation path is added. Kept it fire-and-forget in the request paths (matches existing direct-create behavior; folder provisioning shouldn't block the API response or fail the promotion). Reused the pre-existing `/api/admin/drive/backfill` endpoint + Settings→Drive button for the one-time check rather than a throwaway script — it runs in-process on the live server (has creds + shares the `drive-folders.json` cache, so no concurrent-write race), is admin-gated, and is idempotent/re-runnable. Upgraded its return from a bare count to a per-project audit so "check" actually reports which clients were missing folders.
+
+**Alternatives considered:** Moving provisioning into `ProjectStore.create()` (rejected — the store is synchronous better-sqlite3 and shouldn't do async network I/O; keeping it in the API layer preserves the existing fire-and-forget contract). A standalone Node backfill script run via Doppler (rejected — would write `drive-folders.json` concurrently with the live server, risking a last-write-wins cache clobber; the in-process endpoint is race-safe).
+
+**Commands/checks run:** `npx tsc --noEmit` — no errors in any changed file. Confirmed `ensureAllProjectFolders` had only the one caller before changing its signature; confirmed `getCachedRootFolderId`/`ensureLposRootFolder` are still exported and used elsewhere. No dev server started (per workspace rule).
+
+**Assumptions / follow-ups:** The running production server must restart/redeploy to pick up the promotion fix and the richer backfill report. The one-time check is run by an admin clicking "Check / Create All Project Folders" in Settings → Drive (I cannot trigger the admin-gated endpoint myself). The pre-existing (old) backfill already created folders idempotently, so clicking it repairs current data even before redeploy; the detailed audit report appears after redeploy.

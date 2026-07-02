@@ -9,11 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
 import { getProjectStore } from '@/lib/services/container';
-import {
-  ensureLposRootFolder,
-  ensureAllProjectFolders,
-  getCachedRootFolderId,
-} from '@/lib/services/drive-folder-service';
+import { ensureAllProjectFolders } from '@/lib/services/drive-folder-service';
 
 export async function POST(req: NextRequest) {
   const authError = await requireRole(req, 'admin');
@@ -28,13 +24,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    let rootFolderId = getCachedRootFolderId();
-    if (!rootFolderId) rootFolderId = await ensureLposRootFolder(driveId);
-
     const projects = getProjectStore().getAll();
-    const count    = await ensureAllProjectFolders(driveId, rootFolderId, projects);
+    const report   = await ensureAllProjectFolders(projects);
 
-    return NextResponse.json({ ok: true, projectCount: count });
+    // Surface which projects were actually missing folders (created) vs already set up.
+    return NextResponse.json({ ok: true, projectCount: report.processed, ...report });
   } catch (err) {
     console.error('[admin/drive/backfill] error:', err);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

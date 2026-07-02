@@ -12,9 +12,21 @@ interface DriveStatus {
   channel:          { channelId: string; expiresAt: string } | null;
 }
 
+interface ProjectFolderSetupResult {
+  clientName:  string;
+  projectName: string;
+  status:      'created' | 'existing' | 'skipped' | 'error';
+  error?:      string;
+}
+
 interface BackfillResult {
-  ok:           boolean;
-  projectCount: number;
+  ok:        boolean;
+  processed: number;
+  created:   number;
+  existing:  number;
+  skipped:   number;
+  failed:    number;
+  results:   ProjectFolderSetupResult[];
 }
 
 interface ScanResult {
@@ -114,9 +126,17 @@ export function DriveSettingsClient() {
     setError(null);
     try {
       const res  = await fetch('/api/admin/drive/backfill', { method: 'POST' });
-      const data = await res.json() as { ok?: boolean; projectCount?: number; error?: string };
+      const data = await res.json() as Partial<BackfillResult> & { error?: string };
       if (data.error) throw new Error(data.error);
-      setBackfillResult({ ok: true, projectCount: data.projectCount ?? 0 });
+      setBackfillResult({
+        ok:        true,
+        processed: data.processed ?? 0,
+        created:   data.created   ?? 0,
+        existing:  data.existing  ?? 0,
+        skipped:   data.skipped   ?? 0,
+        failed:    data.failed    ?? 0,
+        results:   data.results   ?? [],
+      });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -227,11 +247,14 @@ export function DriveSettingsClient() {
             onClick={() => void handleBackfill()}
             disabled={backfillRunning || !status?.configured}
           >
-            {backfillRunning ? 'Creating folders…' : 'Create All Project Folders'}
+            {backfillRunning ? 'Checking folders…' : 'Check / Create All Project Folders'}
           </button>
           {backfillResult && (
-            <span style={{ fontSize: '0.85rem', color: 'var(--success)' }}>
-              ✓ {backfillResult.projectCount} project{backfillResult.projectCount !== 1 ? 's' : ''} confirmed
+            <span style={{ fontSize: '0.85rem', color: backfillResult.failed > 0 ? '#d87070' : 'var(--success)' }}>
+              ✓ {backfillResult.processed} checked · {backfillResult.created} created ·{' '}
+              {backfillResult.existing} already set up
+              {backfillResult.skipped > 0 ? ` · ${backfillResult.skipped} skipped` : ''}
+              {backfillResult.failed  > 0 ? ` · ${backfillResult.failed} failed`   : ''}
             </span>
           )}
           {!status?.configured && (
@@ -240,6 +263,28 @@ export function DriveSettingsClient() {
             </span>
           )}
         </div>
+
+        {backfillResult && (backfillResult.created > 0 || backfillResult.failed > 0) && (
+          <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.3rem' }}>
+            {backfillResult.results
+              .filter(r => r.status === 'created' || r.status === 'error')
+              .map((r, i) => (
+                <div key={`${r.clientName}/${r.projectName}/${i}`} style={{ fontSize: '0.8rem' }}>
+                  <span style={{ color: r.status === 'error' ? '#d87070' : 'var(--success)' }}>
+                    {r.status === 'error' ? '✗ ' : '＋ '}
+                  </span>
+                  <span style={{ color: 'var(--muted-soft)' }}>{r.clientName} / </span>
+                  <strong>{r.projectName}</strong>
+                  {r.status === 'created' && (
+                    <span style={{ color: 'var(--muted-soft)' }}> — folders created</span>
+                  )}
+                  {r.status === 'error' && (
+                    <span style={{ color: '#d87070' }}> — {r.error}</span>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
       </div>
 
       {/* ── Scan existing assets ── */}

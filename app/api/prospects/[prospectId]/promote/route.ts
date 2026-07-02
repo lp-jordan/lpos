@@ -4,6 +4,7 @@ import { requireProspectsAccess, getSession } from '@/lib/services/api-auth';
 import { getProspectStore, getClientStore, getProjectStore } from '@/lib/services/container';
 import { notifyProspectEvent } from '@/lib/services/prospect-notification-service';
 import { getUserById } from '@/lib/store/user-store';
+import { setupProjectDriveFolders } from '@/lib/services/drive-folder-service';
 
 type Ctx = { params: Promise<{ prospectId: string }> };
 
@@ -50,11 +51,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     // Mark the target client as a parent org (idempotent).
     clientStore.setAsParent(targetClient.clientId);
 
-    // Auto-create a project on the Projects page for this engagement.
+    // Auto-create a project on the Projects page for this engagement, and set
+    // up its Drive folder tree so the Assets tab works — same as direct create.
     try {
-      getProjectStore().create(
+      const project = getProjectStore().create(
         { name: existing.company, clientName: targetClient.name },
         { source_kind: 'api' },
+      );
+      setupProjectDriveFolders(project).catch(err =>
+        console.warn('[promote] drive folder setup failed:', err),
       );
     } catch (err) {
       console.warn('[promote] project auto-create skipped:', (err as Error).message);
@@ -73,11 +78,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
   getClientStore().upsertForProspect(prospectId, clientName, session!.userId);
 
-  // Auto-create a project on the Projects page for this engagement.
+  // Auto-create a project on the Projects page for this engagement, and set up
+  // its Drive folder tree so the Assets tab works — same as direct create.
   try {
-    getProjectStore().create(
+    const project = getProjectStore().create(
       { name: existing.company, clientName },
       { source_kind: 'api' },
+    );
+    setupProjectDriveFolders(project).catch(err =>
+      console.warn('[promote] drive folder setup failed:', err),
     );
   } catch (err) {
     console.warn('[promote] project auto-create skipped:', (err as Error).message);

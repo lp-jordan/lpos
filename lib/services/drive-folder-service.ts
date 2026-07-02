@@ -24,6 +24,7 @@ import fs   from 'node:fs';
 import path from 'node:path';
 import { ensureFolder, findFolder, getDriveClient, listChildren, moveFile } from './drive-client';
 import { getCoreDb } from '../store/core-db';
+import { getOrphanedFolderByClientProject, markOrphanedFolderResolved } from '../store/drive-sync-db';
 
 const DATA_DIR    = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const CACHE_PATH  = path.join(DATA_DIR, 'drive-folders.json');
@@ -248,22 +249,88 @@ export async function adoptOrphanedFolderContents(
   }
 }
 
+export interface ProjectFolderSetupResult {
+  clientName:  string;
+  projectName: string;
+  /** created = folder tree was newly built · existing = already cached · skipped = Drive not configured · error = failed */
+  status:      'created' | 'existing' | 'skipped' | 'error';
+  error?:      string;
+}
+
+/**
+ * Ensures the full Drive folder tree exists for a single project and adopts any
+ * orphaned Drive folder that was created before the project existed.
+ *
+ * This is THE shared entry point every project-creation path must call so the
+ * Assets tab has somewhere to resolve to — direct create (POST /api/projects),
+ * prospect promotion, and the admin backfill all funnel through here. Idempotent
+ * and safe to call fire-and-forget.
+ */
+export async function setupProjectDriveFolders(
+  project: { name: string; clientName: string },
+): Promise<ProjectFolderSetupResult> {
+  const base = { clientName: project.clientName, projectName: project.name };
+
+  const driveId = process.env.GOOGLE_DRIVE_SHARED_DRIVE_ID?.trim();
+  if (!driveId) return { ...base, status: 'skipped' };
+
+  // Was the tree already known before this call? Distinguishes a real backfill
+  // (folders were missing) from a no-op re-run for the audit report.
+  const alreadyCached = getCachedProjectFolders(project.name, project.clientName) !== null;
+
+  const rootFolderId = await ensureLposRootFolder(driveId);
+  const folders      = await ensureProjectFolders(driveId, rootFolderId, project.name, project.clientName);
+
+  const orphaned = getOrphanedFolderByClientProject(project.clientName, project.name);
+  if (orphaned) {
+    if (folders.assets) {
+      await adoptOrphanedFolderContents(orphaned.driveFileId, folders.assets, driveId);
+    }
+    markOrphanedFolderResolved(orphaned.driveFileId);
+    console.log(`[drive-folders] adopted orphaned folder for: ${project.clientName} / ${project.name}`);
+  }
+
+  return { ...base, status: alreadyCached ? 'existing' : 'created' };
+}
+
+export interface BackfillReport {
+  processed: number;
+  created:   number;
+  existing:  number;
+  skipped:   number;
+  failed:    number;
+  results:   ProjectFolderSetupResult[];
+}
+
 /**
  * Ensures Drive folders exist for every project in the provided list.
  * Idempotent — safe to re-run. Used by the admin backfill endpoint.
- * Returns the count of projects processed.
+ * Returns a per-project audit so callers can see what was missing vs already set up.
  */
 export async function ensureAllProjectFolders(
-  driveId:      string,
-  rootFolderId: string,
-  projects:     { name: string; clientName: string }[],
-): Promise<number> {
-  let count = 0;
+  projects: { name: string; clientName: string }[],
+): Promise<BackfillReport> {
+  const results: ProjectFolderSetupResult[] = [];
   for (const project of projects) {
-    await ensureProjectFolders(driveId, rootFolderId, project.name, project.clientName);
-    count++;
+    try {
+      results.push(await setupProjectDriveFolders(project));
+    } catch (err) {
+      results.push({
+        clientName:  project.clientName,
+        projectName: project.name,
+        status:      'error',
+        error:       (err as Error).message,
+      });
+    }
   }
-  return count;
+  return {
+    processed: results.length,
+    created:   results.filter(r => r.status === 'created').length,
+    existing:  results.filter(r => r.status === 'existing').length,
+    skipped:   results.filter(r => r.status === 'skipped').length,
+    failed:    results.filter(r => r.status === 'error').length,
+    results,
+  };
 }
 
 /**

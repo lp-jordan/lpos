@@ -275,3 +275,23 @@ On server restart. The git lookup runs once at module load (cached in a module-l
 
 ### Dirty marker
 If the working tree had uncommitted changes when the server started, an asterisk appears (`0.1.28* · 7755ccb`) — a hint that the running build doesn't match a tagged commit.
+
+## Google Drive Folder Provisioning
+
+### What it does
+Every project needs a Drive folder tree — `/LPOS/{clientName}/{projectName}/{Scripts,Transcripts,Assets,Workbooks}` in the Shared Team Drive — for the Assets tab to have somewhere to resolve to. Folder IDs are **not** stored on the project row; they live in `data/drive-folders.json`, keyed by `{clientName}/{projectName}`. The Assets tab does **not** lazily create folders on open, so provisioning must happen at project-creation time.
+
+### Key files and entry points
+| File | Role |
+|------|------|
+| `lib/services/drive-folder-service.ts` | `setupProjectDriveFolders(project)` is **the single shared entry point** every creation path must call. It ensures the LPOS root, ensures the per-project tree, and adopts any pre-existing orphaned Drive folder. Idempotent; returns `{ status: 'created' \| 'existing' \| 'skipped' \| 'error' }`. |
+| `app/api/projects/route.ts` | Direct project creation — calls `setupProjectDriveFolders` after `store.create()`. |
+| `app/api/prospects/[prospectId]/promote/route.ts` | Prospect promotion — auto-creates a project in both branches (fold-into-existing-client and new-standalone-client) and calls `setupProjectDriveFolders` on each, so promoted clients get the same tree as directly created ones. |
+| `app/api/admin/drive/backfill/route.ts` | `POST` — runs `ensureAllProjectFolders()` over every project. Idempotent one-time check/repair; returns a per-project audit (`created` / `existing` / `skipped` / `failed`). |
+| `components/settings/DriveSettingsClient.tsx` | Settings → Drive UI. "Check / Create All Project Folders" button triggers the backfill and shows the created/already-set-up/failed breakdown. |
+
+### Data flow
+Project created (direct OR promotion) → `setupProjectDriveFolders` → `ensureLposRootFolder` + `ensureProjectFolders` → folder IDs written to `drive-folders.json` → Assets tab resolves via `getCachedProjectFolders` / `resolveAssetsFolder`.
+
+### Current status / known gaps
+All creation paths (direct + both promotion branches) now provision folders through the shared helper. Historically the promotion path skipped this, leaving promoted clients without a folder tree; the admin backfill (Settings → Drive) is the one-time repair for any such pre-existing projects. If `GOOGLE_DRIVE_SHARED_DRIVE_ID` is unset, setup is a no-op (`skipped`).
