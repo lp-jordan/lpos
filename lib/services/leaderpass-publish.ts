@@ -102,11 +102,20 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
     return;
   }
 
-  const alreadyActive = asset.leaderpass.status === 'preparing'
-    && (asset.cloudflare.uid !== null || asset.cloudflare.uploadUrl !== null || asset.cloudflare.progress > 0);
-  // Also covers a decoupled CF auto-upload in flight (status 'uploading' before
-  // it reaches 'processing'), so a manual push can't collide with it.
-  const cloudflareBusy = asset.cloudflare.status === 'processing' || asset.cloudflare.status === 'uploading';
+  // Real evidence that an upload is genuinely in flight, as opposed to a bare
+  // pre-flight 'uploading' claim written by the publish API route just before it
+  // dispatches to this worker (that claim carries no uid/uploadUrl and 0 progress).
+  const hasUploadEvidence = asset.cloudflare.uid !== null
+    || asset.cloudflare.uploadUrl !== null
+    || asset.cloudflare.progress > 0;
+  const alreadyActive = asset.leaderpass.status === 'preparing' && hasUploadEvidence;
+  // 'uploading' WITH evidence means a decoupled CF auto-upload (or another publish)
+  // is genuinely mid-flight, so a manual push must not collide with it. A bare
+  // 'uploading' with no evidence is just this request's own route-set claim — let
+  // it through, otherwise the worker rejects the very state the route set for it
+  // and the asset wedges at uploading/preparing forever (regression from 4cae2ca).
+  const cloudflareBusy = asset.cloudflare.status === 'processing'
+    || (asset.cloudflare.status === 'uploading' && hasUploadEvidence);
 
   if (alreadyActive || cloudflareBusy) {
     console.warn(`[leaderpass] asset ${assetId} is already in progress; skipping duplicate trigger`);
