@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-02T00:45:00Z",
+    "title": "Verified: Drive folder backfill is non-destructive",
+    "summary": "Confirmed via a full call-path trace that the Settings → Drive 'Check / Create All Project Folders' backfill cannot delete any content. It only finds-or-creates missing folders (idempotent — existing folders are reused untouched). The only non-additive action is in the orphaned-folder adoption branch, which moves (never deletes) loose files into a project's Assets folder, and only runs when a tracked orphan record matches. The destructive delete/trash helpers are never called on this path. Safe to run against live Drive data."
+  },
+  {
     "timestamp": "2026-07-02T00:30:00Z",
     "title": "Promoted clients now get Drive folders + one-time backfill audit",
     "summary": "Fixed the gap where projects auto-created by promoting a prospect never got their Google Drive folder tree (so the Assets tab had nothing to resolve to). Extracted the folder-provisioning logic into a single shared setupProjectDriveFolders helper and now call it from every project-creation path: direct create, and both branches of prospect promotion (fold-into-existing-client and new-standalone-client). Centralising it prevents this drift from recurring. Also upgraded the admin one-time check: Settings → Drive → 'Check / Create All Project Folders' now runs an idempotent audit across every project and reports how many were newly created vs already set up vs failed, listing each newly-created project — so you can confirm all current clients have proper folders and repair any that were missing. Requires a server restart to take effect; the button repairs existing data on click."

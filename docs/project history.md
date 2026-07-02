@@ -2085,3 +2085,19 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit` — no errors in any changed file. Confirmed `ensureAllProjectFolders` had only the one caller before changing its signature; confirmed `getCachedRootFolderId`/`ensureLposRootFolder` are still exported and used elsewhere. No dev server started (per workspace rule).
 
 **Assumptions / follow-ups:** The running production server must restart/redeploy to pick up the promotion fix and the richer backfill report. The one-time check is run by an admin clicking "Check / Create All Project Folders" in Settings → Drive (I cannot trigger the admin-gated endpoint myself). The pre-existing (old) backfill already created folders idempotently, so clicking it repairs current data even before redeploy; the detailed audit report appears after redeploy.
+
+---
+
+## 2026-07-02T00:45:00Z — Verification: confirm the Drive backfill is non-destructive
+
+**User prompt:** "There's no chance the backfill deletes any content, right"
+
+**Assistant response summary:** Analysis-only, no files changed. Traced the full backfill call path and confirmed it cannot delete content. Path: `ensureAllProjectFolders` → `setupProjectDriveFolders` per project → `getCachedProjectFolders` (local read), `ensureLposRootFolder`/`ensureProjectFolders` (find-or-create only; returns early with zero Drive calls when already cached), and — only when a tracked orphaned-folder record exists — `adoptOrphanedFolderContents`. The only two Drive write primitives reachable are `createFolder` (via `ensureFolder`, and only when the folder is missing — `findFolder` reuses an existing one) and `moveFile` (reparents, does not delete). The destructive `deleteFile`/`trashFile` helpers in `drive-client.ts` are never invoked from the backfill path. Flagged the one non-additive behavior: the orphan-adoption branch *moves* (not deletes) loose files from a tracked orphaned folder into the project's Assets folder; no content is lost, and that branch only runs when an orphan record matches (won't run for freshly-created or freshly-promoted projects). Conclusion: safe against live data — worst case it creates missing folders.
+
+**Files changed:** None (verification only). `docs/project history.md` + `docs/changelog.json` — this log entry.
+
+**Decision rationale:** N/A — read-only trace of `drive-folder-service.ts` and `drive-client.ts` to answer a safety question before the admin runs the backfill on production Drive data.
+
+**Commands/checks run:** Read of `lib/services/drive-client.ts` (all folder/file ops) and re-read of the backfill path in `drive-folder-service.ts`. Confirmed `deleteFile`/`trashFile` have no callers on the backfill path. No code, tests, or server touched.
+
+**Assumptions / follow-ups:** None. Backfill confirmed additive + idempotent.
