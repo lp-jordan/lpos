@@ -9,7 +9,7 @@
  * already built and MUST NOT be changed — we target its contract exactly:
  *
  *   POST ${LPAI_BASE_URL}/api/ingest
- *   Authorization: Bearer ${LPAI_INGEST_SECRET}     (== LP.AI's INGEST_SECRET)
+ *   Authorization: Bearer ${LPAI_PROVISIONING_SECRET}   (== LP.AI's PROVISIONING_SECRET)
  *   Body (one request per video):
  *     {
  *       "pass": "<project name>",
@@ -19,7 +19,7 @@
  *     }
  *
  * Config:
- *   - LPAI_BASE_URL / LPAI_INGEST_SECRET are credentials → Doppler/env (per
+ *   - LPAI_BASE_URL / LPAI_PROVISIONING_SECRET are credentials → Doppler/env (per
  *     feedback_doppler_secrets). If either is unset, provisioning is a no-op.
  *   - The per-project ON/OFF toggle is an operational knob → lpos_settings
  *     (per feedback_doppler_vs_admin_settings), keyed `lpai.enabled.<projectId>`.
@@ -38,7 +38,25 @@ import { readRegistry, getAsset } from '@/lib/store/media-registry';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
 import { getSetting, setSetting } from '@/lib/store/lpos-settings-store';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
-import { getProjectStore } from '@/lib/services/container';
+import { getProjectStore, getTranscripterService } from '@/lib/services/container';
+import type { TranscriptJob } from '@/lib/services/transcripter-service';
+
+// ── Turbo-on-provision config ────────────────────────────────────────────────
+
+/**
+ * The high-quality model produced at provision time. Normal LPOS ingest stays on
+ * `base` (fast, snappy); only the LP.AI push gets this turbo pass. Overridable via
+ * env for operators who staged a different large model, but defaults to the
+ * recommended turbo build.
+ */
+export const LPAI_TURBO_MODEL = (process.env.LPAI_TURBO_MODEL?.trim() || 'large-v3-turbo');
+
+/**
+ * Whisper model names we accept as "turbo quality" for the cache check. If the
+ * transcript that fed LP.AI was produced by one of these, we skip re-transcription.
+ * large-v3 (non-turbo) is higher quality still, so it also satisfies the bar.
+ */
+const TURBO_QUALITY_MODELS = new Set<string>([LPAI_TURBO_MODEL, 'large-v3-turbo', 'large-v3']);
 
 // ── Config (credentials from Doppler/env) ─────────────────────────────────────
 
@@ -50,7 +68,7 @@ interface LpaiConfig {
 /** Read + validate the LP.AI ingest config. Returns null if either value is unset. */
 export function getLpaiConfig(): LpaiConfig | null {
   const baseUrl = process.env.LPAI_BASE_URL?.trim();
-  const secret = process.env.LPAI_INGEST_SECRET?.trim();
+  const secret = process.env.LPAI_PROVISIONING_SECRET?.trim();
   if (!baseUrl || !secret) return null;
   return { baseUrl: baseUrl.replace(/\/+$/, ''), secret };
 }
@@ -178,6 +196,171 @@ export function loadTranscriptCues(projectId: string, jobId: string): Transcript
   return readSegmentTranscript(jsonPath);
 }
 
+// ── Turbo-on-provision: high-quality word-level transcript, produced lazily ───
+//
+// Normal LPOS ingest transcribes on `base` (fast, snappy) and that transcript
+// backs the Transcripts UI — we never touch it. At PROVISION time we want a
+// high-quality `large-v3-turbo` WORD-LEVEL transcript for LP.AI. We produce it
+// once per asset, cache the fact, and push it.
+//
+//   Cache marker : lpos_settings key `lpai.turbo.<projectId>.<assetId>` holding
+//                  { model, jobId, completedAt }. Fast-path skip check.
+//   Authority    : the marker's `<jobId>.words.json` must still exist on disk and
+//                  the whisper JSON's `params.model` must be turbo-quality — so a
+//                  hand-deleted or downgraded file forces a fresh pass.
+//   Produce      : enqueueSidecar() with model=large-v3-turbo → a separate
+//                  `<jobId>.*` fileset; only `.json`/`.words.json` are kept.
+//   Wait         : an onJobComplete callback filtered on the sidecar jobId
+//                  resolves a promise (non-blocking for the batch — each asset
+//                  pushes as its own turbo job finishes).
+
+interface TurboMarker {
+  model: string;
+  jobId: string;
+  completedAt: string;
+}
+
+function turboMarkerKey(projectId: string, assetId: string): string {
+  return `lpai.turbo.${projectId}.${assetId}`;
+}
+
+/** whisper.cpp `-oj` output includes a top-level `params.model` = absolute path to the ggml file. */
+interface WhisperJsonWithParams {
+  params?: { model?: string };
+}
+
+/** Extract the bare model name (e.g. "large-v3-turbo") from a whisper JSON's params.model path. */
+function readModelFromWhisperJson(jsonPath: string): string | null {
+  if (!fs.existsSync(jsonPath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as WhisperJsonWithParams;
+    const modelPath = raw.params?.model;
+    if (typeof modelPath !== 'string' || !modelPath) return null;
+    // params.model is a path like ".../ggml-large-v3-turbo.bin"; reduce to the bare name.
+    const base = path.basename(modelPath).replace(/^ggml-/, '').replace(/\.bin$/i, '');
+    return base || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Has a turbo-quality word-level transcript already been produced for this asset?
+ * Returns the jobId of the usable turbo transcript, or null if a fresh pass is
+ * needed. Verified against disk + `params.model`, not just the cached marker, so
+ * a deleted/downgraded file re-triggers.
+ */
+export function findCachedTurboJobId(projectId: string, assetId: string): string | null {
+  const marker = getSetting<TurboMarker | null>(turboMarkerKey(projectId, assetId), null);
+  if (!marker || !marker.jobId) return null;
+
+  const { jsonPath } = getTranscriptPaths(projectId, marker.jobId);
+  const wordsPath = jsonPath.replace(/\.json$/, '.words.json');
+  // Word-level file is the whole point; if it's gone, the cache is stale.
+  if (!fs.existsSync(wordsPath)) return null;
+
+  // Confirm the on-disk transcript really was turbo quality. Prefer the words
+  // JSON's params, fall back to the segment JSON's params.
+  const producedModel = readModelFromWhisperJson(wordsPath) ?? readModelFromWhisperJson(jsonPath);
+  if (producedModel && TURBO_QUALITY_MODELS.has(producedModel)) return marker.jobId;
+
+  // Marker recorded a model but disk disagrees (or model unreadable) — if the
+  // marker itself claims a turbo model and the words file exists, trust it; this
+  // tolerates older whisper builds that omit params.model.
+  if (!producedModel && TURBO_QUALITY_MODELS.has(marker.model)) return marker.jobId;
+
+  return null;
+}
+
+function writeTurboMarker(projectId: string, assetId: string, marker: TurboMarker): void {
+  setSetting<TurboMarker>(turboMarkerKey(projectId, assetId), marker);
+}
+
+/**
+ * Ensure a turbo-quality word-level transcript exists for an asset, producing one
+ * if needed, and return the jobId whose `<jobId>.words.json` / `<jobId>.json` hold
+ * it. Non-blocking-friendly: it awaits the single turbo job for THIS asset (via a
+ * completion callback) but callers fan these out per-asset so the batch never
+ * blocks on the whole set serially.
+ *
+ * Returns null when no source file is available to transcribe.
+ */
+export async function ensureTurboTranscript(projectId: string, asset: MediaAsset): Promise<string | null> {
+  const assetId = asset.assetId;
+
+  // 1. Cache check — skip re-transcription if a turbo transcript already exists.
+  const cached = findCachedTurboJobId(projectId, assetId);
+  if (cached) {
+    console.log(`[lpai] turbo transcript cache hit for asset ${assetId} (job ${cached})`);
+    return cached;
+  }
+
+  // 2. Need the source media on disk to transcribe.
+  if (!asset.filePath || !fs.existsSync(asset.filePath)) {
+    console.warn(`[lpai] cannot produce turbo transcript for asset ${assetId}: source file missing (${asset.filePath ?? 'null'})`);
+    return null;
+  }
+
+  // 3. Enqueue a turbo sidecar job and await ONLY that job's completion.
+  const transcripter = getTranscripterService();
+  const durationSec = typeof asset.duration === 'number' && asset.duration > 0 ? asset.duration : undefined;
+  const displayName = asset.name || asset.originalFilename;
+
+  const job = transcripter.enqueueSidecar(projectId, asset.filePath, assetId, {
+    model: LPAI_TURBO_MODEL,
+    durationSec,
+    displayName,
+  });
+
+  console.log(`[lpai] awaiting turbo transcript for asset ${assetId} (job ${job.jobId}, model ${LPAI_TURBO_MODEL})`);
+
+  const completed = await waitForJob(transcripter, job.jobId);
+  if (completed.status !== 'done') {
+    throw new Error(`Turbo transcription ${completed.status}${completed.error ? `: ${completed.error}` : ''}`);
+  }
+
+  // 4. Record the cache marker so re-provisions skip this work.
+  writeTurboMarker(projectId, assetId, {
+    model: LPAI_TURBO_MODEL,
+    jobId: job.jobId,
+    completedAt: new Date().toISOString(),
+  });
+
+  return job.jobId;
+}
+
+/**
+ * Resolve when the transcripter job with `jobId` reaches a terminal state.
+ * Uses the service's `onJobComplete` fan-out, filtered on jobId, and unregisters
+ * the listener once it fires so provisioning batches don't leak callbacks.
+ */
+function waitForJob(
+  transcripter: ReturnType<typeof getTranscripterService>,
+  jobId: string,
+): Promise<TranscriptJob> {
+  return new Promise<TranscriptJob>((resolve) => {
+    let settled = false;
+    let unregister: (() => void) | null = null;
+    const finish = (job: TranscriptJob) => {
+      if (settled) return;
+      settled = true;
+      unregister?.();
+      resolve(job);
+    };
+
+    unregister = transcripter.onJobComplete((job) => {
+      if (job.jobId === jobId) finish(job);
+    });
+
+    // Guard the race where the job already finished before we registered: if it's
+    // already terminal in the queue, resolve immediately.
+    const existing = transcripter.getQueue().find((j) => j.jobId === jobId);
+    if (existing && (existing.status === 'done' || existing.status === 'failed' || existing.status === 'canceled')) {
+      finish(existing);
+    }
+  });
+}
+
 // ── HTTP push ─────────────────────────────────────────────────────────────────
 
 export interface IngestPayload {
@@ -212,16 +395,28 @@ async function postIngest(config: LpaiConfig, payload: IngestPayload): Promise<v
   }
 }
 
-/**
- * Decide whether a single asset is provisionable and build its payload.
- * Returns a reason string when it should be skipped.
- */
-function buildPayload(projectName: string, asset: MediaAsset): { payload?: IngestPayload; skip?: string } {
+/** Fast CF-readiness gate. Returns a skip reason when the asset isn't provisionable yet. */
+function checkCloudflareEligible(asset: MediaAsset): { cfUid?: string; skip?: string } {
   const cfUid = asset.cloudflare.uid;
   if (!cfUid) return { skip: 'No Cloudflare Stream UID (video not published to Cloudflare yet)' };
   if (asset.cloudflare.status !== 'ready') return { skip: `Cloudflare not ready (status=${asset.cloudflare.status})` };
+  return { cfUid };
+}
 
-  const jobId = asset.transcription.jobId;
+/**
+ * Build the ingest payload from a SPECIFIC transcript jobId (normally the turbo
+ * sidecar). Falls back to the base transcript jobId when no turbo job is given —
+ * so provisioning still works if turbo production was skipped/failed.
+ */
+function buildPayload(
+  projectName: string,
+  asset: MediaAsset,
+  transcriptJobId: string | null,
+): { payload?: IngestPayload; skip?: string } {
+  const { cfUid, skip } = checkCloudflareEligible(asset);
+  if (!cfUid) return { skip };
+
+  const jobId = transcriptJobId ?? asset.transcription.jobId;
   const cues = jobId ? loadTranscriptCues(asset.projectId, jobId) : [];
   // A transcript is not strictly required by the contract, but a video with no
   // transcript adds nothing to LP.AI — still push it so LP.AI knows it exists.
@@ -258,7 +453,7 @@ export async function provisionAssetToLpai(
   const title = asset ? (asset.name || asset.originalFilename) : assetId;
 
   if (!config) {
-    return { assetId, title, ok: false, skippedReason: 'LP.AI not configured (LPAI_BASE_URL / LPAI_INGEST_SECRET unset)' };
+    return { assetId, title, ok: false, skippedReason: 'LP.AI not configured (LPAI_BASE_URL / LPAI_PROVISIONING_SECRET unset)' };
   }
   if (!asset) {
     return { assetId, title, ok: false, skippedReason: 'Asset not found' };
@@ -267,7 +462,26 @@ export async function provisionAssetToLpai(
   const project = getProjectStore().getById(projectId);
   const projectName = project?.name ?? projectId;
 
-  const { payload, skip } = buildPayload(projectName, asset);
+  // CF-readiness gate first — no point producing an expensive turbo transcript for
+  // a video LP.AI can't ingest yet (the contract requires a Cloudflare UID).
+  const eligibility = checkCloudflareEligible(asset);
+  if (eligibility.skip) {
+    return { assetId, title, ok: false, skippedReason: eligibility.skip };
+  }
+
+  // Produce (or reuse the cached) high-quality turbo word-level transcript. This
+  // is the turbo-on-provision step: normal ingest stays on `base`; only here do we
+  // pay for large-v3-turbo, and only once per asset. On failure we don't abort —
+  // we fall back to whatever base transcript exists so LP.AI still gets the video.
+  let turboJobId: string | null = null;
+  try {
+    turboJobId = await ensureTurboTranscript(projectId, asset);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[lpai] turbo transcript failed for asset ${assetId}; falling back to base transcript: ${message}`);
+  }
+
+  const { payload, skip } = buildPayload(projectName, asset, turboJobId);
   if (!payload) {
     return { assetId, title, ok: false, skippedReason: skip };
   }
@@ -288,7 +502,14 @@ export async function provisionAssetToLpai(
       project_id: projectId,
       asset_id: assetId,
       source_service: 'lpai-provisioning',
-      details_json: { trigger: context.trigger, cloudflareUid: payload.cloudflareUid, cues: payload.transcript.length, pass: payload.pass },
+      details_json: {
+        trigger: context.trigger,
+        cloudflareUid: payload.cloudflareUid,
+        cues: payload.transcript.length,
+        pass: payload.pass,
+        transcriptModel: turboJobId ? LPAI_TURBO_MODEL : 'base (fallback)',
+        transcriptJobId: turboJobId ?? asset.transcription.jobId,
+      },
     });
     return { assetId, title, ok: true };
   } catch (err) {

@@ -208,8 +208,14 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   transcripterService = new TranscripterService(io, registry);
   globalThis.__lpos_transcripterService = transcripterService;
 
-  // Keep media-registry transcription status in sync when jobs finish
+  // Keep media-registry transcription status in sync when jobs finish.
+  // LP.AI turbo sidecar jobs are an ADDITIVE background pass for provisioning: they
+  // must NOT re-point asset.transcription to their (separate) jobId, nor push their
+  // files to Drive / Cloudflare captions — that would clobber the base transcript
+  // the Transcripts UI depends on. Skip them entirely here; the LP.AI provisioner
+  // reads their words.json directly via its own completion waiter.
   transcripterService.onJobComplete((job) => {
+    if (job.purpose === 'lpai_sidecar') return;
     if (job.assetId) {
       patchAsset(job.projectId, job.assetId, {
         transcription: {

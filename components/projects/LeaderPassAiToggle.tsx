@@ -6,18 +6,14 @@ interface Props {
   projectId: string;
 }
 
-interface ReprovisionSummary {
-  pushed: number;
-  failed: number;
-  skipped: number;
-}
-
 /**
  * Per-project "Use in LeaderPass AI" control. Lives in the project header.
  *
  *  - Reads/writes the toggle via /api/projects/:id/lpai (GET/PUT).
  *  - Toggle-ON kicks off provisioning of all current videos server-side.
- *  - "Re-provision" manually re-pushes every eligible video and shows a summary.
+ *  - "Re-provision" starts a background transcribe-then-push batch: each video is
+ *    (re)transcribed at turbo quality once, then pushed. The request returns
+ *    immediately (202); progress shows on the activity timeline, not here.
  *
  * When LP.AI is not configured on the host the control still renders but is
  * disabled with an explanatory note, so operators can see the feature exists.
@@ -28,7 +24,7 @@ export function LeaderPassAiToggle({ projectId }: Readonly<Props>) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reprovisioning, setReprovisioning] = useState(false);
-  const [summary, setSummary] = useState<ReprovisionSummary | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -55,7 +51,7 @@ export function LeaderPassAiToggle({ projectId }: Readonly<Props>) {
     const next = !enabled;
     setSaving(true);
     setError(null);
-    setSummary(null);
+    setNotice(null);
     // Optimistic.
     setEnabled(next);
     try {
@@ -83,12 +79,12 @@ export function LeaderPassAiToggle({ projectId }: Readonly<Props>) {
     if (reprovisioning) return;
     setReprovisioning(true);
     setError(null);
-    setSummary(null);
+    setNotice(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/lpai/reprovision`, { method: 'POST' });
-      const data = await res.json().catch(() => ({})) as { error?: string; pushed?: number; failed?: number; skipped?: number };
+      const data = await res.json().catch(() => ({})) as { error?: string; message?: string };
       if (!res.ok) throw new Error(data.error ?? 'Re-provision failed');
-      setSummary({ pushed: data.pushed ?? 0, failed: data.failed ?? 0, skipped: data.skipped ?? 0 });
+      setNotice(data.message ?? 'Re-provisioning started in the background.');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -113,7 +109,7 @@ export function LeaderPassAiToggle({ projectId }: Readonly<Props>) {
           }}
           title={configured
             ? 'Push this project’s videos to LeaderPass AI for search & Q&A'
-            : 'LeaderPass AI is not configured on this host (set LPAI_BASE_URL / LPAI_INGEST_SECRET)'}
+            : 'LeaderPass AI is not configured on this host (set LPAI_BASE_URL / LPAI_PROVISIONING_SECRET)'}
         >
           <input
             type="checkbox"
@@ -135,11 +131,9 @@ export function LeaderPassAiToggle({ projectId }: Readonly<Props>) {
           </button>
         )}
       </div>
-      {summary && (
-        <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted, #9aa0a6)' }}>
-          Pushed {summary.pushed}
-          {summary.skipped > 0 ? ` · skipped ${summary.skipped}` : ''}
-          {summary.failed > 0 ? ` · failed ${summary.failed}` : ''}
+      {notice && (
+        <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted, #9aa0a6)', maxWidth: '22rem', textAlign: 'right' }}>
+          {notice}
         </span>
       )}
       {error && (

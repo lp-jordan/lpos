@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-02T18:00:00Z",
+    "title": "LeaderPass AI: turbo-quality transcripts on provision + secret rename",
+    "summary": "Videos sent to LeaderPass AI now carry a high-quality large-v3-turbo word-level transcript instead of the fast 'base' one. Normal LPOS ingest is unchanged and still uses base (snappy) — the turbo transcript is produced only at provision time, cached per video so re-provisioning doesn't redo the work, and never disturbs the transcript shown in the Transcripts tab. Because turbo transcription takes real time, provisioning a project (toggle-on, Re-provision, or a video finishing publish) is now a background 'transcribe-then-push' batch: each video is pushed the moment its own turbo transcript finishes. Also renamed the ingest credential to LPAI_PROVISIONING_SECRET to match the LeaderPass AI side (which now reads PROVISIONING_SECRET) — LPAI_BASE_URL is unchanged."
+  },
+  {
     "timestamp": "2026-07-02T00:45:00Z",
     "title": "Verified: Drive folder backfill is non-destructive",
     "summary": "Confirmed via a full call-path trace that the Settings → Drive 'Check / Create All Project Folders' backfill cannot delete any content. It only finds-or-creates missing folders (idempotent — existing folders are reused untouched). The only non-additive action is in the orphaned-folder adoption branch, which moves (never deletes) loose files into a project's Assets folder, and only runs when a tracked orphan record matches. The destructive delete/trash helpers are never called on this path. Safe to run against live Drive data."
@@ -22,7 +27,7 @@
   {
     "timestamp": "2026-07-02T00:00:00Z",
     "title": "LeaderPass AI provisioning: per-project \"Use in LeaderPass AI\" toggle",
-    "summary": "Projects now have a \"Use in LeaderPass AI\" toggle in their header. Turning it on pushes that project's Cloudflare-published videos to LeaderPass AI's ingest endpoint (one request per video: pass name, Cloudflare UID, title, and the transcript mapped to millisecond {startMs,endMs,text} cues). Transcripts prefer the word-level file when present and fall back to the whisper segment JSON. There's a manual Re-provision button that reports pushed/skipped/failed counts, and new videos auto-provision when they finish publishing to Cloudflare (the moment they first have a Cloudflare UID). The whole feature stays dormant until the LPAI_BASE_URL and LPAI_INGEST_SECRET credentials are set in Doppler, per-video failures never abort the batch, and every push is logged to the activity timeline. Turning the toggle off just stops future pushes."
+    "summary": "Projects now have a \"Use in LeaderPass AI\" toggle in their header. Turning it on pushes that project's Cloudflare-published videos to LeaderPass AI's ingest endpoint (one request per video: pass name, Cloudflare UID, title, and the transcript mapped to millisecond {startMs,endMs,text} cues). Transcripts prefer the word-level file when present and fall back to the whisper segment JSON. There's a manual Re-provision button that reports pushed/skipped/failed counts, and new videos auto-provision when they finish publishing to Cloudflare (the moment they first have a Cloudflare UID). The whole feature stays dormant until the LPAI_BASE_URL and LPAI_PROVISIONING_SECRET credentials are set in Doppler, per-video failures never abort the batch, and every push is logged to the activity timeline. Turning the toggle off just stops future pushes."
   },
   {
     "timestamp": "2026-06-30T21:40:00Z",

@@ -2,16 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProjectStore } from '@/lib/services/container';
 import {
   isLpaiConfigured,
-  provisionProjectToLpai,
+  triggerProjectProvisioning,
 } from '@/lib/services/lpai-provisioning';
 
 type Ctx = { params: Promise<{ projectId: string }> };
 
 /**
  * Manually re-provision every eligible video in a project to LeaderPass AI.
- * Unlike the toggle-ON trigger this awaits the batch and returns a per-video
- * summary so the UI can report success/skip/failure counts. Does not require
- * the toggle to be ON (it's an explicit operator action) but does require
+ *
+ * This is now a BACKGROUND "transcribe-then-push" batch, not an instant op: each
+ * video first gets a high-quality large-v3-turbo word-level transcript (produced
+ * once, then cached) before its LP.AI push. Because that can take many minutes on
+ * long videos, we kick the batch off fire-and-forget and return 202 immediately —
+ * blocking the request thread on the whole set would time out. Per-video
+ * push/skip/fail land on the activity timeline (`lpai.ingest.*`).
+ *
+ * Does not require the toggle to be ON (explicit operator action) but does require
  * LP.AI to be configured.
  */
 export async function POST(_req: NextRequest, { params }: Ctx) {
@@ -22,16 +28,19 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
 
   if (!isLpaiConfigured()) {
     return NextResponse.json(
-      { error: 'LeaderPass AI is not configured on this LPOS host (LPAI_BASE_URL / LPAI_INGEST_SECRET unset).' },
+      { error: 'LeaderPass AI is not configured on this LPOS host (LPAI_BASE_URL / LPAI_PROVISIONING_SECRET unset).' },
       { status: 501 },
     );
   }
 
-  const { results } = await provisionProjectToLpai(projectId, { trigger: 'reprovision' });
+  triggerProjectProvisioning(projectId, { trigger: 'reprovision' });
 
-  const pushed = results.filter((r) => r.ok).length;
-  const failed = results.filter((r) => !r.ok && r.error).length;
-  const skipped = results.filter((r) => !r.ok && r.skippedReason).length;
-
-  return NextResponse.json({ ok: true, pushed, failed, skipped, results });
+  return NextResponse.json(
+    {
+      ok: true,
+      accepted: true,
+      message: 'Re-provisioning started in the background — each video is transcribed at turbo quality, then pushed. Watch the activity timeline for progress.',
+    },
+    { status: 202 },
+  );
 }

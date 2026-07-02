@@ -123,36 +123,50 @@ Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → p
 Pushes a project's videos into LeaderPass AI ("LP.AI") for search / Q&A. The LP.AI side is a separate project; LPOS only implements the provisioning (push) half of the contract.
 
 ### What it does
-A per-project **"Use in LeaderPass AI"** toggle. When ON, each Cloudflare-ready video in the project is POSTed to LP.AI's ingest endpoint — one request per video — carrying the project name (`pass`), the Cloudflare Stream UID, the title, and the transcript mapped to millisecond `{startMs,endMs,text}` cues.
+A per-project **"Use in LeaderPass AI"** toggle. When ON, each Cloudflare-ready video in the project is POSTed to LP.AI's ingest endpoint — one request per video — carrying the project name (`pass`), the Cloudflare Stream UID, the title, and a **high-quality `large-v3-turbo` word-level transcript** mapped to millisecond `{startMs,endMs,text}` cues.
+
+### Turbo-on-provision (the transcript sent to LP.AI is NOT the base transcript)
+Normal LPOS ingest transcribes on **`base`** (fast, snappy) and that transcript backs the Transcripts UI — it is never touched. LP.AI needs the best transcript, so **at provision time** we produce a separate high-quality pass:
+
+1. **Cache check** — `findCachedTurboJobId()` reads `lpos_settings` key `lpai.turbo.<projectId>.<assetId>` (a `{model, jobId, completedAt}` marker), then confirms the marker's `<jobId>.words.json` still exists and the whisper JSON's `params.model` is turbo-quality (`large-v3-turbo` / `large-v3`). If good, re-transcription is skipped.
+2. **Produce** — otherwise `enqueueSidecar()` queues a transcription job with `purpose: 'lpai_sidecar'` and `model` overridden to `large-v3-turbo` (whisper-upgrade's per-job `process({model})` path). It writes a fresh `<jobId>.*` fileset but keeps only `.json` + `.words.json` (the human-facing `.txt/.srt/.vtt` are dropped so it never appears in the Transcripts UI). It writes **no** `.meta.json`, does **not** prune the base transcript, and does **not** touch `asset.transcription.*`.
+3. **Wait (non-blocking)** — `ensureTurboTranscript()` awaits only *that* asset's turbo job via an `onJobComplete` waiter; the batch loop fans out per-asset so each video pushes as its own turbo transcript finishes. The whole batch runs fire-and-forget off the request thread.
+4. **Push** — read the turbo `<jobId>.words.json` → ms cues → POST to LP.AI. On turbo failure it falls back to the base transcript so the video still ships.
 
 ### Key files
 | File | Role |
 |------|------|
-| `lib/services/lpai-provisioning.ts` | Config read, per-project toggle KV, transcript→cue mapping, single/batch/auto push, activity logging |
+| `lib/services/lpai-provisioning.ts` | Config read, per-project toggle KV, **turbo cache + enqueue + waiter**, transcript→cue mapping, single/batch/auto push, activity logging |
+| `lib/services/transcripter-service.ts` | `enqueueSidecar()` (per-job model + `lpai_sidecar` purpose), sidecar meta/prune skip + UI-file cleanup |
+| `lib/services/container.ts` | Global `onJobComplete` handler skips `lpai_sidecar` jobs (won't re-point asset transcript / Drive / captions) |
+| `lib/services/pipeline-tracker-service.ts` | `syncTranscript` ignores `lpai_sidecar` jobs (no phantom pipeline stage) |
 | `app/api/projects/[projectId]/lpai/route.ts` | GET toggle state; PUT set toggle (toggle-ON triggers batch provisioning) |
-| `app/api/projects/[projectId]/lpai/reprovision/route.ts` | POST manual re-provision; returns pushed/skipped/failed counts |
-| `components/projects/LeaderPassAiToggle.tsx` | Header control (checkbox + Re-provision + summary) |
+| `app/api/projects/[projectId]/lpai/reprovision/route.ts` | POST manual re-provision; returns **202 accepted** (background batch) |
+| `components/projects/LeaderPassAiToggle.tsx` | Header control (checkbox + Re-provision + background-started notice) |
 | `lib/services/leaderpass-publish.ts` | Calls `triggerAutoProvisionOnFinalize` after a successful CF publish |
 
 ### Config
-- **Credentials (Doppler/env):** `LPAI_BASE_URL`, `LPAI_INGEST_SECRET` (== LP.AI's `INGEST_SECRET`). If either is unset the whole feature is a silent no-op.
+- **Credentials (Doppler/env):** `LPAI_BASE_URL`, `LPAI_PROVISIONING_SECRET` (== LP.AI's `PROVISIONING_SECRET`). If either is unset the whole feature is a silent no-op.
+- **Turbo model (optional env):** `LPAI_TURBO_MODEL`, default `large-v3-turbo`. The model file must be staged at `runtime/whisper-models/ggml-<model>.bin`.
 - **Per-project toggle (SQLite `lpos_settings`):** key `lpai.enabled.<projectId>`, default OFF.
+- **Turbo cache marker (SQLite `lpos_settings`):** key `lpai.turbo.<projectId>.<assetId>`, auto-written after a turbo pass completes.
 
 ### Contract (do not change — target it)
-`POST ${LPAI_BASE_URL}/api/ingest`, header `Authorization: Bearer ${LPAI_INGEST_SECRET}`, body `{ pass, cloudflareUid, title, transcript: [{startMs,endMs,text}] }`.
+`POST ${LPAI_BASE_URL}/api/ingest`, header `Authorization: Bearer ${LPAI_PROVISIONING_SECRET}`, body `{ pass, cloudflareUid, title, transcript: [{startMs,endMs,text}] }`.
 
 ### Data flow (inputs → outputs)
-Toggle-ON / Re-provision / CF-publish-complete → read project assets (`readRegistry`) → for each asset with `cloudflare.uid` + `status==='ready'`: load transcript (word-level `<jobId>.words.json` preferred, whisper segment `<jobId>.json` fallback) → map to ms cues → POST to LP.AI ingest. Per-video failures are isolated; each push logs `lpai.ingest.*` / `lpai.project.*` activity events.
+Toggle-ON / Re-provision / CF-publish-complete → read project assets (`readRegistry`) → for each asset with `cloudflare.uid` + `status==='ready'`: **ensure turbo transcript** (cache hit, else enqueue `large-v3-turbo` sidecar + wait) → load its `<jobId>.words.json` → map to ms cues → POST to LP.AI ingest. Per-video failures are isolated; each push logs `lpai.ingest.*` / `lpai.project.*` activity events. Sidecar transcription events are `operator_only` so they don't duplicate the user timeline.
 
 ### Triggers
-- **Toggle-ON:** provisions all current videos (fire-and-forget).
-- **Manual Re-provision:** awaits the batch, returns a summary.
+- **Toggle-ON:** provisions all current videos (fire-and-forget background batch).
+- **Manual Re-provision:** fire-and-forget background batch, returns 202 immediately (turbo transcription can take minutes).
 - **Auto on finalize:** hooked at LeaderPass-publish completion (first moment a CF UID exists), gated on the toggle + config.
 
 ### Current status / known gaps
+- Provisioning is a background transcribe-then-push batch — no longer instant (expected).
 - Auto-provision only fires via the LeaderPass publish path.
 - Toggle-OFF stops future pushes only; LP.AI-side removal is not implemented.
-- The word-level `.words.json` format is inferred from the separate whisper-upgrade work; the loader tolerates several shapes but may need a tweak once that ships.
+- If the turbo word-level pass fails but the segment pass succeeds, the cache check (which requires `.words.json`) re-triggers turbo next provision; the push still uses turbo-quality segment cues meanwhile.
 
 ---
 

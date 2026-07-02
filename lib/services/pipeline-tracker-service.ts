@@ -337,6 +337,11 @@ export class PipelineTrackerService {
     const projectMap = this.buildProjectMap();
     let changed = false;
     for (const job of jobs) {
+      // LP.AI turbo sidecar jobs are a background quality pass for provisioning,
+      // not part of the user-facing ingest pipeline. Skipping them here prevents
+      // a second "transcribing" stage from reopening an asset's completed pipeline.
+      if (job.purpose === 'lpai_sidecar') continue;
+
       const existingByJob = this.jobIndex.get(job.jobId);
       if (existingByJob) {
         const entry = this.pipelines.get(existingByJob);

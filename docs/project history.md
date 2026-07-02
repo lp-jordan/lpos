@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-07-02 — Integration: merge whisper-upgrade + lpai-provisioning, add turbo-on-provision, rename LP.AI secret
+
+**Timestamp:** 2026-07-02T18:00:00Z
+
+**User prompt (summary):** In an isolated `lpai-integration` git worktree off main, merge the `whisper-upgrade` and `lpai-provisioning` feature branches, then add a "turbo-on-provision" feature: normal LPOS ingest stays on `base`, but at LP.AI provision time produce a high-quality `large-v3-turbo` word-level transcript (cached, skip if already present), wait for completion non-blocking, and push that to LP.AI. Then (follow-up) rename the provisioning secret env var from `LPAI_INGEST_SECRET` to `LPAI_PROVISIONING_SECRET` to match the LP.AI side's `PROVISIONING_SECRET` (leave `LPAI_BASE_URL` unchanged). Typecheck; commit on the branch; do not push or merge to main.
+
+**Response summary:** Created worktree `/Users/lpos/lp-app-ecosystem/lpos-dashboard-lpai-integration` on branch `lpai-integration` off `main` (695f0d6). Merged `whisper-upgrade` (only `docs/changelog.json` conflicted — ordering; resolved keeping both entries newest-first) then `lpai-provisioning` (`docs/changelog.json` + `docs/project history.md` conflicted — ordering only; both resolved keeping all entries). All code files merged cleanly (the two branches touch disjoint code; shared drive/backfill files matched main's newer versions via 3-way merge). Typecheck clean after each merge. Then implemented turbo-on-provision and the secret rename.
+
+**Turbo-on-provision design:**
+- **Cache:** per-asset marker in `lpos_settings` key `lpai.turbo.<projectId>.<assetId>` = `{model, jobId, completedAt}`. `findCachedTurboJobId()` validates against disk (the marker's `<jobId>.words.json` must exist) and the whisper JSON `params.model` (must be `large-v3-turbo`/`large-v3`), so a deleted/downgraded file re-triggers. Model discerned from the ggml path in `params.model`.
+- **Enqueue turbo:** new `TranscripterService.enqueueSidecar()` threads a per-job `model` (default `large-v3-turbo`, override `LPAI_TURBO_MODEL`) and `purpose: 'lpai_sidecar'` through `TranscriptJob` → `processNext` → `MediaProcessor.process({model})` (whisper-upgrade's per-job path). Sidecar jobs get a fresh UUID prefix so they never collide with the base transcript; they write NO `.meta.json`, do NOT prune the base transcript, and their human-facing `.txt/.srt/.vtt` are deleted after completion (kept: `.json` + `.words.json`), so they never surface in the Transcripts UI.
+- **Wait (non-blocking):** `ensureTurboTranscript()` awaits only that asset's turbo job via an `onJobComplete` waiter (now returns an unregister fn; waiter also guards the already-terminal race). The batch loop stays sequential (gentle on the single GPU) and each video pushes as its own turbo transcript finishes. Reprovision route is now fire-and-forget (202) since a blocking request would time out.
+- **Push:** `provisionAssetToLpai` gates CF-readiness first, then ensures the turbo transcript, then `buildPayload(…, turboJobId)` loads `<turboJobId>.words.json` → ms cues → POST. On turbo failure it falls back to the base transcript so the video still ships.
+- **Isolation guards:** the container global `onJobComplete` handler and the pipeline tracker's `syncTranscript` both skip `lpai_sidecar` jobs, so the sidecar never re-points `asset.transcription`, re-pushes to Drive/Cloudflare captions, or adds a phantom pipeline stage. Sidecar activity events are `operator_only`.
+
+**Secret rename:** every `LPAI_INGEST_SECRET` code + user-facing reference → `LPAI_PROVISIONING_SECRET` (config read in `getLpaiConfig`, error/skip strings in the reprovision route + provisioning service, the toggle component's disabled tooltip, and file-header docstrings). `LPAI_BASE_URL` unchanged. Docs updated too.
+
+**Files changed:**
+- Merge commits: `3b2876b` (whisper-upgrade), `bb7a9f7` (lpai-provisioning).
+- `lib/services/transcripter-service.ts` — `TranscriptJobPurpose` type; `model`/`purpose` on `TranscriptJob`; `enqueueSidecar()`; `enqueue()` sets `purpose:'standard'`; `processNext` threads `model` + gates meta/prune on purpose + `cleanupSidecarUiFiles`; `onJobComplete` returns unregister; sidecar-aware activity events (operator_only).
+- `lib/services/lpai-provisioning.ts` — turbo config (`LPAI_TURBO_MODEL`, `TURBO_QUALITY_MODELS`); turbo cache (`findCachedTurboJobId`, `writeTurboMarker`, `readModelFromWhisperJson`); `ensureTurboTranscript` + `waitForJob`; `provisionAssetToLpai` ensures turbo then builds payload from the turbo jobId; `buildPayload` split into `checkCloudflareEligible` + jobId-parameterised build; push activity records the model; **secret rename**.
+- `lib/services/container.ts` — global `onJobComplete` skips `lpai_sidecar`.
+- `lib/services/pipeline-tracker-service.ts` — `syncTranscript` skips `lpai_sidecar`.
+- `app/api/projects/[projectId]/lpai/reprovision/route.ts` — fire-and-forget 202 background batch; secret-rename in error string.
+- `components/projects/LeaderPassAiToggle.tsx` — reprovision shows background-started notice (not a count summary); secret-rename in tooltip.
+- `docs/README.md`, `docs/changelog.json`, `docs/project history.md` — living docs + changelog entry.
+
+**Decision rationale:**
+- Turbo cache in `lpos_settings` (not the asset record) — `AssetPatch` is a fixed-shape canonical-store interface, so a marker there would need a schema migration; the KV store already holds the LP.AI toggle and needs no migration.
+- Separate sidecar jobId (not overwriting the base transcript) keeps the base transcript that the Transcripts UI depends on byte-for-byte intact; the sidecar is purely additive and self-cleaning of UI files.
+- Non-blocking per-asset push (vs. blocking the whole batch) matches the brief and keeps request threads free; sequential queue avoids multi-large-model GPU contention.
+
+**Alternatives considered:** Storing turbo output at the base jobId prefix (rejected — would clobber the UI transcript + trip prune). Blocking the reprovision request on the batch (rejected — times out on long videos). Adding a turbo marker column to the asset record (rejected — schema migration for one boolean).
+
+**Commands/checks run:** `git worktree add -b lpai-integration …`; `git merge whisper-upgrade`; `git merge lpai-provisioning`; `npx tsc --noEmit` (exit 0, clean) after each merge and after the feature + rename, using the main tree's `node_modules` via a temporary symlink. Dev server NOT started; no live transcription (no model/audio); no live LP.AI push.
+
+**Assumptions / follow-ups / open questions / MANUAL steps:**
+- MANUAL: download `ggml-large-v3-turbo.bin` into the production tree's `runtime/whisper-models/` before the first provision (else turbo falls back to base with a logged warning).
+- MANUAL: set `LPAI_BASE_URL` and `LPAI_PROVISIONING_SECRET` on the LPOS host (Doppler) — the latter must equal LP.AI's `PROVISIONING_SECRET`, else the push 401s. User reports `LPAI_PROVISIONING_SECRET` is already set.
+- MANUAL: single server restart after merging `lpai-integration` → main (new env var + service wiring).
+- If the turbo word-level pass fails but the segment pass succeeds, the cache (which requires `.words.json`) re-triggers turbo next provision; the push still uses turbo-quality segment cues meanwhile.
+- LP.AI-side removal on toggle-OFF / asset delete remains unbuilt (inherited from the provisioning branch).
+
+---
+
 ## 2026-07-01 — Transcription quality upgrade: settings-selectable whisper model + word-level sidecar + length-aware timeout
 
 **Timestamp:** 2026-07-01T00:00:00Z
