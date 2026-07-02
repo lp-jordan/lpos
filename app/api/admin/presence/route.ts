@@ -7,18 +7,20 @@ export async function GET(req: NextRequest) {
   const deny = await requireRole(req, 'admin');
   if (deny) return deny;
 
-  const clients = getPresenceService().getClients().map((entry) => {
+  // One row per user, collapsing every tab/socket that user has open.
+  const users = getPresenceService().getUsers().map((entry) => {
     const user = getUserById(entry.userId);
     return {
       userId: entry.userId,
       name: user?.name ?? entry.userId,
       email: user?.email ?? null,
-      connectedAt: entry.connectedAt,
       focused: entry.focused,
+      tabCount: entry.tabCount,
+      connectedAt: entry.connectedAt,
       lastFocusedAt: entry.lastFocusedAt,
-      lastBlurredAt: entry.lastBlurredAt,
+      lastSeenAt: entry.lastSeenAt,
     };
   });
 
-  return NextResponse.json({ clients });
+  return NextResponse.json({ users });
 }

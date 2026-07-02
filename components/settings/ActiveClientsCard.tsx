@@ -6,10 +6,11 @@ interface ClientInfo {
   userId: string;
   name: string;
   email: string | null;
-  connectedAt: number;
   focused: boolean;
+  tabCount: number;
+  connectedAt: number;
   lastFocusedAt: number | null;
-  lastBlurredAt: number | null;
+  lastSeenAt: number;
 }
 
 function relativeTime(ts: number): string {
@@ -30,8 +31,8 @@ export function ActiveClientsCard() {
     try {
       const res = await fetch('/api/admin/presence');
       if (res.ok) {
-        const data = await res.json() as { clients: ClientInfo[] };
-        setClients(data.clients);
+        const data = await res.json() as { users: ClientInfo[] };
+        setClients(data.users);
         setFetchedAt(Date.now());
       }
     } finally {
@@ -39,7 +40,12 @@ export function ActiveClientsCard() {
     }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  // Poll while the card is mounted so the list reflects who's actually here.
+  useEffect(() => {
+    void refresh();
+    const interval = setInterval(() => void refresh(), 10_000);
+    return () => clearInterval(interval);
+  }, [refresh]);
 
   return (
     <div className="storage-settings-card">
@@ -81,7 +87,7 @@ export function ActiveClientsCard() {
         <ul style={{ listStyle: 'none', padding: 0, margin: '1rem 0 0', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {clients.map((c) => (
             <li
-              key={c.userId + c.connectedAt}
+              key={c.userId}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -98,6 +104,11 @@ export function ActiveClientsCard() {
                 {c.email && (
                   <span style={{ marginLeft: '0.5rem', color: 'var(--color-text-muted, #888)', fontSize: '0.8rem' }}>
                     {c.email}
+                  </span>
+                )}
+                {c.tabCount > 1 && (
+                  <span style={{ marginLeft: '0.5rem', color: 'var(--color-text-muted, #888)', fontSize: '0.75rem' }}>
+                    · {c.tabCount} tabs
                   </span>
                 )}
                 <span style={{ marginLeft: '0.75rem', color: 'var(--color-text-muted, #888)', fontSize: '0.75rem' }}>

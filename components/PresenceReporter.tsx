@@ -23,7 +23,12 @@ export function PresenceReporter() {
     socket.on('connect', reportState);
     document.addEventListener('visibilitychange', reportState);
 
+    // Heartbeat — keeps this tab alive in the presence list and lets the server
+    // prune tabs that have gone silent (sleep, network death, tab freeze).
+    const heartbeat = setInterval(() => socket.emit('presence:ping'), 20_000);
+
     return () => {
+      clearInterval(heartbeat);
       socket.off('connect', reportState);
       document.removeEventListener('visibilitychange', reportState);
       socket.disconnect();
