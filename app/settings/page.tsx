@@ -1,24 +1,6 @@
-import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { AdminsPanel } from '@/components/settings/AdminsPanel';
-import { CloudflareOrphansPanel } from '@/components/settings/CloudflareOrphansPanel';
-import { TaskCategoriesPanel } from '@/components/settings/TaskCategoriesPanel';
-import { GuestPinCard } from '@/components/settings/GuestPinCard';
-import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
-import { SlackTestCard } from '@/components/settings/SlackTestCard';
-import { SlackUsersCard } from '@/components/settings/SlackUsersCard';
-import { ConsoleAlertsCard } from '@/components/settings/ConsoleAlertsCard';
-import { LpReleasesCard } from '@/components/settings/LpReleasesCard';
-import { EpReleasesCard } from '@/components/settings/EpReleasesCard';
-import { EditpanelAccessPanel } from '@/components/settings/EditpanelAccessPanel';
-import { WhatsNewTestCard } from '@/components/settings/WhatsNewTestCard';
-import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel';
-import { PreprodBoardAccessPanel } from '@/components/settings/PreprodBoardAccessPanel';
-import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
-import { StorageMapCard } from '@/components/settings/StorageMapCard';
-import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
-import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConfigCard';
+import { AdminSettings } from '@/components/settings/AdminSettings';
 
 async function getRole() {
   const cookieStore = await cookies();
@@ -28,63 +10,5 @@ async function getRole() {
 
 export default async function SettingsPage() {
   const role = await getRole();
-
-  return (
-    <section className="storage-settings-page">
-      <div className="storage-settings-hero">
-        <div>
-          <p className="storage-settings-kicker">Settings</p>
-          <h1 className="storage-settings-title">Host settings</h1>
-          <p className="storage-settings-copy">
-            Manage the LPOS host configuration for storage and other machine-level controls.
-          </p>
-        </div>
-      </div>
-
-      <div className="storage-settings-card settings-link-card">
-        <div>
-          <h2 className="storage-settings-section-title">Storage</h2>
-          <p className="storage-settings-muted">
-            Choose which attached drives LPOS should use for managed media storage and failover.
-          </p>
-        </div>
-        <Link href="/settings/storage" className="storage-settings-primary settings-link-button">
-          Open Storage Settings
-        </Link>
-      </div>
-
-      {role === 'admin' && (
-        <div className="storage-settings-card settings-link-card">
-          <div>
-            <h2 className="storage-settings-section-title">Google Drive</h2>
-            <p className="storage-settings-muted">
-              Configure the Shared Drive integration — connection status, folder setup, and backfill.
-            </p>
-          </div>
-          <Link href="/settings/drive" className="storage-settings-primary settings-link-button">
-            Open Drive Settings
-          </Link>
-        </div>
-      )}
-
-      {role === 'admin' && <EpTokensPanel />}
-      {role === 'admin' && <TranscriptionConfigCard />}
-      {role === 'admin' && <StorageMapCard />}
-      {role === 'admin' && <WhatsNewTestCard />}
-      {role === 'admin' && <LpReleasesCard />}
-      {role === 'admin' && <EpReleasesCard />}
-      {role === 'admin' && <EditpanelAccessPanel />}
-      {role === 'admin' && <ActiveClientsCard />}
-      {role === 'admin' && <SlackTestCard />}
-      {role === 'admin' && <ConsoleAlertsCard />}
-      {role === 'admin' && <SlackUsersCard />}
-      {role === 'admin' && <GuestPinCard />}
-      {role === 'admin' && <ProspectsAccessPanel />}
-      {role === 'admin' && <PreprodBoardAccessPanel />}
-      {role === 'admin' && <NasIngestPanel />}
-      {role === 'admin' && <TaskCategoriesPanel />}
-      {role === 'admin' && <CloudflareOrphansPanel />}
-      {role === 'admin' && <AdminsPanel />}
-    </section>
-  );
+  return <AdminSettings role={role} />;
 }

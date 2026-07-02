@@ -6156,6 +6156,33 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   gap: 18px;
 }
 
+/* Settings tab strip (reuses .proj-tabs / .proj-tab) + grouped panels. */
+.settings-tabs {
+  margin-top: 2px;
+}
+
+.settings-tab-panels {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-group-heading {
+  margin: 6px 0 -8px;
+}
+
+.settings-group-heading h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-group-heading p {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .storage-settings-hero,
 .storage-settings-grid {
   display: grid;
