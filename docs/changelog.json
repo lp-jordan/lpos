@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-07T20:17:59Z",
+    "title": "Move between projects now handles same-name collisions",
+    "summary": "Moving an asset into a project that already has one with the same name no longer silently creates a duplicate. Before the move commits, a preflight checks the target for name collisions; if any exist, the move dialog asks — per asset — whether the moved file is a new version of the existing one (it's stacked on as the next version), a keep-both (renamed with a \" (1)\" suffix), or a skip (left in the source project, which is the default when the file is an exact byte-for-byte duplicate already present). Assets with no name clash move exactly as before. Merging re-parents the moved asset's versions onto the existing asset and removes the now-empty original."
+  },
+  {
     "timestamp": "2026-07-02T18:00:00Z",
     "title": "LeaderPass AI: turbo-quality transcripts on provision + secret rename",
     "summary": "Videos sent to LeaderPass AI now carry a high-quality large-v3-turbo word-level transcript instead of the fast 'base' one. Normal LPOS ingest is unchanged and still uses base (snappy) — the turbo transcript is produced only at provision time, cached per video so re-provisioning doesn't redo the work, and never disturbs the transcript shown in the Transcripts tab. Because turbo transcription takes real time, provisioning a project (toggle-on, Re-provision, or a video finishing publish) is now a background 'transcribe-then-push' batch: each video is pushed the moment its own turbo transcript finishes. Also renamed the ingest credential to LPAI_PROVISIONING_SECRET to match the LeaderPass AI side (which now reads PROVISIONING_SECRET) — LPAI_BASE_URL is unchanged."

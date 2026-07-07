@@ -1235,6 +1235,114 @@ export function findCanonicalVersionCandidate(
   };
 }
 
+export interface MoveCollision {
+  /** The asset being moved (lives in the source project until the move commits). */
+  movingAssetId: string;
+  /** Display name of the moving asset (the "B1"). */
+  movingName: string;
+  /** Existing asset in the target project whose name collides with the moving one. */
+  destAssetId: string;
+  destName: string;
+  /** Highest existing version_number on the destination asset — a merge stacks above this. */
+  destMaxVersionNumber: number;
+  /** True when the moving asset's current-version content hash already exists on the
+   *  destination asset (any of its versions) — i.e. moving it would duplicate content. */
+  isExactDuplicate: boolean;
+}
+
+/**
+ * Detect whether moving `movingAssetId` into `targetProjectId` would collide with an
+ * existing asset of the same (normalized) name there. Mirrors the name-matching used by
+ * {@link findCanonicalVersionCandidate} (primary name/originalFilename pass + version-suffix
+ * base pass) so a move behaves consistently with an in-project re-upload. Returns null when
+ * there is no name collision.
+ *
+ * Duplicate detection compares the moving asset's current-version `content_hash` (stored on
+ * media_files at ingest — no file reads) against every version's media on the matched
+ * destination asset.
+ */
+export function findMoveCollision(targetProjectId: string, movingAssetId: string): MoveCollision | null {
+  const movingBundle = rowToAssetBundle(movingAssetId);
+  if (!movingBundle) return null;
+  const movingAsset = bundleToProjection(movingBundle);
+
+  const nameKey = normalizeAssetKey(movingAsset.name);
+  const fileKey = normalizeAssetKey(movingAsset.originalFilename);
+  if (!nameKey && !fileKey) return null;
+
+  const targetAssets = listCanonicalMediaAssets(targetProjectId);
+  const keysMatch = (asset: MediaAsset): boolean => {
+    const an = normalizeAssetKey(asset.name);
+    const af = normalizeAssetKey(asset.originalFilename);
+    return (
+      (!!nameKey && (an === nameKey || af === nameKey))
+      || (!!fileKey && (an === fileKey || af === fileKey))
+    );
+  };
+
+  // Primary pass: exact normalized-name match (newest-first so we prefer the most recent).
+  let match = [...targetAssets].reverse().find(keysMatch) ?? null;
+
+  // Second pass: strip an explicit version suffix (e.g. B1_v2 → B1) and match on the base
+  // name, mirroring the re-upload path so "B1 v2" links to an existing "B1".
+  if (!match) {
+    const nameBase = stripVersionSuffix(nameKey);
+    const fileBase = stripVersionSuffix(fileKey);
+    if ((nameBase && nameBase !== nameKey) || (fileBase && fileBase !== fileKey)) {
+      match = [...targetAssets].reverse().find((asset) => {
+        const an = stripVersionSuffix(normalizeAssetKey(asset.name));
+        const af = stripVersionSuffix(normalizeAssetKey(asset.originalFilename));
+        return (
+          (!!nameBase && (an === nameBase || af === nameBase))
+          || (!!fileBase && (an === fileBase || af === fileBase))
+        );
+      }) ?? null;
+    }
+  }
+
+  if (!match) return null;
+
+  const movingVersion = getLatestNonDuplicateVersionForAsset(movingAssetId);
+  const movingMedia = movingVersion ? getPrimaryMediaFileForVersion(movingVersion.asset_version_id) : null;
+  const movingHash = movingMedia?.content_hash ?? null;
+
+  const destBundle = rowToAssetBundle(match.assetId);
+  const destVersionNumbers = destBundle ? destBundle.versions.map((v) => v.version_number) : [];
+  const destMaxVersionNumber = destVersionNumbers.length ? Math.max(...destVersionNumbers) : 1;
+  const isExactDuplicate = Boolean(
+    movingHash && destBundle?.mediaFiles.some((mf) => mf.content_hash && mf.content_hash === movingHash),
+  );
+
+  return {
+    movingAssetId,
+    movingName: movingAsset.name,
+    destAssetId: match.assetId,
+    destName: match.name,
+    destMaxVersionNumber,
+    isExactDuplicate,
+  };
+}
+
+/**
+ * Pick a display name that does NOT collide (by normalized key) with any existing asset in
+ * the target project. Strips a trailing " (n)" from `desiredName` first so re-moving an
+ * already-suffixed asset yields "B1 (1)" rather than "B1 (1) (1)", then appends the lowest
+ * free " (n)". Used by the move "keep both" resolution.
+ */
+export function computeNextFreeAssetName(targetProjectId: string, desiredName: string): string {
+  const existing = new Set(
+    listCanonicalMediaAssets(targetProjectId).map((asset) => normalizeAssetKey(asset.name)),
+  );
+  const base = desiredName.replace(/\s*\(\d+\)\s*$/, '').trim() || desiredName;
+  if (!existing.has(normalizeAssetKey(base))) return base;
+  for (let i = 1; i < 1000; i += 1) {
+    const candidate = `${base} (${i})`;
+    if (!existing.has(normalizeAssetKey(candidate))) return candidate;
+  }
+  // Astronomically unlikely fallback — keep it unique without a clock dependency.
+  return `${base} (${randomUUID().slice(0, 8)})`;
+}
+
 export function getLatestDistributionInfoForAsset(
   assetId: string,
   provider: CanonicalDistributionProvider,

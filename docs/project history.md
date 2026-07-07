@@ -2225,3 +2225,47 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** Read of `lib/services/drive-client.ts` (all folder/file ops) and re-read of the backfill path in `drive-folder-service.ts`. Confirmed `deleteFile`/`trashFile` have no callers on the backfill path. No code, tests, or server touched.
 
 **Assumptions / follow-ups:** None. Backfill confirmed additive + idempotent.
+
+## 2026-07-07T19:52:34Z — LPOS: fix Amaran on/off reliability (serial request queue + power verify/retry)
+
+**User prompt:** "Can you break a and b down like I'm an absolute brain dead idiot?" → then "Yeah I'm good with that." (approving implementation of the two fixes proposed in the preceding analysis entry.)
+
+**Response summary:** Implemented both fixes in `lpos-dashboard/lib/services/amaran-service.ts`. No other files changed.
+
+**Files changed:** `lpos-dashboard/lib/services/amaran-service.ts`
+
+**Implementation summary:**
+- **Fix A — serial request queue (kills cross-fixture contamination).** Replaced the action-keyed `pending` Map with a single `inFlight` slot fed by a serial `sendChain` promise queue: exactly one WebSocket request is outstanding at a time, so a reply (which echoes only `action`, never node_id) can only ever match its own request. Added a short (1.5 s) `staleActions` guard so a late answer to an already-timed-out request can't resolve a later same-action request. New `sendRequestRaw` (transport) + `resolveResponse` (matching) + `markStale`. `handleMessage` response branch now calls `resolveResponse`. `closeWs` now fails any in-flight request so the queue advances instead of stalling 5 s on a dead socket.
+- **Fix B — verify + retry on power.** `setPower` now delegates to `applyPowerWithVerify`: send `set_sleep`, wait a settle delay (350 ms waking / 150 ms sleeping), read back `get_sleep`, and retry once if the fixture's actual power doesn't match the request. Records the verified reading; on total failure falls back to the requested state and logs a warning. Applies to single-fixture, master-switch, and preset power changes alike.
+- **Poll-stack guard.** Added a `_refreshing` flag to `refreshStatus` so the 30 s interval can't stack overlapping polls now that requests serialize.
+
+**Decision rationale:** Responses carry no node_id, so the only reliable way to match a reply to a fixture is to guarantee a single outstanding request — hence a transport-level serial queue rather than trying to key by action+node_id (impossible to look up from the reply). Verify/retry addresses the orthogonal problem that Bluetooth silently drops power frames. Callers (preset-apply loop, master-switch loop) keep their existing sequential structure + BT settle delays, but correctness no longer depends on them being sequential.
+
+**Alternatives considered:** Keying pending by action+node_id (rejected — reply lacks node_id). Longer stale-guard window (rejected — risks swallowing a fresh same-action reply; 1.5 s only arms after a timeout, invisible in the healthy path).
+
+**Commands/checks run:** `grep` for stale `this.pending` references (none), `npx tsc --noEmit` (no errors in amaran-service). Not runtime-verified against live Amaran Desktop hardware from this session — needs an on-hardware smoke test (master All Off with a fixture that ignores the first frame; apply an all-off preset).
+
+**Assumptions / follow-ups:** Assumes `get_sleep` `data` is the sleep boolean (power = !data), consistent with existing `pullNodeState`. Follow-up: on-hardware test; consider surfacing per-fixture "couldn't confirm" state to the UI instead of only a server-side console.warn.
+
+## 2026-07-07T20:17:59Z — LPOS: name-collision handling when moving assets between projects
+
+**User prompt:** "Some LPOS edge case behavior - moving between projects does not check to see if there are pre-existing versions. For example, project 1 has a \"B1\". I move a new \"B1\" out of Project 2 into project 1. Now p1 has two \"b1's\". Probably need to confirm with the user that it's a new version, if not, check if it's a dupe, and if not, just appened a (1) to the moved file."
+
+**Response summary:** The move flow previously only flipped `assets.project_id`, so moving an asset whose name already existed in the target left two same-named assets side by side. Added an interactive collision-resolution pass: a preflight detects name collisions in the target, and the move modal asks the editor, per colliding asset, to treat it as a **new version** (merge/stack onto the existing asset), **keep both** (rename with a " (n)" suffix), or **skip** (leave it in the source — the default for exact-content duplicates). Answers to the design forks were captured up front via a clarifying question (interactive prompt / merge / skip-leave-in-source).
+
+**Files changed:**
+- `lib/store/canonical-asset-store.ts` — new `findMoveCollision()` (normalized-name match + version-suffix base pass + content-hash exact-dupe test, reusing the same helpers as `findCanonicalVersionCandidate`) and `computeNextFreeAssetName()`; both exported.
+- `lib/store/asset-move-store.ts` — `moveAssetsBetweenProjects()` now takes per-asset `resolutions`, with an `unresolved-collision` guard; factored `performPlainMove()`; new `mergeAssetAsNewVersions()`; richer result buckets (`renamed`/`merged`/`skipped`).
+- `app/api/projects/[projectId]/media/move/preflight/route.ts` — **new** POST returning `{ collisions }`.
+- `app/api/projects/[projectId]/media/move/route.ts` — parses/validates `resolutions`, records `asset.moved` for plain/renamed moves (with `renamed_to`) and merge events anchored to the destination asset (`merged_into_asset_id`/`merged_as_version`).
+- `components/projects/MoveAssetsModal.tsx` — two-step (pick → resolve) + a summary step shown only when something was skipped/failed.
+
+**Implementation summary:** Collision detection reuses the upload path's normalized-name matching and stored `content_hash` (no file reads). The merge re-parents the moving asset's `asset_versions` onto the destination asset with `version_number` stacked strictly above the destination's current max (so `UNIQUE(asset_id, version_number)` can't clash; `media_files`/`distribution_records`/`transcription_jobs` follow via `asset_version_id`), re-points `editorial_links` + `ingest_exceptions` (which key on `asset_id` and would otherwise cascade-delete), repoints core-DB `asset_share_links`, drops the moving asset's `deliverable_assets`, then deletes the emptied moving shell. Rename computes the lowest free " (n)" against the target project.
+
+**Decision rationale:** An interactive per-collision prompt (vs. silent auto-rename or hard block) matches the existing in-project version-confirm UX and gives the editor the new-version/keep-both/skip choice the user described. The server re-detects collisions inside the move and fails any unresolved one, so even a stale or direct API call can never silently create a duplicate. Exact duplicates default to skip-and-leave-in-source so nothing is lost. Merge stacks above the destination max to avoid version-number renumbering of existing rows.
+
+**Alternatives considered:** Auto-rename with no prompt (rejected — loses the new-version intent); block colliding assets as failures (rejected — worse UX); deferring the merge/re-parent to a later version (rejected — user explicitly wanted the new-version path).
+
+**Commands/checks run:** `npx tsc --noEmit` (exit 0, no errors). `next lint` is not configured in this repo (interactive setup prompt) — skipped. Not runtime-verified: per workspace policy the dev server is user-managed, so the end-to-end scenarios (plain move, keep-both → "B1 (1)", new-version merge stacking a v(N+1), exact-dupe skip, mixed bulk move) still need a manual pass once the server is up.
+
+**Assumptions / follow-ups:** Merge intentionally discards the moving asset's own identity/history (its shell is deleted) — the destination asset is authoritative afterward. Frame.io state remains LPOS-only (unchanged). Follow-up: manual verification of the five scenarios and a DB spot-check for orphaned `asset_versions` / re-pointed `editorial_links` after a merge.

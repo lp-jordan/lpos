@@ -40,6 +40,34 @@ Ingest, Frame.io upload, and Cloudflare/LeaderPass publish pipelines are all ope
 
 ---
 
+## Asset Move Between Projects
+
+### What it does
+Reassigns one or more assets from one project to another (Internal Media → "Move to project…"). The move is **LPOS-side only** — Frame.io state (review links, comment history) stays with the source project. Historical activity stays at the source; an `asset.moved`/merge event is recorded at the target.
+
+### Name-collision handling
+If the moving asset's (normalized) name already exists in the target project, the move does **not** blindly create a second same-named asset. A preflight surfaces each collision and the editor resolves it per asset:
+- **New version (merge):** the moving asset's version chain is re-parented onto the existing destination asset, stacked above its highest `version_number`, and the emptied moving shell is deleted. Child media/distribution/transcription rows follow via `asset_version_id`; `editorial_links` + `ingest_exceptions` (which key on `asset_id`) are re-pointed; core-DB `asset_share_links` are repointed and `deliverable_assets` dropped.
+- **Keep both (rename):** the asset moves and its display name gets the lowest free `" (n)"` suffix in the target.
+- **Skip:** the asset is left in the source project. This is the default when the file is an exact content duplicate (same stored `content_hash`) of a version already in the target.
+
+The server re-detects collisions inside the move and **fails any unresolved collision** (`unresolved-collision`), so a stale UI or a direct API call can never silently duplicate.
+
+### Key files and entry points
+- `lib/store/asset-move-store.ts` — `moveAssetsBetweenProjects()` (resolution-aware), `mergeAssetAsNewVersions()`, `performPlainMove()`.
+- `lib/store/canonical-asset-store.ts` — `findMoveCollision()` (name match + exact-dupe test), `computeNextFreeAssetName()`.
+- `app/api/projects/[projectId]/media/move/preflight/route.ts` — collision preflight → `{ collisions }`.
+- `app/api/projects/[projectId]/media/move/route.ts` — commits the move with `resolutions`; records activity.
+- `components/projects/MoveAssetsModal.tsx` — pick-target → resolve-collisions → summary steps.
+
+### Data flow (inputs → outputs)
+Selected asset ids + target project → preflight POST → (collisions?) resolution UI → move POST with `resolutions` → per-asset plain move / rename / merge / skip → result buckets (`moved`/`renamed`/`merged`/`skipped`/`failed`) drive the modal summary and the source-tab refresh.
+
+### Current status / known gaps
+Operational. Collisions are matched by normalized display name (with a version-suffix base pass) mirroring the upload version-candidate logic. Merge intentionally discards the moving asset's own identity/history (destination asset becomes authoritative). Not yet runtime-verified end-to-end from the shipping session — see the matching project-history entry for the manual scenarios to walk.
+
+---
+
 ## Frame.io Upload Pipeline
 
 ### Key files

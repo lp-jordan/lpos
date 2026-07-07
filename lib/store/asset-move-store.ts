@@ -1,5 +1,10 @@
 import { getCoreDb, withTransaction } from '@/lib/store/core-db';
 import { getCanonicalAssetDb } from '@/lib/store/canonical-asset-db';
+import {
+  findMoveCollision,
+  computeNextFreeAssetName,
+  patchCanonicalMediaAsset,
+} from '@/lib/store/canonical-asset-store';
 
 /**
  * Move one or more assets from one project to another. Touches two databases:
@@ -34,88 +39,231 @@ import { getCanonicalAssetDb } from '@/lib/store/canonical-asset-db';
  * transactions, which gives us per-DB atomicity. A crash between DB writes
  * is theoretically possible; for v1 we accept that tradeoff (moves are
  * admin-initiated and rare).
+ *
+ * Name collisions: if the moving asset's (normalized) name already exists in
+ * the target project, the caller must supply a per-asset `resolution` — the
+ * move UI surfaces this via a preflight check (findMoveCollision). Without a
+ * resolution, a colliding asset FAILS with `unresolved-collision` so we can
+ * never silently drop two same-named "B1"s into one project. Resolutions:
+ *   - 'skip'        → leave the asset in the source (used for exact dupes).
+ *   - 'rename'      → move it, then append " (n)" so both survive distinctly.
+ *   - 'new_version' → MERGE: re-parent the moving asset's versions onto the
+ *                     colliding destination asset as new version numbers, then
+ *                     delete the emptied moving shell. See mergeAssetAsNewVersions.
  */
 
+export type MoveResolutionAction = 'rename' | 'new_version' | 'skip';
+
+export interface MoveResolution {
+  action: MoveResolutionAction;
+}
+
 export interface AssetMoveResult {
+  /** Assets that landed in the target as-is or via rename (still their own asset). */
   movedAssetIds: string[];
+  /** Renamed-on-collision moves (subset of movedAssetIds), with the new display name. */
+  renamed: Array<{ assetId: string; newName: string }>;
+  /** Assets merged into a destination asset as new versions (the moving shell is gone). */
+  merged: Array<{ assetId: string; destAssetId: string; asVersion: number }>;
+  /** Assets deliberately not moved (e.g. exact duplicate → skip, leave in source). */
+  skipped: Array<{ assetId: string; reason: string }>;
   failedAssetIds: Array<{ assetId: string; reason: string }>;
+}
+
+/**
+ * Plain move of a single asset: flip its project_id (canonical DB) + repoint
+ * legacy share links and drop old-project deliverable memberships (core DB).
+ * Factored out so the 'rename' resolution can reuse it before renaming.
+ */
+function performPlainMove(assetId: string, fromProjectId: string, toProjectId: string, now: string): void {
+  const canonicalDb = getCanonicalAssetDb();
+  const coreDb = getCoreDb();
+
+  withTransaction(canonicalDb, () => {
+    canonicalDb
+      .prepare('UPDATE assets SET project_id = ?, updated_at = ? WHERE asset_id = ?')
+      .run(toProjectId, now, assetId);
+  });
+
+  // `asset_share_links` PK is (project_id, asset_id, share_id), so updating
+  // project_id in place is safe as long as the same share_id doesn't exist in
+  // the target project (it won't — share_ids are UUIDs).
+  withTransaction(coreDb, () => {
+    coreDb
+      .prepare('UPDATE asset_share_links SET project_id = ? WHERE asset_id = ? AND project_id = ?')
+      .run(toProjectId, assetId, fromProjectId);
+
+    coreDb
+      .prepare(
+        `DELETE FROM deliverable_assets
+         WHERE asset_id = ?
+           AND deliverable_id IN (
+             SELECT deliverable_id FROM deliverables WHERE project_id = ?
+           )`,
+      )
+      .run(assetId, fromProjectId);
+  });
+}
+
+/**
+ * Merge a moving asset's version chain onto an existing destination asset, stacking its
+ * versions ABOVE the destination's highest number so the moved content becomes the newest
+ * version(s). Child rows (media_files / distribution_records / transcription_jobs) reference
+ * asset_version_id and so follow their version automatically; editorial_links + ingest_exceptions
+ * reference asset_id directly and are re-pointed explicitly (editorial_links would otherwise be
+ * cascade-deleted with the shell). The emptied moving asset row is then deleted.
+ *
+ * Returns the first (lowest) new version number the moved content occupies on the destination.
+ */
+function mergeAssetAsNewVersions(
+  movingAssetId: string,
+  destAssetId: string,
+  fromProjectId: string,
+  toProjectId: string,
+  now: string,
+): { asVersion: number } {
+  const canonicalDb = getCanonicalAssetDb();
+  const coreDb = getCoreDb();
+  let firstNewVersion = 1;
+
+  withTransaction(canonicalDb, () => {
+    const maxRow = canonicalDb
+      .prepare('SELECT MAX(version_number) AS n FROM asset_versions WHERE asset_id = ?')
+      .get(destAssetId) as { n: number | null } | undefined;
+    const base = maxRow?.n ?? 0;
+    firstNewVersion = base + 1;
+
+    // Re-point the moving asset's versions ascending. New numbers are strictly greater than
+    // the destination's existing max, so UNIQUE(asset_id, version_number) can't clash.
+    const movingVersions = canonicalDb
+      .prepare(
+        'SELECT asset_version_id FROM asset_versions WHERE asset_id = ? ORDER BY version_number ASC, created_at ASC',
+      )
+      .all(movingAssetId) as Array<{ asset_version_id: string }>;
+    movingVersions.forEach((v, i) => {
+      canonicalDb
+        .prepare('UPDATE asset_versions SET asset_id = ?, version_number = ?, updated_at = ? WHERE asset_version_id = ?')
+        .run(destAssetId, base + i + 1, now, v.asset_version_id);
+    });
+
+    // Re-point asset_id-scoped rows so nothing is lost when the shell is deleted.
+    canonicalDb
+      .prepare('UPDATE editorial_links SET asset_id = ?, updated_at = ? WHERE asset_id = ?')
+      .run(destAssetId, now, movingAssetId);
+    canonicalDb
+      .prepare('UPDATE ingest_exceptions SET asset_id = ?, updated_at = ? WHERE asset_id = ?')
+      .run(destAssetId, now, movingAssetId);
+
+    canonicalDb.prepare('UPDATE assets SET updated_at = ? WHERE asset_id = ?').run(now, destAssetId);
+
+    // Delete the now-empty moving shell. Its versions/editorial_links were re-pointed above,
+    // so ON DELETE CASCADE has nothing of value left to remove.
+    canonicalDb.prepare('DELETE FROM assets WHERE asset_id = ?').run(movingAssetId);
+  });
+
+  withTransaction(coreDb, () => {
+    // Share links follow the content onto the destination asset in the target project.
+    coreDb
+      .prepare('UPDATE asset_share_links SET project_id = ?, asset_id = ? WHERE asset_id = ?')
+      .run(toProjectId, destAssetId, movingAssetId);
+    // The moving asset ceases to exist — drop all its deliverable memberships.
+    coreDb.prepare('DELETE FROM deliverable_assets WHERE asset_id = ?').run(movingAssetId);
+  });
+
+  return { asVersion: firstNewVersion };
 }
 
 export function moveAssetsBetweenProjects(input: {
   fromProjectId: string;
   toProjectId: string;
   assetIds: string[];
+  resolutions?: Record<string, MoveResolution>;
 }): AssetMoveResult {
-  const { fromProjectId, toProjectId, assetIds } = input;
+  const { fromProjectId, toProjectId, assetIds, resolutions = {} } = input;
+  const empty: AssetMoveResult = {
+    movedAssetIds: [],
+    renamed: [],
+    merged: [],
+    skipped: [],
+    failedAssetIds: [],
+  };
   if (fromProjectId === toProjectId) {
     return {
-      movedAssetIds: [],
+      ...empty,
       failedAssetIds: assetIds.map((id) => ({ assetId: id, reason: 'Source and target project are the same' })),
     };
   }
 
-  const moved: string[] = [];
-  const failed: Array<{ assetId: string; reason: string }> = [];
-
+  const result: AssetMoveResult = { ...empty };
   const canonicalDb = getCanonicalAssetDb();
-  const coreDb = getCoreDb();
   const now = new Date().toISOString();
 
   for (const assetId of assetIds) {
-    // Verify the asset exists in the source project. We hit canonical DB —
-    // it's the source of truth for assets.
+    // Verify the asset exists in the source project. Canonical DB is the source of truth.
     const existing = canonicalDb
       .prepare('SELECT asset_id, project_id FROM assets WHERE asset_id = ?')
       .get(assetId) as { asset_id: string; project_id: string } | undefined;
     if (!existing) {
-      failed.push({ assetId, reason: 'Asset not found' });
+      result.failedAssetIds.push({ assetId, reason: 'Asset not found' });
       continue;
     }
     if (existing.project_id !== fromProjectId) {
-      failed.push({ assetId, reason: `Asset is not in project ${fromProjectId} (currently ${existing.project_id})` });
+      result.failedAssetIds.push({
+        assetId,
+        reason: `Asset is not in project ${fromProjectId} (currently ${existing.project_id})`,
+      });
+      continue;
+    }
+
+    const resolution = resolutions[assetId];
+    // Re-detect the collision server-side (defensive — never trust the client's preflight to
+    // be current). A resolution without a live collision falls back to a plain move.
+    const collision = findMoveCollision(toProjectId, assetId);
+
+    // Explicit user skip wins regardless — they chose not to bring this asset over.
+    if (resolution?.action === 'skip') {
+      result.skipped.push({
+        assetId,
+        reason: collision?.isExactDuplicate ? 'exact-duplicate' : 'skipped-by-user',
+      });
+      continue;
+    }
+
+    // A live collision with no resolution is a hard stop — the UI must resolve it first.
+    if (collision && !resolution) {
+      result.failedAssetIds.push({ assetId, reason: 'unresolved-collision' });
       continue;
     }
 
     try {
-      // Canonical DB — move the asset row itself.
-      withTransaction(canonicalDb, () => {
-        canonicalDb
-          .prepare('UPDATE assets SET project_id = ?, updated_at = ? WHERE asset_id = ?')
-          .run(toProjectId, now, assetId);
-      });
+      if (collision && resolution?.action === 'new_version') {
+        const { asVersion } = mergeAssetAsNewVersions(
+          assetId,
+          collision.destAssetId,
+          fromProjectId,
+          toProjectId,
+          now,
+        );
+        result.merged.push({ assetId, destAssetId: collision.destAssetId, asVersion });
+        continue;
+      }
 
-      // Core DB — update legacy share links + drop old-project deliverable links.
-      // `asset_share_links` PK is (project_id, asset_id, share_id), so updating
-      // project_id in place is safe as long as the same share_id doesn't exist
-      // in the target project (it won't — share_ids are UUIDs).
-      withTransaction(coreDb, () => {
-        coreDb
-          .prepare('UPDATE asset_share_links SET project_id = ? WHERE asset_id = ? AND project_id = ?')
-          .run(toProjectId, assetId, fromProjectId);
+      // Plain move — covers "no collision" and "collision + rename".
+      performPlainMove(assetId, fromProjectId, toProjectId, now);
 
-        coreDb
-          .prepare(
-            `DELETE FROM deliverable_assets
-             WHERE asset_id = ?
-               AND deliverable_id IN (
-                 SELECT deliverable_id FROM deliverables WHERE project_id = ?
-               )`,
-          )
-          .run(assetId, fromProjectId);
-      });
+      if (collision && resolution?.action === 'rename') {
+        // Compute the free name AFTER the move: the asset is now in the target, so its own
+        // "B1" occupies the base slot alongside the pre-existing "B1" → we get "B1 (1)".
+        const newName = computeNextFreeAssetName(toProjectId, collision.movingName);
+        patchCanonicalMediaAsset(toProjectId, assetId, { name: newName });
+        result.renamed.push({ assetId, newName });
+      }
 
-      // Activity DB is intentionally NOT touched here. See the file-level
-      // docstring — historical events stay at the source so the asset's
-      // pre-move history is preserved in the source project's feed; the
-      // asset.moved event recorded by the API route at the TARGET project
-      // anchors the new location. Future activity naturally lands at the
-      // target because the asset's project_id is now the target.
-
-      moved.push(assetId);
+      result.movedAssetIds.push(assetId);
     } catch (err) {
-      failed.push({ assetId, reason: (err as Error).message });
+      result.failedAssetIds.push({ assetId, reason: (err as Error).message });
     }
   }
 
-  return { movedAssetIds: moved, failedAssetIds: failed };
+  return result;
 }
