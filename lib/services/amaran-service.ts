@@ -147,6 +147,7 @@ export class AmaranService {
   private _fixtures:      AmaranFixture[]                = [];
   private _states:        Record<string, AmaranFixtureState> = {};
   private _fixtureModes:  Record<string, 'cct' | 'hsi'> = {};
+  private _refreshing:    boolean                        = false;
 
   constructor(io?: SocketIOServer | null) {
     this.io = io;
@@ -246,6 +247,13 @@ export class AmaranService {
       try { this.ws.close(); } catch { /* ignore */ }
       this.ws = null;
     }
+    // Don't leave a request hanging on a dead socket — fail it so the serial
+    // request queue advances instead of stalling for the full 5 s timeout.
+    if (this.inFlight) {
+      clearTimeout(this.inFlight.timer);
+      this.inFlight.resolve({ code: -1, data: null });
+      this.inFlight = null;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -295,8 +303,8 @@ export class AmaranService {
           }));
       }
 
-      // Pull state sequentially — action-only pending keys mean concurrent
-      // same-action requests across fixtures would overwrite each other's resolver.
+      // Pull each fixture's state. The serial request queue guarantees ordering,
+      // so no two fixtures' same-action replies can be confused.
       for (const f of this._fixtures) {
         await this.pullNodeState(f.nodeId).catch(() => {});
       }
@@ -354,12 +362,7 @@ export class AmaranService {
       }
 
       if (msg.type === 'response' && typeof msg.action === 'string') {
-        const entry = this.pending.get(msg.action);
-        if (entry) {
-          clearTimeout(entry.timer);
-          this.pending.delete(msg.action);
-          entry.resolve({ code: Number(msg.code ?? -1), data: msg.data ?? null });
-        }
+        this.resolveResponse(msg.action, Number(msg.code ?? -1), msg.data ?? null);
       }
     } catch {
       // Non-JSON messages — ignore
@@ -413,12 +416,41 @@ export class AmaranService {
 
   // ── Low-level request/response ──────────────────────────────────────────────
 
-  private pending = new Map<string, {
+  // Amaran Desktop's responses echo only `action` — never node_id — so a reply
+  // can be matched to its request ONLY when exactly one request is outstanding.
+  // We therefore funnel every request through a serial queue: one in flight at a
+  // time. This is what prevents cross-fixture contamination (the 30 s poll
+  // overlapping a preset apply, a manual refresh, or a second guest client)
+  // that previously let one fixture's reply resolve another fixture's request.
+
+  private sendChain: Promise<unknown> = Promise.resolve();
+
+  private inFlight: {
+    action:  string;
     resolve: (res: { code: number; data: unknown }) => void;
     timer:   ReturnType<typeof setTimeout>;
-  }>();
+  } | null = null;
+
+  // After a request times out its answer may still arrive late. We briefly
+  // swallow the next response for that action so a straggler can't resolve a
+  // later same-action request with stale data. Only ever armed after a timeout,
+  // so it is invisible during healthy operation.
+  private staleActions = new Map<string, ReturnType<typeof setTimeout>>();
 
   private sendRequest(
+    action: string,
+    nodeId: string | undefined,
+    args:   Record<string, unknown>,
+  ): Promise<{ code: number; data: unknown }> {
+    const run = () => this.sendRequestRaw(action, nodeId, args);
+    // Chain onto the queue regardless of the previous request's outcome, then
+    // keep the chain alive so one rejection doesn't poison later requests.
+    const result = this.sendChain.then(run, run);
+    this.sendChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private sendRequestRaw(
     action: string,
     nodeId: string | undefined,
     args:   Record<string, unknown>,
@@ -431,27 +463,51 @@ export class AmaranService {
       const req: AmaranRequest = { version: 2, token: '', action, args };
       if (nodeId) req.node_id = nodeId;
 
-      // Keyed by action only — Amaran Desktop responses don't reliably echo
-      // node_id, so we can't key by action+nodeId. Collision is avoided by
-      // ensuring no two concurrent requests use the same action (discovery and
-      // refresh process fixtures sequentially; preset apply is already sequential).
       const timer = setTimeout(() => {
-        if (this.pending.get(action)?.timer === timer) {
-          this.pending.delete(action);
+        if (this.inFlight?.timer === timer) {
+          this.inFlight = null;
+          this.markStale(action);
           reject(new Error(`[amaran] timeout waiting for ${action}`));
         }
       }, 5_000);
 
-      this.pending.set(action, { resolve, timer });
+      this.inFlight = { action, resolve, timer };
 
       try {
         this.ws.send(JSON.stringify({ id: ++_reqId, ...req }));
       } catch (err) {
         clearTimeout(timer);
-        this.pending.delete(action);
+        this.inFlight = null;
         reject(err);
       }
     });
+  }
+
+  /** Match an Amaran Desktop response to the single outstanding request. */
+  private resolveResponse(action: string, code: number, data: unknown): void {
+    // Swallow a late answer to an already-timed-out request.
+    const stale = this.staleActions.get(action);
+    if (stale) {
+      clearTimeout(stale);
+      this.staleActions.delete(action);
+      return;
+    }
+    if (this.inFlight && this.inFlight.action === action) {
+      clearTimeout(this.inFlight.timer);
+      const entry = this.inFlight;
+      this.inFlight = null;
+      entry.resolve({ code, data });
+    }
+  }
+
+  private markStale(action: string): void {
+    const existing = this.staleActions.get(action);
+    if (existing) clearTimeout(existing);
+    this.staleActions.set(action, setTimeout(() => this.staleActions.delete(action), 1_500));
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   // ── Control API ─────────────────────────────────────────────────────────────
@@ -464,11 +520,49 @@ export class AmaranService {
 
   async setPower(on: boolean, nodeId?: string): Promise<void> {
     const id = this.resolveNodeId(nodeId);
-    await this.sendRequest('set_sleep', id, { sleep: !on });
+    const ok = await this.applyPowerWithVerify(id, on);
+    if (!ok) {
+      console.warn(`[amaran] setPower(${on}) for ${id} could not be confirmed after retry`);
+    }
+    this.emitStatus();
+  }
+
+  /**
+   * Send set_sleep, then read back get_sleep to confirm the fixture actually
+   * changed. Bluetooth silently drops frames — especially to a sleeping light —
+   * so a single unacknowledged set_sleep is why "off" was unreliable. Retries
+   * once if the read-back disagrees. Records the verified state; on total
+   * failure falls back to the requested state so the UI isn't wedged.
+   *
+   * Returns true if the fixture's power was confirmed to match `on`.
+   */
+  private async applyPowerWithVerify(id: string, on: boolean, attempts = 2): Promise<boolean> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        await this.sendRequest('set_sleep', id, { sleep: !on });
+      } catch { /* send failed — read back anyway, then retry */ }
+
+      // Let the fixture apply the change before reading it back. Waking from
+      // sleep takes longer than dropping into it.
+      await this.delay(on ? 350 : 150);
+
+      try {
+        const res = await this.sendRequest('get_sleep', id, {});
+        if (res.code === 0) {
+          const actualOn = !res.data;
+          const state = this._states[id] ?? defaultFixtureState();
+          state.power = actualOn;
+          this._states[id] = state;
+          if (actualOn === on) return true;   // confirmed
+        }
+      } catch { /* read-back failed — retry */ }
+    }
+
+    // Could not confirm — record the intent so the UI reflects the attempt.
     const state = this._states[id] ?? defaultFixtureState();
     state.power = on;
     this._states[id] = state;
-    this.emitStatus();
+    return false;
   }
 
   /** brightness: 0–100 % */
@@ -517,13 +611,19 @@ export class AmaranService {
   }
 
   async refreshStatus(): Promise<void> {
-    if (this._fixtures.length > 0) {
-      for (const f of this._fixtures) {
-        await this.pullNodeState(f.nodeId).catch(() => {});
+    if (this._refreshing) return;   // a poll/refresh is already running — don't stack
+    this._refreshing = true;
+    try {
+      if (this._fixtures.length > 0) {
+        for (const f of this._fixtures) {
+          await this.pullNodeState(f.nodeId).catch(() => {});
+        }
+        this.emitStatus();
+      } else {
+        await this.discoverAndRefresh();
       }
-      this.emitStatus();
-    } else {
-      await this.discoverAndRefresh();
+    } finally {
+      this._refreshing = false;
     }
   }
 
