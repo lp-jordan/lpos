@@ -5,6 +5,7 @@ import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-a
 import { getTaskStore, getTaskHandoffStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
+import { isTerminalStatus } from '@/lib/models/task-phase';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getUserById } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
@@ -75,7 +76,18 @@ export async function PATCH(
     // counts as the new owner engaging, which silences any pending handoff
     // alarm on this task. The store helper no-ops when the actor isn't a
     // target, so no need to gate the call.
-    getTaskHandoffStore().completeOnActivity(taskId, session.userId, 'status_change');
+    const handoffStore = getTaskHandoffStore();
+    if (isTerminalStatus(updated.taskType, updated.status)) {
+      // Moving a task to its terminal ("Done") status closes the work outright,
+      // so silence any pending handoff regardless of who marked it done — a
+      // finished task should never be re-pinged. (completeOnActivity only fires
+      // for a target assignee, which wouldn't cover an admin/handoff-er closing
+      // it out.)
+      const pending = handoffStore.getPendingForTask(taskId);
+      if (pending) handoffStore.markCompleted(pending.handoffId, 'status_change');
+    } else {
+      handoffStore.completeOnActivity(taskId, session.userId, 'status_change');
+    }
   }
 
   // Notify newly added assignees

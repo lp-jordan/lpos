@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveProjectMediaStorageDir } from '@/lib/services/storage-volume-service';
-import { readRegistry } from '@/lib/store/media-registry';
+import { readRegistry, getAsset } from '@/lib/store/media-registry';
+import { extractThumbnail } from '@/lib/services/media-probe';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string }> };
 
@@ -32,9 +33,28 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   }
 
   // ── Static asset thumbnail: serve local .thumb.jpg ────────────────────────
+  // The thumbnail lives next to the media file — same directory as the asset's
+  // stored `filePath` — NOT under resolveProjectMediaStorageDir(projectId).
+  // When an asset is moved between projects only its DB `project_id` changes;
+  // the bytes on disk stay put (which is why the /stream route, keyed off the
+  // stored absolute filePath, keeps working post-move). Deriving the thumb dir
+  // from filePath therefore resolves correctly for both current and
+  // already-moved assets. We fall back to the project media dir for assets that
+  // predate a stored filePath, and regenerate the thumb on the fly when it's
+  // missing but the source media is still on disk.
   try {
-    const mediaDir = resolveProjectMediaStorageDir(projectId);
-    const thumbPath = path.join(mediaDir, `${assetId}.thumb.jpg`);
+    const asset = getAsset(projectId, assetId);
+
+    let thumbPath: string;
+    if (asset?.filePath) {
+      thumbPath = path.join(path.dirname(asset.filePath), `${assetId}.thumb.jpg`);
+    } else {
+      thumbPath = path.join(resolveProjectMediaStorageDir(projectId), `${assetId}.thumb.jpg`);
+    }
+
+    if (!fs.existsSync(thumbPath) && asset?.filePath && fs.existsSync(asset.filePath)) {
+      await extractThumbnail(asset.filePath, thumbPath);
+    }
 
     if (!fs.existsSync(thumbPath)) {
       return new NextResponse(null, { status: 404 });

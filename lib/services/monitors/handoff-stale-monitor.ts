@@ -26,6 +26,7 @@ import { getTaskStore, getTaskHandoffStore } from '@/lib/services/container';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 import { getUserById } from '@/lib/store/user-store';
 import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
+import { isTerminalStatus } from '@/lib/models/task-phase';
 
 export class HandoffStaleMonitor implements Monitor {
   readonly name = 'handoff-stale';
@@ -71,6 +72,17 @@ export class HandoffStaleMonitor implements Monitor {
       if (!task) {
         handoffStore.markCompleted(handoff.handoffId, 'manual');
         console.warn(`[handoff-stale-monitor] handoff ${handoff.handoffId} references missing task — closing as 'manual'`);
+        continue;
+      }
+
+      // A task that has reached its terminal ("Done") status is finished — the
+      // new owner has nothing left to engage with, so stop re-pinging. This
+      // covers tasks moved to Done by anyone (not just a target assignee, which
+      // is all completeOnActivity handles) as well as tasks that were already
+      // Done when the handoff came due. Close the handoff so it doesn't recur.
+      if (isTerminalStatus(task.taskType, task.status)) {
+        handoffStore.markCompleted(handoff.handoffId, 'status_change');
+        console.log(`[handoff-stale-monitor] handoff ${handoff.handoffId} skipped — task already in terminal status '${task.status}'`);
         continue;
       }
 
