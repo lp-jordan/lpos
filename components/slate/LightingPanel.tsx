@@ -1,30 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-  arrayMove,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { createPortal } from 'react-dom';
 import type { AmaranFixture, AmaranFixtureState, AmaranColorMode } from '@/lib/services/amaran-service';
 import { useLighting } from '@/hooks/useLighting';
 import { AMARAN_GROUPS, GROUP_LABELS, type AmaranFixtureGroup } from '@/lib/lighting-constants';
-import { WledPanel } from '@/components/slate/WledPanel';
-import { FillSlider, cctFillColor, PowerIcon } from '@/components/slate/lighting-controls';
+import { WledTile } from '@/components/slate/WledPanel';
+import { FillSlider, cctFillColor } from '@/components/slate/lighting-controls';
 import { useLightingPresets, snapshotAmaran, findIncompleteFixtures } from '@/hooks/useLightingPresets';
 import type { PresetWledState } from '@/lib/store/lighting-presets-store';
 import {
-  PresetsModal, EditingBar, PresetsTrigger, NameDialog, AllPowerToggle, SaveWarningDialog,
+  PresetsModal, EditingBar, NameDialog, SaveWarningDialog,
 } from '@/components/slate/LightingPresets';
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -51,22 +37,35 @@ function GearIcon() {
   );
 }
 
-
-function DragHandleIcon() {
+/** Filament bulb — the shared tile glyph. */
+export function BulbIcon() {
   return (
-    <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
-      <circle cx="4" cy="3"  r="1.5"/>
-      <circle cx="8" cy="3"  r="1.5"/>
-      <circle cx="4" cy="8"  r="1.5"/>
-      <circle cx="8" cy="8"  r="1.5"/>
-      <circle cx="4" cy="13" r="1.5"/>
-      <circle cx="8" cy="13" r="1.5"/>
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18h6M10 21h4"/>
+      <path d="M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.4 1 2.5h6c0-1.1.4-1.9 1-2.5A6 6 0 0 0 12 3Z"/>
     </svg>
   );
 }
 
+/** Power ⏻ glyph for the tile toggle dot. */
+export function TilePowerGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round">
+      <path d="M12 3v9"/>
+      <path d="M6.5 7a8 8 0 1 0 11 0"/>
+    </svg>
+  );
+}
 
-// ── ColorWheel ────────────────────────────────────────────────────────────────
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M1 1l12 12M13 1L1 13"/>
+    </svg>
+  );
+}
+
+// ── Colour helpers ────────────────────────────────────────────────────────────
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   s /= 100; l /= 100;
@@ -76,6 +75,17 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 }
 
+/** The colour a fixture is currently emitting — drives the tile glow + sheet swatch. */
+export function glowColor(mode: AmaranColorMode, cct: number, hue: number, sat: number, hasHSI: boolean): string {
+  if (hasHSI && mode === 'hsi') {
+    const [r, g, b] = hslToRgb(hue, sat, 58);
+    return `rgb(${r},${g},${b})`;
+  }
+  return cctFillColor(cct);
+}
+
+// ── ColorWheel ────────────────────────────────────────────────────────────────
+
 interface ColorWheelProps {
   hue: number; saturation: number; active: boolean;
   onChange: (hue: number, saturation: number) => void;
@@ -83,7 +93,7 @@ interface ColorWheelProps {
 
 function ColorWheel({ hue, saturation, active, onChange }: ColorWheelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const SIZE = 110; const R = SIZE / 2;
+  const SIZE = 168; const R = SIZE / 2;
 
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return;
@@ -97,15 +107,15 @@ function ColorWheel({ hue, saturation, active, onChange }: ColorWheelProps) {
         const h = ((angle * 180 / Math.PI) + 360) % 360, s = (dist / R) * 100;
         const [r, g, b] = hslToRgb(h, s, 50);
         const idx = (y * SIZE + x) * 4;
-        data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = active ? 255 : 140;
+        data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
     const selAngle = hue * Math.PI / 180, selDist = (saturation / 100) * R;
     const sx = R + Math.cos(selAngle) * selDist, sy = R + Math.sin(selAngle) * selDist;
-    ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 2*Math.PI);
-    ctx.strokeStyle = active ? '#fff' : 'rgba(255,255,255,0.45)'; ctx.lineWidth = 2.5; ctx.stroke();
-    ctx.beginPath(); ctx.arc(sx, sy, 7, 0, 2*Math.PI);
+    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 2*Math.PI);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 2*Math.PI);
     ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
   }, [hue, saturation, active, R]);
 
@@ -123,30 +133,14 @@ function ColorWheel({ hue, saturation, active, onChange }: ColorWheelProps) {
   }, [R, onChange]);
 
   return (
-    <canvas ref={canvasRef} width={SIZE} height={SIZE} className="lp-color-wheel"
-      style={{ opacity: active ? 1 : 0.5 }}
+    <canvas ref={canvasRef} width={SIZE} height={SIZE} className="lp-sheet-wheel-canvas"
       onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); getCoords(e); }}
       onPointerMove={(e) => { if (e.buttons > 0) getCoords(e); }}
     />
   );
 }
 
-// ── FixtureRow ────────────────────────────────────────────────────────────────
-
-interface FixtureRowProps {
-  fixture:         AmaranFixture;
-  state:           AmaranFixtureState | undefined;
-  label:           string;
-  group:           AmaranFixtureGroup | undefined;
-  loading:         boolean;
-  isAdmin:         boolean;
-  showGroupPicker: boolean;
-  isDragging:      boolean;
-  dragHandleProps: Record<string, unknown>;
-  onCommand:       (method: string, nodeId: string, params?: Record<string, unknown>) => void;
-  onRename:        (nodeId: string, label: string) => void;
-  onMoveToGroup:   (nodeId: string, group: AmaranFixtureGroup) => void;
-}
+// ── Capabilities ──────────────────────────────────────────────────────────────
 
 function useCaps(fixture: AmaranFixture) {
   return {
@@ -156,37 +150,51 @@ function useCaps(fixture: AmaranFixture) {
   };
 }
 
-function FixtureRow({
-  fixture, state, label, group, loading, isAdmin, showGroupPicker, isDragging,
-  dragHandleProps, onCommand, onRename, onMoveToGroup,
-}: FixtureRowProps) {
-  const { hasHSI, cctMin, cctMax } = useCaps(fixture);
+// ── FixtureTile (+ its detail sheet) ──────────────────────────────────────────
 
-  const [activeMode,  setActiveMode]  = useState<AmaranColorMode>(state?.mode ?? 'cct');
-  const [intensity,   setIntensity]   = useState(state?.brightness ?? 50);
-  const [cct,         setCct]         = useState(() => {
+interface FixtureTileProps {
+  fixture:      AmaranFixture;
+  state:        AmaranFixtureState | undefined;
+  label:        string;
+  group:        AmaranFixtureGroup | undefined;
+  loading:      boolean;
+  isAdmin:      boolean;
+  open:         boolean;
+  onOpen:       (nodeId: string) => void;
+  onClose:      () => void;
+  onCommand:    (method: string, nodeId: string, params?: Record<string, unknown>) => void;
+  onRename:     (nodeId: string, label: string) => void;
+  onMoveToGroup:(nodeId: string, group: AmaranFixtureGroup) => void;
+}
+
+function FixtureTile({
+  fixture, state, label, group, loading, isAdmin, open, onOpen, onClose,
+  onCommand, onRename, onMoveToGroup,
+}: FixtureTileProps) {
+  const { hasHSI, cctMin, cctMax } = useCaps(fixture);
+  const id = fixture.nodeId;
+
+  const [mode,       setMode]       = useState<AmaranColorMode>(state?.mode ?? 'cct');
+  const [intensity,  setIntensity]  = useState(state?.brightness ?? 50);
+  const [cct,        setCct]        = useState(() => {
     const v = state?.cct ?? Math.round((cctMin + cctMax) / 2);
     return Math.max(cctMin, Math.min(cctMax, v));
   });
-  const [hue,         setHue]         = useState(state?.hue        ?? 0);
-  const [saturation,  setSaturation]  = useState(state?.saturation ?? 100);
-  const [editing,     setEditing]     = useState(false);
-  const [nameDraft,   setNameDraft]   = useState(label);
-  const nameInputRef  = useRef<HTMLInputElement>(null);
-  // Suppress server-state sync for 2s after the user touches a control,
-  // preventing Amaran status pushes from blipping sliders mid-interaction.
+  const [hue,        setHue]        = useState(state?.hue        ?? 0);
+  const [saturation, setSaturation] = useState(state?.saturation ?? 100);
+  const [editing,    setEditing]    = useState(false);
+  const [nameDraft,  setNameDraft]  = useState(label);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // Suppress server-state sync for 2s after the user touches a control so
+  // Amaran status pushes don't blip a slider mid-interaction. Mirrors the
+  // original FixtureRow behaviour.
   const lastTouchedAt = useRef<number>(0);
   const touch = () => { lastTouchedAt.current = Date.now(); };
   const recentlyTouched = () => Date.now() - lastTouchedAt.current < 2000;
 
   useEffect(() => {
-    // Mode is set by hardware commands (presets, CCT/HSI switching) — always sync
-    // it so the color wheel activates/deactivates immediately even if the user was
-    // recently dragging a slider.
-    if (state?.mode != null) setActiveMode(state.mode);
-
-    // Slider values are guarded: suppress server-push blips for 2 s after any
-    // user interaction so mid-drag updates don't snap the slider back.
+    if (state?.mode != null) setMode(state.mode);
     if (recentlyTouched()) return;
     if (state?.brightness != null) setIntensity(state.brightness);
     if (state?.cct        != null) setCct(Math.max(cctMin, Math.min(cctMax, state.cct)));
@@ -197,8 +205,21 @@ function FixtureRow({
   useEffect(() => { setNameDraft(label); }, [label]);
   useEffect(() => { if (editing) nameInputRef.current?.select(); }, [editing]);
 
-  const id = fixture.nodeId;
+  // Close the sheet on Escape.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
   const isPowered = state?.power === true;
+  const glow = glowColor(mode, cct, hue, saturation, hasHSI);
+
+  function togglePower() {
+    touch();
+    onCommand('setPower', id, { on: !isPowered });
+  }
 
   function commitRename() {
     const t = nameDraft.trim();
@@ -207,235 +228,177 @@ function FixtureRow({
   }
 
   function commitCCT(kelvin: number) {
-    touch();
-    setActiveMode('cct');
+    touch(); setMode('cct');
     if (isPowered) onCommand('setCCT', id, { kelvin });
   }
 
+  function setColorMode() {
+    touch(); setMode('hsi');
+    if (isPowered) onCommand('setHSI', id, { hue, saturation, brightness: intensity });
+  }
+
   function handleColorWheel(newHue: number, newSat: number) {
-    touch(); setHue(newHue); setSaturation(newSat); setActiveMode('hsi');
+    touch(); setHue(newHue); setSaturation(newSat); setMode('hsi');
     if (isPowered) onCommand('setHSI', id, { hue: newHue, saturation: newSat, brightness: intensity });
   }
 
+  const stateText = isPowered
+    ? `${Math.round(intensity)}%  ·  ${hasHSI && mode === 'hsi' ? 'Colour' : `${cct}K`}`
+    : 'Off';
+
+  const fillHeight = isPowered ? `${Math.max(12, Math.round(intensity))}%` : '0%';
+
   return (
-    <div className={`lp-fixture-row${!isPowered ? ' lp-fixture-row--off' : ''}${isDragging ? ' lp-fixture-row--dragging' : ''}`}>
-
-      {/* Header */}
-      <div className="lp-fixture-row-header">
-
-        {/* Drag handle */}
-        <span className="lp-fixture-drag-handle" {...dragHandleProps} aria-label="Drag to reorder">
-          <DragHandleIcon />
+    <>
+      <div
+        className={`lp-tile${isPowered ? ' lp-tile--on' : ''}`}
+        role="button"
+        tabIndex={0}
+        aria-label={`${label} — ${stateText}. Open controls`}
+        onClick={() => onOpen(id)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(id); } }}
+        style={{
+          borderColor: isPowered ? glow : undefined,
+          boxShadow: isPowered ? `0 8px 30px -12px ${glow}` : undefined,
+        }}
+      >
+        <span
+          className="lp-tile-fill"
+          style={{ height: fillHeight, background: glow, opacity: isPowered ? 0.55 : 0.12 }}
+        />
+        <span className="lp-tile-veil" />
+        <span className="lp-tile-c">
+          <span className="lp-tile-top">
+            <span className={`lp-tile-ico${hasHSI ? ' lp-tile-ico--rgb' : ''}`}><BulbIcon /></span>
+            <button
+              type="button"
+              className="lp-tile-pw"
+              onClick={(e) => { e.stopPropagation(); togglePower(); }}
+              disabled={loading}
+              aria-label={isPowered ? 'Turn off' : 'Turn on'}
+            >
+              <TilePowerGlyph />
+            </button>
+          </span>
+          <span className="lp-tile-body">
+            <span className="lp-tile-name">{label}</span>
+            <span className="lp-tile-state">{stateText}</span>
+          </span>
         </span>
-
-        <span className={`lp-lighting-dot${isPowered ? ' lp-lighting-dot--on' : ''}`} />
-
-        {editing ? (
-          <input
-            ref={nameInputRef}
-            className="lp-fixture-name-input"
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter')  commitRename();
-              if (e.key === 'Escape') { setNameDraft(label); setEditing(false); }
-            }}
-          />
-        ) : (
-          <button type="button" className="lp-fixture-name-btn" onClick={() => setEditing(true)} title="Click to rename">
-            {label}
-          </button>
-        )}
-
-        <span className="lp-fixture-row-id">{fixture.id}</span>
-
-        {/* Section picker — admin only, when arrangement mode is on */}
-        {isAdmin && showGroupPicker && (
-          <select
-            className="lp-fixture-group-select"
-            value={group ?? ''}
-            onChange={(e) => { if (e.target.value) onMoveToGroup(id, e.target.value as AmaranFixtureGroup); }}
-            title="Move to section"
-          >
-            <option value="" disabled>Move to…</option>
-            {AMARAN_GROUPS.map((g) => (
-              <option key={g} value={g}>{GROUP_LABELS[g]}</option>
-            ))}
-          </select>
-        )}
       </div>
 
-      {/* Controls */}
-      <div className="lp-fixture-row-controls">
-        <button
-          type="button"
-          className={`lp-fixture-power-btn${isPowered ? ' lp-fixture-power-btn--on' : ''}`}
-          onClick={() => { touch(); onCommand('setPower', id, { on: !isPowered }); }}
-          disabled={loading}
-          aria-label={isPowered ? 'Turn off' : 'Turn on'}
-        >
-          <PowerIcon />
-          <span>{isPowered ? 'ON' : 'OFF'}</span>
-        </button>
+      {open && createPortal(
+        <div className="lp-sheet-backdrop lp-sheet-backdrop--show" onClick={onClose}>
+          <div className="lp-sheet lp-sheet--show" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`${label} controls`}>
+            <div className="lp-sheet-grabber" />
 
-        <div className="lp-fixture-row-sliders">
-          <FillSlider
-            value={intensity} min={0} max={100} label={`${intensity}%`}
-            fillColor="rgba(255,255,255,0.88)"
-            onChange={(v) => { touch(); setIntensity(v); }}
-            onCommit={(v) => { if (isPowered) onCommand('setBrightness', id, { pct: v }); }}
-          />
-          <FillSlider
-            value={cct} min={cctMin} max={cctMax} label={`${cct}K`}
-            fillColor={cctFillColor(cct)}
-            step={100}
-            onChange={(v) => { touch(); setCct(v); }}
-            onCommit={commitCCT}
-          />
-        </div>
+            <div className="lp-sheet-head">
+              <span className="lp-sheet-glow" style={{ background: isPowered ? glow : 'var(--surface-raised)', color: glow }} />
+              <div className="lp-sheet-titles">
+                {editing ? (
+                  <input
+                    ref={nameInputRef}
+                    className="lp-fixture-name-input"
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter')  commitRename();
+                      if (e.key === 'Escape') { e.stopPropagation(); setNameDraft(label); setEditing(false); }
+                    }}
+                  />
+                ) : (
+                  <button type="button" className="lp-sheet-title" onClick={() => setEditing(true)} title="Rename">
+                    {label}
+                  </button>
+                )}
+                <span className="lp-sheet-meta">{fixture.name} · {fixture.id}</span>
+              </div>
+              <button
+                type="button"
+                className={`lp-tile-pw lp-sheet-power${isPowered ? ' lp-tile--on' : ''}`}
+                onClick={togglePower}
+                disabled={loading}
+                aria-label={isPowered ? 'Turn off' : 'Turn on'}
+              >
+                <TilePowerGlyph />
+              </button>
+              <button type="button" className="lp-sheet-close" onClick={onClose} aria-label="Close"><CloseIcon /></button>
+            </div>
 
-        <div className={`lp-fixture-row-wheel${activeMode === 'hsi' ? ' lp-fixture-row-wheel--active' : ''}`}>
-          {hasHSI && (
-            <ColorWheel hue={hue} saturation={saturation} active={activeMode === 'hsi'} onChange={handleColorWheel} />
-          )}
-        </div>
-      </div>
-    </div>
+            <div className="lp-sheet-label"><span>Brightness</span><span>{Math.round(intensity)}%</span></div>
+            <FillSlider
+              value={intensity} min={0} max={100} label=""
+              fillColor="rgba(255,255,255,0.9)"
+              onChange={(v) => { touch(); setIntensity(v); }}
+              onCommit={(v) => { if (isPowered) onCommand('setBrightness', id, { pct: v }); }}
+            />
+
+            {hasHSI && (
+              <div className="lp-mode-seg">
+                <button type="button" className={mode === 'cct' ? 'lp-mode-seg--on' : ''} onClick={() => commitCCT(cct)}>White</button>
+                <button type="button" className={mode === 'hsi' ? 'lp-mode-seg--on' : ''} onClick={setColorMode}>Colour</button>
+              </div>
+            )}
+
+            {(!hasHSI || mode === 'cct') && (
+              <>
+                <div className="lp-sheet-label"><span>Colour temperature</span><span>{cct}K</span></div>
+                <FillSlider
+                  value={cct} min={cctMin} max={cctMax} step={100} label=""
+                  fillColor={cctFillColor(cct)}
+                  onChange={(v) => { touch(); setCct(v); }}
+                  onCommit={commitCCT}
+                />
+              </>
+            )}
+
+            {hasHSI && mode === 'hsi' && (
+              <div className="lp-sheet-wheel">
+                <ColorWheel hue={hue} saturation={saturation} active onChange={handleColorWheel} />
+              </div>
+            )}
+
+            {isAdmin && (
+              <div className="lp-reassign">
+                <span className="lp-reassign-label">Room</span>
+                <div className="lp-reassign-opts">
+                  {AMARAN_GROUPS.map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`lp-reassign-opt${group === g ? ' lp-reassign-opt--on' : ''}`}
+                      onClick={() => { if (group !== g) onMoveToGroup(id, g); }}
+                    >
+                      {GROUP_LABELS[g]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
-// ── SortableFixtureRow — wraps FixtureRow with dnd-kit sortable ───────────────
+// ── Ordering helper ───────────────────────────────────────────────────────────
 
-interface SortableFixtureRowProps extends Omit<FixtureRowProps, 'isDragging' | 'dragHandleProps'> {
-  id: string;
-}
-
-function SortableFixtureRow({ id, ...rest }: SortableFixtureRowProps) {
-  const {
-    attributes, listeners, setNodeRef, transform, transition, isDragging,
-  } = useSortable({ id });
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 10 : undefined,
-    position: 'relative',
-  };
-
-  return (
-    <div ref={setNodeRef} style={style}>
-      <FixtureRow
-        {...rest}
-        isDragging={isDragging}
-        dragHandleProps={{ ...attributes, ...listeners }}
-      />
-    </div>
-  );
-}
-
-// ── Helpers: build ordered fixture list for a section ─────────────────────────
-
-function buildSectionFixtures(
-  group:    AmaranFixtureGroup | 'ungrouped',
+function orderedRoomFixtures(
+  group:    AmaranFixtureGroup,
   fixtures: AmaranFixture[],
   fixtureGroups: Record<string, AmaranFixtureGroup>,
   fixtureOrder:  Record<AmaranFixtureGroup, string[]>,
 ): AmaranFixture[] {
-  if (group === 'ungrouped') {
-    return fixtures.filter((f) => !fixtureGroups[f.nodeId]);
-  }
-  const ordered = fixtureOrder[group] ?? [];
+  const ordered  = fixtureOrder[group] ?? [];
   const inGroup  = fixtures.filter((f) => fixtureGroups[f.nodeId] === group);
-  // Fixtures that are assigned to this group but not yet in the order array
   const unordered = inGroup.filter((f) => !ordered.includes(f.nodeId));
-  // Return in stored order, then append any newly discovered fixtures
   return [
     ...ordered.map((nid) => inGroup.find((f) => f.nodeId === nid)).filter(Boolean) as AmaranFixture[],
     ...unordered,
   ];
-}
-
-// ── FixtureSection ────────────────────────────────────────────────────────────
-
-interface FixtureSectionProps {
-  group:             AmaranFixtureGroup;
-  fixtures:          AmaranFixture[];
-  status:            ReturnType<typeof useLighting>['status'];
-  arrangement:       ReturnType<typeof useLighting>['arrangement'];
-  loading:           boolean;
-  isAdmin:           boolean;
-  showGroupPicker:   boolean;
-  showWled?:         boolean;
-  wledSnapshotRef?:  React.MutableRefObject<(() => PresetWledState) | null>;
-  onCommand:         FixtureRowProps['onCommand'];
-  onRename:          FixtureRowProps['onRename'];
-  onMoveToGroup:     FixtureRowProps['onMoveToGroup'];
-  onReorder:         (group: AmaranFixtureGroup, newOrder: string[]) => void;
-}
-
-function FixtureSection({
-  group, fixtures, status, arrangement, loading, isAdmin, showGroupPicker, showWled,
-  wledSnapshotRef, onCommand, onRename, onMoveToGroup, onReorder,
-}: FixtureSectionProps) {
-  const sectionFixtures = buildSectionFixtures(group, fixtures, arrangement.fixtureGroups, arrangement.fixtureOrder);
-  const ids = sectionFixtures.map((f) => f.nodeId);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-  );
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const oldIndex = ids.indexOf(String(active.id));
-    const newIndex = ids.indexOf(String(over.id));
-    if (oldIndex === -1 || newIndex === -1) return;
-    onReorder(group, arrayMove(ids, oldIndex, newIndex));
-  }
-
-  return (
-    <div className="lp-lighting-section">
-      <div className="lp-lighting-section-header lp-lighting-section-header--named">
-        <div className="lp-lighting-section-header-left">
-          {GROUP_LABELS[group]}
-        </div>
-        <span className="lp-lighting-section-count">{sectionFixtures.length}</span>
-      </div>
-
-      {/* WLED panel lives inside Bookshelves */}
-      {showWled && <WledPanel snapshotRef={wledSnapshotRef} />}
-
-      {sectionFixtures.length === 0 ? (
-        <p className="lp-lighting-hint lp-lighting-section-empty">
-          {isAdmin ? 'No fixtures assigned — use the section picker on any fixture.' : 'No fixtures in this section.'}
-        </p>
-      ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-            <div className="lp-fixture-rows">
-              {sectionFixtures.map((fixture) => (
-                <SortableFixtureRow
-                  key={fixture.nodeId}
-                  id={fixture.nodeId}
-                  fixture={fixture}
-                  state={status?.states[fixture.nodeId]}
-                  label={arrangement.fixtureLabels[fixture.nodeId] ?? fixture.name}
-                  group={arrangement.fixtureGroups[fixture.nodeId]}
-                  loading={loading}
-                  isAdmin={isAdmin}
-                  showGroupPicker={showGroupPicker}
-                  onCommand={onCommand}
-                  onRename={onRename}
-                  onMoveToGroup={onMoveToGroup}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-      )}
-    </div>
-  );
 }
 
 // ── LightingPanel ─────────────────────────────────────────────────────────────
@@ -444,12 +407,12 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const {
     status, loading, error, arrangement,
     sendCommand, syncStatus, refreshHardware, connect, disconnect, rediscover,
-    renameFixture, moveFixtureToGroup, reorderGroup,
+    renameFixture, moveFixtureToGroup,
   } = useLighting();
 
-  const [refreshing,      setRefreshing]      = useState(false);
-  const [arrangementMode, setArrangementMode] = useState(false);
-  const [bulkBusy,        setBulkBusy]        = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [bulkBusy,   setBulkBusy]   = useState(false);
+  const [openNode,   setOpenNode]   = useState<string | null>(null);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -482,11 +445,8 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const [editingPreset, setEditingPreset] = useState<{ id: string; name: string } | null>(null);
   const [nameDialog,    setNameDialog]    = useState(false);
 
-  // WledPanel registers a getter so we can snapshot its current slider values
   const wledSnapshotRef = useRef<(() => PresetWledState) | null>(null);
 
-  // When a save would bake in placeholder values (fixtures haven't reported in),
-  // we stash the pending commit here and surface a warning instead of saving.
   const [saveWarning, setSaveWarning] = useState<{
     fixtures: { label: string; reason: string }[];
     proceed:  () => void;
@@ -498,8 +458,6 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
       ?? nodeId;
   }
 
-  /** Re-poll the hardware, snapshot the fresh state, and either commit or warn
-   *  if any fixture's state is still unknown. */
   async function captureAndGuard(commit: (snap: {
     amaran: ReturnType<typeof snapshotAmaran>; wled: PresetWledState | null;
   }) => void) {
@@ -534,6 +492,14 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
     });
   }
 
+  function handleApplyPreset(id: string) {
+    void applyPreset(id).then(() => {
+      // Pull true hardware state after the sequential apply finishes; give the
+      // last fixture's wake delay time to settle before syncing.
+      setTimeout(() => void syncStatus(), 1500);
+    });
+  }
+
   useEffect(() => {
     fetch('/api/studio/lighting/config')
       .then((r) => r.json())
@@ -564,17 +530,29 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const connected = status?.connected ?? false;
   const fixtures  = status?.fixtures  ?? [];
 
-  // Keep fixture sections mounted while we have data, even during a brief
-  // reconnect gap. Hiding them resets scroll position; the service preserves
-  // fixture state across disconnects so we can safely keep them visible.
   const showSections = connected || fixtures.length > 0;
-
-  // Fixtures not yet assigned to any group
   const ungrouped = fixtures.filter((f) => !arrangement.fixtureGroups[f.nodeId]);
+  const anyOn = fixtures.some((f) => status?.states[f.nodeId]?.power === true);
 
-  // Master toggle reflects "all on" — the thumb sits right only when every
-  // fixture is powered; otherwise a tap turns the whole rig on.
-  const allOn = fixtures.length > 0 && fixtures.every((f) => status?.states[f.nodeId]?.power === true);
+  function renderTile(fixture: AmaranFixture) {
+    return (
+      <FixtureTile
+        key={fixture.nodeId}
+        fixture={fixture}
+        state={status?.states[fixture.nodeId]}
+        label={arrangement.fixtureLabels[fixture.nodeId] ?? fixture.name}
+        group={arrangement.fixtureGroups[fixture.nodeId]}
+        loading={loading}
+        isAdmin={isAdmin}
+        open={openNode === fixture.nodeId}
+        onOpen={setOpenNode}
+        onClose={() => setOpenNode(null)}
+        onCommand={sendCommand}
+        onRename={renameFixture}
+        onMoveToGroup={moveFixtureToGroup}
+      />
+    );
+  }
 
   return (
     <div className="lp-lighting-tab">
@@ -588,18 +566,12 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
 
-      {/* ═══ Presets modal ═══ */}
+      {/* ═══ Presets management modal ═══ */}
       {presetsOpen && (
         <PresetsModal
           presets={presets}
           applying={applying}
-          onApply={(id) => {
-            void applyPreset(id).then(() => {
-              // Pull true hardware state after the sequential apply finishes.
-              // Give the last fixture's wake delay time to settle before syncing.
-              setTimeout(() => void syncStatus(), 1500);
-            });
-          }}
+          onApply={handleApplyPreset}
           onAdd={() => setNameDialog(true)}
           onEdit={(p) => { setEditingPreset({ id: p.id, name: p.name }); setPresetsOpen(false); }}
           onDelete={(p) => void deletePreset(p.id)}
@@ -607,7 +579,6 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
 
-      {/* ═══ Name dialog ═══ */}
       {nameDialog && (
         <NameDialog
           initial="Untitled Preset"
@@ -616,7 +587,6 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
 
-      {/* ═══ Save warning (incomplete fixture state) ═══ */}
       {saveWarning && (
         <SaveWarningDialog
           fixtures={saveWarning.fixtures}
@@ -630,20 +600,10 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         <span className="sl-atem-title">Lighting Control</span>
       </div>
 
-      {/* ═══ Amaran — connection header ═══ */}
+      {/* ═══ Connection header ═══ */}
       <div className="lp-lighting-section">
         <div className="lp-lighting-topbar-actions">
           <span className={`lp-lighting-dot${connected ? ' lp-lighting-dot--on' : ''}`} />
-          {isAdmin && connected && (
-            <button
-              type="button"
-              className={`lp-lighting-btn${arrangementMode ? ' lp-lighting-btn--active' : ''}`}
-              onClick={() => setArrangementMode((v) => !v)}
-              title="Toggle section assignment"
-            >
-              Arrange
-            </button>
-          )}
           {connected ? (
             <>
               <button
@@ -715,72 +675,86 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {/* ═══ Presets trigger + master power toggle ═══ */}
+      {/* ═══ Master + scenes toolbar ═══ */}
       {showSections && (
-        <div className="lp-lighting-actions-row">
-          <PresetsTrigger onClick={() => setPresetsOpen(true)} />
-          <AllPowerToggle
-            on={allOn}
-            busy={bulkBusy}
-            disabled={!connected || fixtures.length === 0}
-            onToggle={(next) => void handleAllPower(next)}
-          />
+        <div className="lp-lightbar">
+          <button
+            type="button"
+            className={`lp-master-c${anyOn ? ' lp-master-c--on' : ''}`}
+            onClick={() => void handleAllPower(!anyOn)}
+            disabled={!connected || fixtures.length === 0 || bulkBusy}
+            aria-pressed={anyOn}
+            title={anyOn ? 'Turn all lights off' : 'Turn all lights on'}
+          >
+            <span className="lp-master-pg"><TilePowerGlyph /></span>
+            <span className="lp-master-label">{bulkBusy ? 'Working…' : 'All lights'}</span>
+          </button>
+
+          <div className="lp-scene-row">
+            {presets.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`lp-scene${applying === p.id ? ' lp-scene--applying' : ''}`}
+                onClick={() => handleApplyPreset(p.id)}
+                title={`Apply ${p.name}`}
+              >
+                {applying === p.id ? 'Applying…' : p.name}
+              </button>
+            ))}
+            <button type="button" className="lp-scene lp-scene--manage" onClick={() => setPresetsOpen(true)} title="Save or edit presets">
+              Presets…
+            </button>
+          </div>
         </div>
       )}
 
-      {/* ═══ Ungrouped (unassigned) fixtures ═══ */}
+      {/* ═══ Unassigned ═══ */}
       {showSections && ungrouped.length > 0 && (
         <div className="lp-lighting-section">
-          <div className="lp-lighting-section-header">
+          <div className="lp-lighting-section-header lp-lighting-section-header--named">
             <div className="lp-lighting-section-header-left">Unassigned</div>
             <span className="lp-lighting-section-count">{ungrouped.length}</span>
           </div>
-          <div className="lp-fixture-rows">
-            {ungrouped.map((fixture) => (
-              <FixtureRow
-                key={fixture.nodeId}
-                fixture={fixture}
-                state={status?.states[fixture.nodeId]}
-                label={arrangement.fixtureLabels[fixture.nodeId] ?? fixture.name}
-                group={undefined}
-                loading={loading}
-                isAdmin={isAdmin}
-                showGroupPicker={arrangementMode}
-                isDragging={false}
-                dragHandleProps={{}}
-                onCommand={sendCommand}
-                onRename={renameFixture}
-                onMoveToGroup={moveFixtureToGroup}
-              />
-            ))}
+          <div className="lp-tile-grid">
+            {ungrouped.map(renderTile)}
           </div>
           {isAdmin && (
             <p className="lp-lighting-hint" style={{ marginTop: 4 }}>
-              Use the section picker on each fixture to assign it to Bookshelves, Void, or Mobile.
+              Open a light and use its Room control to file it under Bookshelves, Void, or Mobile.
             </p>
           )}
         </div>
       )}
 
-      {/* ═══ Named sections ═══ */}
-      {showSections && AMARAN_GROUPS.map((group) => (
-        <FixtureSection
-          key={group}
-          group={group}
-          fixtures={fixtures}
-          status={status}
-          arrangement={arrangement}
-          loading={loading}
-          isAdmin={isAdmin}
-          showGroupPicker={arrangementMode}
-          showWled={group === 'bookshelves'}
-          wledSnapshotRef={group === 'bookshelves' ? wledSnapshotRef : undefined}
-          onCommand={sendCommand}
-          onRename={renameFixture}
-          onMoveToGroup={moveFixtureToGroup}
-          onReorder={reorderGroup}
-        />
-      ))}
+      {/* ═══ Named rooms ═══ */}
+      {showSections && AMARAN_GROUPS.map((group) => {
+        const roomFixtures = orderedRoomFixtures(group, fixtures, arrangement.fixtureGroups, arrangement.fixtureOrder);
+        const showWled = group === 'bookshelves';
+        if (roomFixtures.length === 0 && !showWled) {
+          return (
+            <div className="lp-lighting-section" key={group}>
+              <div className="lp-lighting-section-header lp-lighting-section-header--named">
+                <div className="lp-lighting-section-header-left">{GROUP_LABELS[group]}</div>
+                <span className="lp-lighting-section-count">0</span>
+              </div>
+              <p className="lp-lighting-hint lp-lighting-section-empty">No fixtures in this room.</p>
+            </div>
+          );
+        }
+        return (
+          <div className="lp-lighting-section" key={group}>
+            <div className="lp-lighting-section-header lp-lighting-section-header--named">
+              <div className="lp-lighting-section-header-left">{GROUP_LABELS[group]}</div>
+              <span className="lp-lighting-section-count">{roomFixtures.length + (showWled ? 1 : 0)}</span>
+            </div>
+            <div className="lp-tile-grid">
+              {roomFixtures.map(renderTile)}
+              {showWled && <WledTile snapshotRef={wledSnapshotRef} />}
+            </div>
+          </div>
+        );
+      })}
 
     </div>
   );
