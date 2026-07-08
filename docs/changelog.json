@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-08T20:35:25Z",
+    "title": "Edit button on your new comments appears instantly",
+    "summary": "Fixed a brief delay where the Edit button on a comment you just posted only showed up about a second after posting. The comment-post response now reports the author-edit flag directly (the poster is always the author), so the Edit affordance is present the moment the comment appears — in both the sidebar and theater comment views — instead of waiting for the next background refresh to fill it in."
+  },
+  {
     "timestamp": "2026-07-08T20:23:57Z",
     "title": "Edit media comments from theater mode too",
     "summary": "The full-screen theater player's comment panel now has the same edit button the sidebar comment list already had. Hovering your own comment shows a pencil icon that swaps the comment into an inline editor (⌘↵ to save, Esc to cancel); edits save immediately and stay in sync between the theater and sidebar views. Only your own top-level comments are editable, matching the sidebar."

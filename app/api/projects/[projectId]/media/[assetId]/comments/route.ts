@@ -266,6 +266,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       replies:         [] as Array<unknown>,
       fromFrame:       false,
       mirrorAbandoned: false,
+      // The poster is the author, so the edit affordance applies immediately.
+      // Without this the optimistic insert lacks canEdit and the Edit button
+      // only appears a beat later when the background GET refresh restamps it.
+      canEdit:         !!lposUser,
     };
     return NextResponse.json({ comment: named }, { status: 201 });
   } catch (err) {

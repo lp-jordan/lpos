@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-07-08 — Fix delayed appearance of comment Edit button after posting
+
+**Timestamp:** 2026-07-08T20:35:25Z
+
+**User prompt (verbatim):** "Why does it take a second for the edit option to appear in the sidebar?"
+
+**Response summary:** Diagnosed and fixed. The Edit affordance on media comments is gated on a per-comment `canEdit` flag that only the GET comments route computes. When a user posts a comment, the client optimistically inserts the object returned by the POST route, which never included `canEdit` — so the button stayed hidden until a background `fetchComments()` GET refresh (~1s later) restamped the comment with `canEdit: true`. Added `canEdit: !!lposUser` to the POST top-level response, since the poster is by definition the author. The button now appears immediately in both the sidebar and theater views (both add the POST response to the same `comments` state).
+
+**Files changed:**
+- `app/api/projects/[projectId]/media/[assetId]/comments/route.ts` — POST top-level response object now sets `canEdit: !!lposUser`.
+
+**Decision rationale:** The POST handler already resolves `lposUser` from the session; a non-null `lposUser` means the comment was authored by the current LPOS user, which is exactly the condition GET uses for `canEdit` (`lposUser.id === session.userId`). So declaring `canEdit: !!lposUser` on the POST response is authoritative, not a guess, and needs no extra lookup. Fixing it at the response source (rather than defaulting `canEdit` true on the client's optimistic insert) keeps the server as the single source of truth for the flag and avoids a client-side special case. The reply-branch response is intentionally untouched — replies aren't editable.
+
+**Checks run:** `npx tsc --noEmit` — clean.
+
+**Assumptions / follow-ups:** External (Frame.io reviewer) comments can't be posted through this authenticated route, so `!!lposUser` is effectively always true here; kept the guard for correctness rather than hardcoding `true`. Untracked foreign `C:\...docx` left unstaged.
+
 ## 2026-07-08 — Add comment editing to theater-mode media comment panel
 
 **Timestamp:** 2026-07-08T20:23:57Z
