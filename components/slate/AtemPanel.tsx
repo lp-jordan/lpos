@@ -24,8 +24,6 @@ interface Props {
   onSetFilename: (filename: string) => void;
   onSetPreview: (inputId: number) => void;
   onSetProgram: (inputId: number) => void;
-  onCut: () => void;
-  onAuto: () => void;
   onStartRecording: (filename?: string) => void;
   onStopRecording: () => void;
   onOutput4Toggle: () => void;

@@ -736,8 +736,6 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
               onSetFilename={slate.atemSetFilename}
               onSetPreview={slate.atemSetPreview}
               onSetProgram={slate.atemSetProgram}
-              onCut={slate.atemCut}
-              onAuto={slate.atemAuto}
               onStartRecording={slate.atemStartRecording}
               onStopRecording={slate.atemStopRecording}
               onOutput4Toggle={handleOutput4Toggle}

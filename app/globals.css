@@ -9747,11 +9747,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   box-shadow: var(--shadow-md);
 }
 
-.sl-atem-panel {
-  display: grid;
-  gap: 18px;
-}
-
 .sl-atem-header {
   display: flex;
   align-items: center;
@@ -9951,103 +9946,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   background: color-mix(in srgb, var(--accent, #4a9eff) 20%, transparent);
   border-color: color-mix(in srgb, var(--accent, #4a9eff) 50%, transparent);
 }
-
-/* Camera switcher */
-.sl-switcher-card {
-  display: flex;
-  gap: 14px;
-  align-items: stretch;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.015);
-}
-
-.sl-camera-stack {
-  flex: 1;
-  display: grid;
-  gap: 10px;
-}
-
-.sl-camera-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.sl-camera-row-label {
-  width: 60px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted-soft);
-  flex-shrink: 0;
-}
-
-.sl-camera-row-buttons {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.sl-cam-btn {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.84rem;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.sl-cam-btn:hover { border-color: var(--line-strong); color: var(--text); background: rgba(255,255,255,0.07); }
-
-.sl-cam-btn--pvw.active {
-  border-color: rgba(80, 170, 80, 0.55);
-  background: rgba(60, 140, 60, 0.2);
-  color: #7ec87e;
-}
-
-.sl-cam-btn--pgm.active {
-  border-color: rgba(200, 60, 60, 0.55);
-  background: rgba(160, 30, 30, 0.22);
-  color: #d87070;
-}
-
-/* Tall output4 tile — right side of switcher card */
-.sl-output4-tile {
-  width: 80px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.025);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 700;
-  white-space: pre-line;
-  line-height: 1.35;
-  cursor: pointer;
-}
-
-.sl-output4-tile:hover { border-color: var(--line-strong); color: var(--text); }
-.sl-output4-tile--program { border-color: rgba(200,60,60,0.4); color: #d87070; background: rgba(160,30,30,0.14); }
-
-.sl-atem-status-line {
-  font-size: 0.82rem;
-  color: var(--muted-soft);
-}
-
-.sl-atem-status-line--recording { color: #d87070; }
 
 .sl-playback-panel {
   display: grid;
@@ -10373,13 +10271,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .sl-rec-action-btn--stop:hover { background: rgba(216, 112, 112, 0.2); }
 .sl-rec-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* ATEM error text */
-.sl-atem-error {
-  margin: 4px 0 0;
-  font-size: 0.78rem;
-  color: #d87070;
-}
-
 /* Socket / connection status */
 .sl-socket-status {
   font-size: 0.78rem;
@@ -10508,8 +10399,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 @media (max-width: 900px) {
   .sl-timecode { font-size: clamp(2.8rem, 7vw, 5rem); }
   .sl-note-inputs { grid-template-columns: 1fr; }
-  .sl-switcher-card { flex-direction: column; }
-  .sl-output4-tile { width: 100%; height: 44px; }
 }
 
 /* ── Legacy .slate-* kept for reference — strip after redesign ── */
