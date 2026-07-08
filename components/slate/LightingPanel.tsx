@@ -472,6 +472,10 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
       for (const f of fixtures) {
         await sendCommand('setPower', f.nodeId, { on });
       }
+      // Include the bookshelf WLED strip in the master switch.
+      if (wledPowerRef.current) {
+        try { await wledPowerRef.current(on); } catch { /* non-fatal */ }
+      }
     } finally {
       setBulkBusy(false);
     }
@@ -488,6 +492,10 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const [nameDialog,    setNameDialog]    = useState(false);
 
   const wledSnapshotRef = useRef<(() => PresetWledState) | null>(null);
+  // The bookshelf WLED strip participates in the master switch: it reports its
+  // power up (for the "any on" tint) and exposes a setPower the master calls.
+  const [wledPower, setWledPower] = useState<boolean | null>(null);
+  const wledPowerRef = useRef<((on: boolean) => Promise<void>) | null>(null);
 
   const [saveWarning, setSaveWarning] = useState<{
     fixtures: { label: string; reason: string }[];
@@ -574,7 +582,7 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const showSections = connected || fixtures.length > 0;
   const ungrouped = fixtures.filter((f) => !arrangement.fixtureGroups[f.nodeId]);
-  const anyOn = fixtures.some((f) => status?.states[f.nodeId]?.power === true);
+  const anyOn = fixtures.some((f) => status?.states[f.nodeId]?.power === true) || wledPower === true;
 
   function renderTile(fixture: AmaranFixture) {
     return (
@@ -724,7 +732,7 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
             type="button"
             className={`lp-master-c${anyOn ? ' lp-master-c--on' : ''}`}
             onClick={() => void handleAllPower(!anyOn)}
-            disabled={!connected || fixtures.length === 0 || bulkBusy}
+            disabled={bulkBusy || (fixtures.length === 0 && wledPower === null)}
             aria-pressed={anyOn}
             title={anyOn ? 'Turn all lights off' : 'Turn all lights on'}
           >
@@ -784,7 +792,7 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
             </div>
             <div className="lp-tile-grid">
               {roomFixtures.map(renderTile)}
-              {showWled && <WledTile snapshotRef={wledSnapshotRef} />}
+              {showWled && <WledTile snapshotRef={wledSnapshotRef} controlRef={wledPowerRef} onPowerChange={setWledPower} />}
             </div>
           </div>
         );

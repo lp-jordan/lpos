@@ -44,13 +44,17 @@ function CloseIcon() {
 
 interface WledTileProps {
   snapshotRef?: React.MutableRefObject<(() => PresetWledState) | null>;
+  /** Master switch hook — LightingPanel calls this to include the strip in "All lights". */
+  controlRef?: React.MutableRefObject<((on: boolean) => Promise<void>) | null>;
+  /** Reports the strip's power up so the master's "any on" tint reflects it (null when unreachable). */
+  onPowerChange?: (on: boolean | null) => void;
 }
 
 /** The bookshelf WLED strip, rendered as a tile that opens its own control
  *  sheet — mirrors the Amaran FixtureTile so it sits cohesively in the
  *  Bookshelves room grid. All WLED logic (polling, snapshot, commands) is
  *  unchanged from the previous WledPanel. */
-export function WledTile({ snapshotRef }: WledTileProps = {}) {
+export function WledTile({ snapshotRef, controlRef, onPowerChange }: WledTileProps = {}) {
   const [status,  setStatus]  = useState<WledStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
@@ -70,6 +74,18 @@ export function WledTile({ snapshotRef }: WledTileProps = {}) {
     });
     return () => { if (snapshotRef) snapshotRef.current = null; };
   }); // intentionally no dep array — always reflects latest values
+
+  // Expose a setPower for the master switch; kept fresh every render.
+  useEffect(() => {
+    if (!controlRef) return;
+    controlRef.current = async (on: boolean) => { touch(); await sendCommand('setPower', { on }); };
+    return () => { if (controlRef) controlRef.current = null; };
+  });
+
+  // Report power state up so the master's "any on" tint includes the strip.
+  useEffect(() => {
+    onPowerChange?.(status?.reachable ? (status?.power ?? false) : null);
+  }, [status, onPowerChange]);
 
   const lastTouchedAt = useRef<number>(0);
   const touch = () => { lastTouchedAt.current = Date.now(); };
