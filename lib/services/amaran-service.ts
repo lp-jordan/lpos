@@ -576,15 +576,24 @@ export class AmaranService {
     this.emitStatus();
   }
 
-  /** kelvin: clamped to the fixture's actual CCT range; gm: 0–200 (100 = neutral) */
-  async setCCT(kelvin: number, gm = 100, nodeId?: string): Promise<void> {
-    const id      = this.resolveNodeId(nodeId);
+  private clampCct(id: string, kelvin: number): number {
     const fixture = this._fixtures.find(f => f.nodeId === id);
     const cctMin  = fixture?.capabilities.cctMin ?? 2500;
     const cctMax  = fixture?.capabilities.cctMax ?? 7500;
-    const cct = Math.max(cctMin, Math.min(cctMax, Math.round(kelvin)));
-    await this.sendRequest('set_cct', id, { cct, gm });
+    return Math.max(cctMin, Math.min(cctMax, Math.round(kelvin)));
+  }
+
+  /** kelvin: clamped to the fixture's actual CCT range; gm: 0–200 (100 = neutral) */
+  async setCCT(kelvin: number, gm = 100, nodeId?: string): Promise<void> {
+    const id    = this.resolveNodeId(nodeId);
+    const cct   = this.clampCct(id, kelvin);
     const state = this._states[id] ?? defaultFixtureState();
+    // set_cct MUST carry intensity — Amaran treats cct+gm+intensity as one
+    // atomic CCT command (the same triple get_cct/cct_changed report). Omitting
+    // intensity was why colour temperature never applied. Re-assert the
+    // fixture's current brightness so changing temp doesn't disturb level.
+    const intensity = Math.round(Math.max(0, Math.min(100, state.brightness ?? 50)) * 10);
+    await this.sendRequest('set_cct', id, { cct, gm, intensity });
     state.cct  = cct;
     state.gm   = gm;
     state.mode = 'cct';
@@ -608,6 +617,98 @@ export class AmaranService {
     this._states[id] = state;
     this.persistMode(id, 'hsi');
     this.emitStatus();
+  }
+
+  // ── Verified colour application (used by preset apply) ──────────────────────
+  //
+  // Interactive controls (slider/wheel drags) fire the plain set* methods above
+  // fire-and-forget for responsiveness. Preset apply instead uses these: send
+  // the colour command, read it back, and retry once if the fixture didn't take
+  // it. Bluetooth drops colour frames just like it drops power frames, and a
+  // dropped set_cct/set_hsi is why presets applied the wrong look.
+
+  private near(actual: unknown, target: number, tol: number): boolean {
+    return typeof actual === 'number' && Math.abs(actual - target) <= tol;
+  }
+
+  /** Apply a CCT look and confirm the fixture reports it back. Returns true if confirmed. */
+  async setCCTVerified(kelvin: number, gm: number, brightnessPct: number, nodeId?: string): Promise<boolean> {
+    const id        = this.resolveNodeId(nodeId);
+    const cct       = this.clampCct(id, kelvin);
+    const intensity = Math.round(Math.max(0, Math.min(100, brightnessPct)) * 10);
+    let confirmed   = false;
+
+    for (let attempt = 0; attempt < 2 && !confirmed; attempt++) {
+      try {
+        await this.sendRequest('set_cct', id, { cct, gm, intensity });
+        // Belt-and-suspenders: also assert intensity on its own channel so
+        // brightness lands even on firmware that ignores intensity in set_cct.
+        await this.sendRequest('set_intensity', id, { intensity });
+      } catch { /* send failed — read back anyway, then retry */ }
+
+      await this.delay(200);
+
+      try {
+        const res = await this.sendRequest('get_cct', id, {});
+        if (res.code === 0 && res.data) {
+          const d = res.data as { cct: number; gm: number; intensity: number };
+          if (this.near(d.cct, cct, 75) && this.near(d.gm, gm, 4) && this.near(d.intensity, intensity, 30)) {
+            confirmed = true;
+          } else {
+            console.warn(`[amaran] cct mismatch on ${id}: sent {cct:${cct},gm:${gm},intensity:${intensity}} got {cct:${d.cct},gm:${d.gm},intensity:${d.intensity}}`);
+          }
+        }
+      } catch { /* read-back failed — retry */ }
+    }
+
+    const state = this._states[id] ?? defaultFixtureState();
+    state.cct        = cct;
+    state.gm         = gm;
+    state.brightness = Math.round(brightnessPct);
+    state.mode       = 'cct';
+    this._states[id] = state;
+    this.persistMode(id, 'cct');
+    this.emitStatus();
+    return confirmed;
+  }
+
+  /** Apply an HSI look and confirm the fixture reports it back. Returns true if confirmed. */
+  async setHSIVerified(hue: number, saturation: number, brightnessPct: number, nodeId?: string): Promise<boolean> {
+    const id        = this.resolveNodeId(nodeId);
+    const h         = Math.max(0, Math.min(360, Math.round(hue)));
+    const s         = Math.max(0, Math.min(100, Math.round(saturation)));
+    const intensity = Math.round(Math.max(0, Math.min(100, brightnessPct)) * 10);
+    let confirmed   = false;
+
+    for (let attempt = 0; attempt < 2 && !confirmed; attempt++) {
+      try {
+        await this.sendRequest('set_hsi', id, { hue: h, sat: s, intensity });
+      } catch { /* send failed — read back anyway, then retry */ }
+
+      await this.delay(200);
+
+      try {
+        const res = await this.sendRequest('get_hsi', id, {});
+        if (res.code === 0 && res.data) {
+          const d = res.data as { hue: number; sat: number; intensity: number };
+          if (this.near(d.hue, h, 3) && this.near(d.sat, s, 3) && this.near(d.intensity, intensity, 30)) {
+            confirmed = true;
+          } else {
+            console.warn(`[amaran] hsi mismatch on ${id}: sent {hue:${h},sat:${s},intensity:${intensity}} got {hue:${d.hue},sat:${d.sat},intensity:${d.intensity}}`);
+          }
+        }
+      } catch { /* read-back failed — retry */ }
+    }
+
+    const state = this._states[id] ?? defaultFixtureState();
+    state.hue        = h;
+    state.saturation = s;
+    state.brightness = Math.round(brightnessPct);
+    state.mode       = 'hsi';
+    this._states[id] = state;
+    this.persistMode(id, 'hsi');
+    this.emitStatus();
+    return confirmed;
   }
 
   async refreshStatus(): Promise<void> {

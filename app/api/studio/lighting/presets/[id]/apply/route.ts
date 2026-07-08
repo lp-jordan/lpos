@@ -21,29 +21,29 @@ export async function POST(
     const amaran = getAmaranService();
     const wled   = getWledService();
 
-    // Apply Amaran fixture states sequentially.
-    // AmaranService.pending is keyed by action name ("set_sleep", "set_cct", etc.),
-    // so parallel calls for the same action overwrite each other's resolver and
-    // only the last one resolves. Sequential processing avoids that collision.
+    // Apply Amaran fixture states sequentially. The service serialises all
+    // requests through one queue, so ordering is guaranteed; we still walk
+    // fixtures one at a time so each one's wake delay is honoured.
     const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
     for (const [nodeId, state] of Object.entries(preset.amaran)) {
-      // setPower failure is non-fatal — the light may already be in the desired
-      // state or have a transient Bluetooth hiccup. Always attempt color/brightness.
+      // setPower verifies + retries internally. Non-fatal on failure — always
+      // attempt colour/brightness for fixtures the preset wants on.
       try { await amaran.setPower(state.power, nodeId); } catch { /* continue */ }
 
       if (!state.power) continue;
 
       // After waking a fixture from sleep, the Bluetooth handshake completes
       // before the WS response arrives, but the fixture needs ~300 ms before it
-      // will reliably accept CCT / brightness commands.
+      // will reliably accept CCT / colour commands.
       await delay(300);
 
+      // Verified colour apply: sends the command with intensity, reads it back,
+      // and retries once if the fixture didn't take it (logs on mismatch).
       if (state.mode === 'hsi') {
-        try { await amaran.setHSI(state.hue, state.saturation, state.brightness, nodeId); } catch { /* skip */ }
+        try { await amaran.setHSIVerified(state.hue, state.saturation, state.brightness, nodeId); } catch { /* skip */ }
       } else {
-        try { await amaran.setCCT(state.cct, state.gm, nodeId); } catch { /* skip */ }
-        try { await amaran.setBrightness(state.brightness, nodeId); } catch { /* skip */ }
+        try { await amaran.setCCTVerified(state.cct, state.gm, state.brightness, nodeId); } catch { /* skip */ }
       }
     }
 
