@@ -1,5 +1,6 @@
 import { AdminsPanel } from '@/components/settings/AdminsPanel';
 import { CloudflareOrphansPanel } from '@/components/settings/CloudflareOrphansPanel';
+import { CloudflareLibraryPanel } from '@/components/settings/CloudflareLibraryPanel';
 import { TaskCategoriesPanel } from '@/components/settings/TaskCategoriesPanel';
 import { GuestPinCard } from '@/components/settings/GuestPinCard';
 import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
@@ -110,6 +111,7 @@ export function AdminSettings({ role }: { role: string }) {
       content: (
         <>
           <TranscriptionConfigCard />
+          <CloudflareLibraryPanel />
           <CloudflareOrphansPanel />
           <TaskCategoriesPanel />
         </>

@@ -608,6 +608,12 @@ export interface CloudflareVideoSummary {
   meta: Record<string, unknown> | null;
   /** Cloudflare's "creator" field — we set this to the LPOS assetId (truncated to 64 chars) on upload */
   creator: string | null;
+  /** Playable length in seconds. Cloudflare reports -1 while the video is still processing. */
+  duration: number | null;
+  /** Stored size in bytes. */
+  size: number | null;
+  /** Thumbnail image URL. */
+  thumbnail: string | null;
 }
 
 /**
@@ -629,7 +635,7 @@ export async function listCloudflareVideos(): Promise<CloudflareVideoSummary[]> 
     if (before) url.searchParams.set('before', before);
 
     const response = await fetch(url.toString(), { method: 'GET', headers: authHeaders(config) });
-    const result = await parseCloudflareResponse<Array<{ uid: string; status?: { state?: string }; created?: string; meta?: Record<string, unknown>; creator?: string }>>(response);
+    const result = await parseCloudflareResponse<Array<{ uid: string; status?: { state?: string }; created?: string; meta?: Record<string, unknown>; creator?: string; duration?: number; size?: number; thumbnail?: string }>>(response);
 
     for (const v of result) {
       collected.push({
@@ -638,6 +644,10 @@ export async function listCloudflareVideos(): Promise<CloudflareVideoSummary[]> 
         created: v.created ?? null,
         meta: v.meta ?? null,
         creator: v.creator ?? null,
+        // Cloudflare returns duration -1 for videos that haven't finished processing.
+        duration: typeof v.duration === 'number' && v.duration >= 0 ? v.duration : null,
+        size: typeof v.size === 'number' ? v.size : null,
+        thumbnail: v.thumbnail ?? null,
       });
     }
 
