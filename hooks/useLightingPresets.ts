@@ -8,7 +8,10 @@ export type { LightingPreset };
 
 // ── Snapshot helpers ──────────────────────────────────────────────────────────
 
-/** Build an Amaran snapshot from the live status object. */
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
+
+/** Build an Amaran snapshot from the live status object, clamped to each
+ *  fixture's real capabilities so no out-of-range value is ever stored. */
 export function snapshotAmaran(
   status: AmaranStatus | null,
 ): Record<string, PresetFixtureState> {
@@ -17,17 +20,58 @@ export function snapshotAmaran(
   for (const fixture of status.fixtures) {
     const s = status.states[fixture.nodeId];
     if (!s) continue;
+    const cctMin = fixture.capabilities?.cctMin ?? 2500;
+    const cctMax = fixture.capabilities?.cctMax ?? 7500;
     snap[fixture.nodeId] = {
       power:      s.power      ?? false,
-      brightness: s.brightness ?? 50,
+      brightness: clamp(s.brightness ?? 50, 0, 100),
       mode:       s.mode       ?? 'cct',
-      cct:        s.cct        ?? 5000,
-      gm:         s.gm         ?? 100,
-      hue:        s.hue        ?? 0,
-      saturation: s.saturation ?? 100,
+      cct:        clamp(s.cct   ?? 5000, cctMin, cctMax),
+      gm:         clamp(s.gm    ?? 100, 0, 200),
+      hue:        clamp(s.hue   ?? 0, 0, 360),
+      saturation: clamp(s.saturation ?? 100, 0, 100),
     };
   }
   return snap;
+}
+
+export interface IncompleteFixture {
+  nodeId: string;
+  reason: string;
+}
+
+/**
+ * Find fixtures whose live state is unknown in a way that would corrupt a
+ * preset. A preset only applies colour/brightness to fixtures it turns ON, so
+ * OFF fixtures only need their power known; ON fixtures also need brightness
+ * and the values for whichever colour mode is active. Anything unknown here
+ * would otherwise be silently baked in as a hard-coded default.
+ */
+export function findIncompleteFixtures(status: AmaranStatus | null): IncompleteFixture[] {
+  if (!status) return [];
+  const issues: IncompleteFixture[] = [];
+  for (const fixture of status.fixtures) {
+    const s = status.states[fixture.nodeId];
+    if (!s || s.power == null) {
+      issues.push({ nodeId: fixture.nodeId, reason: 'on/off state unknown' });
+      continue;
+    }
+    if (s.power !== true) continue;             // OFF — colour is irrelevant on apply
+    if (s.brightness == null) {
+      issues.push({ nodeId: fixture.nodeId, reason: 'brightness unknown' });
+      continue;
+    }
+    if (s.mode == null) {
+      issues.push({ nodeId: fixture.nodeId, reason: 'colour mode unknown' });
+      continue;
+    }
+    if (s.mode === 'hsi' && (s.hue == null || s.saturation == null)) {
+      issues.push({ nodeId: fixture.nodeId, reason: 'colour unknown' });
+    } else if (s.mode === 'cct' && s.cct == null) {
+      issues.push({ nodeId: fixture.nodeId, reason: 'colour temperature unknown' });
+    }
+  }
+  return issues;
 }
 
 /** Build a WLED snapshot from the current slider values (passed in from WledPanel state). */

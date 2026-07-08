@@ -164,6 +164,21 @@ export function useLighting() {
     await patchConfig({ fixtureOrder: { [group]: newOrder } as Record<AmaranFixtureGroup, string[]> });
   }, [patchConfig]);
 
+  /** Force a fresh hardware poll on the server and return the resulting status.
+   *  Used before capturing a preset so we snapshot the true current state rather
+   *  than whatever the last passive poll happened to leave in memory. */
+  const refreshHardware = useCallback(async (): Promise<AmaranStatus | null> => {
+    try {
+      const res  = await fetch('/api/studio/lighting', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method: 'refreshStatus' }),
+      });
+      const data = await res.json() as { status?: AmaranStatus };
+      if (data.status) { setStatus(data.status); return data.status; }
+    } catch { /* fall through */ }
+    return null;
+  }, []);
+
   /** Pull the current Amaran status from the server and sync React state. */
   const syncStatus = useCallback(async () => {
     try {
@@ -180,6 +195,7 @@ export function useLighting() {
     arrangement,
     sendCommand,
     syncStatus,
+    refreshHardware,
     connect,
     disconnect,
     rediscover,

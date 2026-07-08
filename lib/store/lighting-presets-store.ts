@@ -38,6 +38,59 @@ export interface LightingPreset {
   updatedAt: string;
 }
 
+// ── Sanitisation ────────────────────────────────────────────────────────────
+//
+// Last line of defence: whatever a client (or a hand-recovered data file) hands
+// us, coerce it into a valid, in-range fixture state before it ever touches
+// disk. Out-of-range numbers, NaN, bad modes, and junk nodeIds are clamped or
+// dropped here so a corrupt preset can't be created or silently persisted.
+
+const MODE_VALUES = new Set(['cct', 'hsi']);
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function sanitizeFixtureState(raw: unknown): PresetFixtureState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const mode = MODE_VALUES.has(s.mode as string) ? (s.mode as 'cct' | 'hsi') : 'cct';
+  return {
+    power:      Boolean(s.power),
+    brightness: clampInt(s.brightness, 0, 100, 50),
+    mode,
+    // Store a generous CCT range — the per-fixture capability clamp is applied
+    // at apply time (setCCTVerified → clampCct), not here.
+    cct:        clampInt(s.cct, 1000, 20000, 5000),
+    gm:         clampInt(s.gm, 0, 200, 100),
+    hue:        clampInt(s.hue, 0, 360, 0),
+    saturation: clampInt(s.saturation, 0, 100, 100),
+  };
+}
+
+function sanitizeAmaran(raw: unknown): Record<string, PresetFixtureState> {
+  const out: Record<string, PresetFixtureState> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [nodeId, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!nodeId || typeof nodeId !== 'string') continue;
+    const st = sanitizeFixtureState(v);
+    if (st) out[nodeId] = st;
+  }
+  return out;
+}
+
+function sanitizeWled(raw: unknown): PresetWledState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const w = raw as Record<string, unknown>;
+  return {
+    power:      Boolean(w.power),
+    brightness: clampInt(w.brightness, 0, 100, 50),
+    cctK:       clampInt(w.cctK, 2700, 6000, 4000),
+  };
+}
+
 // ── IO ────────────────────────────────────────────────────────────────────────
 
 function readAll(): LightingPreset[] {
@@ -68,8 +121,8 @@ export function createPreset(
   const preset: LightingPreset = {
     id: randomUUID(),
     name: name.trim() || 'Untitled Preset',
-    amaran,
-    wled,
+    amaran: sanitizeAmaran(amaran),
+    wled:   sanitizeWled(wled),
     createdAt: now,
     updatedAt: now,
   };
@@ -91,8 +144,8 @@ export function updatePreset(
   all[idx] = {
     ...all[idx],
     name:      name.trim() || all[idx].name,
-    amaran,
-    wled,
+    amaran:    sanitizeAmaran(amaran),
+    wled:      sanitizeWled(wled),
     updatedAt: new Date().toISOString(),
   };
   writeAll(all);

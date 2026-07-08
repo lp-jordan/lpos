@@ -100,6 +100,46 @@ export function NameDialog({ initial, onConfirm, onCancel }: NameDialogProps) {
   );
 }
 
+// ── Save warning dialog ───────────────────────────────────────────────────────
+
+interface SaveWarningDialogProps {
+  /** Human labels of fixtures whose state is unknown/incomplete. */
+  fixtures:   { label: string; reason: string }[];
+  onSaveAnyway: () => void;
+  onCancel:     () => void;
+}
+
+/** Shown when a preset is about to bake in placeholder values because one or
+ *  more fixtures haven't reported their true state. Lets the operator back out
+ *  and let the lights report in, or save anyway if they know better. */
+export function SaveWarningDialog({ fixtures, onSaveAnyway, onCancel }: SaveWarningDialogProps) {
+  return createPortal(
+    <div className="lp-preset-name-overlay">
+      <div className="lp-preset-name-dialog">
+        <p className="lp-preset-name-label">Some fixtures haven’t reported their state</p>
+        <p className="lp-lighting-hint" style={{ marginTop: 0 }}>
+          These lights would be saved with placeholder values, not their real look:
+        </p>
+        <ul className="lp-preset-warning-list">
+          {fixtures.map((f) => (
+            <li key={f.label}><strong>{f.label}</strong> — {f.reason}</li>
+          ))}
+        </ul>
+        <p className="lp-lighting-hint">
+          Cancel, give the lights a moment to report in, then try again — or save anyway.
+        </p>
+        <div className="lp-preset-name-actions">
+          <button type="button" className="lp-lighting-btn" onClick={onCancel}>Cancel</button>
+          <button type="button" className="lp-lighting-btn lp-lighting-btn--accent" onClick={onSaveAnyway}>
+            Save anyway
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ── Presets modal ─────────────────────────────────────────────────────────────
 
 export interface PresetsModalProps {

@@ -16604,6 +16604,25 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   margin-top: 4px;
 }
 
+.lp-preset-warning-list {
+  color: var(--text);
+  font-size: 0.82rem;
+  list-style: none;
+  margin: 2px 0;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--warn, #d08a2c) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn, #d08a2c) 35%, var(--line));
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lp-preset-warning-list li { line-height: 1.35; }
+.lp-preset-warning-list strong { color: var(--text); font-weight: 600; }
+
 /* Floating edit bar */
 .lp-preset-editing-bar {
   align-items: center;

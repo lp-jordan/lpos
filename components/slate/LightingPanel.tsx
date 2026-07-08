@@ -21,10 +21,10 @@ import { useLighting } from '@/hooks/useLighting';
 import { AMARAN_GROUPS, GROUP_LABELS, type AmaranFixtureGroup } from '@/lib/lighting-constants';
 import { WledPanel } from '@/components/slate/WledPanel';
 import { FillSlider, cctFillColor, PowerIcon } from '@/components/slate/lighting-controls';
-import { useLightingPresets, snapshotAmaran } from '@/hooks/useLightingPresets';
+import { useLightingPresets, snapshotAmaran, findIncompleteFixtures } from '@/hooks/useLightingPresets';
 import type { PresetWledState } from '@/lib/store/lighting-presets-store';
 import {
-  PresetsModal, EditingBar, PresetsTrigger, NameDialog, AllPowerToggle,
+  PresetsModal, EditingBar, PresetsTrigger, NameDialog, AllPowerToggle, SaveWarningDialog,
 } from '@/components/slate/LightingPresets';
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -443,7 +443,7 @@ function FixtureSection({
 export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   const {
     status, loading, error, arrangement,
-    sendCommand, syncStatus, connect, disconnect, rediscover,
+    sendCommand, syncStatus, refreshHardware, connect, disconnect, rediscover,
     renameFixture, moveFixtureToGroup, reorderGroup,
   } = useLighting();
 
@@ -485,24 +485,53 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
   // WledPanel registers a getter so we can snapshot its current slider values
   const wledSnapshotRef = useRef<(() => PresetWledState) | null>(null);
 
-  function captureSnapshot() {
-    const amaran = snapshotAmaran(status);
-    const wled   = wledSnapshotRef.current?.() ?? null;
-    return { amaran, wled };
+  // When a save would bake in placeholder values (fixtures haven't reported in),
+  // we stash the pending commit here and surface a warning instead of saving.
+  const [saveWarning, setSaveWarning] = useState<{
+    fixtures: { label: string; reason: string }[];
+    proceed:  () => void;
+  } | null>(null);
+
+  function labelFor(nodeId: string): string {
+    return arrangement.fixtureLabels[nodeId]
+      ?? status?.fixtures.find((f) => f.nodeId === nodeId)?.name
+      ?? nodeId;
+  }
+
+  /** Re-poll the hardware, snapshot the fresh state, and either commit or warn
+   *  if any fixture's state is still unknown. */
+  async function captureAndGuard(commit: (snap: {
+    amaran: ReturnType<typeof snapshotAmaran>; wled: PresetWledState | null;
+  }) => void) {
+    const fresh  = (await refreshHardware()) ?? status;
+    const snap   = { amaran: snapshotAmaran(fresh), wled: wledSnapshotRef.current?.() ?? null };
+    const issues = findIncompleteFixtures(fresh);
+    if (issues.length > 0) {
+      setNameDialog(false);
+      setSaveWarning({
+        fixtures: issues.map((i) => ({ label: labelFor(i.nodeId), reason: i.reason })),
+        proceed:  () => { setSaveWarning(null); commit(snap); },
+      });
+      return;
+    }
+    commit(snap);
   }
 
   function handleSavePreset(name: string) {
-    const { amaran, wled } = captureSnapshot();
-    void savePreset(name, amaran, wled);
-    setNameDialog(false);
-    setPresetsOpen(false);
+    void captureAndGuard(({ amaran, wled }) => {
+      void savePreset(name, amaran, wled);
+      setNameDialog(false);
+      setPresetsOpen(false);
+    });
   }
 
   function handleUpdatePreset() {
     if (!editingPreset) return;
-    const { amaran, wled } = captureSnapshot();
-    void updatePreset(editingPreset.id, editingPreset.name, amaran, wled);
-    setEditingPreset(null);
+    const target = editingPreset;
+    void captureAndGuard(({ amaran, wled }) => {
+      void updatePreset(target.id, target.name, amaran, wled);
+      setEditingPreset(null);
+    });
   }
 
   useEffect(() => {
@@ -584,6 +613,15 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
           initial="Untitled Preset"
           onConfirm={handleSavePreset}
           onCancel={() => setNameDialog(false)}
+        />
+      )}
+
+      {/* ═══ Save warning (incomplete fixture state) ═══ */}
+      {saveWarning && (
+        <SaveWarningDialog
+          fixtures={saveWarning.fixtures}
+          onSaveAnyway={saveWarning.proceed}
+          onCancel={() => setSaveWarning(null)}
         />
       )}
 
