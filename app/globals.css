@@ -19516,9 +19516,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   position: relative;
   text-align: left;
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
+  touch-action: none; /* vertical drag on a tile = dim, not page scroll */
+  user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
 .lp-tile:active { transform: scale(0.985); }
+.lp-scene--presets { margin-left: auto; }
 .lp-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lp-tile-fill {
   bottom: 0;

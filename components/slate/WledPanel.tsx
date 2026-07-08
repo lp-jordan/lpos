@@ -75,6 +75,11 @@ export function WledTile({ snapshotRef }: WledTileProps = {}) {
   const touch = () => { lastTouchedAt.current = Date.now(); };
   const recentlyTouched = () => Date.now() - lastTouchedAt.current < 2000;
 
+  // Drag-to-dim on the tile (matches the Amaran FixtureTile).
+  const dragRef = useRef<{ id: number; startY: number; startBri: number; active: boolean }>({ id: -1, startY: 0, startBri: 0, active: false });
+  const liveBriRef = useRef(0);
+  const suppressClickRef = useRef(false);
+
   const fetchStatus = useCallback(async (fromServer = false) => {
     try {
       const res  = await fetch('/api/studio/wled');
@@ -150,6 +155,37 @@ export function WledTile({ snapshotRef }: WledTileProps = {}) {
     );
   }
 
+  function tilePointerDown(e: React.PointerEvent) {
+    if ((e.target as HTMLElement).closest('.lp-tile-pw')) return;
+    suppressClickRef.current = false;
+    dragRef.current = { id: e.pointerId, startY: e.clientY, startBri: brightness, active: false };
+  }
+  function tilePointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (d.id !== e.pointerId) return;
+    const dy = d.startY - e.clientY;
+    if (!d.active) {
+      if (Math.abs(dy) < 6 || !isPowered) return;
+      d.active = true;
+      suppressClickRef.current = true;
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    const next = Math.max(2, Math.min(100, Math.round(d.startBri + dy * (100 / 160))));
+    liveBriRef.current = next;
+    touch();
+    setBrightness(next);
+  }
+  function tilePointerUp(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (d.id !== e.pointerId) return;
+    dragRef.current = { ...d, id: -1 };
+    if (d.active && isPowered) void sendCommand('setBrightness', { pct: liveBriRef.current });
+  }
+  function tileClick() {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+    setOpen(true);
+  }
+
   const stateText = isPowered ? `${Math.round(brightness)}%  ·  ${cctK}K` : 'Off';
   const fillHeight = isPowered ? `${Math.max(12, Math.round(brightness))}%` : '0%';
 
@@ -159,9 +195,13 @@ export function WledTile({ snapshotRef }: WledTileProps = {}) {
         className={`lp-tile${isPowered ? ' lp-tile--on' : ''}`}
         role="button"
         tabIndex={0}
-        aria-label={`Bookshelf LEDs — ${stateText}. Open controls`}
-        onClick={() => setOpen(true)}
+        aria-label={`Bookshelf LEDs — ${stateText}. Drag to dim, tap to open controls`}
+        onClick={tileClick}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(true); } }}
+        onPointerDown={tilePointerDown}
+        onPointerMove={tilePointerMove}
+        onPointerUp={tilePointerUp}
+        onPointerCancel={tilePointerUp}
         style={{
           borderColor: isPowered ? glow : undefined,
           boxShadow: isPowered ? `0 8px 30px -12px ${glow}` : undefined,

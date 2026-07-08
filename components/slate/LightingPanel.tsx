@@ -193,6 +193,13 @@ function FixtureTile({
   const touch = () => { lastTouchedAt.current = Date.now(); };
   const recentlyTouched = () => Date.now() - lastTouchedAt.current < 2000;
 
+  // Drag-to-dim: a vertical drag anywhere on the tile sets brightness directly,
+  // no need to open the sheet. Glow follows live; one command commits on release
+  // (mirrors FillSlider — never floods the Amaran queue). A plain tap still opens.
+  const dragRef = useRef<{ id: number; startY: number; startBri: number; active: boolean }>({ id: -1, startY: 0, startBri: 0, active: false });
+  const liveBriRef = useRef(0);
+  const suppressClickRef = useRef(false);
+
   useEffect(() => {
     if (state?.mode != null) setMode(state.mode);
     if (recentlyTouched()) return;
@@ -242,6 +249,37 @@ function FixtureTile({
     if (isPowered) onCommand('setHSI', id, { hue: newHue, saturation: newSat, brightness: intensity });
   }
 
+  function tilePointerDown(e: React.PointerEvent) {
+    if ((e.target as HTMLElement).closest('.lp-tile-pw')) return; // power dot handles itself
+    suppressClickRef.current = false;
+    dragRef.current = { id: e.pointerId, startY: e.clientY, startBri: intensity, active: false };
+  }
+  function tilePointerMove(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (d.id !== e.pointerId) return;
+    const dy = d.startY - e.clientY; // up = brighter
+    if (!d.active) {
+      if (Math.abs(dy) < 6 || !isPowered) return; // engage only on a clear vertical drag of a lit fixture
+      d.active = true;
+      suppressClickRef.current = true;
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    const next = Math.max(2, Math.min(100, Math.round(d.startBri + dy * (100 / 160))));
+    liveBriRef.current = next;
+    touch();
+    setIntensity(next);
+  }
+  function tilePointerUp(e: React.PointerEvent) {
+    const d = dragRef.current;
+    if (d.id !== e.pointerId) return;
+    dragRef.current = { ...d, id: -1 };
+    if (d.active && isPowered) onCommand('setBrightness', id, { pct: liveBriRef.current });
+  }
+  function tileClick() {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; } // consumed by a drag
+    onOpen(id);
+  }
+
   const stateText = isPowered
     ? `${Math.round(intensity)}%  ·  ${hasHSI && mode === 'hsi' ? 'Colour' : `${cct}K`}`
     : 'Off';
@@ -254,9 +292,13 @@ function FixtureTile({
         className={`lp-tile${isPowered ? ' lp-tile--on' : ''}`}
         role="button"
         tabIndex={0}
-        aria-label={`${label} — ${stateText}. Open controls`}
-        onClick={() => onOpen(id)}
+        aria-label={`${label} — ${stateText}. Drag to dim, tap to open controls`}
+        onClick={tileClick}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(id); } }}
+        onPointerDown={tilePointerDown}
+        onPointerMove={tilePointerMove}
+        onPointerUp={tilePointerUp}
+        onPointerCancel={tilePointerUp}
         style={{
           borderColor: isPowered ? glow : undefined,
           boxShadow: isPowered ? `0 8px 30px -12px ${glow}` : undefined,
@@ -690,22 +732,14 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
             <span className="lp-master-label">{bulkBusy ? 'Working…' : 'All lights'}</span>
           </button>
 
-          <div className="lp-scene-row">
-            {presets.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`lp-scene${applying === p.id ? ' lp-scene--applying' : ''}`}
-                onClick={() => handleApplyPreset(p.id)}
-                title={`Apply ${p.name}`}
-              >
-                {applying === p.id ? 'Applying…' : p.name}
-              </button>
-            ))}
-            <button type="button" className="lp-scene lp-scene--manage" onClick={() => setPresetsOpen(true)} title="Save or edit presets">
-              Presets…
-            </button>
-          </div>
+          <button
+            type="button"
+            className="lp-scene lp-scene--presets"
+            onClick={() => setPresetsOpen(true)}
+            title="Apply, save, or edit presets"
+          >
+            Presets
+          </button>
         </div>
       )}
 
