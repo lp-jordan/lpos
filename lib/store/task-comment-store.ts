@@ -121,6 +121,36 @@ export class TaskCommentStore {
     return comment;
   }
 
+  /**
+   * Edit a comment's body text. Only succeeds if requesterId is the author and
+   * the entry is a plain 'comment' (handoff / handoff_ack entries are system
+   * records and are not editable). Replaces the mention set and stamps
+   * `edited_at`. Returns the updated comment, or null if not permitted.
+   */
+  update(commentId: string, requesterId: string, body: string, mentions: string[]): TaskComment | null {
+    const existing = this.getById(commentId);
+    if (!existing || existing.authorId !== requesterId || existing.kind !== 'comment') return null;
+
+    const trimmed  = body.trim();
+    if (!trimmed) return null;
+    const editedAt = new Date().toISOString();
+
+    const db = getCoreDb();
+    withTransaction(db, () => {
+      db.prepare(
+        'UPDATE task_comments SET body = ?, edited_at = ? WHERE comment_id = ?',
+      ).run(trimmed, editedAt, commentId);
+      db.prepare('DELETE FROM comment_mentions WHERE comment_id = ?').run(commentId);
+      for (const userId of mentions) {
+        db.prepare(
+          'INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?, ?)',
+        ).run(commentId, userId);
+      }
+    });
+
+    return { ...existing, body: trimmed, mentions, editedAt };
+  }
+
   /** Returns true if deleted. Only succeeds if requesterId is the author. */
   delete(commentId: string, requesterId: string): boolean {
     const existing = this.getById(commentId);

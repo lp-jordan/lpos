@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-08T20:19:29Z",
+    "title": "Task comments can now be edited",
+    "summary": "You can now edit a task comment after posting it, not just delete it. Hovering your own comment in a task's Updates thread reveals an Edit button that swaps the comment into an inline editor (with @mention support); Save updates the text and the comment shows a subtle '(edited)' marker. Only the original author can edit, and only plain comments — handoff and acknowledgement entries stay locked as system records. Matches the edit behavior media comments already had."
+  },
+  {
     "timestamp": "2026-07-07T20:17:59Z",
     "title": "Move between projects now handles same-name collisions",
     "summary": "Moving an asset into a project that already has one with the same name no longer silently creates a duplicate. Before the move commits, a preflight checks the target for name collisions; if any exist, the move dialog asks — per asset — whether the moved file is a new version of the existing one (it's stacked on as the next version), a keep-both (renamed with a \" (1)\" suffix), or a skip (left in the source project, which is the default when the file is an exact byte-for-byte duplicate already present). Assets with no name clash move exactly as before. Merging re-parents the moved asset's versions onto the existing asset and removes the now-empty original."

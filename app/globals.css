@@ -15990,6 +15990,14 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .comment-delete-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.65rem; margin-left: auto; opacity: 0; padding: 1px 3px; transition: color 0.1s; }
 .comment-item:hover .comment-delete-btn { opacity: 1; }
 .comment-delete-btn:hover { color: #ef4444; }
+.comment-edit-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.68rem; margin-left: auto; opacity: 0; padding: 1px 3px; transition: color 0.1s; }
+.comment-edit-btn + .comment-delete-btn { margin-left: 0; }
+.comment-item:hover .comment-edit-btn { opacity: 1; }
+.comment-edit-btn:hover { color: var(--accent); }
+.comment-edit-area { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.comment-edit-actions { display: flex; gap: 8px; align-items: center; }
+.comment-edit-cancel { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 6px 8px; }
+.comment-edit-cancel:hover { color: var(--text); }
 .comment-body { color: var(--text); font-size: 0.82rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .comment-input-area { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; padding-top: 10px; }
 .comment-post-btn { align-self: flex-end; background: var(--accent); border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 0.8rem; font-weight: 600; padding: 6px 16px; transition: opacity 0.15s; }

@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-08 — Add edit capability to task comments
+
+**Timestamp:** 2026-07-08T20:19:29Z
+
+**User prompt (verbatim):** "I just realized there's no way to edit a comment on lpos?" → (clarified they meant task comments) "BUT, editing task comments would be nice. Easy add?"
+
+**Response summary:** Task comments (the "Updates" thread on a task, `CommentThread.tsx`) previously supported only create + delete — no way to edit the text after posting, unlike media comments which already had it. Added author-only text editing that mirrors the existing media-comment/delete patterns. The `task_comments.edited_at` column already existed (defined but never populated), so no schema migration was needed — the edit path now stamps it.
+
+**Files changed:**
+- `lib/store/task-comment-store.ts` — new `update(commentId, requesterId, body, mentions)` method: author-only, `kind === 'comment'` only (handoff/handoff_ack system entries not editable), trims/rejects empty body, updates `body` + stamps `edited_at`, replaces the `comment_mentions` set, all in a transaction. Returns the updated comment or null.
+- `app/api/tasks/[taskId]/comments/[commentId]/route.ts` — new `PATCH` handler: session-auth, resolves `@firstName` mentions with the same logic as `POST`, calls `store.update`, 404s on not-found/not-author.
+- `components/tasks/CommentThread.tsx` — inline edit UI: `startEdit`/`cancelEdit`/`saveEdit` handlers + edit state; an "Edit" button next to the delete "✕" (author-only, plain comments only), an "(edited)" indicator when `editedAt` is set, and an inline `MentionTextarea` + Save/Cancel that swaps in for the comment body while editing.
+- `app/globals.css` — `.comment-edit-btn`, `.comment-edit-area`, `.comment-edit-actions`, `.comment-edit-cancel` styles matching the existing hover-reveal delete-button treatment; Edit carries `margin-left:auto` so both action buttons group to the right.
+
+**Decision rationale:** Reused the exact author-only authorization + mention-resolution + PATCH shape already proven by media comments and the task-comment DELETE path, rather than inventing a new pattern. Mirrored the delete button's hover-reveal styling for visual consistency. Replaced the mention set on edit (rather than diffing) since the POST path already rebuilds mentions wholesale — simplest correct behavior. Did not add edit-notification side-effects (POST notifies assignees/mentions); an edit is a low-signal event and re-notifying on every keystroke-save would be noisy — left as a possible follow-up if re-notifying newly-added mentions is wanted.
+
+**Checks run:** `npx tsc --noEmit` — clean.
+
+**Assumptions / follow-ups:** No new notification on edit (see rationale). Handoff/handoff_ack entries remain non-editable by design. An untracked foreign file (`C:\...docx` under another project's data dir) was present in the tree and deliberately NOT staged.
+
 ## 2026-07-02 — Integration: merge whisper-upgrade + lpai-provisioning, add turbo-on-provision, rename LP.AI secret
 
 **Timestamp:** 2026-07-02T18:00:00Z

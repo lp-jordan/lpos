@@ -208,6 +208,9 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
   const [loading,       setLoading]       = useState(true);
   const [pending,       setPending]       = useState<PendingAttachment[]>([]);
   const [dragOver,      setDragOver]      = useState(false);
+  const [editingId,     setEditingId]     = useState<string | null>(null);
+  const [editBody,      setEditBody]      = useState('');
+  const [savingEdit,    setSavingEdit]    = useState(false);
   const bottomRef   = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -308,6 +311,36 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
       setComments((prev) => prev.filter((c) => c.commentId !== commentId));
     }
   }, [taskId]);
+
+  const startEdit = useCallback((c: TaskComment) => {
+    setEditingId(c.commentId);
+    setEditBody(c.body);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditBody('');
+  }, []);
+
+  const saveEdit = useCallback(async (commentId: string) => {
+    if (!editBody.trim() || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/comments/${commentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: editBody.trim() }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { comment: TaskComment };
+        setComments((prev) => prev.map((c) => (c.commentId === commentId ? data.comment : c)));
+        setEditingId(null);
+        setEditBody('');
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [editBody, savingEdit, taskId]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -419,18 +452,59 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
                 <div className="comment-meta">
                   <span className="comment-author-name">{author?.name ?? 'Unknown'}</span>
                   <span className="comment-time">{relativeTime(c.createdAt)}</span>
-                  {c.authorId === currentUserId && c.kind === 'comment' && (
-                    <button
-                      type="button"
-                      className="comment-delete-btn"
-                      onClick={() => void deleteComment(c.commentId)}
-                      title="Delete comment"
-                    >
-                      ✕
-                    </button>
+                  {c.editedAt && <span className="comment-time">(edited)</span>}
+                  {c.authorId === currentUserId && c.kind === 'comment' && editingId !== c.commentId && (
+                    <>
+                      <button
+                        type="button"
+                        className="comment-edit-btn"
+                        onClick={() => startEdit(c)}
+                        title="Edit comment"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="comment-delete-btn"
+                        onClick={() => void deleteComment(c.commentId)}
+                        title="Delete comment"
+                      >
+                        ✕
+                      </button>
+                    </>
                   )}
                 </div>
-                <div className="comment-body">{renderBody(c.body)}</div>
+                {editingId === c.commentId ? (
+                  <div className="comment-edit-area">
+                    <MentionTextarea
+                      value={editBody}
+                      onChange={setEditBody}
+                      users={users}
+                      placeholder="Edit your update…"
+                      rows={2}
+                    />
+                    <div className="comment-edit-actions">
+                      <button
+                        type="button"
+                        className="comment-post-btn"
+                        onClick={() => void saveEdit(c.commentId)}
+                        disabled={!editBody.trim() || savingEdit}
+                      >
+                        {savingEdit ? 'Saving…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        className="comment-edit-cancel"
+                        onClick={cancelEdit}
+                        disabled={savingEdit}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="comment-body">{renderBody(c.body)}</div>
+                )}
                 {c.attachments.length > 0 && (
                   <div className="comment-attachments">
                     {c.attachments.map((a) => <AttachmentChip key={a.key} a={a} />)}
