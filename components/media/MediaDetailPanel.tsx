@@ -700,6 +700,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
               pendingTogglesRef.current.set(id, completed);
               setComments(prev => prev.map(c => c.id === id ? { ...c, completed } : c));
             }}
+            onCommentEdited={(id, text) =>
+              setComments(prev => prev.map(c => c.id === id ? { ...c, text } : c))
+            }
             onReplyPosted={(reply, parentId) =>
               setComments(prev => prev.map(c =>
                 c.id === parentId ? { ...c, replies: [...(c.replies ?? []), reply] } : c,

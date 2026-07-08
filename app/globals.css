@@ -19159,6 +19159,34 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .mp-reply-send:disabled { opacity: 0.4; cursor: default; }
 .mp-reply-send:not(:disabled):hover { background: #333; }
 
+/* Theater comment edit (mirrors the sidebar edit affordance) */
+.mp-comment-edit-btn {
+  background: none;
+  border: 1px solid #333;
+  border-radius: 3px;
+  color: #444;
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0; padding: 0;
+}
+.mp-comment-edit-btn:hover { border-color: #555; color: #888; }
+.mp-comment-edit { margin-top: 4px; }
+.mp-comment-edit-input {
+  width: 100%;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 5px 8px;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+.mp-comment-edit-input:focus { border-color: #555; }
+.mp-comment-edit-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+
 /* Compose footer */
 .mp-compose {
   border-top: 1px solid #222;

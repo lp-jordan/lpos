@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-08 — Add comment editing to theater-mode media comment panel
+
+**Timestamp:** 2026-07-08T20:23:57Z
+
+**User prompt (verbatim):** "Id also like to add the edit button to the theater mode comment view, not just sidebar"
+
+**Response summary:** Media comments were editable in the sidebar (`MediaDetailPanel`) but not in the full-screen theater player (`MediaPlayer` variant='theater'), which renders its own comment panel. Added the same author-only edit affordance to the theater panel, reusing the existing PATCH endpoint and the server-computed `canEdit` flag that already flows through on each comment.
+
+**Files changed:**
+- `components/media/MediaPlayer.tsx` — exported a new `PlayerComment` type (`FrameIOComment & { canEdit?, mirrorAbandoned? }`) and widened the `comments` prop to it; added `onCommentEdited?(id, text)` prop; added `editingId`/`editText`/`editSaving` state + `handleEditComment` (PATCH `{ commentId, text }`, same call the sidebar uses); rendered an edit (pencil) button next to the complete-toggle gated on `c.canEdit`, and an inline textarea + Save/Cancel (⌘↵ to save, Esc to cancel) that swaps in for the comment text while editing.
+- `components/media/VideoTheaterMode.tsx` — imported `PlayerComment`, retyped its `comments` prop, added the `onCommentEdited` prop and forwarded it to `MediaPlayer`.
+- `components/media/MediaDetailPanel.tsx` — passed `onCommentEdited` to `VideoTheaterMode`, updating the shared `comments` state in place (mirrors the existing `onCommentCompleted` handler).
+- `app/globals.css` — `.mp-comment-edit-btn` (icon button matching `.mp-check`), `.mp-comment-edit`, `.mp-comment-edit-input`, `.mp-comment-edit-actions` styles.
+
+**Decision rationale:** The theater panel already receives the identical enriched comment objects the sidebar uses (the GET route computes `canEdit` = "current user is the top-level author"), so gating on `c.canEdit` needed no new server work and keeps authorization consistent — the PATCH endpoint re-checks author identity server-side regardless. Threaded an `onCommentEdited` callback up to the parent (rather than refetching) so the edit reflects instantly in the shared `comments` state that both the theater and sidebar read, matching the established pattern for post/complete/reply. Reused the sidebar's PATCH shape and the pencil icon for visual/behavioral parity.
+
+**Checks run:** `npx tsc --noEmit` — clean.
+
+**Assumptions / follow-ups:** Reply text remains non-editable in theater mode (matches sidebar — only top-level author comments are editable). No new notification side-effects on edit. The untracked foreign `C:\...docx` file was again left unstaged.
+
 ## 2026-07-08 — Add edit capability to task comments
 
 **Timestamp:** 2026-07-08T20:19:29Z

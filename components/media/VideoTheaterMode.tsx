@@ -2,25 +2,26 @@
 
 import { useRef, useState } from 'react';
 import type { FrameIOComment, FrameIOCommentReply } from '@/lib/services/frameio';
-import { MediaPlayer } from './MediaPlayer';
+import { MediaPlayer, type PlayerComment } from './MediaPlayer';
 
 interface Props {
   src:                  string;
   assetId:              string;
   projectId:            string;
   frameioAssetId:       string | null;
-  comments:             FrameIOComment[];
+  comments:             PlayerComment[];
   seekTarget?:          number | null;
   onClose:              (currentTime: number) => void;
   onCommentPosted:      (comment: FrameIOComment) => void;
   onCommentCompleted?:  (commentId: string, completed: boolean) => void;
+  onCommentEdited?:     (commentId: string, text: string) => void;
   onReplyPosted?:       (reply: FrameIOCommentReply, parentId: string) => void;
   onSeekHandled?:       () => void;
 }
 
 export function VideoTheaterMode({
   src, assetId, projectId, frameioAssetId, comments,
-  seekTarget, onClose, onCommentPosted, onCommentCompleted, onReplyPosted, onSeekHandled,
+  seekTarget, onClose, onCommentPosted, onCommentCompleted, onCommentEdited, onReplyPosted, onSeekHandled,
 }: Readonly<Props>) {
   const [panelContainer, setPanelContainer] = useState<HTMLDivElement | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -44,6 +45,7 @@ export function VideoTheaterMode({
           onClose={onClose}
           onCommentPosted={onCommentPosted}
           onCommentCompleted={onCommentCompleted}
+          onCommentEdited={onCommentEdited}
           onReplyPosted={onReplyPosted}
           panelContainer={panelContainer}
           onPanelOpenChange={setPanelOpen}

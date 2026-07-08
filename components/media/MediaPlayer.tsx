@@ -8,13 +8,19 @@ import { useHlsPlayer } from '@/hooks/useHlsPlayer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+// Comments arrive from the parent already enriched with the server-computed
+// `canEdit` flag (true only for the current user's own top-level comments) and
+// the `mirrorAbandoned` marker. Widen the base Frame.io shape here so the
+// theater panel can gate its edit affordance on the same flag the sidebar uses.
+export type PlayerComment = FrameIOComment & { canEdit?: boolean; mirrorAbandoned?: boolean };
+
 interface Props {
   variant:             'compact' | 'theater';
   src:                 string;
   assetId:             string;
   projectId:           string;
   frameioAssetId?:     string | null;
-  comments?:           FrameIOComment[];
+  comments?:           PlayerComment[];
   seekTarget?:         number | null;
   onSeekHandled?:      () => void;
   onTheaterOpen?:       (currentTime: number) => void;   // compact only
@@ -22,6 +28,7 @@ interface Props {
   onCurrentTimeChange?: (currentTime: number) => void;   // theater only — for parent to track time
   onCommentPosted?:    (c: FrameIOComment) => void;
   onCommentCompleted?: (id: string, completed: boolean) => void;
+  onCommentEdited?:    (id: string, text: string) => void;
   onReplyPosted?:      (reply: FrameIOCommentReply, parentId: string) => void;
   // Theater-only: slot element outside mp-root to portal the panel into
   panelContainer?:     HTMLDivElement | null;
@@ -64,7 +71,7 @@ function fmtCreatedAt(iso: string): string {
 export function MediaPlayer({
   variant, src, assetId, projectId, frameioAssetId,
   comments = [], seekTarget, onSeekHandled,
-  onTheaterOpen, onClose, onCurrentTimeChange, onCommentPosted, onCommentCompleted, onReplyPosted,
+  onTheaterOpen, onClose, onCurrentTimeChange, onCommentPosted, onCommentCompleted, onCommentEdited, onReplyPosted,
   panelContainer, onPanelOpenChange,
 }: Readonly<Props>) {
   const isTheater = variant === 'theater';
@@ -116,6 +123,9 @@ export function MediaPlayer({
   const [replyingToId,   setReplyingToId]  = useState<string | null>(null);
   const [replyText,      setReplyText]     = useState('');
   const [replyPosting,   setReplyPosting]  = useState(false);
+  const [editingId,      setEditingId]     = useState<string | null>(null);
+  const [editText,       setEditText]      = useState('');
+  const [editSaving,     setEditSaving]    = useState(false);
 
   // ── Stream URL ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -502,6 +512,21 @@ export function MediaPlayer({
     } catch {} finally { setTogglingId(null); }
   }
 
+  async function handleEditComment(commentId: string) {
+    if (!editText.trim()) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/${assetId}/comments`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commentId, text: editText.trim() }),
+      });
+      if (res.ok) {
+        onCommentEdited?.(commentId, editText.trim());
+        setEditingId(null); setEditText('');
+      }
+    } catch {} finally { setEditSaving(false); }
+  }
+
   async function handlePostReply(parentId: string) {
     if (!replyText.trim()) return;
     setReplyPosting(true);
@@ -812,8 +837,44 @@ export function MediaPlayer({
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                   </button>
+                  {c.canEdit && editingId !== c.id && (
+                    <button
+                      type="button"
+                      className="mp-comment-edit-btn"
+                      onClick={() => { setEditingId(c.id); setEditText(c.text); }}
+                      aria-label="Edit comment"
+                      title="Edit comment"
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                  )}
                 </div>
-                <p className="mp-comment-text">{c.text}</p>
+                {editingId === c.id ? (
+                  <div className="mp-comment-edit">
+                    <textarea
+                      className="mp-comment-edit-input"
+                      value={editText}
+                      autoFocus
+                      rows={2}
+                      onChange={e => setEditText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void handleEditComment(c.id); }
+                        if (e.key === 'Escape') { setEditingId(null); setEditText(''); }
+                      }}
+                    />
+                    <div className="mp-comment-edit-actions">
+                      <button type="button" className="mp-reply-cancel" onClick={() => { setEditingId(null); setEditText(''); }}>Cancel</button>
+                      <button type="button" className="mp-reply-send" onClick={() => void handleEditComment(c.id)} disabled={editSaving || !editText.trim()}>
+                        {editSaving ? '…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mp-comment-text">{c.text}</p>
+                )}
                 {fmtCreatedAt(c.createdAt) && <span className="mp-comment-date">{fmtCreatedAt(c.createdAt)}</span>}
 
                 {(c.replies ?? []).length > 0 && (
