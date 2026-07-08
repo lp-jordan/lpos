@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { AtemState } from '@/lib/services/atem-utils';
 import type { TravelModeState } from '@/hooks/useSlate';
 
@@ -33,6 +34,23 @@ interface Props {
 
 const CAMERAS = [1, 2, 3, 4, 5, 6];
 
+function GearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.3 2.6h3.4l.6 2.5a7.9 7.9 0 0 1 1.8.7l2.2-1.3 2.4 2.4-1.3 2.2c.3.6.5 1.2.7 1.8l2.5.6v3.4l-2.5.6a7.9 7.9 0 0 1-.7 1.8l1.3 2.2-2.4 2.4-2.2-1.3c-.6.3-1.2.5-1.8.7l-.6 2.5h-3.4l-.6-2.5a7.9 7.9 0 0 1-1.8-.7l-2.2 1.3-2.4-2.4 1.3-2.2a7.9 7.9 0 0 1-.7-1.8l-2.5-.6v-3.4l2.5-.6a7.9 7.9 0 0 1 .7-1.8L3.8 7l2.4-2.4 2.2 1.3c.6-.3 1.2-.5 1.8-.7z"/>
+      <circle cx="12" cy="12" r="3.4"/>
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M1 1l12 12M13 1L1 13"/>
+    </svg>
+  );
+}
+
 export function AtemPanel({
   atemState,
   travelMode,
@@ -48,10 +66,6 @@ export function AtemPanel({
   onSetFilename,
   onSetPreview,
   onSetProgram,
-  onCut,
-  onAuto,
-  onStartRecording,
-  onStopRecording,
   onOutput4Toggle,
   output4Mode,
 }: Readonly<Props>) {
@@ -62,6 +76,14 @@ export function AtemPanel({
   useEffect(() => {
     setFilenameInput(atemState?.recording.filename ?? '');
   }, [atemState?.recording.filename]);
+
+  // Close the settings sheet on Escape.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onSettingsToggle(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [settingsOpen, onSettingsToggle]);
 
   const connected = atemState?.connected ?? false;
   const isRecording = atemState?.recording.isRecording ?? false;
@@ -80,50 +102,124 @@ export function AtemPanel({
     }
   };
 
+  const connectionText = connected
+    ? `${travelMode.active ? '✈ ' : ''}Connected · ${switcherIp}`
+    : (atemState?.bridgeAvailable ? 'Bridge ready · not connected' : 'Bridge unavailable');
+
   return (
-    <div className="sl-atem-panel">
-      <div className="sl-atem-header">
-        <span className="sl-atem-title">ATEM Control Panel</span>
+    <div className="at-panel">
+
+      {/* ── Header ── */}
+      <div className="at-head">
+        <span className={`at-dot${connected ? ' at-dot--on' : ''}`} />
+        <span className="at-title">ATEM</span>
+        <button className="at-gear" type="button" onClick={onSettingsToggle} aria-label="ATEM settings">
+          <GearIcon />
+        </button>
+      </div>
+      <div className="at-subline">
+        <span>{connectionText}</span>
+        {isRecording && <span className="at-rec"><span className="at-rec-dot" />REC</span>}
+      </div>
+
+      {/* ── Monitors: what's live / what's cued ── */}
+      <div className="at-mons">
+        <div className="at-mon at-mon--pgm">
+          <span className="at-mon-tag">● PROGRAM</span>
+          <span className="at-mon-cam">{programInput ? `Cam ${programInput}` : '—'}</span>
+        </div>
+        <div className="at-mon at-mon--pvw">
+          <span className="at-mon-tag">● PREVIEW</span>
+          <span className="at-mon-cam">{previewInput ? `Cam ${previewInput}` : '—'}</span>
+        </div>
+      </div>
+
+      {/* ── Program bus (tap = on air) ── */}
+      <div className="at-bus">
+        <p className="at-bus-label at-bus-label--pgm">● Program</p>
+        <div className="at-grid">
+          {CAMERAS.map((cam) => (
+            <button
+              key={cam}
+              type="button"
+              className={`at-cam${programInput === cam ? ' at-cam--pgm-on' : ''}`}
+              onClick={() => onSetProgram(cam)}
+              aria-pressed={programInput === cam}
+            >
+              <span className="at-cam-live">LIVE</span>
+              <span className="at-cam-n">Cam {cam}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Preview bus (tap = cue) ── */}
+      <div className="at-bus">
+        <p className="at-bus-label at-bus-label--pvw">● Preview</p>
+        <div className="at-grid">
+          {CAMERAS.map((cam) => (
+            <button
+              key={cam}
+              type="button"
+              className={`at-cam${previewInput === cam ? ' at-cam--pvw-on' : ''}`}
+              onClick={() => onSetPreview(cam)}
+              aria-pressed={previewInput === cam}
+            >
+              <span className="at-cam-live">CUE</span>
+              <span className="at-cam-n">Cam {cam}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Output 4 mode ── */}
+      <div className="at-foot">
         <button
-          className={`sl-gear-btn${settingsOpen ? ' sl-gear-btn--open' : ''}`}
-          onClick={onSettingsToggle}
           type="button"
-          aria-label="Toggle ATEM settings"
+          className={`at-out4${output4IsProgram ? ' at-out4--pgm' : ''}`}
+          onClick={onOutput4Toggle}
+          title="Output 4 source — tap to switch"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-          </svg>
+          {output4IsProgram ? 'Program' : 'Multiview'}
         </button>
       </div>
 
-      {settingsOpen && (
-        <div className="sl-atem-settings">
+      <div className={`at-status${isRecording ? ' at-status--rec' : ''}`}>
+        {atemPaused ? 'Reconnect paused' : `Record file: ${recordingFilename || '—'}`}
+      </div>
 
-          {/* Travel Mode */}
-          <div className="sl-settings-block">
-            <div className="sl-travel-row">
-              <span className="sl-settings-label">Travel Mode</span>
-              <button
-                className={`sl-pill-toggle${travelMode.active ? ' sl-pill-toggle--on' : ''}`}
-                type="button"
-                onClick={handleTravelToggle}
-                aria-pressed={travelMode.active}
-              >
-                <span className="sl-pill-knob" />
-              </button>
-              <button
-                className={`sl-checklist-btn${showChecklist ? ' sl-checklist-btn--active' : ''}`}
-                type="button"
-                onClick={() => setShowChecklist((v) => !v)}
-                aria-label="Show setup checklist"
-              >
-                ?
-              </button>
+      {/* ── Settings sheet ── */}
+      {settingsOpen && createPortal(
+        <div className="at-backdrop" onClick={onSettingsToggle}>
+          <div className="at-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="ATEM settings">
+            <div className="at-grabber" />
+            <div className="at-sheet-head">
+              <h3>ATEM settings</h3>
+              <button className="at-sheet-close" type="button" onClick={onSettingsToggle} aria-label="Close"><CloseIcon /></button>
             </div>
 
+            {/* Travel mode */}
+            <div className="at-set-row">
+              <div className="at-set-label">
+                <div className="t">Travel mode</div>
+                <div className="s">Route through the remote bridge over Tailscale</div>
+              </div>
+              <button
+                type="button"
+                className={`at-sw${travelMode.active ? ' at-sw--on' : ''}`}
+                onClick={handleTravelToggle}
+                aria-pressed={travelMode.active}
+                aria-label="Travel mode"
+              ><span /></button>
+              <button
+                type="button"
+                className="at-help"
+                onClick={() => setShowChecklist((v) => !v)}
+                aria-label="Setup checklist"
+              >?</button>
+            </div>
             {showChecklist && (
-              <ol className="sl-travel-checklist">
+              <ol className="at-checklist">
                 <li>Ethernet cable from ATEM → Mac USB adapter</li>
                 <li>Mac Network → USB LAN → Manual IP <code>10.10.10.1</code>, mask <code>255.255.255.0</code></li>
                 <li>ATEM Network → Static <code>10.10.10.241</code>, gateway <code>10.10.10.1</code></li>
@@ -133,111 +229,63 @@ export function AtemPanel({
               </ol>
             )}
 
-          </div>
-
-          {/* Pause Reconnect — silences atem-connection retry loop when ATEM is off-network */}
-          <div className="sl-settings-block">
-            <div className="sl-travel-row">
-              <span className="sl-settings-label">Pause Reconnect</span>
+            {/* Pause reconnect */}
+            <div className="at-set-row">
+              <div className="at-set-label">
+                <div className="t">Pause reconnect</div>
+                <div className="s">Stop auto-reconnect attempts (bridge stays up)</div>
+              </div>
               <button
-                className={`sl-pill-toggle${atemPaused ? ' sl-pill-toggle--on' : ''}`}
                 type="button"
+                className={`at-sw${atemPaused ? ' at-sw--on' : ''}`}
                 onClick={() => (atemPaused ? onResume() : onPause())}
                 aria-pressed={atemPaused}
-                title={atemPaused ? 'Resume ATEM reconnect attempts' : 'Pause ATEM reconnect attempts (bridge stays up)'}
-              >
-                <span className="sl-pill-knob" />
-              </button>
+                aria-label="Pause reconnect"
+              ><span /></button>
             </div>
-          </div>
 
-          {/* Connection */}
-          <div className="sl-settings-block">
-            <span className="sl-settings-label">Connection</span>
-            <div className="sl-settings-row">
+            {/* Connection */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">Connection</div>
+                <div className="s">ATEM IP address</div>
+              </div>
               <input
-                className="sl-input"
-                placeholder="ATEM IP Address"
+                className="at-input"
+                placeholder="172.20.10.241"
                 value={ipInput}
                 onChange={(e) => setIpInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && onConnect(ipInput)}
+                onKeyDown={(e) => { if (e.key === 'Enter') onConnect(ipInput); }}
               />
-              <button className="sl-btn-sm" type="button" onClick={() => onConnect(ipInput)}>Connect</button>
-              <button className="sl-btn-sm" type="button" onClick={onDisconnect} disabled={!connected}>Disconnect</button>
+              <div className="at-set-btns">
+                <button type="button" className="at-btn at-btn--pri" onClick={() => onConnect(ipInput)}>Connect</button>
+                <button type="button" className="at-btn" onClick={onDisconnect} disabled={!connected}>Disconnect</button>
+              </div>
             </div>
-          </div>
 
-          {/* Record Filename */}
-          <div className="sl-settings-block">
-            <span className="sl-settings-label">Record Filename</span>
-            <div className="sl-settings-row">
+            {/* Record filename */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">Record filename</div>
+                <div className="s">Base name for ATEM recordings</div>
+              </div>
               <input
-                className="sl-input"
-                placeholder="Recording filename base"
+                className="at-input"
+                placeholder="session name"
                 value={filenameInput || recordingFilename}
                 onChange={(e) => setFilenameInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && onSetFilename(filenameInput)}
+                onKeyDown={(e) => { if (e.key === 'Enter') onSetFilename(filenameInput); }}
               />
-              <button className="sl-btn-sm" type="button" onClick={() => onSetFilename(filenameInput)}>Apply</button>
+              <div className="at-set-btns">
+                <button type="button" className="at-btn at-btn--pri" onClick={() => onSetFilename(filenameInput)}>Apply</button>
+              </div>
             </div>
-          </div>
 
-          {atemState?.lastError && (
-            <p className="sl-atem-error">{atemState.lastError}</p>
-          )}
-        </div>
+            {atemState?.lastError && <p className="at-error">{atemState.lastError}</p>}
+          </div>
+        </div>,
+        document.body,
       )}
-
-      <div className="sl-switcher-card">
-        <div className="sl-camera-stack">
-          <div className="sl-camera-row">
-            <span className="sl-camera-row-label">Preview</span>
-            <div className="sl-camera-row-buttons">
-              {CAMERAS.map((cam) => (
-                <button
-                  key={cam}
-                  className={`sl-cam-btn sl-cam-btn--pvw${previewInput === cam ? ' active' : ''}`}
-                  onClick={() => onSetPreview(cam)}
-                  type="button"
-                >
-                  Cam {cam}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="sl-camera-row">
-            <span className="sl-camera-row-label">Program</span>
-            <div className="sl-camera-row-buttons">
-              {CAMERAS.map((cam) => (
-                <button
-                  key={cam}
-                  className={`sl-cam-btn sl-cam-btn--pgm${programInput === cam ? ' active' : ''}`}
-                  onClick={() => onSetProgram(cam)}
-                  type="button"
-                >
-                  Cam {cam}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <button
-          className={`sl-output4-tile${output4IsProgram ? ' sl-output4-tile--program' : ''}`}
-          onClick={onOutput4Toggle}
-          type="button"
-        >
-          {output4IsProgram ? 'Switch to\nMultiview' : 'Switch to\nProgram'}
-        </button>
-      </div>
-
-      <div className={`sl-atem-status-line${isRecording ? ' sl-atem-status-line--recording' : ''}`}>
-        {atemPaused
-          ? 'Reconnect paused'
-          : connected
-            ? `${travelMode.active ? '✈ ' : ''}${switcherIp}  ·  ${recordingFilename || '—'}`
-            : (atemState?.bridgeAvailable ? 'Bridge ready · Not connected' : 'Bridge unavailable')}
-      </div>
     </div>
   );
 }
