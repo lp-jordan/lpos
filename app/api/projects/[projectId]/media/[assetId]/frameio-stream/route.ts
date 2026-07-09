@@ -89,8 +89,13 @@ async function resolveStreamUrl(
   // CF is the internal playback source once a video is fully processed. Gated
   // on status==='ready' so a still-uploading/encoding CF video falls through to
   // Frame.io during the processing window rather than serving a dead manifest.
-  // (allowedOrigins does NOT gate direct HLS — verified — so this plays from the
-  // LPOS origin regardless of a video's leaderpass-only origin lock.)
+  // NOTE: allowedOrigins DOES gate direct HLS via CORS. This route 302-redirects
+  // the browser to the cross-origin CF manifest, so hls.js (Firefox/Chrome MSE)
+  // makes a CORS-checked XHR for the .m3u8 — CF rejects it unless the LPOS origin
+  // (lpos.tail856ed3.ts.net) is in the video's allowedOrigins. Safari/native HLS
+  // skips the CORS check, which is why a leaderpass-only lock only breaks Firefox.
+  // getDefaultAllowedOrigins() includes the tailnet host so new uploads are fine;
+  // videos uploaded before 2026-06-28 were leaderpass-only and were backfilled.
   //
   // Use the STORED hlsUrl (captured from the CF API at upload time, already
   // carrying the customer subdomain) rather than rebuilding from

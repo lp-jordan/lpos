@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-09T17:13:45Z",
+    "title": "Fix Firefox video playback across the library",
+    "summary": "Fixed videos failing to play in Firefox inside LPOS. Firefox loads video differently than Chrome/Safari and is stricter about cross-origin permissions, so 214 older videos (about 40% of the library, all uploaded before 2026-06-28) were being blocked because they only permitted playback on the LeaderPass platform domain, not the internal LPOS address. Updated all 214 on Cloudflare to also permit the LPOS tailnet host — additive, so their existing LeaderPass protection is unchanged. New uploads since 2026-06-28 already include both and were unaffected. Hard-refresh Firefox to clear the previously-failed load."
+  },
+  {
     "timestamp": "2026-07-09T14:44:11Z",
     "title": "Fix videos wrongly showing as \"stale\" after multiple re-pushes",
     "summary": "Fixed a bug where a video could show as out-of-date (\"stale\") in LPOS even when its current version was live on Cloudflare — and where LPOS could point at an old, already-deleted Cloudflare copy. It happened when an earlier version of a video had been pushed to Cloudflare more times than the current version: the internal ranking compared per-version attempt counts across versions, so the older version could win. LPOS now always picks the newest version's most recent Cloudflare publication. This corrected 24 active videos that were mis-labeled, and is what made the reported video keep looking stale/stuck after a force reset."
