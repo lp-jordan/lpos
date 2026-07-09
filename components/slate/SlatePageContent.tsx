@@ -328,6 +328,25 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
               MXR
             </span>
           )}
+          {slate.cameraRollState?.results.map((cam) => {
+            const action = slate.cameraRollState!.action;
+            // A camera that stopped cleanly is no longer rolling — nothing to show.
+            if (action === 'stop' && cam.ok) return null;
+            const pending = !cam.ok && !cam.error;   // mid-roll, not yet confirmed
+            const cls = cam.ok
+              ? ' sl-cam-rec-pip--on'
+              : pending ? ' sl-cam-rec-pip--pending' : ' sl-cam-rec-pip--fail';
+            const title = cam.ok
+              ? `${cam.label} rolling (${cam.host})`
+              : pending
+                ? `${cam.label} — ${action === 'stop' ? 'stopping…' : 'starting…'} (${cam.host})`
+                : `${cam.label} — ${cam.error ?? (action === 'stop' ? "didn't stop" : 'not rolling')} (${cam.host})`;
+            return (
+              <span key={cam.id} className={`sl-cam-rec-pip${cls}`} title={title}>
+                {cam.label}
+              </span>
+            );
+          })}
           <span className={`sl-connected-badge${slate.atemState?.connected ? '' : ' sl-connected-badge--off'}`}>
             {slate.atemState?.connected ? 'Connected' : 'Disconnected'}
           </span>

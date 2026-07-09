@@ -13,6 +13,15 @@ import type {
   SlateTab,
 } from '@/lib/services/atem-utils';
 import type { CqMixerState } from '@/lib/services/cq-mixer-client';
+import type { CameraRollResult } from '@/lib/services/camera-control-service';
+
+/** Best-effort Sony camera roll state that rides alongside the ATEM+mixer core. */
+export interface CameraRollState {
+  rolling: boolean;
+  action: 'start' | 'stop';
+  results: CameraRollResult[];
+  updatedAt: string;
+}
 
 export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation';
 
@@ -59,6 +68,7 @@ export interface SlateState {
   audioMonitor: ClientAudioMonitorState;
   playbackConnection: PlaybackConnectionState | null;
   cqMixerState: CqMixerState | null;
+  cameraRollState: CameraRollState | null;
   atemToast: AtemToast | null;
   logs: string[];
   projects: SlateProject[];
@@ -254,6 +264,7 @@ export function useSlate(): SlateState & SlateActions {
   const [audioLocalError, setAudioLocalError] = useState('');
   const [playbackConnection, setPlaybackConnection] = useState<PlaybackConnectionState | null>(DEFAULT_PLAYBACK_CONNECTION_STATE);
   const [cqMixerState, setCqMixerState] = useState<CqMixerState | null>(null);
+  const [cameraRollState, setCameraRollState] = useState<CameraRollState | null>(null);
   const [atemToast, setAtemToast] = useState<AtemToast | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [projects, setProjects] = useState<SlateProject[]>([]);
@@ -486,6 +497,7 @@ export function useSlate(): SlateState & SlateActions {
     });
     socket.on('playbackConnectionState', (state: PlaybackConnectionState) => setPlaybackConnection(state));
     socket.on('cqMixerState', (state: CqMixerState) => setCqMixerState(state));
+    socket.on('cameraRollState', (state: CameraRollState) => setCameraRollState(state));
 
     socket.on('atemProfiles', (profiles: AtemProfile[]) => setAtemProfiles(profiles));
     socket.on('travelMode', (state: TravelModeState) => setTravelMode(state));
@@ -528,6 +540,7 @@ export function useSlate(): SlateState & SlateActions {
     audioMonitor,
     playbackConnection,
     cqMixerState,
+    cameraRollState,
     atemToast,
     logs,
     projects,

@@ -4,6 +4,12 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { AtemState } from '@/lib/services/atem-utils';
 import type { TravelModeState } from '@/hooks/useSlate';
+import type { SonyCameraDevice } from '@/lib/store/studio-config-store';
+
+function newCameraId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return c?.randomUUID ? c.randomUUID() : `cam-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+}
 
 const TRAVEL_ATEM_IP = '10.10.10.241';
 const HOME_ATEM_IP = '172.20.10.241';
@@ -70,6 +76,56 @@ export function AtemPanel({
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
   const [showChecklist, setShowChecklist] = useState(false);
+
+  // ── Sony camera roster (armed cams follow the studio REC button) ──
+  const [cameras, setCameras] = useState<SonyCameraDevice[]>([]);
+  const [camSaving, setCamSaving] = useState(false);
+  const [camMsg, setCamMsg] = useState('');
+
+  // Load the roster whenever the settings sheet opens.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    let cancelled = false;
+    fetch('/api/studio/camera/config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { camera?: { cameras?: SonyCameraDevice[] } } | null) => {
+        if (!cancelled) setCameras(Array.isArray(data?.camera?.cameras) ? data!.camera!.cameras! : []);
+      })
+      .catch(() => { /* leave roster empty on failure */ });
+    return () => { cancelled = true; };
+  }, [settingsOpen]);
+
+  function updateCamera(id: string, patch: Partial<SonyCameraDevice>) {
+    setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+  function addCamera() {
+    setCameras((prev) => [
+      ...prev,
+      { id: newCameraId(), label: `Cam ${prev.length + 1}`, host: '', model: 'fx6', armed: false },
+    ]);
+  }
+  function removeCamera(id: string) {
+    setCameras((prev) => prev.filter((c) => c.id !== id));
+  }
+  async function saveCameras() {
+    setCamSaving(true);
+    setCamMsg('');
+    try {
+      const res = await fetch('/api/studio/camera/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera: { cameras } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { camera?: { cameras?: SonyCameraDevice[] } };
+      setCameras(Array.isArray(data?.camera?.cameras) ? data.camera!.cameras! : cameras);
+      setCamMsg('Saved');
+    } catch (err) {
+      setCamMsg(`Save failed: ${(err as Error).message}`);
+    } finally {
+      setCamSaving(false);
+    }
+  }
 
   useEffect(() => {
     setFilenameInput(atemState?.recording.filename ?? '');
@@ -276,6 +332,64 @@ export function AtemPanel({
               />
               <div className="at-set-btns">
                 <button type="button" className="at-btn at-btn--pri" onClick={() => onSetFilename(filenameInput)}>Apply</button>
+              </div>
+            </div>
+
+            {/* Sony cameras — armed cams start/stop with the studio REC button */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">Sony cameras</div>
+                <div className="s">Armed cameras record/stop with the REC button (best-effort — they never block ATEM + mixer)</div>
+              </div>
+
+              {cameras.length === 0 && (
+                <p className="at-cam-empty">No cameras yet. Add one to sync it with REC.</p>
+              )}
+
+              {cameras.map((cam) => (
+                <div className="at-cam-row" key={cam.id}>
+                  <button
+                    type="button"
+                    className={`at-sw at-sw--sm${cam.armed ? ' at-sw--on' : ''}`}
+                    onClick={() => updateCamera(cam.id, { armed: !cam.armed })}
+                    aria-pressed={cam.armed}
+                    aria-label={`Arm ${cam.label || 'camera'}`}
+                  ><span /></button>
+                  <input
+                    className="at-input at-cam-label"
+                    placeholder="Label"
+                    value={cam.label}
+                    onChange={(e) => updateCamera(cam.id, { label: e.target.value })}
+                  />
+                  <input
+                    className="at-input at-cam-host"
+                    placeholder="192.168.0.10"
+                    value={cam.host}
+                    onChange={(e) => updateCamera(cam.id, { host: e.target.value })}
+                  />
+                  <select
+                    className="at-input at-cam-model"
+                    value={cam.model}
+                    onChange={(e) => updateCamera(cam.id, { model: e.target.value === 'fx3' ? 'fx3' : 'fx6' })}
+                  >
+                    <option value="fx6">FX6</option>
+                    <option value="fx3">FX3</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="at-cam-del"
+                    onClick={() => removeCamera(cam.id)}
+                    aria-label={`Remove ${cam.label || 'camera'}`}
+                  ><CloseIcon /></button>
+                </div>
+              ))}
+
+              <div className="at-set-btns">
+                <button type="button" className="at-btn" onClick={addCamera}>Add camera</button>
+                <button type="button" className="at-btn at-btn--pri" onClick={saveCameras} disabled={camSaving}>
+                  {camSaving ? 'Saving…' : 'Save cameras'}
+                </button>
+                {camMsg && <span className="at-cam-msg">{camMsg}</span>}
               </div>
             </div>
 

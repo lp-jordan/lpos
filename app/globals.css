@@ -9684,6 +9684,24 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   opacity: 1;
 }
 
+/* Per-camera roll pips beside the REC button (best-effort Sony cams) */
+.sl-cam-rec-pip {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted-soft);
+  opacity: 0.5;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-cam-rec-pip--on { color: #34d399; opacity: 1; }
+.sl-cam-rec-pip--fail { color: #ff8a95; opacity: 1; text-decoration: line-through; }
+.sl-cam-rec-pip--pending { color: var(--muted); opacity: 0.85; animation: slCamPulse 1s ease-in-out infinite; }
+@keyframes slCamPulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.9; } }
+@media (prefers-reduced-motion: reduce) { .sl-cam-rec-pip--pending { animation: none; } }
+
 /* Mixer status section — audio tab body */
 .sl-mixer-status {
   border-top: 1px solid var(--line-subtle);
@@ -19739,6 +19757,21 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .at-btn:disabled { cursor: default; opacity: 0.5; }
 .at-btn--pri { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border-color: var(--accent); color: var(--accent); }
 .at-error { color: #ff8a95; font-size: 0.8rem; margin-top: 10px; }
+
+/* Sony camera roster in the ATEM settings sheet */
+.at-sw--sm { height: 24px; width: 40px; }
+.at-sw--sm > span { height: 20px; width: 20px; }
+.at-sw--sm.at-sw--on > span { transform: translateX(16px); }
+.at-cam-empty { color: var(--muted); font-size: 0.8rem; margin: 4px 0 8px; }
+.at-cam-row { align-items: center; display: flex; gap: 6px; margin-bottom: 8px; }
+.at-cam-row .at-input { height: 34px; font-size: 0.85rem; }
+.at-cam-label { flex: 1 1 30%; min-width: 0; }
+.at-cam-host { flex: 1 1 40%; min-width: 0; }
+.at-cam-model { flex: 0 0 74px; padding: 0 6px; }
+.at-cam-del { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; display: flex; flex: 0 0 auto; height: 34px; justify-content: center; width: 34px; }
+.at-cam-del:hover { border-color: #ff5566; color: #ff8a95; }
+.at-cam-msg { align-self: center; color: var(--muted); font-size: 0.8rem; }
+
 @keyframes atFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes atSlideUp { from { opacity: 0.6; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .at-backdrop, .at-sheet { animation: none; } }

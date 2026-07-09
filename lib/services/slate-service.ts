@@ -37,6 +37,7 @@ import type { CameraRollResult } from './camera-control-service';
  */
 interface CameraRollState {
   rolling: boolean;              // at least one armed camera is believed to be recording
+  action: 'start' | 'stop';      // which roll produced these results (drives pip semantics)
   results: CameraRollResult[];   // per-camera outcome of the most recent roll/stop
   updatedAt: string;             // ISO timestamp of the last roll
 }
@@ -310,6 +311,9 @@ export class SlateService {
     this.emitPlaybackConnectionState(socket);
     this.emitCqMixerState(socket);
     this.emitCameraRollState(socket);
+    // Warm up armed-camera sessions when the studio opens so the first REC
+    // press doesn't pay cold-connect latency. Throttled + best-effort.
+    void this.maybePreconnectCameras();
 
     // ── Note events ──
     socket.on('addNote', (data: { code: string; note: string; tabId?: string | null }) => {
@@ -874,7 +878,20 @@ export class SlateService {
     target.emit('atemCommandResult', { type, message });
   }
 
-  private cameraRollState: CameraRollState = { rolling: false, results: [], updatedAt: '' };
+  private cameraRollState: CameraRollState = { rolling: false, action: 'start', results: [], updatedAt: '' };
+  private lastCameraPreconnect = 0;
+
+  /** Warm up armed-camera sessions, throttled to at most once per 20s. Best-effort. */
+  private async maybePreconnectCameras(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastCameraPreconnect < 20_000) return;
+    if (getArmedCameras().length === 0) return;
+    this.lastCameraPreconnect = now;
+    try {
+      const { getCameraControlService } = await import('./container');
+      await getCameraControlService().preconnectArmed();
+    } catch { /* best-effort warm-up — ignore failures */ }
+  }
 
   private emitCameraRollState(
     target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
@@ -897,8 +914,10 @@ export class SlateService {
     if (armed.length === 0) return;
 
     // Optimistically flag the roll as in-flight so the UI can show pending dots.
+    // Pending is distinguishable from failure by the absence of an `error`.
     this.cameraRollState = {
       rolling: action === 'start',
+      action,
       results: armed.map((c) => ({ id: c.id, label: c.label, host: c.host, model: c.model, ok: false })),
       updatedAt: createTimestamp(),
     };
@@ -913,7 +932,7 @@ export class SlateService {
         : await camera.stopAllArmed();
     } catch (err) {
       this.emitAtemToast(target, 'error', `Camera control unavailable: ${(err as Error).message}`);
-      this.cameraRollState = { rolling: false, results: [], updatedAt: createTimestamp() };
+      this.cameraRollState = { rolling: false, action, results: [], updatedAt: createTimestamp() };
       this.emitCameraRollState();
       return;
     }
@@ -923,7 +942,7 @@ export class SlateService {
     // After a start, "rolling" = any camera confirmed recording. After a stop,
     // "rolling" = any camera that FAILED to stop (i.e. may still be recording).
     const anyRolling = action === 'start' ? ok.length > 0 : failed.length > 0;
-    this.cameraRollState = { rolling: anyRolling, results, updatedAt: createTimestamp() };
+    this.cameraRollState = { rolling: anyRolling, action, results, updatedAt: createTimestamp() };
     this.emitCameraRollState();
 
     // Non-blocking per-camera feedback.
