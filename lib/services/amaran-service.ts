@@ -333,18 +333,22 @@ export class AmaranService {
       state.power = !sleepRes.value.data;
     }
 
+    // Only overwrite a field when the poll actually returned a number. Amaran
+    // Desktop omits some keys (e.g. gm from get_cct comes back undefined); writing
+    // that undefined back would corrupt state — and any preset saved afterward,
+    // since preset snapshots read straight from this state.
     if (hsiRes.status === 'fulfilled' && hsiRes.value.code === 0) {
-      const d = hsiRes.value.data as { hue: number; sat: number; intensity: number };
-      state.hue        = d.hue;
-      state.saturation = d.sat;
-      state.brightness = Math.round((d.intensity / 1000) * 100);
+      const d = hsiRes.value.data as { hue?: number; sat?: number; intensity?: number };
+      if (typeof d.hue === 'number')       state.hue        = d.hue;
+      if (typeof d.sat === 'number')       state.saturation = d.sat;
+      if (typeof d.intensity === 'number') state.brightness = Math.round((d.intensity / 1000) * 100);
     }
 
     if (cctRes.status === 'fulfilled' && cctRes.value.code === 0) {
-      const d = cctRes.value.data as { cct: number; gm: number; intensity: number };
-      state.cct        = d.cct;
-      state.gm         = d.gm;
-      state.brightness = Math.round((d.intensity / 1000) * 100);
+      const d = cctRes.value.data as { cct?: number; gm?: number; intensity?: number };
+      if (typeof d.cct === 'number')       state.cct        = d.cct;
+      if (typeof d.gm === 'number')        state.gm         = d.gm;
+      if (typeof d.intensity === 'number') state.brightness = Math.round((d.intensity / 1000) * 100);
     }
 
     this._states[nodeId] = state;
@@ -651,8 +655,13 @@ export class AmaranService {
       try {
         const res = await this.sendRequest('get_cct', id, {});
         if (res.code === 0 && res.data) {
-          const d = res.data as { cct: number; gm: number; intensity: number };
-          if (this.near(d.cct, cct, 75) && this.near(d.gm, gm, 4) && this.near(d.intensity, intensity, 30)) {
+          const d = res.data as { cct: number; gm?: number; intensity: number };
+          // Amaran Desktop's get_cct reply does NOT echo gm (it comes back
+          // undefined), so confirm on cct + intensity and only fault gm when the
+          // fixture actually reports a number. Comparing against undefined here
+          // was making every verified CCT apply "mismatch" and retry needlessly.
+          const gmOk = typeof d.gm !== 'number' || this.near(d.gm, gm, 4);
+          if (this.near(d.cct, cct, 75) && gmOk && this.near(d.intensity, intensity, 30)) {
             confirmed = true;
           } else {
             console.warn(`[amaran] cct mismatch on ${id}: sent {cct:${cct},gm:${gm},intensity:${intensity}} got {cct:${d.cct},gm:${d.gm},intensity:${d.intensity}}`);
