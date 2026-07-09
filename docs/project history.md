@@ -2387,3 +2387,22 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** CF API GET on the failing UID (confirmed leaderpass-only origins). Full-account scan (538 videos) bucketed by allowedOrigins. Backfill dry-run (214 targets) then apply (214 OK / 0 fail). Post-backfill re-scan: 0 ready videos missing the tailnet origin; C3.mp4 confirmed `['app.leaderpass.com', 'lpos.tail856ed3.ts.net']`.
 
 **Assumptions / follow-ups:** User should hard-refresh Firefox (it may have cached the failed CORS response). Follow-up landmine: `lpos-dashboard-dev/lib/services/leaderpass-publish.ts:22` still hardcodes `['app.leaderpass.com']` — harmless while publishing from prod, but would recreate the problem if the dev tree ever publishes; left untouched per the prod-default / dev-opt-in rule. Longer-term option: proxy HLS same-origin to make in-app playback independent of per-video allowedOrigins (and resilient if the tailnet hostname ever changes).
+
+## 2026-07-09T17:25:50Z — LPOS: fix inline prior-video delete leaking stale Cloudflare copies
+
+**User prompt:** "Any idea why this video (Todd's promo) would have still had three versions in cloudflare? Our system SHOULD have deleted those older versions. Was that a side effect of what you just fixed?" — followed by choosing to fix the inline prior-delete.
+
+**Response summary:** Investigated why Todd's promo still had three CF videos. Evidence from production: the two leaked v2 UIDs (`4a49…`, `7b58…`) were recorded in `cloudflare_orphans` by the nightly reconciler on 2026-07-07 with reason `reconciler` — but the reconciler only *flags* for manual purge, it never auto-deletes, so they lingered until the force-reset prune removed them. The live v3 UID (`8246…`) had itself been wrongly flagged as an orphan on 2026-07-08 (the `getLiveCloudflareUids` cross-version bug, already fixed). Root cause of the leak: both publish paths delete only the single "prior" distribution returned by `getLatestDistributionInfoForAsset`, which shared the same per-version-`attempt_number`-compared-across-versions bug — so it never selected the older v2 attempts and left them un-deleted. Fixed `getLatestDistributionInfoForAsset` to be version-aware. Confirmed the extra videos predated all of this session's work (created 07-02 → 07-08) — not a side effect of the earlier fixes.
+
+**Files changed:**
+- `lib/store/canonical-asset-store.ts` — `getLatestDistributionInfoForAsset` now delegates to the (already-fixed) version-aware `pickLatestDistributionAnyVersion` instead of taking the global-max-`attempt_number` head of `bundle.distributions`.
+
+**Implementation summary:** One-line-ish delegation reusing the version-aware selector, so the "prior distribution to delete on a new publish" is the newest version's latest attempt for the provider. Applies to both `cloudflare-publish.ts` and `leaderpass-publish.ts` `priorCloudflare`/`priorLeaderPass` captures and to `readPriorPosterUrl`'s poster carry-forward. `tsc --noEmit` → 0 errors.
+
+**Decision rationale:** User opted to fix the inline prior-delete (not to make the reconciler auto-purge). The version-aware pick makes each publish reliably delete the immediately-prior live video, preventing future leaks at the source. Left the reconciler as record-only (deliberate human purge) per its existing design and the user's choice.
+
+**Alternatives considered:** Reconciler auto-purge of confirmed-non-live videos (declined by user — destructive automation). Leave as-is and rely on force-reset prune (declined — doesn't stop the leak at the source). Note: even with this fix, inline cleanup only deletes one video per publish; historical accumulation is still swept by the reconciler flag + force-reset prune.
+
+**Commands/checks run:** `tsc --noEmit -p tsconfig.json` → 0 errors. Production `sqlite3` forensics: confirmed orphan rows for `4a49…`/`7b58…` (reason `reconciler`, since purged by the prune) and the mis-flagged live `8246…`; confirmed video creation dates predate this session.
+
+**Assumptions / follow-ups:** Assumes version ranking is the correct "prior live publication" semantics (matches the other two selectors). Follow-up (not done, user declined for now): optional reconciler auto-purge so leaks self-heal without a manual reset. The 22 other assets flagged earlier by the cross-version bug are unaffected by this change beyond already being corrected by the selector fixes.

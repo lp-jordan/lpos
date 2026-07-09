@@ -1359,7 +1359,12 @@ export function getLatestDistributionInfoForAsset(
 ): CanonicalDistributionRecord | null {
   const bundle = rowToAssetBundle(assetId);
   if (!bundle) return null;
-  return bundle.distributions.find((distribution) => distribution.provider === provider) ?? null;
+  // Version-aware: newest version's latest attempt, NOT the global max attempt_number.
+  // The publish paths use this to pick the "prior" Cloudflare/LeaderPass distribution to
+  // delete when a new one goes live; ranking by the per-version attempt_number across
+  // versions would return the wrong record (an older version re-pushed more times) and
+  // leave the actual previous-live video un-deleted — how stale CF copies leaked.
+  return pickLatestDistributionAnyVersion(bundle, provider);
 }
 
 /**

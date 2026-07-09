@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-09T17:25:50Z",
+    "title": "Publishing to Cloudflare now reliably removes the old copy",
+    "summary": "Closed the source of stale Cloudflare copies: when a new version of a video is published, the system now reliably deletes the immediately-previous live copy instead of occasionally picking the wrong record and leaving old copies behind. This was the underlying reason a video could accumulate several copies in Cloudflare. Existing leftover copies are still cleaned up by the nightly orphan detector (flag for manual purge) and by force reset."
+  },
+  {
     "timestamp": "2026-07-09T17:13:45Z",
     "title": "Fix Firefox video playback across the library",
     "summary": "Fixed videos failing to play in Firefox inside LPOS. Firefox loads video differently than Chrome/Safari and is stricter about cross-origin permissions, so 214 older videos (about 40% of the library, all uploaded before 2026-06-28) were being blocked because they only permitted playback on the LeaderPass platform domain, not the internal LPOS address. Updated all 214 on Cloudflare to also permit the LPOS tailnet host — additive, so their existing LeaderPass protection is unchanged. New uploads since 2026-06-28 already include both and were unaffected. Hard-refresh Firefox to clear the previously-failed load."
