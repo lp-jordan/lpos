@@ -899,7 +899,14 @@ std::string handleJsonRequest(const HttpRequest& request) {
   }
 
   if (request.path == "/camera/discover") {
-    return jsonResponse(200, "OK", discoveryJson(discoverCameras()));
+    // A failed enumeration (e.g. "no cameras found") must NOT escape and abort
+    // the process — return a clean 503 so the caller can show a scan error and
+    // the bridge stays alive for direct-IP connect/record.
+    try {
+      return jsonResponse(200, "OK", discoveryJson(discoverCameras()));
+    } catch (const std::exception& error) {
+      return serviceUnavailable(error.what());
+    }
   }
 
   const auto [host, model] = readIdentity(request);
@@ -1157,30 +1164,44 @@ int main(int argc, char* argv[]) {
     if (client == INVALID_SOCKET) continue;
 
     std::thread([client]() {
-      std::string rawRequest;
-      if (!readHttpRequest(client, rawRequest)) {
-        closesocket(client);
-        return;
-      }
-
-      const HttpRequest request = parseRequest(rawRequest);
-      if (request.path == "/camera/liveview") {
-        const auto [host, model] = readIdentity(request);
-        if (host.empty()) {
-          const std::string response = badRequest("Camera host is required.");
-          sendAll(client, response.c_str(), static_cast<int>(response.size()));
-        } else {
-          const auto [username, password] = readCredentials(request);
-          const auto fingerprint = readFingerprint(request);
-          streamLiveView(client, CameraIdentity{host, model, username, password, fingerprint});
+      // Top-level guard: an exception escaping this thread would call
+      // std::terminate and SIGABRT the whole bridge (killing every camera
+      // session). Catch everything, best-effort report it, and only drop the
+      // one connection.
+      try {
+        std::string rawRequest;
+        if (!readHttpRequest(client, rawRequest)) {
+          closesocket(client);
+          return;
         }
-        closesocket(client);
-        return;
-      }
 
-      const std::string response = handleJsonRequest(request);
-      sendAll(client, response.c_str(), static_cast<int>(response.size()));
-      closesocket(client);
+        const HttpRequest request = parseRequest(rawRequest);
+        if (request.path == "/camera/liveview") {
+          const auto [host, model] = readIdentity(request);
+          if (host.empty()) {
+            const std::string response = badRequest("Camera host is required.");
+            sendAll(client, response.c_str(), static_cast<int>(response.size()));
+          } else {
+            const auto [username, password] = readCredentials(request);
+            const auto fingerprint = readFingerprint(request);
+            streamLiveView(client, CameraIdentity{host, model, username, password, fingerprint});
+          }
+          closesocket(client);
+          return;
+        }
+
+        const std::string response = handleJsonRequest(request);
+        sendAll(client, response.c_str(), static_cast<int>(response.size()));
+        closesocket(client);
+      } catch (const std::exception& error) {
+        std::cerr << "[sony-camera-bridge] request handler error: " << error.what() << '\n';
+        const std::string response = serviceUnavailable(error.what());
+        sendAll(client, response.c_str(), static_cast<int>(response.size()));
+        closesocket(client);
+      } catch (...) {
+        std::cerr << "[sony-camera-bridge] request handler error: unknown exception\n";
+        closesocket(client);
+      }
     }).detach();
   }
 
