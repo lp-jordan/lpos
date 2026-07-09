@@ -472,22 +472,31 @@ public:
     return status;
   }
 
+  // Fires one full REC-button press (Down then Up), which toggles the recording
+  // state exactly once. Cinema bodies (FX6/FX3) use MovieRecButtonToggle — the
+  // Alpha-style MovieRecord command returns NotSupported (0x8003). A lone Down
+  // does NOT register; both halves are required. Sony's own sample ignores the
+  // return code, so we don't treat it as fatal.
+  void pressMovieRecordButtonLocked() {
+    SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Down);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
+  }
+
+  // NOTE: MovieRecButtonToggle is a *toggle*, and this camera's RecordingState
+  // read-back is unreliable (it can report IDLE while actually recording), so we
+  // can't safely guard on current state here — we fire one toggle per call and
+  // rely on LPOS to track intended start/stop. See getStatus caveat.
   void startRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    const SDK::CrError error = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecord, SDK::CrCommandParam_Down);
-    if (CR_FAILED(error)) {
-      throw std::runtime_error("Sony SDK failed to start recording.");
-    }
+    pressMovieRecordButtonLocked();
   }
 
   void stopRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    const SDK::CrError error = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecord, SDK::CrCommandParam_Up);
-    if (CR_FAILED(error)) {
-      throw std::runtime_error("Sony SDK failed to stop recording.");
-    }
+    pressMovieRecordButtonLocked();
   }
 
   void setWhiteBalance(const std::string& mode) {

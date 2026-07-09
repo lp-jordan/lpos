@@ -88,6 +88,16 @@ elseif(APPLE)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libCr_PTP_USB.dylib"  "${BRIDGE_OUTPUT_DIR}/CrAdapter"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libssh2.dylib"        "${BRIDGE_OUTPUT_DIR}/CrAdapter"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libusb-1.0.0.dylib"   "${BRIDGE_OUTPUT_DIR}/CrAdapter"
+      # macOS Cr_Core resolves its connection adapters from a .app-bundle layout
+      # (Contents/Frameworks/CrAdapter). Our bridge is a bare binary, so without
+      # this the PTP-IP/SSH plugin never loads and every authenticated (SSH)
+      # connect fails with CrError_Connect_HandlePlugin (0x8206). Mirror the
+      # adapters into the bundle path so the SDK finds them.
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${BRIDGE_OUTPUT_DIR}/Contents/Frameworks/CrAdapter"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libCr_PTP_IP.dylib"   "${BRIDGE_OUTPUT_DIR}/Contents/Frameworks/CrAdapter"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libCr_PTP_USB.dylib"  "${BRIDGE_OUTPUT_DIR}/Contents/Frameworks/CrAdapter"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libssh2.dylib"        "${BRIDGE_OUTPUT_DIR}/Contents/Frameworks/CrAdapter"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SONY_CRSDK_DIR}/CrAdapter/libusb-1.0.0.dylib"   "${BRIDGE_OUTPUT_DIR}/Contents/Frameworks/CrAdapter"
     )
   endif()
 endif()
