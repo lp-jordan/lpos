@@ -384,6 +384,7 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [showMoveModal,  setShowMoveModal]  = useState(false);
   const [moving,         setMoving]         = useState(false);
+  const [zipping,        setZipping]        = useState(false);
   const [dragOverId,     setDragOverId]     = useState<string | null>(null);
   const [deleteTarget,   setDeleteTarget]   = useState<DriveAsset | null>(null);
   const [deleteError,    setDeleteError]    = useState<string | null>(null);
@@ -583,6 +584,43 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
     a.href  = `/api/projects/${projectId}/assets/${asset.entityId}/download`;
     a.download = asset.name;
     a.click();
+  }
+
+  // Batch-download the current selection as a single .zip (folders recursed,
+  // structure preserved). A lone selected file downloads directly instead.
+  async function handleDownloadZip() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    const soleFile = ids.length === 1 ? items.find((i) => i.entityId === ids[0] && !i.isFolder) : null;
+    if (soleFile) { handleDownload(soleFile); return; }
+
+    setZipping(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/assets/download-zip`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entityIds: ids, zipName: `${projectName || 'assets'} assets` }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error ?? 'Failed to build zip');
+      }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `${projectName || 'assets'} assets.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setZipping(false);
+    }
   }
 
   async function handleSendToScripts(asset: DriveAsset) {
@@ -1021,6 +1059,14 @@ export function AssetsTab({ projectId, projectName = '', sentScriptIds = new Set
             disabled={moving}
           >
             {moving ? 'Moving…' : 'Move to…'}
+          </button>
+          <button
+            type="button"
+            className="assets-selection-btn"
+            onClick={() => void handleDownloadZip()}
+            disabled={zipping}
+          >
+            {zipping ? 'Zipping…' : `Download${selectedIds.size > 1 ? ' (zip)' : ''}`}
           </button>
           <button
             type="button"

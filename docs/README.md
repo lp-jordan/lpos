@@ -68,6 +68,23 @@ Operational. Collisions are matched by normalized display name (with a version-s
 
 ---
 
+## Assets Tab Batch Download
+
+### What it does
+On a project's internal **Assets** tab (`AssetsTab.tsx`, the Drive/local asset tree), a multi-selection of files and/or folders can be downloaded as a single `.zip` from the selection action bar. Selecting exactly one file downloads it directly (no zip wrapper). Selected folders are recursed and added with their folder structure preserved inside the archive.
+
+### Key files and entry points
+- `app/api/projects/[projectId]/assets/download-zip/route.ts` — `POST` route. Auth `requireRole('user')`. Loads `getDriveAssetsByProject` (`entityType='asset'`), flattens the selected `entityIds` into file entries (recursing folders via a `parentDriveId` children map, deduping by `entityId`), then streams a zip via `archiver` + `PassThrough` + `Readable.toWeb`.
+- `components/projects/AssetsTab.tsx` — `handleDownloadZip()` + the "Download" / "Download (zip)" button in the selection bar; single-file selections delegate to the existing per-row `handleDownload`.
+
+### Data flow (inputs → outputs)
+Selected `entityIds` → POST `download-zip` → server flattens to `{ asset, entryPath }` file list → per file: `source='local'` streams from `localPath` (`archive.file`), else Drive stream via `downloadFileStream(driveFileId)` (`archive.append`) → streamed `.zip` response saved by the browser.
+
+### Current status / known gaps
+Operational (not yet runtime-verified in-app). Google Workspace native docs (`application/vnd.google-apps.*`) are skipped — they can't be binary-downloaded via `alt=media`. A file that fails to open is skipped rather than corrupting the archive. If a folder and one of its descendant files are both selected, the file is included once. Path collisions inside the zip get a `(n)` suffix. The client-facing delivery page still has no zip bulk-download (tracked separately).
+
+---
+
 ## Frame.io Upload Pipeline
 
 ### Key files

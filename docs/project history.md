@@ -2406,3 +2406,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `tsc --noEmit -p tsconfig.json` → 0 errors. Production `sqlite3` forensics: confirmed orphan rows for `4a49…`/`7b58…` (reason `reconciler`, since purged by the prune) and the mis-flagged live `8246…`; confirmed video creation dates predate this session.
 
 **Assumptions / follow-ups:** Assumes version ranking is the correct "prior live publication" semantics (matches the other two selectors). Follow-up (not done, user declined for now): optional reconciler auto-purge so leaks self-heal without a manual reset. The 22 other assets flagged earlier by the cross-version bug are unaffected by this change beyond already being corrected by the selector fixes.
+
+## 2026-07-09T19:11:52Z — LPOS: batch (zip) download for project assets
+
+**User prompt:** "Can we please add the ability to batch download from assets in a project?"
+
+**Response summary:** Added a batch-download action to the internal **Assets** tab (`AssetsTab.tsx`) so a multi-selection of files and/or folders downloads as a single `.zip`. New streaming API route `POST /api/projects/[projectId]/assets/download-zip` builds the archive with `archiver` (already a dependency), handling both `source='local'` (disk read stream) and Drive-backed assets (`downloadFileStream`, `alt=media`). Selected folders are recursed and their contents added with folder structure preserved inside the zip; a global path-uniqueness helper suffixes `(n)` on collisions. A lone selected file short-circuits to the existing single-file download route instead of zipping. Confirmed scope with the user (Assets tab, recurse-and-preserve-structure) — the Media tab is intentionally left as-is per prior priority.
+
+**Files changed:**
+- `app/api/projects/[projectId]/assets/download-zip/route.ts` (new) — POST route; auth via `requireRole('user')`; flattens selected `entityIds` (recursing folders via a `parentDriveId` children map, deduping by `entityId`), then streams a zip via `PassThrough` + `Readable.toWeb`. Per-file try/catch skips a failing file rather than corrupting the whole archive; Google Workspace native docs (`application/vnd.google-apps.*`) are skipped (can't binary-download via `alt=media`). Archive built in a fire-and-forget async IIFE so the response streams immediately.
+- `components/projects/AssetsTab.tsx` — added `zipping` state, `handleDownloadZip()` (posts selection, downloads the blob; single-file selection delegates to `handleDownload`), and a "Download"/"Download (zip)" button in the existing selection action bar.
+
+**Implementation summary:** Mirrors the existing `photos/download-zip` and `transcripts/download-zip` routes for the archiver/streaming pattern, adapted to the `DriveAsset` model (`getDriveAssetsByProject`, `entityType='asset'`). Folder recursion uses the server-side full record (which carries `isFolder`/`parentDriveId`/`localPath`/`source`, unlike the client `DriveAsset` type). Compression level 6.
+
+**Decision rationale:** Reused `archiver` + the established zip-route shape for consistency and zero new deps. Streaming (never buffering whole files) keeps large batches off the event loop. Single-file delegation avoids wrapping one file in a needless zip. Skipping google-apps native types and per-file error isolation keep one bad asset from breaking the entire download.
+
+**Alternatives considered:** Staggered individual downloads (what MediaTab's bulk button does) — rejected; the request explicitly wants a single batch download and a zip is the cleaner deliverable. Opening all Drive streams up front via `Promise.all` — rejected in favor of sequential opening inside the archive loop to limit concurrent Drive connections.
+
+**Commands/checks run:** `tsc --noEmit -p tsconfig.json` → 0 errors (project-wide). ESLint CLI not runnable non-interactively in this repo (flat-config/next-lint prompts); relied on tsc. Not manually run in-app (dev server is user-managed).
+
+**Assumptions / follow-ups:** Assumes the internal Assets tab is the intended surface (confirmed with user). Edge case: if a folder and one of its descendant files are both selected, the file is included once (first occurrence wins). The client-facing delivery page still lacks a zip bulk-download (separate stored priority) — not touched here.

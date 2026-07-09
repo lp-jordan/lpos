@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-09T19:11:52Z",
+    "title": "Batch download project assets as a zip",
+    "summary": "You can now select multiple files (and folders) in a project's Assets tab and download them all at once as a single .zip. Selected folders keep their structure inside the archive, and picking just one file downloads it directly as before. Works for both locally-stored and Google Drive-backed assets."
+  },
+  {
     "timestamp": "2026-07-09T17:25:50Z",
     "title": "Publishing to Cloudflare now reliably removes the old copy",
     "summary": "Closed the source of stale Cloudflare copies: when a new version of a video is published, the system now reliably deletes the immediately-previous live copy instead of occasionally picking the wrong record and leaving old copies behind. This was the underlying reason a video could accumulate several copies in Cloudflare. Existing leftover copies are still cleaned up by the nightly orphan detector (flag for manual purge) and by force reset."
