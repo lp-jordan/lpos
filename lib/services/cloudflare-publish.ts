@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
-import { getLatestDistributionInfoForAsset } from '@/lib/store/canonical-asset-store';
-import { recordOrphan } from '@/lib/store/cloudflare-orphan-store';
+import { getLatestDistributionInfoForAsset, listCloudflareUidsForAsset } from '@/lib/store/canonical-asset-store';
+import { recordOrphan, markOrphanPurged } from '@/lib/store/cloudflare-orphan-store';
 import { getUploadQueueService } from '@/lib/services/container';
 import { probeMediaInfo } from '@/lib/services/media-probe';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
@@ -12,7 +12,9 @@ import {
   deleteCloudflareVideo,
   getCloudflareStreamConfigDiagnostic,
   getCloudflareFileSize,
+  getCloudflareVideoState,
   isCloudflareStreamConfigured,
+  listCloudflareVideos,
   uploadCaptionsVtt,
   uploadFileToCloudflareTus,
   waitForCloudflareVideoReady,
@@ -362,4 +364,122 @@ export async function runCloudflareUpload(
       }
     }
   }
+}
+
+export interface CloudflarePruneResult {
+  /** UID kept as the single live survivor (null when none could be confirmed live). */
+  keptUid: string | null;
+  /** UIDs successfully deleted from Cloudflare. */
+  deletedUids: string[];
+  /** UIDs whose delete failed — recorded as cloudflare_orphans for the 24h reconciler to retry. */
+  failedUids: Array<{ uid: string; error: string }>;
+  /** How many CF videos still existed for the asset before pruning. */
+  candidateCount: number;
+  /**
+   * True when no confirmed-live (readyToStream=true) video existed, so nothing
+   * was deleted — the safety rail that refuses to leave the asset with zero
+   * playable video just to satisfy a cleanup.
+   */
+  skipped: boolean;
+  reason?: string;
+}
+
+/**
+ * Forcefully collapse an asset's Cloudflare footprint to a single live video.
+ *
+ * Enumerates EVERY Cloudflare Stream video belonging to this asset — via the
+ * `creator` tag (the assetId, stamped on every upload as Upload-Creator),
+ * unioned with the UIDs recorded in distribution_records and any caller-supplied
+ * `preferUid` — then:
+ *   1. Probes each candidate's live status directly in Cloudflare (readyToStream).
+ *   2. Keeps the most-recently-created LIVE video (preferring `preferUid` if it
+ *      is itself live).
+ *   3. Deletes every OTHER candidate from Cloudflare.
+ *
+ * Safety rail: if NO candidate is confirmed live, it deletes nothing and returns
+ * `skipped: true`. We never leave the asset with zero playable video. Listing
+ * Cloudflare failing is also treated as skip-and-keep.
+ *
+ * This only touches Cloudflare (+ the orphan bookkeeping table). It does not
+ * rewrite distribution_records; the caller repoints LPOS's local pointer at the
+ * survivor.
+ */
+export async function pruneCloudflareVersionsForAsset(
+  assetId: string,
+  opts?: { preferUid?: string | null },
+): Promise<CloudflarePruneResult> {
+  const empty = (skipped: boolean, reason: string, candidateCount = 0): CloudflarePruneResult => ({
+    keptUid: null, deletedUids: [], failedUids: [], candidateCount, skipped, reason,
+  });
+
+  const creatorKey = assetId.slice(0, 64); // matches Upload-Creator set on upload
+
+  // 1. Enumerate candidate UIDs from all sources. The `creator` list is the
+  //    authoritative one (it finds videos LPOS has lost the DB link to); the
+  //    distribution_records + preferUid unions are belt-and-suspenders.
+  const candidateUids = new Set<string>();
+  const createdByUid = new Map<string, string | null>();
+  try {
+    const cfList = await listCloudflareVideos();
+    for (const v of cfList) {
+      createdByUid.set(v.uid, v.created);
+      if (v.creator && v.creator === creatorKey) candidateUids.add(v.uid);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return empty(true, `Could not list Cloudflare videos: ${message}`);
+  }
+  for (const uid of listCloudflareUidsForAsset(assetId)) candidateUids.add(uid);
+  if (opts?.preferUid) candidateUids.add(opts.preferUid);
+
+  if (candidateUids.size === 0) return empty(true, 'No Cloudflare videos found for this asset.');
+
+  // 2. Probe live status per candidate. A 404 means it's already gone (drop it);
+  //    any other probe error is treated conservatively as "still exists, not live"
+  //    so we neither delete it nor let it be the survivor.
+  interface Candidate { uid: string; live: boolean; created: string | null; exists: boolean; }
+  const candidates: Candidate[] = [];
+  for (const uid of candidateUids) {
+    try {
+      const state = await getCloudflareVideoState(uid);
+      candidates.push({ uid, live: state.status === 'ready', created: state.uploadedAt ?? createdByUid.get(uid) ?? null, exists: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const gone = /\b404\b/.test(message) || /not[_\s-]?found/i.test(message);
+      candidates.push({ uid, live: false, created: createdByUid.get(uid) ?? null, exists: !gone });
+    }
+  }
+
+  const existing = candidates.filter((c) => c.exists);
+  const liveOnes = existing.filter((c) => c.live);
+
+  // 3. Safety rail — no confirmed-live survivor → delete nothing.
+  if (liveOnes.length === 0) {
+    return empty(true, 'No Cloudflare video for this asset is confirmed live (readyToStream); refusing to delete duplicates.', existing.length);
+  }
+
+  // Survivor = the preferred UID if it is itself live, else the newest live video.
+  const byNewest = (a: Candidate, b: Candidate) => (b.created ?? '').localeCompare(a.created ?? '');
+  const preferredLive = opts?.preferUid ? liveOnes.find((c) => c.uid === opts.preferUid) : undefined;
+  const keptUid = (preferredLive ?? [...liveOnes].sort(byNewest)[0]).uid;
+
+  // 4. Delete every other still-existing candidate.
+  const deletedUids: string[] = [];
+  const failedUids: Array<{ uid: string; error: string }> = [];
+  for (const c of existing) {
+    if (c.uid === keptUid) continue;
+    try {
+      await deleteCloudflareVideo(c.uid);
+      deletedUids.push(c.uid);
+      try { markOrphanPurged(c.uid); } catch { /* best effort */ }
+      console.log(`[cloudflare-prune] deleted stale CF video uid=${c.uid} for asset ${assetId} (kept ${keptUid})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failedUids.push({ uid: c.uid, error: message });
+      try { recordOrphan({ uid: c.uid, assetId, reason: 'delete_failed', attempts: 1, lastError: message }); } catch { /* best effort */ }
+      console.warn(`[cloudflare-prune] failed to delete stale CF video uid=${c.uid} for asset ${assetId}:`, message);
+    }
+  }
+
+  return { keptUid, deletedUids, failedUids, candidateCount: existing.length, skipped: false };
 }

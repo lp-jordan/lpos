@@ -140,9 +140,19 @@ The "check off" flag lives only in Frame.io, and a user's PATCH is exactly what 
 |------|------|
 | `lib/services/leaderpass-publish.ts` | Orchestrates TUS upload to Cloudflare + polling for ready state |
 | `lib/services/cloudflare-stream.ts` | TUS protocol implementation; 32 MB chunks; retry logic |
+| `lib/services/cloudflare-publish.ts` | Standalone CF-only upload path + `pruneCloudflareVersionsForAsset()` |
 
 ### Data flow
 Publish triggered → Cloudflare TUS upload init → chunked PATCH uploads → poll for `ready` status → asset patched with stream UIDs and URLs.
+
+### Force reset / version prune
+The per-asset **force reset** (`DELETE /api/projects/[projectId]/media/[assetId]/leaderpass`, surfaced as the "Force reset" / "Reset & re-push" buttons in the media detail panel) no longer just blanks LPOS's local CF pointer — that left the real videos alive in the account as orphans. It now calls `pruneCloudflareVersionsForAsset(assetId)`, which:
+- Enumerates **every** CF video for the asset via Cloudflare's `creator` tag (the assetId, stamped as `Upload-Creator` on upload), unioned with `distribution_records` UIDs and the current local pointer — so it catches videos LPOS has lost the DB link to.
+- Probes each candidate's live status directly in Cloudflare (`readyToStream`).
+- Keeps the most-recently-created **confirmed-live** video (preferring the current local pointer) and **deletes every other** CF video for the asset. LPOS is repointed at the survivor (which also updates the latest CF `distribution_record`), so the embed keeps working.
+- **Safety rail:** if no candidate is confirmed live (e.g. a stuck/half-finished upload with no prior good version), it deletes **nothing** and the reset falls back to the old wipe-to-`none` behavior so the operator can re-push from scratch.
+
+Delete failures are recorded in `cloudflare_orphans` for the 24 h reconciler to retry; successful deletes clear any pre-existing orphan row. This is the manual counterpart to the daily orphan reconciler — it collapses a single asset's CF footprint on demand.
 
 ---
 

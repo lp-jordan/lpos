@@ -1384,6 +1384,27 @@ export function getLiveCloudflareUids(): Set<string> {
   return live;
 }
 
+/**
+ * Every Cloudflare Stream UID this asset has ever been published under, across
+ * all versions and attempts (most-recent first). Used by the force-reset prune
+ * to enumerate stale CF videos to delete. This is the DB-side view; the prune
+ * unions it with Cloudflare's own `creator`-tagged list so it also catches
+ * videos whose distribution_record was lost.
+ */
+export function listCloudflareUidsForAsset(assetId: string): string[] {
+  const db = getCanonicalAssetDb();
+  const rows = db.prepare(`
+    SELECT DISTINCT dr.provider_asset_id AS uid
+    FROM distribution_records dr
+    INNER JOIN asset_versions av ON av.asset_version_id = dr.asset_version_id
+    WHERE av.asset_id = ?
+      AND dr.provider = 'cloudflare'
+      AND dr.provider_asset_id IS NOT NULL
+    ORDER BY dr.attempt_number DESC
+  `).all(assetId) as Array<{ uid: string | null }>;
+  return rows.map((r) => r.uid).filter((u): u is string => !!u);
+}
+
 export interface AssetByCloudflareUidResult {
   assetId: string;
   projectId: string;

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-09T14:20:49Z",
+    "title": "Force reset now clears old Cloudflare copies of a video",
+    "summary": "Force-resetting a video no longer leaves its old Cloudflare copies piling up in the account. The reset now finds every Cloudflare copy of that video, keeps only the most recent one that is actually live and playable, and deletes the rest — then points LPOS at the surviving copy so the embed keeps working. As a safety guard, if none of the copies is confirmed live yet (for example a stuck upload with no earlier good version), it deletes nothing and falls back to the old behavior of clearing the state so you can re-push."
+  },
+  {
     "timestamp": "2026-07-08T20:35:25Z",
     "title": "Edit button on your new comments appears instantly",
     "summary": "Fixed a brief delay where the Edit button on a comment you just posted only showed up about a second after posting. The comment-post response now reports the author-edit flag directly (the poster is always the author), so the Edit affordance is present the moment the comment appears — in both the sidebar and theater comment views — instead of waiting for the next background refresh to fill it in."
