@@ -19428,7 +19428,16 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .lp-tile-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  /* Desktop: larger tiles that wrap to fill the row. */
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+/* iPad (portrait 768 / landscape 1024): exactly 4 per row. */
+@media (max-width: 1024px) {
+  .lp-tile-grid { grid-template-columns: repeat(4, 1fr); }
+}
+/* Phones: exactly 2 per row. */
+@media (max-width: 640px) {
+  .lp-tile-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 .lp-tile {
@@ -19436,7 +19445,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   border: 1px solid var(--line);
   border-radius: 16px;
   cursor: pointer;
-  height: 112px;
+  height: 132px;
   overflow: hidden;
   position: relative;
   text-align: left;
