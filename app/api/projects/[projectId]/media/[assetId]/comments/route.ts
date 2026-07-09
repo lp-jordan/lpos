@@ -14,6 +14,10 @@ import { getUserById } from '@/lib/store/user-store';
 import { notifyCommentReply } from '@/lib/services/comment-notification-service';
 import { findAssetVersionByFrameioFileId, getCurrentAssetVersion } from '@/lib/store/canonical-asset-store';
 import {
+  getFrameioFileIdForAssetVersion,
+  pullFrameioCommentsForAssetVersion,
+} from '@/lib/services/frameio-comment-sync';
+import {
   insertMediaComment,
   getMediaCommentByEitherId,
   updateMediaCommentTextById,
@@ -88,6 +92,23 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       resolvedProjectId      = scope.projectId;
       resolvedAssetId        = scope.assetId;
       resolvedAssetVersionId = scope.assetVersionId;
+    }
+
+    // On-demand freshness (Drive-parity): pull the live Frame.io thread for
+    // this version into media_comments before reading, so comments left via a
+    // Frame.io review link show up the moment someone opens the asset — even
+    // if the webhook was missed. Best-effort + throttled: Frame.io being slow
+    // or down must never break the comments UI, so we serve whatever is local.
+    const pullFileId = getFrameioFileIdForAssetVersion(resolvedAssetVersionId) ?? fileId;
+    if (pullFileId) {
+      try {
+        await pullFrameioCommentsForAssetVersion(
+          { projectId: resolvedProjectId, assetId: resolvedAssetId, assetVersionId: resolvedAssetVersionId },
+          pullFileId,
+        );
+      } catch (err) {
+        console.warn(`[comments GET] live Frame.io pull failed for asset ${resolvedAssetId} — serving local only:`, (err as Error).message);
+      }
     }
 
     const { comments, rowLookup } = getThreadedCommentsForAssetVersion(
