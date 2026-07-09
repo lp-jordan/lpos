@@ -22,10 +22,26 @@ import {
 } from './sony-camera';
 import {
   readStudioConfig,
+  getArmedCameras,
   type CameraConfig,
   type CameraProviderKind,
   type SonyCameraModel,
+  type SonyCameraDevice,
 } from '@/lib/store/studio-config-store';
+
+/** Outcome of a single camera in a coordinated record/stop roll. */
+export interface CameraRollResult {
+  id: string;
+  label: string;
+  host: string;
+  model: SonyCameraModel;
+  ok: boolean;          // command confirmed (recording started / stopped) within the timeout
+  error?: string;       // populated when ok === false
+}
+
+// How long to wait for a camera to confirm it actually started/stopped rolling.
+const ROLL_CONFIRM_TIMEOUT_MS = 5_000;
+const ROLL_CONFIRM_POLL_MS = 400;
 
 export interface CameraConnectResult {
   provider: CameraProviderKind;
@@ -428,6 +444,70 @@ export class CameraControlService {
   async stopMovieRec(configOverride?: Partial<CameraConfig>): Promise<void> {
     const config = resolveCameraConfig(configOverride);
     await this.getProvider(config).stopMovieRec(config);
+  }
+
+  // ── Multi-camera coordinated roll ─────────────────────────────────────────
+  // These fan a record/stop command out to every *armed* camera independently.
+  // They are best-effort by contract: the studio REC flow calls them AFTER the
+  // ATEM+mixer core has committed, and a camera failing here never blocks the
+  // shoot — the per-camera result just reports which bodies caught the take.
+
+  private deviceOverride(device: SonyCameraDevice): Partial<CameraConfig> {
+    return { host: device.host, ip: device.host, model: device.model };
+  }
+
+  /** Poll a camera's status until `recording` matches `want`, or the timeout elapses. */
+  private async confirmRecordingState(device: SonyCameraDevice, want: boolean): Promise<void> {
+    const deadline = Date.now() + ROLL_CONFIRM_TIMEOUT_MS;
+    let lastErr = '';
+    while (Date.now() < deadline) {
+      try {
+        const status = await this.getCameraEvent(this.deviceOverride(device));
+        if (status.recording === want) return;
+      } catch (err) {
+        lastErr = (err as Error).message;
+      }
+      await delay(ROLL_CONFIRM_POLL_MS);
+    }
+    throw new Error(lastErr || `Timed out waiting for camera to ${want ? 'start' : 'stop'} recording`);
+  }
+
+  private async rollOne(device: SonyCameraDevice, action: 'start' | 'stop'): Promise<CameraRollResult> {
+    const base: Omit<CameraRollResult, 'ok' | 'error'> = {
+      id: device.id, label: device.label, host: device.host, model: device.model,
+    };
+    try {
+      const override = this.deviceOverride(device);
+      if (action === 'start') await this.startMovieRec(override);
+      else await this.stopMovieRec(override);
+      await this.confirmRecordingState(device, action === 'start');
+      return { ...base, ok: true };
+    } catch (err) {
+      return { ...base, ok: false, error: (err as Error).message };
+    }
+  }
+
+  /** Start recording on every armed camera in parallel. Never throws. */
+  async recordAllArmed(): Promise<CameraRollResult[]> {
+    const armed = getArmedCameras();
+    return Promise.all(armed.map((d) => this.rollOne(d, 'start')));
+  }
+
+  /** Stop recording on every armed camera in parallel. Never throws. */
+  async stopAllArmed(): Promise<CameraRollResult[]> {
+    const armed = getArmedCameras();
+    return Promise.all(armed.map((d) => this.rollOne(d, 'stop')));
+  }
+
+  /**
+   * Warm up sessions to all armed cameras (best-effort, parallel, swallows errors)
+   * so the first REC press doesn't pay cold-connect latency. Safe to call repeatedly.
+   */
+  async preconnectArmed(): Promise<void> {
+    const armed = getArmedCameras();
+    await Promise.all(
+      armed.map((d) => this.getCameraEvent(this.deviceOverride(d)).catch(() => null)),
+    );
   }
 
   async getAvailableWhiteBalance(configOverride?: Partial<CameraConfig>): Promise<string[]> {

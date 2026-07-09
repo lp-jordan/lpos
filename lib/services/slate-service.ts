@@ -28,6 +28,18 @@ import {
 import { CqMixerClient, type CqMixerState, createDefaultCqMixerState } from './cq-mixer-client';
 import type { ProjectStore } from '@/lib/store/project-store';
 import { SlateAudioMonitorService } from './slate-audio-monitor';
+import { getArmedCameras } from '@/lib/store/studio-config-store';
+import type { CameraRollResult } from './camera-control-service';
+
+/**
+ * Live state of the best-effort Sony camera roll that rides alongside the
+ * ATEM+mixer core on the studio REC button. Broadcast on `cameraRollState`.
+ */
+interface CameraRollState {
+  rolling: boolean;              // at least one armed camera is believed to be recording
+  results: CameraRollResult[];   // per-camera outcome of the most recent roll/stop
+  updatedAt: string;             // ISO timestamp of the last roll
+}
 
 // ── Data directory ─────────────────────────────────────────────────────────
 
@@ -297,6 +309,7 @@ export class SlateService {
     this.emitAudioMonitorState(socket);
     this.emitPlaybackConnectionState(socket);
     this.emitCqMixerState(socket);
+    this.emitCameraRollState(socket);
 
     // ── Note events ──
     socket.on('addNote', (data: { code: string; note: string; tabId?: string | null }) => {
@@ -709,6 +722,9 @@ export class SlateService {
         }, { successMessage: `Recording started: ${filename}` });
         this.addAutomaticAtemNote(`Recording started (${filename})`);
         this.cqMixer.startRecording();
+        // Best-effort: fan record out to armed Sony cams AFTER the core has
+        // committed. Never awaited — a slow/offline camera can't stall the shoot.
+        void this.rollArmedCameras(socket, 'start');
       } catch (err) { this.log('ATEM start recording failed', (err as Error).message); }
     });
 
@@ -720,6 +736,9 @@ export class SlateService {
         this.addAutomaticAtemNote(`Recording stopped (${this.atemFilenameBase || this.atemState.recording.filename || 'unnamed'})`);
         this.emitAtemState();
         this.cqMixer.stopRecording();
+        // Best-effort stop for armed Sony cams; a camera that won't stop raises a
+        // loud warning but never blocks the core from stopping.
+        void this.rollArmedCameras(socket, 'stop');
       } catch (err) { this.log('ATEM stop recording failed', (err as Error).message); }
     });
 
@@ -853,6 +872,81 @@ export class SlateService {
 
   private emitAtemToast(target: { emit: (ev: string, data: unknown) => void }, type: string, message: string) {
     target.emit('atemCommandResult', { type, message });
+  }
+
+  private cameraRollState: CameraRollState = { rolling: false, results: [], updatedAt: '' };
+
+  private emitCameraRollState(
+    target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
+  ) {
+    target.emit('cameraRollState', this.cameraRollState);
+  }
+
+  /**
+   * Best-effort Sony camera fan-out for the studio REC roll. Runs AFTER the
+   * ATEM+mixer core has committed and never blocks it: armed cams are
+   * recorded/stopped in parallel, each confirmed independently, and any that
+   * fail raise a non-blocking warning. With no armed cameras this is a no-op,
+   * so the REC button behaves exactly as it did before (ATEM + mixer only).
+   */
+  private async rollArmedCameras(
+    target: { emit: (ev: string, data: unknown) => void },
+    action: 'start' | 'stop',
+  ): Promise<void> {
+    const armed = getArmedCameras();
+    if (armed.length === 0) return;
+
+    // Optimistically flag the roll as in-flight so the UI can show pending dots.
+    this.cameraRollState = {
+      rolling: action === 'start',
+      results: armed.map((c) => ({ id: c.id, label: c.label, host: c.host, model: c.model, ok: false })),
+      updatedAt: createTimestamp(),
+    };
+    this.emitCameraRollState();
+
+    let results: CameraRollResult[];
+    try {
+      const { getCameraControlService } = await import('./container');
+      const camera = getCameraControlService();
+      results = action === 'start'
+        ? await camera.recordAllArmed()
+        : await camera.stopAllArmed();
+    } catch (err) {
+      this.emitAtemToast(target, 'error', `Camera control unavailable: ${(err as Error).message}`);
+      this.cameraRollState = { rolling: false, results: [], updatedAt: createTimestamp() };
+      this.emitCameraRollState();
+      return;
+    }
+
+    const ok = results.filter((r) => r.ok);
+    const failed = results.filter((r) => !r.ok);
+    // After a start, "rolling" = any camera confirmed recording. After a stop,
+    // "rolling" = any camera that FAILED to stop (i.e. may still be recording).
+    const anyRolling = action === 'start' ? ok.length > 0 : failed.length > 0;
+    this.cameraRollState = { rolling: anyRolling, results, updatedAt: createTimestamp() };
+    this.emitCameraRollState();
+
+    // Non-blocking per-camera feedback.
+    for (const f of failed) {
+      this.emitAtemToast(
+        target, 'error',
+        `${f.label} didn't ${action === 'start' ? 'roll' : 'stop'}: ${f.error ?? 'unknown error'}`,
+      );
+    }
+    if (!failed.length && ok.length) {
+      this.emitAtemToast(
+        target, 'success',
+        `${ok.length} camera${ok.length > 1 ? 's' : ''} ${action === 'start' ? 'rolling' : 'stopped'}`,
+      );
+    }
+
+    // Record a slate note so the take log reflects which bodies caught it.
+    const verb = action === 'start' ? 'rolling' : 'stopped';
+    const okNames = ok.map((r) => r.label).join(', ') || 'none';
+    const failNote = failed.length
+      ? ` — failed: ${failed.map((r) => `${r.label} (${r.error ?? 'error'})`).join(', ')}`
+      : '';
+    this.addAutomaticAtemNote(`Cameras ${verb}: ${okNames}${failNote}`);
   }
 
   private async refreshAtemState(): Promise<AtemState> {

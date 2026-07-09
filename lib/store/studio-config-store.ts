@@ -45,6 +45,21 @@ export interface WledConfig {
   ip: string;          // IP address of the WLED device (e.g. "192.168.1.50")
 }
 
+/**
+ * A single Sony camera in the multi-camera roster. Connection details that are
+ * shared across the whole rig (bridge, credentials, port, provider) live on
+ * CameraConfig; each device only carries what varies per body plus its arm flag.
+ * `armed` cameras participate in the coordinated studio REC roll (best-effort —
+ * they never gate the ATEM+mixer core). See slate-service REC handlers.
+ */
+export interface SonyCameraDevice {
+  id: string;            // stable identifier (never reused)
+  label: string;         // operator-facing name, e.g. "Cam 1" / "Host FX3"
+  host: string;          // camera IP on the studio LAN/WiFi
+  model: SonyCameraModel;
+  armed: boolean;        // included in the synchronized REC roll for this shoot
+}
+
 export interface CameraConfig {
   provider: CameraProviderKind;
   model: SonyCameraModel;
@@ -57,6 +72,9 @@ export interface CameraConfig {
   port: number;
   sdkBridge: SonySdkBridgeConfig;
   atemVideoDeviceIndex: string;
+  // Multi-camera roster. Empty by default → the studio REC button behaves exactly
+  // as before (ATEM + mixer only). Populate + arm entries to fan record out to cams.
+  cameras: SonyCameraDevice[];
 }
 
 export interface StudioConfig {
@@ -93,6 +111,7 @@ const DEFAULTS: StudioConfig = {
       startupTimeoutMs: 60_000,
       args: [],
     },
+    cameras: [],
   },
   amaran: {
     port: 33782,
@@ -142,7 +161,37 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
       executablePath,
       args: Array.isArray(mergedBridge.args) ? mergedBridge.args : [],
     },
+    cameras: normalizeCameraRoster(camera?.cameras),
   };
+}
+
+/** Sanitize the multi-camera roster: drop junk entries, coerce fields, de-dupe by id. */
+function normalizeCameraRoster(raw?: unknown): SonyCameraDevice[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: SonyCameraDevice[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Partial<SonyCameraDevice>;
+    const id = typeof e.id === 'string' ? e.id.trim() : '';
+    const host = typeof e.host === 'string' ? e.host.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      label: typeof e.label === 'string' && e.label.trim() ? e.label.trim() : host || id,
+      host,
+      model: e.model === 'fx3' ? 'fx3' : 'fx6',
+      armed: e.armed === true,
+    });
+  }
+  return out;
+}
+
+/** The cameras armed for the coordinated REC roll (armed + reachable host configured). */
+export function getArmedCameras(config?: StudioConfig): SonyCameraDevice[] {
+  const cfg = config ?? readStudioConfig();
+  return cfg.camera.cameras.filter((c) => c.armed && c.host.length > 0);
 }
 
 function normalizeStudioConfig(raw?: Partial<StudioConfig>): StudioConfig {
