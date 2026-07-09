@@ -666,6 +666,25 @@ private:
       }
     }
 
+    // SSH-authenticated cameras (Access Authentication ON) require the camera's
+    // SSH fingerprint to be supplied to Connect(). If we weren't given one,
+    // fetch it now (trust-on-first-use) — mirrors Sony's RemoteCli sample. Skip
+    // the interactive y/n confirm: this is a trusted studio LAN.
+    const bool sshOn = !username.empty() || !password.empty() || !fingerprint.empty();
+    if (sshOn && fingerprint.empty()) {
+      char fpBuf[128] = {0};
+      CrInt32u fpLen = 0;
+      const SDK::CrError fpError = SDK::GetFingerprint(cameraInfo, fpBuf, &fpLen);
+      if (CR_SUCCEEDED(fpError) && fpLen > 0) {
+        fingerprint.assign(fpBuf, fpLen);
+        std::cout << "[sony-camera-bridge] fetched SSH fingerprint for " << host
+                  << " (" << fpLen << " bytes)\n";
+      } else {
+        std::cerr << "[sony-camera-bridge] GetFingerprint failed for " << host
+                  << " (err=0x" << std::hex << fpError << std::dec << ")\n";
+      }
+    }
+
     const SDK::CrError connectError = SDK::Connect(
       cameraInfo,
       &callback,
