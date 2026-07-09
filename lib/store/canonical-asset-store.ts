@@ -175,13 +175,23 @@ function pickLatestDistribution(
   ) ?? null;
 }
 
-/** Returns the most recent distribution record for the provider across *all* versions of the asset.
- *  Used by Cloudflare-staleness logic so an unstaged v2 still surfaces that v1 is published. */
+/** Returns the distribution record for the provider from the newest *version* that has one,
+ *  and within that version its latest attempt. Used by Cloudflare-staleness logic so an
+ *  unstaged v2 still surfaces that v1 is published.
+ *
+ *  NOTE: must iterate by version rather than trusting bundle.distributions' global order.
+ *  `attempt_number` is a *per-version* counter, so an older version with more re-push attempts
+ *  (e.g. v2 attempt 3) would otherwise outrank the current version's publication (v3 attempt 2)
+ *  and make a live current video read as "stale". bundle.versions is ordered version_number DESC. */
 function pickLatestDistributionAnyVersion(
   bundle: AssetBundle,
   provider: CanonicalDistributionProvider,
 ): DistributionRow | null {
-  return bundle.distributions.find((distribution) => distribution.provider === provider) ?? null;
+  for (const version of bundle.versions) {
+    const rec = pickLatestDistribution(bundle, version.asset_version_id, provider);
+    if (rec) return rec;
+  }
+  return null;
 }
 
 function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | null): TranscriptionRow | null {
@@ -1362,6 +1372,11 @@ export function getLatestDistributionInfoForAsset(
  */
 export function getLiveCloudflareUids(): Set<string> {
   const db = getCanonicalAssetDb();
+  // The live UID is the newest *version*'s latest attempt (with a non-null uid), NOT the
+  // globally-highest attempt_number. attempt_number is a per-version counter, so an older
+  // version re-pushed more times (v2 attempt 3) would otherwise beat the current version's
+  // publication (v3 attempt 2) and both mis-protect a dead old UID and leave the real live
+  // UID unguarded. Rank by (version_number, attempt_number) per asset.
   const rows = db.prepare(`
     SELECT DISTINCT dr.provider_asset_id AS uid
     FROM distribution_records dr
@@ -1370,12 +1385,22 @@ export function getLiveCloudflareUids(): Set<string> {
     WHERE dr.provider           = 'cloudflare'
       AND dr.provider_asset_id IS NOT NULL
       AND a.status              = 'active'
-      AND dr.attempt_number = (
-        SELECT MAX(dr2.attempt_number)
+      AND av.version_number = (
+        SELECT MAX(av2.version_number)
         FROM distribution_records dr2
         INNER JOIN asset_versions av2 ON av2.asset_version_id = dr2.asset_version_id
         WHERE av2.asset_id = av.asset_id
           AND dr2.provider = 'cloudflare'
+          AND dr2.provider_asset_id IS NOT NULL
+      )
+      AND dr.attempt_number = (
+        SELECT MAX(dr3.attempt_number)
+        FROM distribution_records dr3
+        INNER JOIN asset_versions av3 ON av3.asset_version_id = dr3.asset_version_id
+        WHERE av3.asset_id = av.asset_id
+          AND av3.version_number = av.version_number
+          AND dr3.provider = 'cloudflare'
+          AND dr3.provider_asset_id IS NOT NULL
       )
   `).all() as Array<{ uid: string | null }>;
 

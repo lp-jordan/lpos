@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-09T14:44:11Z",
+    "title": "Fix videos wrongly showing as \"stale\" after multiple re-pushes",
+    "summary": "Fixed a bug where a video could show as out-of-date (\"stale\") in LPOS even when its current version was live on Cloudflare — and where LPOS could point at an old, already-deleted Cloudflare copy. It happened when an earlier version of a video had been pushed to Cloudflare more times than the current version: the internal ranking compared per-version attempt counts across versions, so the older version could win. LPOS now always picks the newest version's most recent Cloudflare publication. This corrected 24 active videos that were mis-labeled, and is what made the reported video keep looking stale/stuck after a force reset."
+  },
+  {
     "timestamp": "2026-07-09T14:20:49Z",
     "title": "Force reset now clears old Cloudflare copies of a video",
     "summary": "Force-resetting a video no longer leaves its old Cloudflare copies piling up in the account. The reset now finds every Cloudflare copy of that video, keeps only the most recent one that is actually live and playable, and deletes the rest — then points LPOS at the surviving copy so the embed keeps working. As a safety guard, if none of the copies is confirmed live yet (for example a stuck upload with no earlier good version), it deletes nothing and falls back to the old behavior of clearing the state so you can re-push."
