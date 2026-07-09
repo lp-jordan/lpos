@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import type { AtemState } from '@/lib/services/atem-utils';
 import type { TravelModeState } from '@/hooks/useSlate';
 import type { SonyCameraDevice } from '@/lib/store/studio-config-store';
+import type { DiscoveredCamera } from '@/lib/services/camera-control-service';
 
 function newCameraId(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -81,6 +82,9 @@ export function AtemPanel({
   const [cameras, setCameras] = useState<SonyCameraDevice[]>([]);
   const [camSaving, setCamSaving] = useState(false);
   const [camMsg, setCamMsg] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [scanErr, setScanErr] = useState('');
+  const [discovered, setDiscovered] = useState<DiscoveredCamera[]>([]);
 
   // Load the roster whenever the settings sheet opens.
   useEffect(() => {
@@ -106,6 +110,38 @@ export function AtemPanel({
   }
   function removeCamera(id: string) {
     setCameras((prev) => prev.filter((c) => c.id !== id));
+  }
+  // Ask the Sony SDK to scan the network and list the cameras it finds (name +
+  // model + IP) so the operator doesn't have to hunt for IP addresses.
+  async function scanForCameras() {
+    setScanning(true);
+    setScanErr('');
+    try {
+      const res = await fetch('/api/studio/camera/discover');
+      const body = await res.json() as { cameras?: DiscoveredCamera[]; error?: string };
+      if (!res.ok) throw new Error(body.error ?? 'Scan failed');
+      const found = body.cameras ?? [];
+      setDiscovered(found);
+      if (found.length === 0) setScanErr('No cameras found. Check they are on the same network and powered on.');
+    } catch (err) {
+      setScanErr((err as Error).message);
+      setDiscovered([]);
+    } finally {
+      setScanning(false);
+    }
+  }
+  // Add a scanned camera into the roster (armed by default), de-duped by IP.
+  function addDiscovered(cam: DiscoveredCamera) {
+    setCameras((prev) => {
+      if (prev.some((c) => c.host === cam.host)) return prev;
+      return [...prev, {
+        id: newCameraId(),
+        label: cam.name || cam.model.toUpperCase() || `Cam ${prev.length + 1}`,
+        host: cam.host,
+        model: cam.model === 'fx3' ? 'fx3' : 'fx6',
+        armed: true,
+      }];
+    });
   }
   async function saveCameras() {
     setCamSaving(true);
@@ -385,12 +421,41 @@ export function AtemPanel({
               ))}
 
               <div className="at-set-btns">
-                <button type="button" className="at-btn" onClick={addCamera}>Add camera</button>
+                <button type="button" className="at-btn" onClick={scanForCameras} disabled={scanning}>
+                  {scanning ? 'Scanning…' : 'Scan network'}
+                </button>
+                <button type="button" className="at-btn" onClick={addCamera}>Add manually</button>
                 <button type="button" className="at-btn at-btn--pri" onClick={saveCameras} disabled={camSaving}>
                   {camSaving ? 'Saving…' : 'Save cameras'}
                 </button>
-                {camMsg && <span className="at-cam-msg">{camMsg}</span>}
               </div>
+              {camMsg && <span className="at-cam-msg">{camMsg}</span>}
+
+              {/* Scan results — pick a camera to drop it into the roster */}
+              {scanErr && <p className="at-error">{scanErr}</p>}
+              {discovered.length > 0 && (
+                <div className="at-scan-list">
+                  <div className="at-scan-head">Found {discovered.length} camera{discovered.length > 1 ? 's' : ''}</div>
+                  {discovered.map((cam) => {
+                    const already = cameras.some((c) => c.host === cam.host);
+                    return (
+                      <div className="at-scan-row" key={cam.id || cam.host}>
+                        <div className="at-scan-info">
+                          <span className="at-scan-name">{cam.name || cam.model.toUpperCase()}</span>
+                          <span className="at-scan-meta">{cam.model.toUpperCase()} · {cam.host}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="at-btn at-scan-add"
+                          onClick={() => addDiscovered(cam)}
+                          disabled={already}
+                        >{already ? 'Added' : 'Add'}</button>
+                      </div>
+                    );
+                  })}
+                  <div className="at-scan-hint">Added cameras still need <strong>Save cameras</strong> to persist.</div>
+                </div>
+              )}
             </div>
 
             {atemState?.lastError && <p className="at-error">{atemState.lastError}</p>}
