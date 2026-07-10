@@ -565,6 +565,8 @@ Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Do
 
 A REC toggle that fails with `0x8402` `CrError_Api_InvalidCalled` *after* the stale-session reconnect retry means the body is refusing: most often **no recordable media** (no card, card full, or write-protected).
 
+`startRecording` / `stopRecording` guard on `readRecordingWithRetryLocked()`, which returns `std::optional<bool>` (nullopt = unreadable, after a stale-session reconnect retry). An unreadable state **throws** rather than skipping the toggle — the earlier code returned `false` on a failed read, so a stop whose state read failed assumed "already stopped," skipped the toggle, and left the camera recording. The throw surfaces as a roll failure (`rollOne`), so the operator sees the camera flagged instead of a silent stuck-recording.
+
 ### Roll state
 `CameraRollResult.recording` carries what the camera last reported (`null` when unreadable). `slate-service` derives its `rolling` flag from that field only — never from whether a command succeeded:
 

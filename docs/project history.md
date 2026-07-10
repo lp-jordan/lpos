@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Stop no longer skips its toggle when the recording state can't be read
+
+**Timestamp:** 2026-07-10T11:00:00Z
+
+**User prompt (verbatim):** "So the weird thing is, all three still successfully started recording with the rec button. However, Cam 3 dropped and failed to stop and remained recording."
+
+**Response summary:** Found a real correctness bug distinct from the MAC collision (though the collision is what triggered it here). The bridge's recording-state read, `isRecordingLocked()`, returned `false` on any failed property fetch (`if (CR_FAILED(error) || properties == nullptr) return false;`) and, unlike `getStatus()`, had no stale-session reconnect retry. `stopRecording()` guarded on it with `if (!isRecordingLocked()) return;` — so when Cam 3's session went stale (the `.189` body was throwing repeated `0x8005` stale-session reconnects in the logs), the state read failed, reported `false` ("not recording"), and stop **skipped the toggle**, leaving the camera rolling while LPOS believed it had stopped. Replaced the boolean read with a tri-state `readRecordingWithRetryLocked()` returning `std::optional<bool>` (nullopt = couldn't read, after a reconnect retry); start/stop now throw on nullopt instead of skipping, so an unconfirmable stop surfaces as a roll failure the operator can see and act on.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `isRecordingLocked()` → `readRecordingWithRetryLocked()` (`std::optional<bool>`, stale-session reconnect retry mirroring `getStatus`); `startRecording`/`stopRecording` throw a descriptive error when the state is unreadable rather than silently skipping the toggle.
+- `docs/README.md` — documented the tri-state guard under Recording.
+
+**Decision rationale:** `MovieRecButtonToggle` only toggles, so a blind toggle on an unknown state is unsafe in the other direction (it could start a recording you meant to stop, or vice-versa) — the guard must exist, but "unknown" and "not recording" are different facts and conflating them is the bug. Throwing routes through `rollOne`'s catch, which already reports per-camera stop failures and (via `readRecordingState`) reflects the camera as possibly-rolling — the truthful, actionable outcome. Did not add an auto-retry toggle loop: re-toggling risks a double-flip (stop→start) during the RecorderMainStatus transition window, and `slate-service.confirmRecordingState` already polls the real state after the toggle to catch a stop that didn't take.
+
+**Alternatives considered:** Keeping the boolean and treating a failed read as "still recording" (so stop always toggles) — rejected, symmetric risk: a false-positive read would then toggle a stopped camera into recording. The optional makes the uncertainty explicit and refuses to guess. A bridge-side retry-toggle loop — rejected for the double-flip hazard noted above.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean. Confirmed no remaining `isRecordingLocked` references.
+
+**Assumptions / follow-ups:** With the MAC URL-decode fix in place, each camera should hold a stable session and these state reads should stop failing in the first place — this change is the safety net for when one still does (any transient stale session). Unverified against live hardware. Windows bridge needs a rebuild. A camera left recording by the old bug must be stopped manually once.
+
 ## 2026-07-10 — URL-decode bridge query params so the real MAC actually reaches the SDK
 
 **Timestamp:** 2026-07-10T10:00:00Z

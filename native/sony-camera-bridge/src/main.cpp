@@ -656,16 +656,29 @@ public:
   // Current recording state, straight from the camera. Cinema bodies (FX6/FX3)
   // publish RecorderMainStatus; Alpha bodies publish RecordingState. Caller must
   // hold the mutex and already be connected.
-  bool isRecordingLocked() {
+  //
+  // Returns nullopt when the state could NOT be read (stale session that survived a
+  // reconnect, or a failed property fetch). A read failure must never be reported as
+  // `false`: start/stop guard on this, and treating "unknown" as "not recording" made
+  // stop skip the toggle and silently leave a camera rolling (observed on the FX6 whose
+  // session kept going stale). Callers must refuse to send a blind toggle on nullopt.
+  std::optional<bool> readRecordingWithRetryLocked() {
     std::array<CrInt32u, 2> codes{
       SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus,
       SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState,
     };
     SDK::CrDeviceProperty* properties = nullptr;
     CrInt32 count = 0;
-    const SDK::CrError error = SDK::GetSelectDeviceProperties(
+    SDK::CrError error = SDK::GetSelectDeviceProperties(
       handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
-    if (CR_FAILED(error) || properties == nullptr) return false;
+    if (isStaleSessionError(error)) {
+      std::cerr << "[sony-camera-bridge] recording-state read on " << host << " hit a stale session (0x"
+                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      reconnectLocked();
+      error = SDK::GetSelectDeviceProperties(
+        handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
+    }
+    if (CR_FAILED(error) || properties == nullptr) return std::nullopt;
 
     bool recording = false;
     bool sawRecorderMainStatus = false;
@@ -727,11 +740,18 @@ public:
   }
 
   // MovieRecButtonToggle only toggles, so a stray duplicate call would flip the
-  // camera the wrong way. Guard on the real state to keep start/stop idempotent.
+  // camera the wrong way. Guard on the real state to keep start/stop idempotent —
+  // but a state we CAN'T read must throw, never silently skip. Skipping on an
+  // unreadable state is what left a camera recording after a failed stop.
   void startRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    if (isRecordingLocked()) {
+    const auto recording = readRecordingWithRetryLocked();
+    if (!recording.has_value()) {
+      throw std::runtime_error(
+        "Could not read recording state on " + host + " — refusing to send a blind REC toggle.");
+    }
+    if (*recording) {
       std::cout << "[sony-camera-bridge] " << host << " already recording; skipping toggle\n";
       return;
     }
@@ -741,7 +761,13 @@ public:
   void stopRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    if (!isRecordingLocked()) {
+    const auto recording = readRecordingWithRetryLocked();
+    if (!recording.has_value()) {
+      throw std::runtime_error(
+        "Could not confirm recording state on " + host + " — it may still be recording. "
+        "Not assuming it stopped.");
+    }
+    if (!*recording) {
       std::cout << "[sony-camera-bridge] " << host << " not recording; skipping toggle\n";
       return;
     }

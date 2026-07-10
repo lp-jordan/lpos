@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T11:00:00Z",
+    "title": "A camera that can't confirm it stopped is now flagged, not left rolling",
+    "summary": "If the system briefly lost solid contact with a camera at the moment you pressed stop, it could wrongly assume the camera was already stopped and skip the stop entirely — leaving that camera recording while everything looked fine. Stopping now refuses to assume: if it can't actually read whether the camera is recording, it reconnects and, failing that, reports the camera as not-confirmed-stopped so you know to check it, rather than silently leaving it rolling."
+  },
+  {
     "timestamp": "2026-07-10T10:00:00Z",
     "title": "Multi-camera control fix now actually reaches the cameras",
     "summary": "The recent fix that gives each camera its own hardware address to the Sony SDK wasn't taking effect on the status/monitoring path: the address was being scrambled in transit, so the system kept treating all cameras as one and they fought over a single connection. That transit bug is fixed, so the per-camera addressing now applies everywhere. A camera still stuck holding an old connection from before may need one power-cycle to clear."
