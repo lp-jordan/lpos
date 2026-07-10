@@ -117,10 +117,12 @@ export function SonyCameraPanel() {
           model: selectedCamera?.model ?? 'fx6',
           host: selectedHost, ip: selectedHost,
           port: 10000, username, password, fingerprint,
+          // The SDK keys Ethernet cameras by MAC; the scan already gave us this one's.
+          mac: selectedCamera?.macAddress ?? '',
         },
       }),
     });
-  }, [selectedCamera?.model, selectedHost, username, password, fingerprint]);
+  }, [selectedCamera?.model, selectedCamera?.macAddress, selectedHost, username, password, fingerprint]);
 
   const pollStatus = useCallback(async () => {
     try {

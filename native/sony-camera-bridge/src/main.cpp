@@ -57,6 +57,7 @@ struct CameraIdentity {
   std::string username;
   std::string password;
   std::string fingerprint;
+  std::string mac;
 };
 
 struct CameraStatus {
@@ -379,6 +380,20 @@ std::string normalizeModel(const std::string& model) {
   return "fx6";
 }
 
+// "9C:50:D1:AD:48:9C" (or dashes / bare hex) -> 6 bytes. Empty optional if unparseable.
+std::optional<std::array<CrInt8u, 6>> parseMacAddress(const std::string& text) {
+  std::string hex;
+  for (const unsigned char ch : text) {
+    if (std::isxdigit(ch)) hex.push_back(static_cast<char>(ch));
+  }
+  if (hex.size() != 12) return std::nullopt;
+  std::array<CrInt8u, 6> mac{};
+  for (std::size_t i = 0; i < 6; ++i) {
+    mac[i] = static_cast<CrInt8u>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+  }
+  return mac;
+}
+
 std::optional<CrInt32u> parseIpAddress(const std::string& host) {
   std::array<std::uint32_t, 4> segments{};
   std::istringstream stream(host);
@@ -478,13 +493,15 @@ public:
     std::string modelValue,
     std::string usernameValue,
     std::string passwordValue,
-    std::string fingerprintValue
+    std::string fingerprintValue,
+    std::string macValue
   )
     : host(std::move(hostValue))
     , model(std::move(modelValue))
     , username(std::move(usernameValue))
     , password(std::move(passwordValue))
     , fingerprint(std::move(fingerprintValue))
+    , mac(std::move(macValue))
   {}
 
   ~CameraSession() {
@@ -892,7 +909,23 @@ private:
     }
 
     if (cameraInfo == nullptr) {
-      std::array<CrInt8u, 6> macAddress{0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC};
+      // The SDK identifies an Ethernet camera by its MAC. Passing the same placeholder
+      // for every body made all three FX6s look like ONE device to the SDK: only one
+      // could hold a session, the others got CrWarning_Connect_Already (0x20019), and
+      // releasing one invalidated the others' handles (CrError_Generic_InvalidHandle,
+      // 0x8005) — which presented as cameras endlessly "going stale" and rotating.
+      // A single-camera rig never showed it. Always pass the real MAC.
+      // Degrade rather than fail when no MAC is supplied: a single-camera rig connects
+      // fine with the placeholder, and that's the path the standalone camera panel
+      // uses. With two or more bodies the placeholder is fatal-by-collision, so warn.
+      const auto parsedMac = parseMacAddress(mac);
+      if (!parsedMac) {
+        std::cerr << "[sony-camera-bridge] WARNING: no MAC for " << host
+                  << " — using a placeholder. Safe for ONE camera; with multiple bodies "
+                     "they collide as a single SDK device. Re-run the network scan.\n";
+      }
+      std::array<CrInt8u, 6> macAddress =
+        parsedMac.value_or(std::array<CrInt8u, 6>{0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC});
       const CrInt32u sshSupport =
         (!username.empty() || !password.empty() || !fingerprint.empty())
           ? SDK::CrSSHsupport_ON
@@ -1033,6 +1066,7 @@ private:
   std::string username;
   std::string password;
   std::string fingerprint;
+  std::string mac;
   std::mutex mutex;
   SDK::ICrCameraObjectInfo* cameraInfo{nullptr};
   SDK::CrDeviceHandle handle{0};
@@ -1063,13 +1097,14 @@ public:
     const std::string& model,
     const std::string& username,
     const std::string& password,
-    const std::string& fingerprint
+    const std::string& fingerprint,
+    const std::string& mac
   ) {
     std::lock_guard<std::mutex> lock(mutex);
-    const std::string key = host + "|" + model + "|" + username + "|" + fingerprint;
+    const std::string key = host + "|" + model + "|" + username + "|" + fingerprint + "|" + mac;
     auto it = sessions.find(key);
     if (it == sessions.end()) {
-      it = sessions.emplace(key, std::make_unique<CameraSession>(host, model, username, password, fingerprint)).first;
+      it = sessions.emplace(key, std::make_unique<CameraSession>(host, model, username, password, fingerprint, mac)).first;
     }
     return *it->second;
   }
@@ -1195,6 +1230,12 @@ std::pair<std::string, std::string> readCredentials(const HttpRequest& request) 
   return {username, password};
 }
 
+std::string readMac(const HttpRequest& request) {
+  std::string mac = getJsonString(request.body, "mac");
+  if (mac.empty()) mac = getQueryParam(request.query, "mac");
+  return trim(mac);
+}
+
 std::string readFingerprint(const HttpRequest& request) {
   std::string fingerprint = getJsonString(request.body, "fingerprint");
   if (fingerprint.empty()) fingerprint = getQueryParam(request.query, "fingerprint");
@@ -1241,7 +1282,8 @@ std::string handleJsonRequest(const HttpRequest& request) {
   try {
     const auto [username, password] = readCredentials(request);
     const auto fingerprint = readFingerprint(request);
-    auto& session = cameraManager().sessionFor(host, model, username, password, fingerprint);
+    const auto mac = readMac(request);
+    auto& session = cameraManager().sessionFor(host, model, username, password, fingerprint, mac);
 
     if (request.path == "/camera/capabilities") {
       session.ensureConnected();
@@ -1339,7 +1381,8 @@ bool streamLiveView(SOCKET client, const CameraIdentity& identity) {
     identity.model,
     identity.username,
     identity.password,
-    identity.fingerprint
+    identity.fingerprint,
+    identity.mac
   );
   try {
     session.ensureConnected();
@@ -1512,7 +1555,8 @@ int main(int argc, char* argv[]) {
           } else {
             const auto [username, password] = readCredentials(request);
             const auto fingerprint = readFingerprint(request);
-            streamLiveView(client, CameraIdentity{host, model, username, password, fingerprint});
+            const auto mac = readMac(request);
+            streamLiveView(client, CameraIdentity{host, model, username, password, fingerprint, mac});
           }
           closesocket(client);
           return;

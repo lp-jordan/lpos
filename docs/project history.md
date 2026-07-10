@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-07-10 — Root cause: all three FX6s shared one hardcoded MAC, colliding as a single SDK device
+
+**Timestamp:** 2026-07-10T08:00:00Z
+
+**User prompt (verbatim):** "I have power cycled - and still getting that. Any ideas on what that's about?" + a full LPOS startup log showing all three cameras cycling through `err=0x20019` (`CrWarning_Connect_Already`), repeated `hit a stale session (0x8005)` reconnects, and 45-second connect timeouts, with exactly one camera connected at any moment.
+
+**Response summary:** The power-cycle not helping falsified the held-session theory. The log shows the failure rotating across all three bodies — not stuck on `.56` — with exactly one camera connected at a time. Root cause found in `ensureConnectedLocked()`: `CreateCameraObjectInfoEthernetConnection()` was called with a hardcoded placeholder MAC `CC:CC:CC:CC:CC:CC` for **every** camera. The Sony SDK identifies an Ethernet device by MAC, so all three FX6s were one device to the SDK: only one could hold a session (others → `CrWarning_Connect_Already` 0x20019), and releasing one invalidated the others' handles (→ `CrError_Generic_InvalidHandle` 0x8005, which the stale-session healing then dutifully "fixed" by reconnecting, stealing the session back — the rotation in the log). A single-camera rig never shows it, which is exactly why the original test cam worked alone. The roster has held the real MACs all along (captured by the network scan); the connect path simply discarded them.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — new `parseMacAddress()` (colon/dash/bare hex → 6 bytes), defined ahead of `parseIpAddress` so it precedes use; `readMac()` reads `mac` from JSON body or query; `CameraSession` and `CameraIdentity` carry `mac`; `CreateCameraObjectInfoEthernetConnection()` now receives the real MAC, warning and falling back to the placeholder when absent; `CameraManager::sessionFor()` keys sessions by `host|model|username|fingerprint|mac`.
+- `lib/services/camera-control-service.ts` — `bridgeBody()` and all four query-string builders send `mac`; `deviceOverride()` forwards `device.mac` from the roster.
+- `lib/store/studio-config-store.ts` — `CameraConfig.mac` added (default `''`, normalized upper-case/trimmed).
+- `components/slate/SonyCameraPanel.tsx` — the single-camera connect path sends `selectedCamera.macAddress` from the scan.
+- `docs/README.md` — new "Device identity (MAC)" subsection explaining the collision and the scan requirement.
+
+**Decision rationale:** Warn-and-fall-back rather than throw when the MAC is missing: the standalone camera panel connects by IP and a hard failure there would be a regression, while a single camera cannot collide with anything. The warning names the multi-camera consequence so the placeholder can never silently reintroduce this. Session keys include the MAC so two roster entries that (mis)share an IP still get distinct sessions. This also explains, retroactively, the `0x8402 CrError_Api_InvalidCalled` REC refusals on a body whose handle had just been invalidated by a sibling camera's connect — the missing SD card was a real and separate cause, but not the only one.
+
+**Alternatives considered:** Serializing all camera access behind one global mutex so only one session is ever open — rejected, it would make the coordinated REC roll sequential and defeat the point of arming multiple bodies. Looking the MAC up via `discoverCameras()` on demand when absent — rejected as a per-connect network scan on the REC path; the roster already stores it.
+
+**Checks run:** `npx tsc --noEmit` — clean (0 errors). `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean. Verified the three roster entries in `data/studio-config.json` carry distinct real MACs (`9C:50:D1:AD:48:9C`, `9C:50:D1:AE:0A:FC`, `9C:50:D1:AE:0A:3B`).
+
+**Assumptions / follow-ups:** Unverified against live hardware — this is the first change that should let all three bodies hold simultaneous sessions. Manually-added roster entries have no MAC and will collide; the scan must be re-run for them. Windows bridge still needs a rebuild. The earlier `CrReconnecting_OFF` change and the stale-session healing remain correct and useful, but neither was the root cause; the healing was in fact amplifying the rotation by immediately re-stealing a session the sibling camera had just taken.
+
 ## 2026-07-10 — Retry the SSH fingerprint fetch; never Connect() without one
 
 **Timestamp:** 2026-07-10T07:00:00Z

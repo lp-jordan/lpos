@@ -232,6 +232,7 @@ class SonySdkBridgeProvider implements CameraProvider {
       username: config.username,
       password: config.password,
       fingerprint: config.fingerprint,
+      mac: config.mac,
       ...extra,
     });
   }
@@ -252,7 +253,7 @@ class SonySdkBridgeProvider implements CameraProvider {
   async getCameraEvent(config: CameraConfig): Promise<CameraStatus> {
     return this.requestJson<CameraStatus>(
       config,
-      `camera/status?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}`,
+      `camera/status?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}&mac=${encodeURIComponent(config.mac)}`,
     );
   }
 
@@ -283,7 +284,7 @@ class SonySdkBridgeProvider implements CameraProvider {
   async getAvailableWhiteBalance(config: CameraConfig): Promise<string[]> {
     const response = await this.requestJson<{ options?: string[] }>(
       config,
-      `camera/settings/white-balance/options?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}`,
+      `camera/settings/white-balance/options?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}&mac=${encodeURIComponent(config.mac)}`,
     );
     return response.options ?? [];
   }
@@ -303,7 +304,7 @@ class SonySdkBridgeProvider implements CameraProvider {
   async getAvailableIsoSpeedRate(config: CameraConfig): Promise<string[]> {
     const response = await this.requestJson<{ options?: string[] }>(
       config,
-      `camera/settings/iso/options?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}`,
+      `camera/settings/iso/options?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}&mac=${encodeURIComponent(config.mac)}`,
     );
     return response.options ?? [];
   }
@@ -328,6 +329,7 @@ class SonySdkBridgeProvider implements CameraProvider {
     url.searchParams.set('username', config.username);
     url.searchParams.set('password', config.password);
     url.searchParams.set('fingerprint', config.fingerprint);
+    url.searchParams.set('mac', config.mac);
 
     const response = await fetch(url);
     if (!response.ok || !response.body) {
@@ -514,6 +516,9 @@ export class CameraControlService {
     if (device.username) override.username = device.username;
     if (device.password) override.password = device.password;
     if (device.fingerprint) override.fingerprint = device.fingerprint;
+    // The SDK keys Ethernet cameras by MAC. Without a real one per body, every camera
+    // collides as a single device inside the SDK. Captured during the network scan.
+    if (device.mac) override.mac = device.mac;
     return override;
   }
 

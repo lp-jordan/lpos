@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T08:00:00Z",
+    "title": "Multiple Sony cameras can finally be controlled at the same time",
+    "summary": "Only one camera could ever hold a connection: the studio was telling the Sony SDK that every camera had the same hardware address, so all of them looked like a single device. Connecting one would knock the others offline, and control would rotate unpredictably between them. Each camera's real hardware address, already captured during the network scan, is now used — so all armed cameras can connect and record together. Cameras added by hand rather than by scanning have no hardware address on file; re-run the network scan for those."
+  },
+  {
     "timestamp": "2026-07-10T07:00:00Z",
     "title": "Cameras no longer fail to connect on startup with a misleading credentials error",
     "summary": "Right after LPOS starts, a camera's security handshake can briefly fail while the camera is still waking up. The studio would give up on that first attempt and then report what looked like a wrong username or password. It now retries the handshake a few times, and if it genuinely cannot complete it, says so plainly instead of blaming the credentials."

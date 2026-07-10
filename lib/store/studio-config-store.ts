@@ -80,6 +80,10 @@ export interface CameraConfig {
   username: string;
   password: string;
   fingerprint: string;
+  // MAC of the single/active camera. The Sony SDK keys Ethernet devices by MAC, so a
+  // per-camera value is required whenever more than one body is connected — the roster
+  // supplies it per device via CameraControlService.deviceOverride().
+  mac: string;
   // `ip` remains for backward compatibility with older stored configs and UI callers.
   ip: string;
   port: number;
@@ -114,6 +118,7 @@ const DEFAULTS: StudioConfig = {
     username: '',
     password: '',
     fingerprint: '',
+    mac: '',
     ip: '',
     port: 10000,
     atemVideoDeviceIndex: '0',
@@ -147,6 +152,7 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
   const username = (camera?.username ?? '').trim();
   const password = camera?.password ?? '';
   const fingerprint = (camera?.fingerprint ?? '').replace(/\s+/g, '');
+  const mac = (camera?.mac ?? '').trim().toUpperCase();
   const port = Number.isFinite(camera?.port) ? Number(camera?.port) : DEFAULTS.camera.port;
 
   // If the stored executable path is for the wrong platform (e.g. a Windows .exe
@@ -166,6 +172,7 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
     username,
     password,
     fingerprint,
+    mac,
     ip: host,
     port,
     sdkBridge: {

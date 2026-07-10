@@ -526,6 +526,15 @@ Other controllers (Content Browser Mobile, Monitor & Control, XDCAM air) *can* h
 
 **`Connect()` is issued with `CrReconnecting_OFF`.** The SDK parameter defaults to `CrReconnecting_ON`, which starts an SDK-owned reconnect loop keyed to the *device*, not to our `ICrCameraObjectInfo`. That loop survives `cameraInfo->Release()`, so the next explicit `Connect()` collides with the SDK's in-flight session and returns `CrWarning_Connect_Already` indefinitely — a session the bridge can neither see nor cancel. The bridge reconnects on demand (`ensureConnectedLocked` / `reconnectLocked`), so the SDK's loop is redundant. Do not turn it back on.
 
+### Device identity (MAC) — required for multi-camera
+`CreateCameraObjectInfoEthernetConnection(..., ipAddress, macAddress, sshSupport)` — **the SDK identifies an Ethernet camera by its MAC, not its IP.** The bridge originally hardcoded `CC:CC:CC:CC:CC:CC` for every body, so all cameras collided as one SDK device:
+
+- Only one could hold a session. The others returned `0x20019 CrWarning_Connect_Already`.
+- Releasing one invalidated the others' handles → `0x8005 CrError_Generic_InvalidHandle`, surfacing as cameras endlessly "going stale" and rotating which one worked.
+- A single-camera rig never exhibits it, which is why it went unnoticed.
+
+MACs are captured by the network scan into `SonyCameraDevice.mac` and forwarded on every bridge call (`deviceOverride()` → `CameraConfig.mac` → query param / JSON body). Sessions are keyed by `host|model|username|fingerprint|mac`. When no MAC is supplied the bridge logs a warning and falls back to the placeholder — correct for one camera, fatal-by-collision for more. **Re-run the network scan after adding a camera manually.**
+
 ### Stale sessions
 `callback.isConnected()` only goes false when `OnDisconnected` fires. A session that dies without it leaves the handle believed-good, and `ensureConnectedLocked()`'s early-return then trusts it — so every later call fails permanently:
 
