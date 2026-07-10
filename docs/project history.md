@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Decode Sony connect errors; fix retry poisoning that masked the real failure
+
+**Timestamp:** 2026-07-10T02:00:00Z
+
+**User prompt (verbatim):** Operator pasted LPOS server logs showing `Sony SDK could not connect to camera at 172.20.10.44 (err=0x820b)` and `(err=0x20019)` for `.44` and `.189`, with `.56` connecting successfully.
+
+**Response summary:** The error surfacing added earlier today worked, but its hint was wrong: it blamed Access Authentication for every connect failure. Decoded both codes against the vendored SDK headers. `0x820b` = `CrError_Connect_FailBusy` (base `CrError_Connect` 0x8200 + 11) — another controller already holds the camera's remote session. `0x20019` = `CrWarning_Connect_Already` (base `CrWarning_Unknown` 0x00020000 + 0x19) — and since `CR_FAILED(e)` is defined as `e != CrError_None`, that *warning* was being thrown as a fatal error. Neither code is authentication. Also found a self-inflicted bug: after a failed `Connect()`, the bridge left `cameraInfo` allocated, and because `Connect()` runs with `CrReconnecting_ON` the SDK keeps retrying against that half-open object — so every subsequent attempt returned `CrWarning_Connect_Already`, permanently masking the real first-attempt error. That is exactly the 0x820b → 0x20019 transition in the operator's log.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — new `describeConnectError()` maps the connect codes this rig hits to operator-actionable text, naming credentials **only** for the `CrError_Connect_SSH_*` codes; `close()` refactored onto a new lock-free `resetConnectionLocked()` (also clears `liveViewEnabled`); `ensureConnectedLocked()` calls it before every attempt so each connect starts from a fresh camera object, and on both the connect-failure and never-became-ready paths so a failure can't poison the next retry; the timeout path now also logs to stderr.
+- `docs/README.md` — new "Connect errors" subsection: `CR_FAILED` includes warnings, a decode table for the observed codes, the one-session-per-FX6 constraint, and why the fresh-object reset is required.
+
+**Decision rationale:** Decoded the codes from `vendor/RemoteCli/app/CRSDK/CrError.h` by offset from each enum base rather than trusting recall, since the earlier auth guess had already sent the operator to change passwords on two cameras for nothing. `describeConnectError()` deliberately returns an empty string for unknown codes so the raw hex still prints — a wrong hint is worse than none, which is the mistake being corrected. Resetting unconditionally at the top of `ensureConnectedLocked()` (rather than special-casing `CrWarning_Connect_Already` with a retry) is the smaller fix and removes the whole class of stale-object failures; the only cost is re-fetching the SSH fingerprint on reconnect, which is already cached in the session member after the first success.
+
+**Alternatives considered:** Treating `CrWarning_Connect_Already` as success and falling through to the readiness wait — rejected, the handle may not be valid and it would hide a genuinely busy camera behind a 45-second timeout. Redefining `CR_FAILED` locally to exclude warnings — rejected, it's Sony's macro and other call sites rely on its semantics.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean, no warnings.
+
+**Assumptions / follow-ups:** Root cause of the *original* `FailBusy` on `.44` and `.189` is camera-side and not yet confirmed — an FX6 accepts one remote SDK session, so something (Content Browser Mobile / Monitor & Control / XDCAM air, or a bridge process killed without `Disconnect` during today's rebuilds) is holding it. Operator to power-cycle both bodies and retry. The per-camera passwords the operator set on `.44`/`.189` were never the problem; standardizing on one shared credential set remains fine. Windows bridge needs a rebuild to pick this up. Not verified against live hardware.
+
 ## 2026-07-10 — Center the ATEM settings dialog, split it into Travel / File / Cameras tabs, drop per-camera password fields
 
 **Timestamp:** 2026-07-10T01:00:00Z

@@ -277,6 +277,37 @@ std::string formatIso(std::uint32_t value) {
   return std::to_string(raw);
 }
 
+// Turn a Connect() CrError into something an operator can act on. Only the codes
+// this rig actually hits are named; anything else falls through to the raw hex.
+// Do not guess at the cause here — the SSH codes are the ONLY ones that mean the
+// credentials are wrong. FailBusy / Connect_Already mean a session is already open.
+std::string describeConnectError(SDK::CrError error) {
+  switch (error) {
+    case SDK::CrError_Connect_FailBusy:
+      return "the camera is busy — another controller (Content Browser Mobile, "
+             "Monitor & Control, XDCAM air, or a stale bridge session) already holds "
+             "its remote session. Close it, or power-cycle the camera.";
+    case SDK::CrWarning_Connect_Already:
+      return "the SDK already holds a session for this camera object.";
+    case SDK::CrError_Connect_SessionAlreadyOpened:
+      return "a remote session is already open on this camera.";
+    case SDK::CrWarning_Connect_OverLimitOfDevice:
+      return "the camera is at its limit of simultaneous remote connections.";
+    case SDK::CrError_Connect_SSH_UserAuthenticationFailed:
+    case SDK::CrError_Connect_SSH_ServerAuthenticationFailed:
+      return "Access Authentication rejected the user/password.";
+    case SDK::CrError_Connect_SSH_ServerConnectFailed:
+      return "the camera refused the SSH connection — check that Access "
+             "Authentication is enabled on the body.";
+    case SDK::CrError_Connect_FailRejected:
+      return "the camera rejected the connection.";
+    case SDK::CrError_Connect_TimeOut:
+      return "the camera did not answer in time.";
+    default:
+      return "";
+  }
+}
+
 std::string formatWhiteBalance(std::uint16_t value) {
   switch (value) {
     case SDK::CrWhiteBalance_AWB: return "Auto";
@@ -719,6 +750,11 @@ public:
 
   void close() {
     std::lock_guard<std::mutex> lock(mutex);
+    resetConnectionLocked();
+  }
+
+  // Drop every SDK object tied to this camera. Caller must hold the mutex.
+  void resetConnectionLocked() {
     if (handle != 0) {
       SDK::Disconnect(handle);
       SDK::ReleaseDevice(handle);
@@ -728,6 +764,7 @@ public:
       cameraInfo->Release();
       cameraInfo = nullptr;
     }
+    liveViewEnabled = false;
   }
 
 private:
@@ -769,6 +806,14 @@ private:
 
   void ensureConnectedLocked() {
     if (handle != 0 && callback.isConnected()) return;
+
+    // We're not connected, but a previous failed attempt can leave the SDK holding a
+    // half-open session on this camera object — and Connect() is called with
+    // CrReconnecting_ON, so the SDK keeps retrying underneath us. Calling Connect()
+    // again on that object returns CrWarning_Connect_Already forever, which masked
+    // the real first-attempt error (CrError_Connect_FailBusy) behind a bogus one on
+    // every subsequent retry. Always start from a freshly created camera object.
+    resetConnectionLocked();
 
     std::cout << "[sony-camera-bridge] connecting to " << model << " at " << host << '\n';
 
@@ -827,14 +872,15 @@ private:
       static_cast<CrInt32u>(fingerprint.size()),
       nullptr
     );
+    // CR_FAILED is just `!= CrError_None`, so SDK *warnings* land here too.
     if (CR_FAILED(connectError)) {
+      const std::string reason = describeConnectError(connectError);
       std::ostringstream message;
       message << "Sony SDK could not connect to camera at " << host
-              << " (err=0x" << std::hex << static_cast<CrInt32u>(connectError) << std::dec << ").";
-      if (sshOn) {
-        message << " This camera authenticated as user '" << username
-                << "' — check its Access Authentication user/password.";
-      }
+              << " (err=0x" << std::hex << static_cast<CrInt32u>(connectError) << std::dec << ")";
+      if (!reason.empty()) message << ": " << reason;
+      else message << '.';
+      resetConnectionLocked();
       std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
       throw std::runtime_error(message.str());
     }
@@ -845,10 +891,12 @@ private:
     }
 
     if (!callback.isConnected()) {
+      resetConnectionLocked();
       std::ostringstream message;
       message
         << "Sony SDK connection to " << host
         << " did not become ready after 45 seconds. Check that the FX6 is in a Sony SDK-supported network remote mode and not locked in another remote-control mode.";
+      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
       throw std::runtime_error(message.str());
     }
 

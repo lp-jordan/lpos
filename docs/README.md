@@ -500,6 +500,20 @@ Supplying a non-empty username turns SSH on for **every** camera (`CrSSHsupport_
 
 Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each body has its own — populating it breaks every camera except the one it belongs to.
 
+### Connect errors
+`CR_FAILED(e)` is defined as `e != CrError_None`, so SDK **warnings** are surfaced as connect failures too. `describeConnectError()` in the bridge names the codes this rig hits. Only the `CrError_Connect_SSH_*` codes mean the credentials are wrong:
+
+| Code | Meaning |
+|---|---|
+| `0x820b` `CrError_Connect_FailBusy` | Another controller holds the camera's remote session |
+| `0x20019` `CrWarning_Connect_Already` | The SDK already holds a session for this camera object |
+| `0x8211` `CrError_Connect_SessionAlreadyOpened` | A remote session is already open on the body |
+| `CrError_Connect_SSH_UserAuthenticationFailed` | Wrong Access Authentication user/password |
+
+An FX6 accepts **one** remote SDK session. Content Browser Mobile, Monitor & Control, XDCAM air, or a bridge process killed without `Disconnect` will hold it until the camera times out or is power-cycled.
+
+`ensureConnectedLocked()` calls `resetConnectionLocked()` before every connect attempt. `Connect()` is issued with `CrReconnecting_ON`, so a failed attempt leaves the SDK retrying against a half-open camera object; connecting again on that object returns `CrWarning_Connect_Already` indefinitely and masks the real first-attempt error. Always build a fresh camera object.
+
 ### Recording
 Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.
 

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T02:00:00Z",
+    "title": "Camera connection errors now say what actually went wrong",
+    "summary": "When a Sony camera fails to connect, the log now explains the reason in plain language instead of always blaming the camera's username and password. The most common cause is that another app or a leftover session is already controlling the camera — an FX6 only allows one remote connection at a time. Also fixed a bug where a single failed connection attempt would poison every retry afterwards with a misleading follow-up error, hiding the original reason the camera refused."
+  },
+  {
     "timestamp": "2026-07-10T01:00:00Z",
     "title": "ATEM settings is now a centered dialog with Travel, File, and Cameras tabs",
     "summary": "The ATEM settings menu opens as a centered dialog instead of sliding up and sticking to the bottom of the screen, and its contents are split across three tabs: Travel (travel mode, setup checklist, pause reconnect, and the ATEM connection), File (record filename), and Cameras (the Sony camera roster). The per-camera password boxes have been removed from the roster rows, since every camera in the studio shares one login. Connection errors still show no matter which tab you are on."
