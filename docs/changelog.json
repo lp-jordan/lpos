@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T13:30:00Z",
+    "title": "Camera battery percentage is now accurate",
+    "summary": "Camera battery was being read from a coarse level indicator and shown as a nonsense percentage — a camera at ~66% displayed as 4%. It now reads the camera's actual battery percentage. This corrects the reading on both FX3 and FX6 bodies."
+  },
+  {
     "timestamp": "2026-07-10T13:00:00Z",
     "title": "FX3 record support",
     "summary": "The FX3 uses a different record command than the FX6 and was rejecting the studio's record button. The camera bridge now recognizes this and uses the right command for each camera automatically — trying one, falling back to the other, and remembering which each body accepts. So the REC button can drive FX3 and FX6 bodies side by side."

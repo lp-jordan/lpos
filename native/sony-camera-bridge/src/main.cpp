@@ -361,6 +361,22 @@ std::string describeConnectError(SDK::CrError error) {
   }
 }
 
+// Approximate a CrBatteryLevel enum as a percentage, for bodies that publish only the
+// coarse level and not BatteryRemain. Midpoint of each bar band. -1 = unknown/USB power.
+int batteryLevelToPercent(CrInt32u level) {
+  switch (level) {
+    case SDK::CrBatteryLevel_PreEndBattery: return 3;
+    case SDK::CrBatteryLevel_1_4:           return 13;
+    case SDK::CrBatteryLevel_2_4:           return 38;
+    case SDK::CrBatteryLevel_3_4:           return 63;
+    case SDK::CrBatteryLevel_4_4:           return 88;
+    case SDK::CrBatteryLevel_1_3:           return 17;
+    case SDK::CrBatteryLevel_2_3:           return 50;
+    case SDK::CrBatteryLevel_3_3:           return 83;
+    default:                                return -1;   // USB power supply / unknown
+  }
+}
+
 std::string formatWhiteBalance(std::uint16_t value) {
   switch (value) {
     case SDK::CrWhiteBalance_AWB: return "Auto";
@@ -577,11 +593,16 @@ public:
     // Querying only RecordingState made an FX6 always read back as "not
     // recording", which silently broke every recording-state check. Ask for
     // both; whichever the camera actually publishes wins.
-    const std::array<CrInt32u, 6> codes{
+    const std::array<CrInt32u, 7> codes{
       SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState,
       SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus,
       SDK::CrDevicePropertyCode::CrDeviceProperty_WhiteBalance,
       SDK::CrDevicePropertyCode::CrDeviceProperty_IsoSensitivity,
+      // BatteryRemain is the actual 0-100 percentage; BatteryLevel is a coarse enum
+      // (CrBatteryLevel: 3_4 == 4 == "3 of 4 bars"). Reading only BatteryLevel reported
+      // the raw enum value as a percentage — an FX3 at 66% showed "4%". Read both;
+      // prefer Remain, fall back to a level→% approximation.
+      SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryRemain,
       SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryLevel,
       SDK::CrDevicePropertyCode::CrDeviceProperty_MediaSLOT1_RemainingTime,
     };
@@ -604,6 +625,9 @@ public:
     // RecorderMainStatus (cinema) is authoritative over RecordingState (Alpha)
     // when both appear, regardless of the order the SDK returns them in.
     bool sawRecorderMainStatus = false;
+    // BatteryRemain (exact %) wins over the BatteryLevel enum approximation, whichever
+    // order the SDK returns them in.
+    bool haveBatteryRemain = false;
     for (CrInt32 index = 0; index < count; ++index) {
       const SDK::CrDeviceProperty property = properties[index];
       switch (property.GetCode()) {
@@ -638,9 +662,21 @@ public:
         case SDK::CrDevicePropertyCode::CrDeviceProperty_IsoSensitivity:
           status.isoSpeedRate = formatIso(static_cast<std::uint32_t>(property.GetCurrentValue()));
           break;
-        case SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryLevel:
-          status.batteryPercent = static_cast<int>(property.GetCurrentValue());
+        case SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryRemain: {
+          const auto remain = static_cast<std::uint16_t>(property.GetCurrentValue());
+          if (remain != SDK::CrBatteryRemain_Untaken && remain <= 100) {
+            status.batteryPercent = static_cast<int>(remain);
+            haveBatteryRemain = true;
+          }
           break;
+        }
+        case SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryLevel: {
+          if (!haveBatteryRemain) {
+            const int pct = batteryLevelToPercent(static_cast<CrInt32u>(property.GetCurrentValue()));
+            if (pct >= 0) status.batteryPercent = pct;
+          }
+          break;
+        }
         case SDK::CrDevicePropertyCode::CrDeviceProperty_MediaSLOT1_RemainingTime:
           status.remainingSeconds = static_cast<int>(property.GetCurrentValue());
           break;

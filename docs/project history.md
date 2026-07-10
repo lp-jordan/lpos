@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Read the real battery percentage (BatteryRemain), not the level enum
+
+**Timestamp:** 2026-07-10T13:30:00Z
+
+**User prompt (verbatim):** "The battery on the fx3 is at 67%"
+
+**Response summary:** LPOS showed the FX3 battery at 4% while the body read 67%. Root cause: `getStatus` read `CrDeviceProperty_BatteryLevel` and reported its raw value as a percentage, but that property is a coarse enum (`CrBatteryLevel`: `CrBatteryLevel_3_4` has the numeric value 4 = "3 of 4 bars"), not a percent. The real percentage lives in a separate property, `CrDeviceProperty_BatteryRemain`. Confirmed live by dumping the FX3's properties through the running bridge: `BatteryRemain (1794) = 66`, `BatteryLevel (1795) = 4`. Added `BatteryRemain` to the status read and made it the source of truth, keeping a level-enum→% approximation as a fallback. This mis-read affected the FX6 too.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `getStatus` codes array gains `CrDeviceProperty_BatteryRemain`; new `batteryLevelToPercent()` maps the `CrBatteryLevel` enum to an approximate percentage; the read prefers `BatteryRemain` (guarded against `CrBatteryRemain_Untaken` 0xFFFF and >100) and falls back to the level approximation, order-independent via a `haveBatteryRemain` flag.
+- `docs/README.md` — new Battery subsection.
+
+**Decision rationale:** `BatteryRemain` is the exact percentage every relevant body publishes, so it's the primary source; the enum fallback covers a hypothetical body that only reports the coarse level (and USB-power states, mapped to "unknown"). Resolved with a flag rather than relying on SDK property order, mirroring the existing `RecorderMainStatus`-vs-`RecordingState` precedence handling in the same loop. Bar-band midpoints chosen for the approximation so a fallback reading is at least in the right neighbourhood.
+
+**Alternatives considered:** Mapping the `BatteryLevel` enum to a percentage as the primary source — rejected, it's coarse (4 bars = 25% steps) when the exact value is available. Adding `BatteryRemainingInMinutes`/`Voltage` too — deferred; not needed for the percentage display.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean. Live `/camera/props` dump of the FX3 confirmed `BatteryRemain = 66` (≈ the user's 67%) vs `BatteryLevel = 4`.
+
+**Assumptions / follow-ups:** Takes effect when the rebuilt bridge runs (LPOS restart); Windows bridge needs a rebuild. The FX6 battery numbers were also wrong (same enum mis-read) and will correct with this. Unverified only in the sense that the display update depends on the restart — the underlying property values are confirmed from the live dump.
+
 ## 2026-07-10 — FX3 record: fall back to MovieRecord when MovieRecButtonToggle is NotSupported
 
 **Timestamp:** 2026-07-10T13:00:00Z

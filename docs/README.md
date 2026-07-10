@@ -490,6 +490,9 @@ Drives the studio's Sony cinema bodies over the network: connect, read status (r
 - `native/sony-camera-bridge/src/main.cpp` — local HTTP bridge wrapping Sony's Camera Remote SDK, one `CameraSession` per host.
 - `docs/sony-camera-sdk-setup.md` — SDK vendoring + build instructions.
 
+### Battery
+`getStatus` reads `CrDeviceProperty_BatteryRemain` (the 0-100 percentage) for `batteryPercent`, falling back to a `CrBatteryLevel`-enum→% approximation (`batteryLevelToPercent`) only when Remain is `Untaken` (`0xFFFF`) or absent. The original code read only `BatteryLevel`, which is a coarse bar enum (`CrBatteryLevel_3_4 == 4`), and reported that raw value as a percentage — an FX3 at 66% showed "4%". This affected the FX6 too.
+
 ### Enablement, auto-idle, and alerting
 Cameras sit powered-off for days between shoots, so the tier self-manages:
 
