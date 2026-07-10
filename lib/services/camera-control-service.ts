@@ -96,6 +96,16 @@ export interface CameraRollResult {
 const ROLL_CONFIRM_TIMEOUT_MS = 5_000;
 const ROLL_CONFIRM_POLL_MS = 400;
 
+/** Per-camera outcome of a timecode soft-jam. */
+export interface TimecodeJamResult {
+  id: string;
+  label: string;
+  host: string;
+  ok: boolean;
+  timecode?: string;   // read-back preset on success
+  error?: string;
+}
+
 export interface CameraConnectResult {
   provider: CameraProviderKind;
   model: SonyCameraModel;
@@ -275,6 +285,29 @@ class SonySdkBridgeProvider implements CameraProvider {
         body: this.bridgeBody(config),
       },
     );
+  }
+
+  // Software "soft jam": Free-Run + Preset + write the timecode. Returns the read-back
+  // preset (SDK-only — the legacy provider has no timecode support). Not frame-accurate.
+  async jamTimecode(config: CameraConfig, timecode: string, dropFrame: boolean): Promise<string> {
+    const res = await this.requestJson<{ timecode?: string }>(
+      config,
+      'camera/timecode',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: this.bridgeBody(config, { timecode, dropFrame }),
+      },
+    );
+    return res.timecode ?? '';
+  }
+
+  async getTimecode(config: CameraConfig): Promise<string> {
+    const res = await this.requestJson<{ timecode?: string }>(
+      config,
+      `camera/timecode?host=${encodeURIComponent(config.host)}&model=${encodeURIComponent(config.model)}&username=${encodeURIComponent(config.username)}&password=${encodeURIComponent(config.password)}&fingerprint=${encodeURIComponent(config.fingerprint)}&mac=${encodeURIComponent(config.mac)}`,
+    );
+    return res.timecode ?? '';
   }
 
   async stopMovieRec(config: CameraConfig): Promise<void> {
@@ -667,6 +700,32 @@ export class CameraControlService {
   async stopAllArmed(): Promise<CameraRollResult[]> {
     const armed = getArmedCameras();
     return Promise.all(armed.map((d) => this.rollOne(d, 'stop')));
+  }
+
+  /**
+   * Software timecode "soft jam" of every armed camera to `timecode` (Free-Run +
+   * Preset). Best-effort and parallel; never throws. Not frame-accurate — the value
+   * lands after each camera's network delivery delay, so cameras end up within that
+   * skew of each other, not phase-locked. Off the REC hot path entirely.
+   */
+  async jamAllArmed(timecode: string, dropFrame: boolean): Promise<TimecodeJamResult[]> {
+    const armed = getArmedCameras();
+    return Promise.all(armed.map(async (device): Promise<TimecodeJamResult> => {
+      const base = { id: device.id, label: device.label, host: device.host };
+      if (!(await probeReachable(device.host))) {
+        return { ...base, ok: false, error: 'camera offline' };
+      }
+      try {
+        const config = resolveCameraConfig(this.deviceOverride(device));
+        const readBack = await this.sdkProvider.jamTimecode(config, timecode, dropFrame);
+        console.log(`[camera-control] jammed ${device.label} (${device.host}) → ${readBack}`);
+        return { ...base, ok: true, timecode: readBack };
+      } catch (err) {
+        const error = (err as Error).message;
+        console.warn(`[camera-control] timecode jam FAILED on ${device.label} (${device.host}): ${error}`);
+        return { ...base, ok: false, error };
+      }
+    }));
   }
 
   /**

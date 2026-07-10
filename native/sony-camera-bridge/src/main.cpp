@@ -361,6 +361,32 @@ std::string describeConnectError(SDK::CrError error) {
   }
 }
 
+// SMPTE 12M timecode packs HH:MM:SS:FF into a CrInt32u as four BCD bytes: 0xHHMMSSFF,
+// each byte two BCD digits. This is the encoding CrDeviceProperty_TimeCodePreset uses.
+std::optional<CrInt32u> encodeTimecode(const std::string& tc) {
+  std::string spaced = tc;
+  for (auto& ch : spaced) if (ch == ':' || ch == ';') ch = ' ';
+  std::istringstream ss(spaced);
+  int h = -1, m = -1, s = -1, f = -1;
+  if (!(ss >> h >> m >> s >> f)) return std::nullopt;
+  if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59 || f < 0 || f > 99) return std::nullopt;
+  const auto bcd = [](int v) { return static_cast<CrInt32u>(((v / 10) << 4) | (v % 10)); };
+  return (bcd(h) << 24) | (bcd(m) << 16) | (bcd(s) << 8) | bcd(f);
+}
+
+std::string decodeTimecode(CrInt32u packed) {
+  const auto unbcd = [](CrInt32u b) { return static_cast<int>((((b >> 4) & 0xF) * 10) + (b & 0xF)); };
+  const int h = unbcd((packed >> 24) & 0xFF);
+  const int m = unbcd((packed >> 16) & 0xFF);
+  const int s = unbcd((packed >> 8) & 0xFF);
+  const int f = unbcd(packed & 0xFF);
+  std::ostringstream out;
+  out << std::setfill('0')
+      << std::setw(2) << h << ':' << std::setw(2) << m << ':'
+      << std::setw(2) << s << ':' << std::setw(2) << f;
+  return out.str();
+}
+
 // Approximate a CrBatteryLevel enum as a percentage, for bodies that publish only the
 // coarse level and not BatteryRemain. Midpoint of each bar band. -1 = unknown/USB power.
 int batteryLevelToPercent(CrInt32u level) {
@@ -694,6 +720,74 @@ public:
 
     SDK::ReleaseDeviceProperties(handle, properties);
     return status;
+  }
+
+  // ── Timecode ──────────────────────────────────────────────────────────────
+  // Software "soft jam": put the body in Free-Run + Preset and write a timecode.
+  // NOT a hardware jam — the value lands after the network delivery delay, so it's
+  // accurate to within that skew, not frame-accurate. Returns the read-back preset.
+  std::string jamTimecode(CrInt32u packed, bool dropFrame) {
+    std::lock_guard<std::mutex> lock(mutex);
+    ensureConnectedLocked();
+    setScalarPropertyLocked(SDK::CrDeviceProperty_TimeCodeRun,
+                            SDK::CrTimeCodeRun_FreeRun, SDK::CrDataType_UInt8, "TimeCodeRun");
+    setScalarPropertyLocked(SDK::CrDeviceProperty_TimeCodeMake,
+                            SDK::CrTimeCodeMake_Preset, SDK::CrDataType_UInt8, "TimeCodeMake");
+    setScalarPropertyLocked(SDK::CrDeviceProperty_TimeCodeFormat,
+                            dropFrame ? SDK::CrTimeCodeFormat_DF : SDK::CrTimeCodeFormat_NDF,
+                            SDK::CrDataType_UInt8, "TimeCodeFormat");
+    setScalarPropertyLocked(SDK::CrDeviceProperty_TimeCodePreset,
+                            packed, SDK::CrDataType_UInt32, "TimeCodePreset");
+    return decodeTimecode(readTimecodePresetLocked());
+  }
+
+  std::string getTimecode() {
+    std::lock_guard<std::mutex> lock(mutex);
+    ensureConnectedLocked();
+    return decodeTimecode(readTimecodePresetLocked());
+  }
+
+  // Write one scalar device property, throwing with the code on failure. Caller holds
+  // the mutex and is connected.
+  void setScalarPropertyLocked(CrInt32u code, CrInt64u value, SDK::CrDataType type, const char* name) {
+    SDK::CrDeviceProperty property;
+    property.SetCode(code);
+    property.SetCurrentValue(value);
+    property.SetValueType(type);
+    const SDK::CrError error = SDK::SetDeviceProperty(handle, &property);
+    if (CR_FAILED(error)) {
+      std::ostringstream message;
+      message << "Sony SDK failed to set " << name << " on " << host
+              << " (err=0x" << std::hex << static_cast<CrInt32u>(error) << std::dec << ").";
+      throw std::runtime_error(message.str());
+    }
+  }
+
+  // Read back the TimeCodePreset setpoint (the value we last jammed), with a stale-
+  // session reconnect retry. The live *running* TC is only in the liveview meta and is
+  // not read here. Caller holds the mutex and is connected.
+  CrInt32u readTimecodePresetLocked() {
+    std::array<CrInt32u, 1> codes{ SDK::CrDeviceProperty_TimeCodePreset };
+    SDK::CrDeviceProperty* properties = nullptr;
+    CrInt32 count = 0;
+    SDK::CrError error = SDK::GetSelectDeviceProperties(
+      handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
+    if (isStaleSessionError(error)) {
+      reconnectLocked();
+      error = SDK::GetSelectDeviceProperties(
+        handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
+    }
+    if (CR_FAILED(error) || properties == nullptr) {
+      throw std::runtime_error("Could not read timecode from " + host + ".");
+    }
+    CrInt32u value = 0;
+    for (CrInt32 i = 0; i < count; ++i) {
+      if (properties[i].GetCode() == SDK::CrDeviceProperty_TimeCodePreset) {
+        value = static_cast<CrInt32u>(properties[i].GetCurrentValue());
+      }
+    }
+    SDK::ReleaseDeviceProperties(handle, properties);
+    return value;
   }
 
   // Current recording state, straight from the camera. Cinema bodies (FX6/FX3)
@@ -1424,6 +1518,21 @@ std::string handleJsonRequest(const HttpRequest& request) {
 
     if (request.path == "/camera/props") {
       return jsonResponse(200, "OK", session.dumpAllPropertiesJson());
+    }
+
+    if (request.path == "/camera/timecode") {
+      // GET reads the preset; POST jams a value (Free-Run + Preset).
+      if (request.method == "POST") {
+        const std::string tc = trim(getJsonString(request.body, "timecode"));
+        const auto packed = encodeTimecode(tc);
+        if (!packed) return badRequest("timecode must be HH:MM:SS:FF.");
+        // dropFrame is a JSON boolean, not a quoted string — detect it in the raw body.
+        const bool dropFrame = request.body.find("\"dropFrame\":true") != std::string::npos
+                            || request.body.find("\"dropFrame\": true") != std::string::npos;
+        const std::string readBack = session.jamTimecode(*packed, dropFrame);
+        return jsonResponse(200, "OK", "{\"timecode\":\"" + jsonEscape(readBack) + "\"}");
+      }
+      return jsonResponse(200, "OK", "{\"timecode\":\"" + jsonEscape(session.getTimecode()) + "\"}");
     }
 
     if (request.path == "/camera/record/start") {

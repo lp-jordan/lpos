@@ -13,7 +13,7 @@ import type {
   SlateTab,
 } from '@/lib/services/atem-utils';
 import type { CqMixerState } from '@/lib/services/cq-mixer-client';
-import type { CameraRollResult, CameraHealth } from '@/lib/services/camera-control-service';
+import type { CameraRollResult, CameraHealth, TimecodeJamResult } from '@/lib/services/camera-control-service';
 
 /** Best-effort Sony camera roll state that rides alongside the ATEM+mixer core. */
 export interface CameraRollState {
@@ -27,6 +27,13 @@ export interface CameraRollState {
 export interface CameraHealthState {
   cameras: CameraHealth[];
   updatedAt: string;
+}
+
+/** Result of the last camera timecode soft-jam. */
+export interface CameraTimecodeState {
+  timecode: string;
+  jammedAt: string;
+  results: TimecodeJamResult[];
 }
 
 export type StudioTab = 'notes' | 'atem' | 'lighting' | 'camera' | 'audio' | 'playback' | 'presentation';
@@ -76,6 +83,7 @@ export interface SlateState {
   cqMixerState: CqMixerState | null;
   cameraRollState: CameraRollState | null;
   cameraHealthState: CameraHealthState | null;
+  cameraTimecodeState: CameraTimecodeState | null;
   atemToast: AtemToast | null;
   logs: string[];
   projects: SlateProject[];
@@ -103,6 +111,7 @@ export interface SlateActions {
   atemAuto: () => void;
   atemStartRecording: (filename?: string) => void;
   atemStopRecording: () => void;
+  syncCameraTimecode: () => void;
   atemSetFilename: (filename: string) => void;
   atemSetOutput4Mode: (mode: 'program' | 'multiview') => void;
   atemSaveProfile: (name: string, ip: string) => void;
@@ -273,6 +282,7 @@ export function useSlate(): SlateState & SlateActions {
   const [cqMixerState, setCqMixerState] = useState<CqMixerState | null>(null);
   const [cameraRollState, setCameraRollState] = useState<CameraRollState | null>(null);
   const [cameraHealthState, setCameraHealthState] = useState<CameraHealthState | null>(null);
+  const [cameraTimecodeState, setCameraTimecodeState] = useState<CameraTimecodeState | null>(null);
   const [atemToast, setAtemToast] = useState<AtemToast | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [projects, setProjects] = useState<SlateProject[]>([]);
@@ -507,6 +517,7 @@ export function useSlate(): SlateState & SlateActions {
     socket.on('cqMixerState', (state: CqMixerState) => setCqMixerState(state));
     socket.on('cameraRollState', (state: CameraRollState) => setCameraRollState(state));
     socket.on('cameraHealthState', (state: CameraHealthState) => setCameraHealthState(state));
+    socket.on('cameraTimecodeState', (state: CameraTimecodeState | null) => setCameraTimecodeState(state));
 
     socket.on('atemProfiles', (profiles: AtemProfile[]) => setAtemProfiles(profiles));
     socket.on('travelMode', (state: TravelModeState) => setTravelMode(state));
@@ -551,6 +562,8 @@ export function useSlate(): SlateState & SlateActions {
     cqMixerState,
     cameraRollState,
     cameraHealthState,
+    cameraTimecodeState,
+    syncCameraTimecode: () => emit('syncCameraTimecode'),
     atemToast,
     logs,
     projects,

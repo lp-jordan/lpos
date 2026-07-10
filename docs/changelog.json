@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T15:00:00Z",
+    "title": "Sync timecode across the studio cameras",
+    "summary": "A new Sync timecode button in the camera settings sets all armed Sony cameras to the same time-of-day timecode (Free-Run) from LPOS's clock. Run it between takes to keep your multicam clips aligned and easy to stack in the edit. It's a software sync — accurate to the network, not frame-locked like a hardware jam — and it's manual on purpose, so it never changes timecode in the middle of a recording."
+  },
+  {
     "timestamp": "2026-07-10T14:00:00Z",
     "title": "FX3 starts recording in sync with the FX6s",
     "summary": "The FX3 uses a different record command, and the system was discovering that by trying the FX6 command first and falling back — which made the FX3 start recording a beat behind the other cameras. It now knows from the camera model to use the FX3's command straight away, so all cameras roll together on the REC button."

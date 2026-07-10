@@ -490,6 +490,11 @@ Drives the studio's Sony cinema bodies over the network: connect, read status (r
 - `native/sony-camera-bridge/src/main.cpp` — local HTTP bridge wrapping Sony's Camera Remote SDK, one `CameraSession` per host.
 - `docs/sony-camera-sdk-setup.md` — SDK vendoring + build instructions.
 
+### Timecode soft-jam
+A software "jam" — **not** hardware sync. `POST /camera/timecode` sets `TimeCodeRun=FreeRun`, `TimeCodeMake=Preset`, `TimeCodeFormat`, and writes `TimeCodePreset` (SMPTE 12M, four BCD bytes `0xHHMMSSFF`), then reads the value back; `GET /camera/timecode` reads the preset. `CameraControlService.jamAllArmed(timecode, dropFrame)` jams every armed camera in parallel; `slate-service.syncCameraTimecode` computes LPOS wall-clock time-of-day (`wallClockTimecode`, frames from the ms fraction) and fires it, broadcasting `cameraTimecodeState`. Triggered manually from the Cameras tab's **Sync timecode** button — never automatically, because re-writing the preset during a recording would jump the timecode mid-clip.
+
+**Accuracy ceiling:** the preset lands after each camera's network delivery delay, so cameras end up within that skew of each other (hundreds of ms on WiFi = several frames), not phase-locked. It bounds multicam drift and keeps clips close for the NLE; it is not a substitute for hardware jam/genlock. The live *running* TC (only in the liveview meta) is not read — the read-back is the setpoint, used to confirm the jam took. A per-clip running-TC "measure" is a possible follow-up.
+
 ### Battery
 `getStatus` reads `CrDeviceProperty_BatteryRemain` (the 0-100 percentage) for `batteryPercent`, falling back to a `CrBatteryLevel`-enum→% approximation (`batteryLevelToPercent`) only when Remain is `Untaken` (`0xFFFF`) or absent. The original code read only `BatteryLevel`, which is a coarse bar enum (`CrBatteryLevel_3_4 == 4`), and reported that raw value as a percentage — an FX3 at 66% showed "4%". This affected the FX6 too.
 

@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-07-10 — Software timecode soft-jam (Sync TC) for armed Sony cameras
+
+**Timestamp:** 2026-07-10T15:00:00Z
+
+**User prompt (verbatim):** "No, don't note anything about hadware. Just go ahead and do the software side we outlined above" (following a discussion scoping a decoupled "Sync TC" soft-jam: set all armed cameras to Free-Run and jam them to LPOS's clock, off the REC hot path).
+
+**Response summary:** Built the software soft-jam end to end. The Sony SDK exposes settable `TimeCodePreset` (SMPTE 12M, four BCD bytes) plus `TimeCodeRun`/`TimeCodeMake`/`TimeCodeFormat`, so the bridge can write a timecode; the running TC lives only in liveview meta, so the read-back is the setpoint (used to confirm the write). A manual **Sync timecode** button jams all armed cameras to LPOS wall-clock time-of-day, parallel and off the REC path. Deliberately manual (not auto-re-jam) because writing the preset during a recording jumps the TC mid-clip.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `encodeTimecode`/`decodeTimecode` (BCD SMPTE 12M); `CameraSession::jamTimecode` (sets FreeRun+Preset+Format+Preset value via a new `setScalarPropertyLocked`) and `getTimecode`/`readTimecodePresetLocked` (stale-session retry); `POST`/`GET /camera/timecode` routes.
+- `lib/services/camera-control-service.ts` — `TimecodeJamResult` type; `SonySdkBridgeProvider.jamTimecode`/`getTimecode`; `CameraControlService.jamAllArmed` (parallel, reachability-gated, never throws).
+- `lib/services/slate-service.ts` — `syncCameraTimecode` socket handler + method, `wallClockTimecode` helper, `cameraTimecodeState` broadcast (also emitted on client connect).
+- `hooks/useSlate.ts` — `CameraTimecodeState` type, socket listener, `cameraTimecodeState` + `syncCameraTimecode()` on the returned API.
+- `components/slate/AtemPanel.tsx` + `components/slate/SlatePageContent.tsx` — Cameras-tab "Sync timecode" button + per-camera result chips; props wired through.
+- `app/globals.css` — `.at-tc-*` readout styles.
+- `docs/README.md` — Timecode soft-jam section.
+
+**Decision rationale:** Decoupled from the REC roll (its own button) so the record path stays fast and synchronized — jamming at record start would reintroduce the start desync we just fixed. Jam to wall-clock time-of-day (frames from the ms fraction) so takes share a real reference and re-jamming bounds drift. Read the preset back rather than the running TC because running TC needs liveview meta (heavy, per-camera) — the setpoint read-back confirms the encoding/write took, which is what v1 needs. Manual-only: auto-re-jam risks a mid-clip TC jump; deferred until it can be gated on not-recording. Encoding is standard SMPTE 12M BCD, but it is the one piece I could not verify against hardware — the read-back exists precisely so the first live test (jam a known value, read it back) confirms it.
+
+**Alternatives considered:** Jam-at-record-start (the user's first framing) — rejected, fights the synced roll. Reading running TC via liveview for a true per-clip "measure" — deferred to a follow-up; not needed for the primitive. Periodic auto-re-jam — deferred for the mid-record-jump hazard.
+
+**Checks run:** `npx tsc --noEmit` — clean. `bash scripts/build-sony-camera-bridge.sh` — clean. (Could not exercise against hardware — bridge needs the LPOS restart, and cameras are on the live rig.)
+
+**Assumptions / follow-ups:** Unverified against hardware. **First live test:** jam a known value and confirm the read-back matches — this validates the BCD encoding; if it's off, the encoding in `encode/decodeTimecode` is where to look. Frame rate for the frames field defaults to 25 (`wallClockTimecode` fps param) — if the rig runs 30/50/60 the frames digits will be approximate; wiring the project fps is a follow-up. Accuracy is network-bounded (several frames on WiFi), never frame-locked — this is the poor-man's stand-in for hardware jam, as scoped. Windows bridge needs a rebuild.
+
 ## 2026-07-10 — Seed the FX3 record command from the model so it starts in sync
 
 **Timestamp:** 2026-07-10T14:00:00Z

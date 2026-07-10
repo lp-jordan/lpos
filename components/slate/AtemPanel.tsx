@@ -44,6 +44,9 @@ interface Props {
   output4Mode: 'multiview' | 'program';
   /** Live liveness for rostered cameras; drives the per-row status dots. */
   cameraHealth?: CameraHealth[];
+  /** Result of the last camera timecode soft-jam (for the Sync TC readout). */
+  cameraTimecode?: { timecode: string; jammedAt: string; results: Array<{ id: string; label: string; ok: boolean; timecode?: string; error?: string }> } | null;
+  onSyncTimecode?: () => void;
 }
 
 const CAMERAS = [1, 2, 3, 4, 5, 6];
@@ -83,6 +86,8 @@ export function AtemPanel({
   onOutput4Toggle,
   output4Mode,
   cameraHealth = [],
+  cameraTimecode = null,
+  onSyncTimecode,
 }: Readonly<Props>) {
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
@@ -426,6 +431,28 @@ export function AtemPanel({
                 aria-pressed={camEnabled}
                 aria-label="Camera control"
               ><span /></button>
+            </div>
+
+            {/* Timecode soft-jam — set all armed cameras to LPOS wall-clock (between takes) */}
+            <div className="at-set-block" style={camEnabled ? undefined : { opacity: 0.5, pointerEvents: 'none' }}>
+              <div className="at-set-label">
+                <div className="t">Timecode sync</div>
+                <div className="s">Jam armed cameras to LPOS time-of-day (Free-Run). Software only — accurate to the network, not frame-locked. Run between takes, not while recording.</div>
+              </div>
+              <div className="at-set-btns">
+                <button type="button" className="at-btn at-btn--pri" onClick={() => onSyncTimecode?.()}>Sync timecode</button>
+              </div>
+              {cameraTimecode && (
+                <div className="at-tc-readout">
+                  <span className="at-tc-value">{cameraTimecode.timecode}</span>
+                  {cameraTimecode.results.map((r) => (
+                    <span key={r.id} className={`at-tc-chip${r.ok ? ' at-tc-chip--ok' : ' at-tc-chip--fail'}`}
+                      title={r.ok ? (r.timecode ?? '') : (r.error ?? 'failed')}>
+                      {r.label}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Sony cameras — armed cams start/stop with the studio REC button */}

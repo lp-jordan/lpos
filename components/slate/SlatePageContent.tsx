@@ -763,6 +763,8 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
             <AtemPanel
               atemState={slate.atemState}
               cameraHealth={slate.cameraHealthState?.cameras ?? []}
+              cameraTimecode={slate.cameraTimecodeState}
+              onSyncTimecode={slate.syncCameraTimecode}
               travelMode={slate.travelMode}
               atemPaused={slate.atemPaused}
               settingsOpen={atemSettingsOpen}

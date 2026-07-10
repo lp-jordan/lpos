@@ -29,7 +29,7 @@ import { CqMixerClient, type CqMixerState, createDefaultCqMixerState } from './c
 import type { ProjectStore } from '@/lib/store/project-store';
 import { SlateAudioMonitorService } from './slate-audio-monitor';
 import { getArmedCameras, readStudioConfig } from '@/lib/store/studio-config-store';
-import type { CameraRollResult, CameraHealth } from './camera-control-service';
+import type { CameraRollResult, CameraHealth, TimecodeJamResult } from './camera-control-service';
 
 /** How often we check whether each rostered camera is still on the network. */
 const CAMERA_HEALTH_INTERVAL_MS = 15_000;
@@ -331,6 +331,7 @@ export class SlateService {
     this.emitCqMixerState(socket);
     this.emitCameraRollState(socket);
     this.emitCameraHealthState(socket);
+    this.emitCameraTimecodeState(socket);
     // Warm up armed-camera sessions when the studio opens so the first REC
     // press doesn't pay cold-connect latency. Throttled + best-effort.
     void this.maybePreconnectCameras();
@@ -766,6 +767,11 @@ export class SlateService {
       } catch (err) { this.log('ATEM stop recording failed', (err as Error).message); }
     });
 
+    // Software timecode soft-jam of all armed Sony cameras to LPOS wall-clock. Manual
+    // (between takes) — never fired automatically, since re-writing the preset during a
+    // recording would jump the timecode mid-clip.
+    socket.on('syncCameraTimecode', () => { void this.syncCameraTimecode(socket); });
+
     // ── CQ mixer track control ──
     socket.on('cqSetTrackMute', (payload: { track?: number; muted?: boolean }) => {
       if (typeof payload?.track !== 'number' || typeof payload?.muted !== 'boolean') return;
@@ -919,6 +925,70 @@ export class SlateService {
     target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
   ) {
     target.emit('cameraHealthState', this.cameraHealthState);
+  }
+
+  // ── Camera timecode soft-jam ───────────────────────────────────────────────
+  private cameraTimecodeState: { timecode: string; jammedAt: string; results: TimecodeJamResult[] } | null = null;
+
+  private emitCameraTimecodeState(
+    target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
+  ) {
+    target.emit('cameraTimecodeState', this.cameraTimecodeState);
+  }
+
+  /** Wall-clock time-of-day as a timecode string. Frames from the ms fraction at `fps`. */
+  private wallClockTimecode(fps = 25): { timecode: string; dropFrame: boolean } {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const frame = Math.min(fps - 1, Math.floor((now.getMilliseconds() / 1000) * fps));
+    const timecode = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}:${pad(frame)}`;
+    // 25p is non-drop; DF only applies to 29.97/59.94. Default rig is non-drop.
+    return { timecode, dropFrame: false };
+  }
+
+  /**
+   * Soft-jam all armed cameras to LPOS wall-clock (Free-Run + Preset). Best-effort,
+   * off the REC path. Not frame-accurate — bounded by network delivery skew — but keeps
+   * multicam clips close and re-jammable between takes. Never fired during a recording.
+   */
+  private async syncCameraTimecode(
+    target: { emit: (ev: string, data: unknown) => void },
+  ): Promise<void> {
+    if (!readStudioConfig().camera.enabled) {
+      this.emitAtemToast(target, 'error', 'Camera control is off — enable it to sync timecode');
+      return;
+    }
+    const armed = getArmedCameras();
+    if (armed.length === 0) {
+      this.emitAtemToast(target, 'error', 'No armed cameras to sync');
+      return;
+    }
+
+    const { timecode, dropFrame } = this.wallClockTimecode();
+    let results: TimecodeJamResult[];
+    try {
+      const { getCameraControlService } = await import('./container');
+      results = await getCameraControlService().jamAllArmed(timecode, dropFrame);
+    } catch (err) {
+      this.emitAtemToast(target, 'error', `Timecode sync unavailable: ${(err as Error).message}`);
+      return;
+    }
+
+    const ok = results.filter((r) => r.ok);
+    const failed = results.filter((r) => !r.ok);
+    this.cameraTimecodeState = { timecode, jammedAt: createTimestamp(), results };
+    this.emitCameraTimecodeState();
+
+    for (const f of failed) {
+      this.emitAtemToast(target, 'error', `${f.label} timecode not set: ${f.error ?? 'unknown error'}`);
+    }
+    if (ok.length) {
+      this.emitAtemToast(target, 'success',
+        `${ok.length} camera${ok.length > 1 ? 's' : ''} jammed to ${timecode}`);
+    }
+    const okNames = ok.map((r) => r.label).join(', ') || 'none';
+    const failNote = failed.length ? ` — failed: ${failed.map((r) => r.label).join(', ')}` : '';
+    this.addAutomaticAtemNote(`Timecode jammed → ${timecode}: ${okNames}${failNote}`);
   }
 
   private startCameraHealthPolling(): void {

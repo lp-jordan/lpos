@@ -19787,6 +19787,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .at-cam-del { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; display: flex; flex: 0 0 auto; height: 34px; justify-content: center; width: 34px; }
 .at-cam-del:hover { border-color: #ff5566; color: #ff8a95; }
 .at-cam-msg { align-self: center; color: var(--muted); font-size: 0.8rem; display: inline-block; margin-top: 6px; }
+/* Timecode soft-jam readout */
+.at-tc-readout { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.at-tc-value { color: var(--text); font-family: var(--font-mono, monospace); font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+.at-tc-chip { border-radius: 999px; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; }
+.at-tc-chip--ok { background: rgba(52, 211, 153, 0.16); color: #7ef0c0; }
+.at-tc-chip--fail { background: rgba(255, 85, 102, 0.16); color: #ff9aa3; }
 .at-scan-list { border: 1px solid var(--line); border-radius: 11px; margin-top: 10px; overflow: hidden; }
 .at-scan-head { background: var(--surface); color: var(--muted); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; padding: 7px 12px; text-transform: uppercase; }
 .at-scan-row { align-items: center; border-top: 1px solid var(--line); display: flex; gap: 10px; padding: 9px 12px; }
