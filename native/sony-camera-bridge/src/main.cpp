@@ -539,7 +539,14 @@ public:
     , password(std::move(passwordValue))
     , fingerprint(std::move(fingerprintValue))
     , mac(std::move(macValue))
-  {}
+  {
+    // Seed the record command from the model so the FIRST toggle uses the right one —
+    // no wasted probe press (~400ms) that would desync an FX3 from the FX6s in a
+    // synchronized REC roll. FX3 (Alpha-based) → MovieRecord; everything else → the
+    // cinema MovieRecButtonToggle. The fallback in sendRecToggleLocked stays as a
+    // safety net but should never fire on a correctly-modelled body.
+    if (model == "fx3") preferredRecCommand = SDK::CrCommandId_MovieRecord;
+  }
 
   ~CameraSession() {
     close();
@@ -1183,8 +1190,10 @@ private:
   std::string password;
   std::string fingerprint;
   std::string mac;
-  // Which movie-record command this body accepts, learned on first successful toggle
-  // (FX6 → MovieRecButtonToggle, FX3 → MovieRecord). Preferred order starts here.
+  // Which movie-record command this body accepts. Seeded from the model in the
+  // constructor (FX3 → MovieRecord, else MovieRecButtonToggle) so the first toggle is
+  // already correct; sendRecToggleLocked tries this first and re-caches if the fallback
+  // ever has to correct it.
   SDK::CrCommandId preferredRecCommand{SDK::CrCommandId_MovieRecButtonToggle};
   std::mutex mutex;
   SDK::ICrCameraObjectInfo* cameraInfo{nullptr};

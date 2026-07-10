@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Seed the FX3 record command from the model so it starts in sync
+
+**Timestamp:** 2026-07-10T14:00:00Z
+
+**User prompt (verbatim):** "Only thing about trying the other command AFTER the first is now all four cameras don't start at the same time. I'd rather hard code an FX3 always uses the moverecord button."
+
+**Response summary:** The previous fallback (try `MovieRecButtonToggle`, fall back to `MovieRecord` on `NotSupported`) made the FX3's first toggle ~400ms slower than the FX6s — a wasted press plus its two 200ms Down/Up sleeps — so it started late in the synchronized REC roll. Seeded `preferredRecCommand` from the model in the `CameraSession` constructor (FX3 → `MovieRecord`, else `MovieRecButtonToggle`), so the FX3's *first* press uses the right command with no probe. Kept the `sendRecToggleLocked` fallback as a safety net that never fires on a correctly-modelled body.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `CameraSession` constructor now sets `preferredRecCommand = CrCommandId_MovieRecord` when `model == "fx3"`; member comment updated.
+- `docs/README.md` — Recording section notes the model-seeded default and the desync rationale.
+
+**Decision rationale:** Seeding from the model gives exactly the "FX3 always uses MovieRecord" behaviour the user asked for, without ripping out the fallback — the fallback is now dead weight on correctly-modelled bodies (zero cost, since the seeded command succeeds first) but preserves self-correction for an FX3A/FX30/mislabelled entry. Chose model-seed over deleting the fallback because it addresses the actual concern (first-press desync) while keeping robustness; a pure hardcode with no fallback would regress the one nice property (a surprising body still works).
+
+**Alternatives considered:** Removing the fallback entirely and hardcoding per model — rejected, loses the safety net for variant bodies at no benefit (seeding already eliminates the desync). Pre-warming the record command on connect — unnecessary once the first press is correct.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean.
+
+**Assumptions / follow-ups:** Takes effect on LPOS restart (rebuilt bridge). Still pending the user's live FX3 REC test to confirm `MovieRecord`'s Down/Up press actually toggles the FX3 — this change only affects *which* command fires first, not whether MovieRecord works. Windows bridge needs a rebuild.
+
 ## 2026-07-10 — Read the real battery percentage (BatteryRemain), not the level enum
 
 **Timestamp:** 2026-07-10T13:30:00Z
