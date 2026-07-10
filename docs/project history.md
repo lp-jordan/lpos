@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-07-10 — Derive camera roll state from reported recording state, not command outcomes
+
+**Timestamp:** 2026-07-10T05:00:00Z
+
+**User prompt (verbatim):** "So it seems like if a cam failed to start recrod, when I send stop via lpos, it gets confused and then assumes it is now failing to STOP record, even tho it never started. I also realized why it wasn't starting on two of the cams - they had no SD card so cam reported no media."
+
+**Response summary:** Two findings. (1) Root cause of the original REC refusal is now known and operator-confirmed: the two cameras had no SD card, and an FX6 with no recordable media rejects `MovieRecButtonToggle` with `CrError_Api_InvalidCalled` (0x8402). (2) A genuine state-machine bug in `slate-service.rollArmedCameras()`: `anyRolling` after a stop was computed as `failed.length > 0`, i.e. inferred from *command outcomes* rather than from what the cameras report. A camera whose start was refused never rolled, but the subsequent stop would be attempted anyway; any error there marked it "failed to stop", which the UI reads as possibly-still-recording — the exact inversion the operator observed. Fixed by making the camera's own reported state the single source of truth.
+
+**Files changed:**
+- `lib/services/camera-control-service.ts` — `CameraRollResult` gains `recording: boolean | null` (null = unreadable); new `readRecordingState()` (never throws); `rollOne()` populates `recording` on every path and now treats a failed **stop** on a camera reading back `recording === false` as a success no-op, logging it as such. `base` narrowed to `Omit<CameraRollResult, 'ok' | 'error' | 'recording'>`.
+- `lib/services/slate-service.ts` — `anyRolling` derived from `r.recording` only: after a start, any camera reporting `true`; after a stop, any camera not reporting `false`. Optimistic pending results seed `recording: null`.
+- `native/sony-camera-bridge/src/main.cpp` — a REC toggle still failing with `CrError_Api_InvalidCalled` after the stale-session reconnect retry now appends the media hint, since the session is known live and the body itself is refusing.
+- `docs/README.md` — new "Roll state" subsection; media hint documented under Recording.
+
+**Decision rationale:** Command success and physical state are different facts, and conflating them is what produced a confidently wrong answer. `recording` is tri-state on purpose: after a stop, an *unreadable* camera must count as possibly-rolling, because silently reporting "stopped" is the unsafe failure. After a start, only a positive `true` counts as rolling — the safe default there is the opposite. Treating a stop-on-a-stopped-camera as success (rather than filtering those cameras out before dispatching stop) keeps the bridge as the authority on state and avoids LPOS maintaining a parallel belief about which cameras are rolling. The `InvalidCalled` media hint is placed only after the reconnect retry, so a stale session cannot be misreported as a missing card.
+
+**Alternatives considered:** Skipping the stop entirely for cameras that failed to start — rejected, it requires LPOS to remember cross-call which cameras rolled, and would miss a camera started by hand on the body. Making `recording` a plain boolean defaulting to `false` — rejected, it erases the unreadable case and would let a genuinely-recording camera be reported as stopped.
+
+**Checks run:** `npx tsc --noEmit` — clean (0 errors). `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean. Grepped `CameraRollResult` consumers (`hooks/useSlate.ts`, `slate-service.ts`) — both read-only, so the added field is additive.
+
+**Assumptions / follow-ups:** The two card-less cameras should now start once media is inserted. Windows bridge still needs a rebuild to pick up the last five rounds. Not verified against live hardware. Note: during this edit the project-history header was briefly clobbered by a bad Edit and restored in the same turn; no content was lost.
+
 ## 2026-07-10 — Connect with CrReconnecting_OFF to stop the SDK holding an uncancellable session
 
 **Timestamp:** 2026-07-10T04:00:00Z

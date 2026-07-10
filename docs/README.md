@@ -529,6 +529,16 @@ An FX6 accepts **one** remote SDK session. Content Browser Mobile, Monitor & Con
 ### Recording
 Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.
 
+A REC toggle that fails with `0x8402` `CrError_Api_InvalidCalled` *after* the stale-session reconnect retry means the body is refusing: most often **no recordable media** (no card, card full, or write-protected).
+
+### Roll state
+`CameraRollResult.recording` carries what the camera last reported (`null` when unreadable). `slate-service` derives its `rolling` flag from that field only — never from whether a command succeeded:
+
+- **start** → `rolling` = any camera reporting `recording === true`
+- **stop** → `rolling` = any camera **not** reporting `recording === false` (unknown counts as possibly-rolling, since assuming "stopped" is the unsafe guess)
+
+`rollOne()` treats a failed **stop** on a camera that reads back `recording === false` as a success. A camera whose start was refused (no media) never rolled, so its stop has nothing to do — reporting that as a stop failure previously told the operator the camera might still be recording, the opposite of the truth.
+
 State is read from `RecorderMainStatus` on cinema bodies (`Standby=3, Recording=4`); Alpha bodies publish `RecordingState` instead. The bridge asks for both and lets `RecorderMainStatus` win.
 
 ### Liveness vs. controllability

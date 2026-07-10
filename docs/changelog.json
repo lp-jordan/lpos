@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T05:00:00Z",
+    "title": "A camera that never started recording no longer reports a failed stop",
+    "summary": "If a camera refused to start recording, pressing stop afterwards would report that the camera failed to stop — implying it might still be rolling, when it had never started. The studio now decides whether a camera is rolling by asking the camera, rather than by whether the last command succeeded. A stop sent to a camera that is not recording is treated as nothing to do. Cameras whose state cannot be read are still flagged as possibly rolling after a stop, since that is the safer assumption. Separately, when a camera refuses to record, the error now suggests checking for a memory card — the most common cause."
+  },
+  {
     "timestamp": "2026-07-10T04:00:00Z",
     "title": "Fixed a camera getting permanently stuck as 'already connected'",
     "summary": "A camera could get wedged in a state where every reconnection attempt was rejected because the camera SDK was silently holding its own background connection — one the studio software could neither see nor close, and which survived every attempt to reset the connection. The bridge now disables the SDK's background reconnection entirely and manages reconnection itself, which it was already doing. A camera stuck in this state before the fix needs one power-cycle to clear it."

@@ -78,6 +78,10 @@ export interface CameraRollResult {
   model: SonyCameraModel;
   ok: boolean;          // command confirmed (recording started / stopped) within the timeout
   error?: string;       // populated when ok === false
+  // What the camera last reported, not what we asked it to do. `null` when the
+  // state could not be read. Callers must use this — never a command outcome — to
+  // decide whether a camera is actually rolling.
+  recording: boolean | null;
 }
 
 // How long to wait for a camera to confirm it actually started/stopped rolling.
@@ -530,7 +534,7 @@ export class CameraControlService {
   }
 
   private async rollOne(device: SonyCameraDevice, action: 'start' | 'stop'): Promise<CameraRollResult> {
-    const base: Omit<CameraRollResult, 'ok' | 'error'> = {
+    const base: Omit<CameraRollResult, 'ok' | 'error' | 'recording'> = {
       id: device.id, label: device.label, host: device.host, model: device.model,
     };
     try {
@@ -539,13 +543,34 @@ export class CameraControlService {
       else await this.stopMovieRec(override);
       await this.confirmRecordingState(device, action === 'start');
       console.log(`[camera-control] ${action} OK on ${device.label} (${device.host})`);
-      return { ...base, ok: true };
+      return { ...base, ok: true, recording: action === 'start' };
     } catch (err) {
       const error = (err as Error).message;
+      const recording = await this.readRecordingState(device);
+
+      // A stop that "failed" on a camera we can see is not recording never had
+      // anything to stop — typically its start was refused (no media) so it never
+      // rolled. Reporting that as a stop failure told the operator the camera might
+      // still be recording, which is the opposite of the truth.
+      if (action === 'stop' && recording === false) {
+        console.log(`[camera-control] stop no-op on ${device.label} (${device.host}): was not recording`);
+        return { ...base, ok: true, recording: false };
+      }
+
       // The roll is best-effort and never throws, so without this the only trace of
       // a camera refusing to record was a transient toast.
       console.warn(`[camera-control] ${action} FAILED on ${device.label} (${device.host}): ${error}`);
-      return { ...base, ok: false, error };
+      return { ...base, ok: false, error, recording };
+    }
+  }
+
+  /** The camera's own recording state, or null when it can't be read. Never throws. */
+  private async readRecordingState(device: SonyCameraDevice): Promise<boolean | null> {
+    try {
+      const status = await this.getCameraEvent(this.deviceOverride(device));
+      return status.recording;
+    } catch {
+      return null;
     }
   }
 

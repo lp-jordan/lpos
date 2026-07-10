@@ -658,7 +658,16 @@ public:
     if (CR_FAILED(error)) {
       std::ostringstream message;
       message << "Camera at " << host << " refused the REC toggle (err=0x"
-              << std::hex << static_cast<CrInt32u>(error) << std::dec << ").";
+              << std::hex << static_cast<CrInt32u>(error) << std::dec << ")";
+      // Survived the reconnect retry above, so the session is live and the body
+      // itself is refusing. Confirmed in the field: an FX6 with no SD card reports
+      // no media and rejects the toggle with CrError_Api_InvalidCalled.
+      if (error == SDK::CrError_Api_InvalidCalled) {
+        message << ": the camera will not record — check for recordable media "
+                   "(no card, card full, or write-protected).";
+      } else {
+        message << '.';
+      }
       std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
       throw std::runtime_error(message.str());
     }

@@ -998,7 +998,7 @@ export class SlateService {
     this.cameraRollState = {
       rolling: action === 'start',
       action,
-      results: armed.map((c) => ({ id: c.id, label: c.label, host: c.host, model: c.model, ok: false })),
+      results: armed.map((c) => ({ id: c.id, label: c.label, host: c.host, model: c.model, ok: false, recording: null })),
       updatedAt: createTimestamp(),
     };
     this.emitCameraRollState();
@@ -1019,9 +1019,15 @@ export class SlateService {
 
     const ok = results.filter((r) => r.ok);
     const failed = results.filter((r) => !r.ok);
-    // After a start, "rolling" = any camera confirmed recording. After a stop,
-    // "rolling" = any camera that FAILED to stop (i.e. may still be recording).
-    const anyRolling = action === 'start' ? ok.length > 0 : failed.length > 0;
+    // "Rolling" is what the cameras report, never what we infer from command
+    // outcomes. Deriving it from stop failures meant a camera whose START was
+    // refused (e.g. no SD card) would then "fail" to stop and be reported as
+    // possibly-still-recording — when it had never rolled at all.
+    // A camera whose state we cannot read (recording === null) is only treated as
+    // possibly-rolling after a stop, where assuming "stopped" is the unsafe guess.
+    const anyRolling = action === 'start'
+      ? results.some((r) => r.recording === true)
+      : results.some((r) => r.recording !== false);
     this.cameraRollState = { rolling: anyRolling, action, results, updatedAt: createTimestamp() };
     this.emitCameraRollState();
 
