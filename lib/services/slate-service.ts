@@ -28,8 +28,17 @@ import {
 import { CqMixerClient, type CqMixerState, createDefaultCqMixerState } from './cq-mixer-client';
 import type { ProjectStore } from '@/lib/store/project-store';
 import { SlateAudioMonitorService } from './slate-audio-monitor';
-import { getArmedCameras } from '@/lib/store/studio-config-store';
-import type { CameraRollResult } from './camera-control-service';
+import { getArmedCameras, readStudioConfig } from '@/lib/store/studio-config-store';
+import type { CameraRollResult, CameraHealth } from './camera-control-service';
+
+/** How often we check whether each rostered camera is still on the network. */
+const CAMERA_HEALTH_INTERVAL_MS = 15_000;
+
+/** Liveness of every rostered camera. Broadcast on `cameraHealthState`. */
+interface CameraHealthState {
+  cameras: CameraHealth[];
+  updatedAt: string;
+}
 
 /**
  * Live state of the best-effort Sony camera roll that rides alongside the
@@ -246,6 +255,9 @@ export class SlateService {
     const ns = this.io.of('/slate');
     ns.on('connection', (socket) => this.onConnect(socket));
 
+    // Watch camera liveness (informational only — never gates recording)
+    this.startCameraHealthPolling();
+
     // Initial ATEM state + auto-connect
     await this.refreshAtemState();
     await this.audioMonitor.refreshSourceAvailability();
@@ -280,6 +292,7 @@ export class SlateService {
   async stop(): Promise<void> {
     if (this.atemInterval) clearInterval(this.atemInterval);
     if (this.playbackInterval) clearInterval(this.playbackInterval);
+    if (this.cameraHealthInterval) clearInterval(this.cameraHealthInterval);
     await this.audioMonitor.stop();
     await this.atemBridge.dispose(); // awaited so ATEM session is released before process exits
     this.cqMixer.dispose();
@@ -311,6 +324,7 @@ export class SlateService {
     this.emitPlaybackConnectionState(socket);
     this.emitCqMixerState(socket);
     this.emitCameraRollState(socket);
+    this.emitCameraHealthState(socket);
     // Warm up armed-camera sessions when the studio opens so the first REC
     // press doesn't pay cold-connect latency. Throttled + best-effort.
     void this.maybePreconnectCameras();
@@ -880,6 +894,72 @@ export class SlateService {
 
   private cameraRollState: CameraRollState = { rolling: false, action: 'start', results: [], updatedAt: '' };
   private lastCameraPreconnect = 0;
+
+  // ── Camera liveness ────────────────────────────────────────────────────
+  // Purely informational: tells the operator when a camera drops off the
+  // network. It NEVER gates the REC button — cameras are a best-effort tier.
+  private cameraHealthState: CameraHealthState = { cameras: [], updatedAt: '' };
+  private cameraHealthInterval: NodeJS.Timeout | null = null;
+  private cameraHealthInFlight = false;
+  private cameraOnlinePrev = new Map<string, boolean>();
+
+  private emitCameraHealthState(
+    target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
+  ) {
+    target.emit('cameraHealthState', this.cameraHealthState);
+  }
+
+  private startCameraHealthPolling(): void {
+    if (this.cameraHealthInterval) return;
+    void this.pollCameraHealthOnce();
+    this.cameraHealthInterval = setInterval(() => void this.pollCameraHealthOnce(), CAMERA_HEALTH_INTERVAL_MS);
+  }
+
+  /** One health sweep: broadcast state, alert on drops, self-heal changed IPs. */
+  private async pollCameraHealthOnce(): Promise<void> {
+    // A cold SDK connect can outlast the poll interval; never let sweeps stack.
+    if (this.cameraHealthInFlight) return;
+    this.cameraHealthInFlight = true;
+
+    let cameras: CameraHealth[];
+    try {
+      const { getCameraControlService } = await import('./container');
+      cameras = await getCameraControlService().pollCameraHealth();
+    } catch {
+      return; // camera control unavailable — stay quiet, never disturb the shoot
+    } finally {
+      this.cameraHealthInFlight = false;
+    }
+
+    this.cameraHealthState = { cameras, updatedAt: createTimestamp() };
+    this.emitCameraHealthState();
+
+    for (const cam of cameras) {
+      const was = this.cameraOnlinePrev.get(cam.id);
+      this.cameraOnlinePrev.set(cam.id, cam.online);
+      // Alert only on the online→offline edge, so we warn once rather than nag.
+      if (was === true && !cam.online) {
+        this.emitAtemToast(this.io.of('/slate'), 'error', `${cam.label} went offline`);
+        void this.tryRecoverCameraHost(cam.id);
+      } else if (was === false && cam.online) {
+        this.emitAtemToast(this.io.of('/slate'), 'success', `${cam.label} is back online`);
+      }
+    }
+  }
+
+  /** An offline camera may just have a new DHCP address — re-find it by MAC. */
+  private async tryRecoverCameraHost(deviceId: string): Promise<void> {
+    try {
+      const device = readStudioConfig().camera.cameras.find((c) => c.id === deviceId);
+      if (!device?.mac) return;
+      const { getCameraControlService } = await import('./container');
+      const newHost = await getCameraControlService().recoverHostByMac(device);
+      if (newHost) {
+        this.emitAtemToast(this.io.of('/slate'), 'info', `${device.label} moved to ${newHost} — roster updated`);
+        void this.pollCameraHealthOnce();
+      }
+    } catch { /* best-effort self-heal */ }
+  }
 
   /** Warm up armed-camera sessions, throttled to at most once per 20s. Best-effort. */
   private async maybePreconnectCameras(): Promise<void> {

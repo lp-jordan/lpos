@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import type { AtemState } from '@/lib/services/atem-utils';
 import type { TravelModeState } from '@/hooks/useSlate';
 import type { SonyCameraDevice } from '@/lib/store/studio-config-store';
-import type { DiscoveredCamera } from '@/lib/services/camera-control-service';
+import type { DiscoveredCamera, CameraHealth } from '@/lib/services/camera-control-service';
 
 function newCameraId(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
@@ -35,6 +35,8 @@ interface Props {
   onStopRecording: () => void;
   onOutput4Toggle: () => void;
   output4Mode: 'multiview' | 'program';
+  /** Live liveness for rostered cameras; drives the per-row status dots. */
+  cameraHealth?: CameraHealth[];
 }
 
 const CAMERAS = [1, 2, 3, 4, 5, 6];
@@ -73,6 +75,7 @@ export function AtemPanel({
   onSetProgram,
   onOutput4Toggle,
   output4Mode,
+  cameraHealth = [],
 }: Readonly<Props>) {
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
@@ -131,6 +134,7 @@ export function AtemPanel({
     }
   }
   // Add a scanned camera into the roster (armed by default), de-duped by IP.
+  // The MAC is kept so a changed DHCP address can be recovered automatically.
   function addDiscovered(cam: DiscoveredCamera) {
     setCameras((prev) => {
       if (prev.some((c) => c.host === cam.host)) return prev;
@@ -140,6 +144,7 @@ export function AtemPanel({
         host: cam.host,
         model: cam.model === 'fx3' ? 'fx3' : 'fx6',
         armed: true,
+        ...(cam.macAddress ? { mac: cam.macAddress.toUpperCase() } : {}),
       }];
     });
   }
@@ -382,8 +387,17 @@ export function AtemPanel({
                 <p className="at-cam-empty">No cameras yet. Add one to sync it with REC.</p>
               )}
 
-              {cameras.map((cam) => (
+              {cameras.map((cam) => {
+                const health = cameraHealth.find((h) => h.id === cam.id);
+                const dot = !health ? 'unknown' : !health.online ? 'offline' : health.recording ? 'recording' : 'online';
+                const dotTitle = !health
+                  ? 'Not checked yet — save to start monitoring'
+                  : !health.online ? `Offline (${cam.host})`
+                  : health.recording ? `Recording (${cam.host})`
+                  : `Online (${cam.host})`;
+                return (
                 <div className="at-cam-row" key={cam.id}>
+                  <span className={`at-cam-dot at-cam-dot--${dot}`} title={dotTitle} aria-label={dotTitle} />
                   <button
                     type="button"
                     className={`at-sw at-sw--sm${cam.armed ? ' at-sw--on' : ''}`}
@@ -418,7 +432,8 @@ export function AtemPanel({
                     aria-label={`Remove ${cam.label || 'camera'}`}
                   ><CloseIcon /></button>
                 </div>
-              ))}
+                );
+              })}
 
               <div className="at-set-btns">
                 <button type="button" className="at-btn" onClick={scanForCameras} disabled={scanning}>

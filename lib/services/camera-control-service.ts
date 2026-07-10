@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -22,12 +23,52 @@ import {
 } from './sony-camera';
 import {
   readStudioConfig,
+  patchStudioConfig,
   getArmedCameras,
   type CameraConfig,
   type CameraProviderKind,
   type SonyCameraModel,
   type SonyCameraDevice,
 } from '@/lib/store/studio-config-store';
+
+/** Liveness + live state for one rostered camera. */
+export interface CameraHealth {
+  id: string;
+  label: string;
+  host: string;
+  model: SonyCameraModel;
+  armed: boolean;
+  online: boolean;                    // answers on the network
+  recording: boolean;                 // only read for armed cameras
+  batteryPercent: number | null;
+  remainingSeconds: number | null;
+  error?: string;                     // reachable, but the SDK call failed
+  checkedAt: string;
+}
+
+// Cameras expose a UPnP/HTTP server on :80 (verified on FX6/FX3). A plain TCP
+// connect is a cheap liveness check that doesn't open an SDK session, so we can
+// poll every camera — armed or not — without holding connections open.
+const REACHABILITY_PORT = 80;
+const REACHABILITY_TIMEOUT_MS = 2_000;
+
+function probeReachable(host: string, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port: REACHABILITY_PORT });
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
 
 /** Outcome of a single camera in a coordinated record/stop roll. */
 export interface CameraRollResult {
@@ -508,6 +549,69 @@ export class CameraControlService {
     await Promise.all(
       armed.map((d) => this.getCameraEvent(this.deviceOverride(d)).catch(() => null)),
     );
+  }
+
+  /**
+   * Liveness + state for every rostered camera. Reachability is a cheap TCP probe
+   * (no SDK session); armed cameras additionally get a real status read, which
+   * doubles as a keepalive so their session stays connected between takes.
+   * Purely informational — never throws, never blocks recording.
+   */
+  async pollCameraHealth(): Promise<CameraHealth[]> {
+    const roster = readStudioConfig().camera.cameras.filter((c) => c.host.length > 0);
+    return Promise.all(roster.map(async (device): Promise<CameraHealth> => {
+      const base = {
+        id: device.id, label: device.label, host: device.host,
+        model: device.model, armed: device.armed, checkedAt: new Date().toISOString(),
+      };
+      const offline: CameraHealth = {
+        ...base, online: false, recording: false, batteryPercent: null, remainingSeconds: null,
+      };
+
+      if (!(await probeReachable(device.host))) return offline;
+      if (!device.armed) {
+        return { ...base, online: true, recording: false, batteryPercent: null, remainingSeconds: null };
+      }
+
+      try {
+        const status = await this.getCameraEvent(this.deviceOverride(device));
+        return {
+          ...base,
+          online: true,
+          recording: status.recording,
+          batteryPercent: status.batteryPercent ?? null,
+          remainingSeconds: status.remainingSeconds ?? null,
+        };
+      } catch (err) {
+        // Reachable on the network but the SDK couldn't talk to it (asleep, busy,
+        // held by another controller). Report it rather than calling it offline.
+        return { ...base, online: true, recording: false, batteryPercent: null, remainingSeconds: null, error: (err as Error).message };
+      }
+    }));
+  }
+
+  /**
+   * A camera is addressed by IP, so a new DHCP lease silently breaks its roster
+   * entry. If we recorded its MAC during a scan, re-discover it and repoint the
+   * roster at the new address. Returns the new host when one was recovered.
+   */
+  async recoverHostByMac(device: SonyCameraDevice): Promise<string | null> {
+    if (!device.mac) return null;
+    let found: DiscoveredCamera[];
+    try {
+      found = await this.discoverCameras();
+    } catch {
+      return null;
+    }
+    const wanted = device.mac.toUpperCase();
+    const match = found.find((c) => (c.macAddress ?? '').toUpperCase() === wanted);
+    if (!match?.host || match.host === device.host) return null;
+
+    const cameras = readStudioConfig().camera.cameras.map((c) =>
+      c.id === device.id ? { ...c, host: match.host } : c,
+    );
+    patchStudioConfig({ camera: { cameras } });
+    return match.host;
   }
 
   async getAvailableWhiteBalance(configOverride?: Partial<CameraConfig>): Promise<string[]> {

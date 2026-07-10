@@ -328,19 +328,39 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
               MXR
             </span>
           )}
-          {slate.cameraRollState?.results.map((cam) => {
-            const action = slate.cameraRollState!.action;
-            // A camera that stopped cleanly is no longer rolling — nothing to show.
-            if (action === 'stop' && cam.ok) return null;
-            const pending = !cam.ok && !cam.error;   // mid-roll, not yet confirmed
-            const cls = cam.ok
-              ? ' sl-cam-rec-pip--on'
-              : pending ? ' sl-cam-rec-pip--pending' : ' sl-cam-rec-pip--fail';
-            const title = cam.ok
-              ? `${cam.label} rolling (${cam.host})`
-              : pending
-                ? `${cam.label} — ${action === 'stop' ? 'stopping…' : 'starting…'} (${cam.host})`
-                : `${cam.label} — ${cam.error ?? (action === 'stop' ? "didn't stop" : 'not rolling')} (${cam.host})`;
+          {/* One always-on pip per armed camera: live liveness from the health
+              poller, with transient roll state (starting/failed) layered on top.
+              Purely informational — a offline camera never blocks REC. */}
+          {slate.cameraHealthState?.cameras.filter((c) => c.armed).map((cam) => {
+            const roll = slate.cameraRollState?.results.find((r) => r.id === cam.id);
+            const rollPending = !!roll && !roll.ok && !roll.error;
+            const rollFailed = !!roll && !roll.ok && !!roll.error;
+
+            const detail = [
+              cam.batteryPercent != null ? `${cam.batteryPercent}% battery` : null,
+              cam.remainingSeconds ? `${Math.floor(cam.remainingSeconds / 60)} min left` : null,
+            ].filter(Boolean).join(' · ');
+            const suffix = detail ? ` — ${detail}` : '';
+
+            let cls: string;
+            let title: string;
+            if (!cam.online) {
+              cls = ' sl-cam-rec-pip--offline';
+              title = `${cam.label} — OFFLINE (${cam.host})`;
+            } else if (rollFailed) {
+              cls = ' sl-cam-rec-pip--fail';
+              title = `${cam.label} — ${roll!.error} (${cam.host})`;
+            } else if (rollPending) {
+              const action = slate.cameraRollState!.action;
+              cls = ' sl-cam-rec-pip--pending';
+              title = `${cam.label} — ${action === 'stop' ? 'stopping…' : 'starting…'} (${cam.host})`;
+            } else if (cam.recording) {
+              cls = ' sl-cam-rec-pip--on';
+              title = `${cam.label} — recording (${cam.host})${suffix}`;
+            } else {
+              cls = ' sl-cam-rec-pip--idle';
+              title = `${cam.label} — online, idle (${cam.host})${suffix}`;
+            }
             return (
               <span key={cam.id} className={`sl-cam-rec-pip${cls}`} title={title}>
                 {cam.label}
@@ -742,6 +762,7 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
           {studioTab === 'atem' && (
             <AtemPanel
               atemState={slate.atemState}
+              cameraHealth={slate.cameraHealthState?.cameras ?? []}
               travelMode={slate.travelMode}
               atemPaused={slate.atemPaused}
               settingsOpen={atemSettingsOpen}

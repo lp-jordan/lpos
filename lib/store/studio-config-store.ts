@@ -58,6 +58,10 @@ export interface SonyCameraDevice {
   host: string;          // camera IP on the studio LAN/WiFi
   model: SonyCameraModel;
   armed: boolean;        // included in the synchronized REC roll for this shoot
+  // Hardware address, captured during a network scan. The camera is addressed by
+  // IP, so if DHCP hands it a new one the roster entry would silently break —
+  // the MAC lets us re-find it by scanning instead. Optional (manual adds lack it).
+  mac?: string;
 }
 
 export interface CameraConfig {
@@ -177,12 +181,14 @@ function normalizeCameraRoster(raw?: unknown): SonyCameraDevice[] {
     const host = typeof e.host === 'string' ? e.host.trim() : '';
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    const mac = typeof e.mac === 'string' ? e.mac.trim().toUpperCase() : '';
     out.push({
       id,
       label: typeof e.label === 'string' && e.label.trim() ? e.label.trim() : host || id,
       host,
       model: e.model === 'fx3' ? 'fx3' : 'fx6',
       armed: e.armed === true,
+      ...(mac ? { mac } : {}),
     });
   }
   return out;
