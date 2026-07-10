@@ -578,7 +578,9 @@ A REC toggle that fails with `0x8402` `CrError_Api_InvalidCalled` *after* the st
 State is read from `RecorderMainStatus` on cinema bodies (`Standby=3, Recording=4`); Alpha bodies publish `RecordingState` instead. The bridge asks for both and lets `RecorderMainStatus` win.
 
 ### Liveness vs. controllability
-The roster status dot is driven by `pollCameraHealth()`. `online` is only a **TCP probe on port 80** — it proves the camera answers, not that the SDK can control it. Armed cameras additionally get a real status read; when that fails the camera is reported `online: true` with an `error`, rendered as an **amber** dot. Green means a working SDK session.
+The roster status dot is driven by `pollCameraHealth()`. `online` is a cheap TCP probe (no SDK session) — it proves the camera answers, not that the SDK can control it. Armed cameras additionally get a real status read; when that fails the camera is reported `online: true` with an `error`, rendered as an **amber** dot. Green means a working SDK session.
+
+The probe tries **ports 22, 80, and 15740** and counts the host reachable if any is open. Bodies differ: Access-Authenticated FX6/FX3 take the SDK over **SSH (22)**; some FX6 firmware also exposes a web service (80); non-auth bodies use PTP/IP (15740). The **FX3 answers on 22 only** — the original port-80-only probe marked it offline despite a live SSH session, so it connected but never showed status. All three FX6 SSH sessions are visible as `bridge → <ip>:22` in `lsof`.
 
 ### Current status / known gaps
 Per-camera credentials, bridge error surfacing (`SendCommand` + `Connect` `CrError` codes), and per-camera roll logging landed 2026-07-10. The bridge binary is built per platform and must be rebuilt on the Windows studio machine to pick up bridge-side changes. Cameras are addressed by IP, so a new DHCP lease breaks a roster entry unless its MAC was captured during a scan (`recoverHostByMac`).

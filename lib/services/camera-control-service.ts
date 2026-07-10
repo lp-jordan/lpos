@@ -46,15 +46,18 @@ export interface CameraHealth {
   checkedAt: string;
 }
 
-// Cameras expose a UPnP/HTTP server on :80 (verified on FX6/FX3). A plain TCP
-// connect is a cheap liveness check that doesn't open an SDK session, so we can
-// poll every camera — armed or not — without holding connections open.
-const REACHABILITY_PORT = 80;
+// Liveness is a cheap TCP connect (no SDK session) so every camera can be polled
+// cheaply. Bodies don't all answer on the same port: Access-Authenticated FX6/FX3
+// take the SDK over SSH (22); some FX6 firmware also exposes a web service (80);
+// non-auth bodies use PTP/IP (15740). The FX3 answers on 22 ONLY — probing just 80
+// (as the original code did) marked it offline despite a working SSH/SDK session, so
+// its status never showed. Reachable = any candidate port open.
+const REACHABILITY_PORTS = [22, 80, 15740];
 const REACHABILITY_TIMEOUT_MS = 2_000;
 
-function probeReachable(host: string, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+function probePort(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host, port: REACHABILITY_PORT });
+    const socket = net.createConnection({ host, port });
     let settled = false;
     const done = (ok: boolean) => {
       if (settled) return;
@@ -68,6 +71,11 @@ function probeReachable(host: string, timeoutMs = REACHABILITY_TIMEOUT_MS): Prom
     socket.once('timeout', () => done(false));
     socket.once('error', () => done(false));
   });
+}
+
+async function probeReachable(host: string, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+  const results = await Promise.all(REACHABILITY_PORTS.map((p) => probePort(host, p, timeoutMs)));
+  return results.some(Boolean);
 }
 
 /** Outcome of a single camera in a coordinated record/stop roll. */

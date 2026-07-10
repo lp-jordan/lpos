@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — FX3 shows no status: liveness probe only checked port 80
+
+**Timestamp:** 2026-07-10T12:00:00Z
+
+**User prompt (verbatim):** "Further question - does our bridge support the fx3? I haven't attempted to connect it yet" followed by "Connection was successful but no status is given which makes me think the commands are different for the fx3."
+
+**Response summary:** Confirmed the bridge supports FX3 (model enum, UI, docs, dual RecorderMainStatus/RecordingState read all present) and then diagnosed the no-status symptom on live hardware — it was not the commands. From the LPOS machine: the FX3 (Cam 4, `172.20.10.179`) pings fine and has **port 22 open but port 80 closed**; the three FX6s have **both 22 and 80**. `lsof` on the bridge showed the FX6s each hold a live SSH session (`bridge → <ip>:22`) — Access Authentication transports the Sony SDK over SSH. LPOS's `probeReachable` liveness check hard-gated on **port 80 only**, so the FX3 connected over SSH fine but the health poll marked it offline and never read its status. Widened the probe to try ports 22, 80, and 15740, reachable if any is open.
+
+**Files changed:**
+- `lib/services/camera-control-service.ts` — `REACHABILITY_PORT` (80) → `REACHABILITY_PORTS` `[22, 80, 15740]`; `probeReachable` now probes all three in parallel (`probePort` helper) and returns reachable if any connects.
+- `docs/README.md` — Liveness section documents the multi-port probe and the FX3-only-on-22 finding.
+
+**Decision rationale:** Port 22 is the port that actually correlates with SDK connectability for these access-authenticated bodies (the SDK tunnels over SSH); port 80 was incidental to the FX6 firmware. Probing a set and OR-ing keeps the FX6 working (still opens 80 and 22), fixes the FX3 (22), and covers a hypothetical non-auth body (15740 PTP/IP). Kept it a bare TCP connect — no SSH handshake or auth attempt, so it won't trip camera-side auth logging. Parallel probes keep the worst-case latency at the same 2s timeout as before.
+
+**Alternatives considered:** Dropping the port probe and always doing the SDK status read — rejected, it would spawn/hold SDK sessions on every poll for every camera (the reason the cheap TCP gate exists) and cost a 45s connect on genuinely-offline armed bodies. Probing only 22 — rejected, would regress a non-auth camera that exposes PTP/IP but not SSH.
+
+**Checks run:** `npx tsc --noEmit` — clean. Live network diagnosis from the LPOS host: `nc` port sweep (FX3 22 open / 80,443,15740 closed; FX6 22+80 open), `ping` (FX3 up ~197ms), `lsof` (three FX6 SSH sessions, none to the FX3 at diagnosis time).
+
+**Assumptions / follow-ups:** TS-only change — no bridge rebuild needed; takes effect on LPOS restart. The FX3 also returned a phantom `0x20019` (SDK thinks it holds a session while `lsof` shows none) — likely a collision-era session the body still holds; a one-time FX3 power-cycle should clear it, same remedy the FX6s needed. Still unverified end-to-end (FX3 status appearing, then REC start/stop) — the REC-command-difference question the user raised is not yet answered because status was masking it; worth a follow-up once the FX3 shows status. The `/camera/props` dump would confirm which recording-state property the FX3 publishes, but couldn't be captured live because LPOS held/blocked the session during diagnosis.
+
 ## 2026-07-10 — Stop no longer skips its toggle when the recording state can't be read
 
 **Timestamp:** 2026-07-10T11:00:00Z
