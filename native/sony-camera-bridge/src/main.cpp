@@ -695,21 +695,51 @@ public:
     return recording;
   }
 
-  // Fires one full REC-button press (Down then Up), which toggles the recording
-  // state exactly once. Cinema bodies (FX6/FX3) use MovieRecButtonToggle — the
-  // Alpha-style MovieRecord command returns NotSupported (0x8003). A lone Down
-  // does NOT register; both halves are required.
-  //
-  // SendCommand's CrError is the only signal that a body refused the toggle (wrong
-  // firmware, no/full card, session held by another controller). Sony's sample
-  // discards it; doing the same turned a refused record into a silent success that
-  // propagated all the way to the operator UI. Fail loudly instead.
-  // One full press. Returns the first failing half's error, or CrError_None.
-  SDK::CrError sendRecToggleLocked() {
-    const SDK::CrError down = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Down);
+  // One full REC-button press (Down then Up) of a given command, which toggles the
+  // recording state exactly once. A lone Down does NOT register; both halves are
+  // required. Returns the first failing half's error, or CrError_None.
+  SDK::CrError sendRecPressLocked(SDK::CrCommandId command) {
+    const SDK::CrError down = SDK::SendCommand(handle, command, SDK::CrCommandParam_Down);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    const SDK::CrError up = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
+    const SDK::CrError up = SDK::SendCommand(handle, command, SDK::CrCommandParam_Up);
     return CR_FAILED(down) ? down : up;
+  }
+
+  // Different Sony bodies expose the movie-record button under different command IDs:
+  //  • Cinema bodies (FX6) take CrCommandId_MovieRecButtonToggle; the Alpha-style
+  //    MovieRecord returns NotSupported (0x8003) on them.
+  //  • Alpha-based bodies (FX3) are the mirror image — they reject MovieRecButtonToggle
+  //    with NotSupported and take MovieRecord.
+  // Rather than branch on model, try the preferred command and fall back to the other
+  // on NotSupported, then cache whichever the body accepted so later toggles go direct.
+  // Any non-NotSupported result (success, busy, no-media) is returned as-is.
+  //
+  // SendCommand's CrError is the only signal that a body refused the press; Sony's
+  // sample discards it, which turned a refusal into a silent success. Fail loudly.
+  SDK::CrError sendRecToggleLocked() {
+    std::array<SDK::CrCommandId, 2> order{
+      SDK::CrCommandId_MovieRecButtonToggle,
+      SDK::CrCommandId_MovieRecord,
+    };
+    if (preferredRecCommand == SDK::CrCommandId_MovieRecord) {
+      order = { SDK::CrCommandId_MovieRecord, SDK::CrCommandId_MovieRecButtonToggle };
+    }
+
+    SDK::CrError result = SDK::CrError_Generic_NotSupported;
+    for (const auto command : order) {
+      result = sendRecPressLocked(command);
+      if (result == SDK::CrError_Generic_NotSupported) continue;   // wrong command for this body
+      if (!CR_FAILED(result)) {
+        if (preferredRecCommand != command) {
+          std::cout << "[sony-camera-bridge] " << host << " uses "
+                    << (command == SDK::CrCommandId_MovieRecord ? "MovieRecord" : "MovieRecButtonToggle")
+                    << " for REC\n";
+          preferredRecCommand = command;
+        }
+      }
+      return result;   // success, or a real error (busy / no media) worth surfacing
+    }
+    return result;     // both commands returned NotSupported
   }
 
   void pressMovieRecordButtonLocked() {
@@ -730,6 +760,9 @@ public:
       if (error == SDK::CrError_Api_InvalidCalled) {
         message << ": the camera will not record — check for recordable media "
                    "(no card, card full, or write-protected).";
+      } else if (error == SDK::CrError_Generic_NotSupported) {
+        message << ": this body accepted neither MovieRecButtonToggle nor MovieRecord "
+                   "— its firmware may use a different record command.";
       } else {
         message << '.';
       }
@@ -1114,6 +1147,9 @@ private:
   std::string password;
   std::string fingerprint;
   std::string mac;
+  // Which movie-record command this body accepts, learned on first successful toggle
+  // (FX6 → MovieRecButtonToggle, FX3 → MovieRecord). Preferred order starts here.
+  SDK::CrCommandId preferredRecCommand{SDK::CrCommandId_MovieRecButtonToggle};
   std::mutex mutex;
   SDK::ICrCameraObjectInfo* cameraInfo{nullptr};
   SDK::CrDeviceHandle handle{0};

@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — FX3 record: fall back to MovieRecord when MovieRecButtonToggle is NotSupported
+
+**Timestamp:** 2026-07-10T13:00:00Z
+
+**User prompt (verbatim):** "Ok, fx3 is connected but refusing record toggle commands"
+
+**Response summary:** With the FX3 now showing status (port-probe fix), the record question surfaced. Captured the FX3's actual rejection via the bridge — `err=0x8003` = `CrError_Generic_NotSupported` for `CrCommandId_MovieRecButtonToggle`. The FX3 is Alpha-based and is the mirror of the FX6: it wants `CrCommandId_MovieRecord` (the command the FX6 rejects). Verified against Sony's vendored sample (`CameraDevice.cpp:2432`) that `MovieRecord` is invoked with the same Down/Up press params. Made the bridge model-agnostic: try the preferred record command, fall back to the other on `NotSupported`, and cache whichever the body accepts.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `sendRecToggleLocked()` now tries both `MovieRecButtonToggle` and `MovieRecord` (preferred-first, skipping `NotSupported`) and caches the winner in a new `preferredRecCommand` session member; extracted `sendRecPressLocked(command)` for the Down/Up press; `pressMovieRecordButtonLocked` error text gains a `NotSupported`-after-both case; stale comment updated.
+- `docs/README.md` — Recording section documents the per-body command split and the fallback.
+
+**Decision rationale:** A fallback chain beats branching on model string: it self-adapts to FX6/FX3 without a lookup table and covers a future body that happens to use either command. Caching the accepted command per session means only the first toggle pays the probe; subsequent ones go direct. Kept the full Down-then-Up press for both commands — Sony's button-emulation commands use that model and each full press toggles once, which the existing state-guard in start/stop relies on. Non-`NotSupported` errors (busy, no-media `0x8402`) are returned as-is so their specific handling still fires.
+
+**Alternatives considered:** Branching on `model == "fx3"` to pick `MovieRecord` — rejected as brittle (FX3A/FX30/future bodies) and it wouldn't self-correct if a body surprised us. Sending a single `MovieRecord` Down (no Up) — not chosen; the full-press model is consistent with the working FX6 path and the toggle-once semantics the guards assume. If the FX3 turns out to need single-press semantics, that's the first thing to try.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean. Live: captured the FX3 `record/start` response through the running bridge → `err=0x8003`, confirming the exact fallback trigger.
+
+**Assumptions / follow-ups:** Unverified end-to-end on the FX3 — the fallback definitely *routes* to `MovieRecord` (the `0x8003` trigger is confirmed), but whether `MovieRecord`'s Down/Up press cleanly toggles the FX3's recording needs the rebuilt bridge running + a live REC test. If it starts-then-immediately-stops or needs a single press, switch `MovieRecord` to single-Down. The bridge binary must be running (LPOS restart) for this to take effect; Windows bridge needs a rebuild. This does not change FX6 behaviour (it still hits `MovieRecButtonToggle` first and succeeds).
+
 ## 2026-07-10 — Studio copy + lighting top-line tweaks
 
 **Timestamp:** 2026-07-10T12:30:00Z

@@ -561,7 +561,7 @@ MACs are captured by the network scan into `SonyCameraDevice.mac` and forwarded 
 `isStaleSessionError()` catches `CrError_Api_InvalidCalled`, `CrError_Generic_InvalidHandle`, and `CrError_Connect_Disconnected`. The REC toggle and the status read each call `reconnectLocked()` (force-reset, then reconnect — bypassing the early-return) and retry **once** before surfacing the error. Only genuine camera refusals reach the operator.
 
 ### Recording
-Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.
+The record button lives under different command IDs per body: **cinema bodies (FX6)** take `CrCommandId_MovieRecButtonToggle`; **Alpha-based bodies (FX3)** reject that with `NotSupported (0x8003)` and take `CrCommandId_MovieRecord`. `sendRecToggleLocked()` tries the preferred command, falls back to the other on `NotSupported`, and caches whichever the body accepted (`preferredRecCommand`) so later toggles go direct. Both are sent as a full Down-then-Up press (a lone Down does not register), and each full press toggles the state once. Because it only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state. If a body accepts neither command, the error says so.
 
 A REC toggle that fails with `0x8402` `CrError_Api_InvalidCalled` *after* the stale-session reconnect retry means the body is refusing: most often **no recordable media** (no card, card full, or write-protected).
 

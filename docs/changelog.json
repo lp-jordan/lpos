@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T13:00:00Z",
+    "title": "FX3 record support",
+    "summary": "The FX3 uses a different record command than the FX6 and was rejecting the studio's record button. The camera bridge now recognizes this and uses the right command for each camera automatically — trying one, falling back to the other, and remembering which each body accepts. So the REC button can drive FX3 and FX6 bodies side by side."
+  },
+  {
     "timestamp": "2026-07-10T12:30:00Z",
     "title": "Studio wording and lighting layout polish",
     "summary": "Clearer captions on the camera settings (what the Camera control switch and Sony cameras section do), and the lighting tab's top controls now sit tight under the header with All lights on the left and the status, settings, and Presets grouped on the right."
