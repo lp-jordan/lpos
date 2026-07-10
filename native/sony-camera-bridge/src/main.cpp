@@ -366,6 +366,7 @@ public:
 
   void OnDisconnected(CrInt32u error) override {
     connected.store(false);
+    propertiesReady.store(false);
     lastError.store(error);
   }
 
@@ -373,8 +374,29 @@ public:
     lastError.store(error);
   }
 
+  // The SDK fills its device-property cache asynchronously after Connect and
+  // republishes on every change. Until the first of these fires, reads of
+  // GetSelectDeviceProperties return defaults — a recording camera reports
+  // IDLE, battery/white-balance come back unset. Tracking these events is what
+  // makes the property reads (notably RecordingState) trustworthy.
+  void OnPropertyChanged() override {
+    propertiesReady.store(true);
+  }
+
+  void OnPropertyChangedCodes(CrInt32u, CrInt32u*) override {
+    propertiesReady.store(true);
+  }
+
   bool isConnected() const {
     return connected.load();
+  }
+
+  bool arePropertiesReady() const {
+    return propertiesReady.load();
+  }
+
+  void resetProperties() {
+    propertiesReady.store(false);
   }
 
   SDK::CrError error() const {
@@ -383,6 +405,7 @@ public:
 
 private:
   std::atomic<bool> connected{false};
+  std::atomic<bool> propertiesReady{false};
   std::atomic<std::uint32_t> lastError{SDK::CrError_None};
 };
 
@@ -417,13 +440,46 @@ public:
     return fetchOptionsLocked();
   }
 
+  // Diagnostic: dump every device property the camera actually publishes, with
+  // its code and current value. Used to discover which property (and value)
+  // represents the recording state on a given body.
+  std::string dumpAllPropertiesJson() {
+    std::lock_guard<std::mutex> lock(mutex);
+    ensureConnectedLocked();
+    SDK::CrDeviceProperty* properties = nullptr;
+    CrInt32 count = 0;
+    const SDK::CrError error = SDK::GetDeviceProperties(handle, &properties, &count);
+    if (CR_FAILED(error) || properties == nullptr) {
+      throw std::runtime_error("GetDeviceProperties failed.");
+    }
+    std::ostringstream out;
+    out << "{\"recordingStateCode\":" << static_cast<CrInt32u>(SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState)
+        << ",\"count\":" << count << ",\"props\":[";
+    for (CrInt32 i = 0; i < count; ++i) {
+      if (i) out << ',';
+      out << "{\"code\":" << static_cast<CrInt32u>(properties[i].GetCode())
+          << ",\"value\":" << static_cast<CrInt64u>(properties[i].GetCurrentValue()) << '}';
+    }
+    out << "]}";
+    SDK::ReleaseDeviceProperties(handle, properties);
+    return out.str();
+  }
+
   CameraStatus getStatus() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
 
     CameraStatus status{};
-    const std::array<CrInt32u, 5> codes{
+    // Two different bodies report recording two different ways:
+    //  • Alpha stills bodies publish RecordingState.
+    //  • Cinema bodies (FX6/FX3) do NOT publish it at all — they publish
+    //    RecorderMainStatus (CrRecorderStatus: Standby=3, Recording=4).
+    // Querying only RecordingState made an FX6 always read back as "not
+    // recording", which silently broke every recording-state check. Ask for
+    // both; whichever the camera actually publishes wins.
+    const std::array<CrInt32u, 6> codes{
       SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState,
+      SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus,
       SDK::CrDevicePropertyCode::CrDeviceProperty_WhiteBalance,
       SDK::CrDevicePropertyCode::CrDeviceProperty_IsoSensitivity,
       SDK::CrDevicePropertyCode::CrDeviceProperty_BatteryLevel,
@@ -436,10 +492,14 @@ public:
       throw std::runtime_error("Failed to load camera status from Sony SDK.");
     }
 
+    // RecorderMainStatus (cinema) is authoritative over RecordingState (Alpha)
+    // when both appear, regardless of the order the SDK returns them in.
+    bool sawRecorderMainStatus = false;
     for (CrInt32 index = 0; index < count; ++index) {
       const SDK::CrDeviceProperty property = properties[index];
       switch (property.GetCode()) {
         case SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState: {
+          if (sawRecorderMainStatus) break;   // cinema body already reported authoritatively
           const auto recordingState = static_cast<std::uint16_t>(property.GetCurrentValue());
           status.recording = recordingState == SDK::CrMovie_Recording_State_Recording;
           if (recordingState == SDK::CrMovie_Recording_State_Recording) {
@@ -448,6 +508,18 @@ public:
             status.cameraStatus = "MovieWaitRecStart";
           } else {
             status.cameraStatus = "IDLE";
+          }
+          break;
+        }
+        case SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus: {
+          sawRecorderMainStatus = true;
+          const auto recorder = static_cast<std::uint8_t>(property.GetCurrentValue());
+          status.recording = recorder == SDK::CrRecorderStatus_Recording;
+          switch (recorder) {
+            case SDK::CrRecorderStatus_Recording:          status.cameraStatus = "MovieRecording";     break;
+            case SDK::CrRecorderStatus_Stopping:           status.cameraStatus = "MovieStopping";      break;
+            case SDK::CrRecorderStatus_PreparingToRecord:  status.cameraStatus = "MovieWaitRecStart";  break;
+            default:                                       status.cameraStatus = "IDLE";               break;
           }
           break;
         }
@@ -472,6 +544,35 @@ public:
     return status;
   }
 
+  // Current recording state, straight from the camera. Cinema bodies (FX6/FX3)
+  // publish RecorderMainStatus; Alpha bodies publish RecordingState. Caller must
+  // hold the mutex and already be connected.
+  bool isRecordingLocked() {
+    std::array<CrInt32u, 2> codes{
+      SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus,
+      SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState,
+    };
+    SDK::CrDeviceProperty* properties = nullptr;
+    CrInt32 count = 0;
+    const SDK::CrError error = SDK::GetSelectDeviceProperties(
+      handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
+    if (CR_FAILED(error) || properties == nullptr) return false;
+
+    bool recording = false;
+    bool sawRecorderMainStatus = false;
+    for (CrInt32 i = 0; i < count; ++i) {
+      const auto code = properties[i].GetCode();
+      if (code == SDK::CrDevicePropertyCode::CrDeviceProperty_RecorderMainStatus) {
+        sawRecorderMainStatus = true;
+        recording = static_cast<std::uint8_t>(properties[i].GetCurrentValue()) == SDK::CrRecorderStatus_Recording;
+      } else if (code == SDK::CrDevicePropertyCode::CrDeviceProperty_RecordingState && !sawRecorderMainStatus) {
+        recording = static_cast<std::uint16_t>(properties[i].GetCurrentValue()) == SDK::CrMovie_Recording_State_Recording;
+      }
+    }
+    SDK::ReleaseDeviceProperties(handle, properties);
+    return recording;
+  }
+
   // Fires one full REC-button press (Down then Up), which toggles the recording
   // state exactly once. Cinema bodies (FX6/FX3) use MovieRecButtonToggle — the
   // Alpha-style MovieRecord command returns NotSupported (0x8003). A lone Down
@@ -483,19 +584,19 @@ public:
     SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
   }
 
-  // NOTE: MovieRecButtonToggle is a *toggle*, and this camera's RecordingState
-  // read-back is unreliable (it can report IDLE while actually recording), so we
-  // can't safely guard on current state here — we fire one toggle per call and
-  // rely on LPOS to track intended start/stop. See getStatus caveat.
+  // MovieRecButtonToggle only toggles, so a stray duplicate call would flip the
+  // camera the wrong way. Guard on the real state to keep start/stop idempotent.
   void startRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
+    if (isRecordingLocked()) return;   // already rolling
     pressMovieRecordButtonLocked();
   }
 
   void stopRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
+    if (!isRecordingLocked()) return;  // already stopped
     pressMovieRecordButtonLocked();
   }
 
@@ -694,6 +795,7 @@ private:
       }
     }
 
+    callback.resetProperties();   // re-wait for a fresh property publish
     const SDK::CrError connectError = SDK::Connect(
       cameraInfo,
       &callback,
@@ -721,6 +823,20 @@ private:
         << "Sony SDK connection to " << host
         << " did not become ready after 45 seconds. Check that the FX6 is in a Sony SDK-supported network remote mode and not locked in another remote-control mode.";
       throw std::runtime_error(message.str());
+    }
+
+    // Connect() returning isn't enough: the SDK's device-property cache is
+    // filled asynchronously afterwards. Reading it before the first property
+    // notification yields defaults (a recording camera reads back as IDLE,
+    // battery/WB come back unset), which silently corrupts recording-state
+    // checks. Wait for the SDK to publish properties before serving any read.
+    const auto propsDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (!callback.arePropertiesReady() && std::chrono::steady_clock::now() < propsDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!callback.arePropertiesReady()) {
+      std::cerr << "[sony-camera-bridge] warning: property cache not published by "
+                << host << " within 15s — status reads may be stale\n";
     }
 
     std::cout << "[sony-camera-bridge] connected to " << model << " at " << host << '\n';
@@ -954,6 +1070,10 @@ std::string handleJsonRequest(const HttpRequest& request) {
 
     if (request.path == "/camera/status") {
       return jsonResponse(200, "OK", statusJson(session.getStatus()));
+    }
+
+    if (request.path == "/camera/props") {
+      return jsonResponse(200, "OK", session.dumpAllPropertiesJson());
     }
 
     if (request.path == "/camera/record/start") {
