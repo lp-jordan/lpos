@@ -368,6 +368,19 @@ export class CameraControlService {
   private readonly legacyProvider = new SonyCameraApiProvider();
   private readonly sdkProvider = new SonySdkBridgeProvider(this);
 
+  // Per-host roll coordination. Every start/stop stamps a monotonically increasing
+  // sequence for its camera's host and records it as that host's latest intent. A
+  // queued roll that is no longer the latest intent when its turn comes is dropped
+  // instead of dispatched — so a stale START (e.g. one that blocked ~45s on a
+  // powered-off body) can never fire a REC toggle after a newer STOP. That exact
+  // race left an FX3 rolling: its take-start blocked while the body was off, the
+  // operator pressed stop, the body came back, and the stale start finally toggled
+  // it on *after* the stop. Rolls to the same host are also serialized so start and
+  // stop can't interleave mid-toggle.
+  private rollSeq = 0;
+  private readonly latestRollSeq = new Map<string, number>();
+  private readonly rollChain = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly io?: SocketIOServer,
     private readonly registry?: ServiceRegistry,
@@ -546,10 +559,67 @@ export class CameraControlService {
     throw new Error(lastErr || `Timed out waiting for camera to ${want ? 'start' : 'stop'} recording`);
   }
 
+  /**
+   * Serialize work for one camera host: each task runs only after the previous task
+   * for the same host settles (success or failure), so a stop can never interleave
+   * with an in-flight start mid-toggle. Failures don't poison the chain.
+   */
+  private serializeByHost<T>(host: string, task: () => Promise<T>): Promise<T> {
+    const prev = this.rollChain.get(host) ?? Promise.resolve();
+    const next = prev.then(task, task);
+    // Keep the chain alive but swallow the result so a rejection can't break the
+    // next link and the retained promise never keeps a value/error referenced.
+    this.rollChain.set(host, next.then(() => undefined, () => undefined));
+    return next;
+  }
+
   private async rollOne(device: SonyCameraDevice, action: 'start' | 'stop'): Promise<CameraRollResult> {
+    // Stamp intent synchronously, in press order, BEFORE queuing. Whichever command
+    // for this host is stamped last wins; earlier queued rolls will see they are no
+    // longer the latest intent and drop out without touching the camera.
+    const seq = ++this.rollSeq;
+    this.latestRollSeq.set(device.host, seq);
+    return this.serializeByHost(device.host, () => this.rollOneCommit(device, action, seq));
+  }
+
+  private async rollOneCommit(
+    device: SonyCameraDevice,
+    action: 'start' | 'stop',
+    seq: number,
+  ): Promise<CameraRollResult> {
     const base: Omit<CameraRollResult, 'ok' | 'error' | 'recording'> = {
       id: device.id, label: device.label, host: device.host, model: device.model,
     };
+
+    // Superseded by a newer command for this host while we waited our turn — the
+    // newer command owns the final state. Drop out silently rather than send a stale
+    // toggle that would flip the camera the wrong way.
+    if (this.latestRollSeq.get(device.host) !== seq) {
+      console.log(`[camera-control] ${action} on ${device.label} (${device.host}) superseded before dispatch; skipping`);
+      return { ...base, ok: true, recording: null };
+    }
+
+    // Reachability gate. A REC command to a body that isn't on the network blocks
+    // ~45s inside the SDK bridge; if the body returns during that window the toggle
+    // fires late — after any newer stop — and leaves it rolling. Never dispatch to a
+    // dark camera: probe first (cheap TCP, no SDK session) and skip if it's offline.
+    if (!(await probeReachable(device.host))) {
+      if (action === 'start') {
+        console.warn(`[camera-control] start SKIPPED on ${device.label} (${device.host}): camera offline`);
+        return { ...base, ok: false, error: 'camera offline', recording: false };
+      }
+      // A powered-off camera cannot be recording; report the stop as a clean no-op.
+      console.log(`[camera-control] stop no-op on ${device.label} (${device.host}): camera offline`);
+      return { ...base, ok: true, recording: false };
+    }
+
+    // A newer command may have landed while we probed. Send the toggle only if we're
+    // still the latest word for this host.
+    if (this.latestRollSeq.get(device.host) !== seq) {
+      console.log(`[camera-control] ${action} on ${device.label} (${device.host}) superseded during probe; skipping`);
+      return { ...base, ok: true, recording: null };
+    }
+
     try {
       const override = this.deviceOverride(device);
       if (action === 'start') await this.startMovieRec(override);

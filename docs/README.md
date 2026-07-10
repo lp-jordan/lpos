@@ -502,6 +502,15 @@ Cameras sit powered-off for days between shoots, so the tier self-manages:
 
 `cameraHealthState` broadcast to `/slate` now carries `enabled` and `idle` flags alongside the per-camera list.
 
+### Roll safety (start/stop ordering)
+The studio REC button fires `rollArmedCameras` fire-and-forget on ATEM start/stop, fanning out over every *armed* body regardless of whether it's currently online (arm is a static config flag, not liveness). `CameraControlService.rollOne` therefore guards each command so a stale or superseded roll can never toggle the wrong way:
+
+- **Reachability gate** — `rollOneCommit` runs `probeReachable(host)` (cheap TCP, no SDK session) before dispatching. A record command to a powered-off body would otherwise block ~45s inside the bridge's `ensureConnectedLocked()`; if the body returned during that window the REC toggle fired *late* — after a newer stop — and left it rolling (observed on the FX3: power a body off mid-take, stop, power it back on, and the stale start toggled it on). Offline bodies are now skipped instantly: a start reports `camera offline`, a stop is a clean no-op.
+- **Latest-intent supersession** — a monotonic `rollSeq` is stamped per host synchronously at call time (`latestRollSeq`). A queued roll that is no longer its host's latest intent (checked before dispatch and again after the probe) is dropped instead of sent, so a start superseded by a later stop never toggles.
+- **Per-host serialization** — `serializeByHost` chains rolls for the same host so start and stop can't interleave mid-toggle; a failed roll doesn't poison the chain.
+
+The bridge's per-camera mutex still serializes the toggle itself; these guards add the missing "latest operator intent wins" semantics at the service layer. No native rebuild — the fix is entirely in `camera-control-service.ts`. Deliberately no client-side `AbortSignal` timeout on the bridge fetch: aborting the HTTP call doesn't stop the bridge finishing its connect+toggle, so an aborted-but-then-succeeds start would reintroduce the late-toggle race.
+
 ### Data flow (inputs → outputs)
 LPOS UI → `/api/studio/camera/*` → `CameraControlService` → (provider `sony-sdk`) local bridge on `http://127.0.0.1:6107` → Sony Camera Remote SDK → camera over Ethernet.
 
