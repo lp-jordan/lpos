@@ -642,6 +642,24 @@ export class AmaranService {
     const intensity = Math.round(Math.max(0, Math.min(100, brightnessPct)) * 10);
     let confirmed   = false;
 
+    // Force the source to flip to CCT when the fixture is currently on a colour
+    // (HSI) source. Amaran Desktop switches the active source as a *side effect*
+    // of set_cct — but only when the CCT VALUE actually changes. A fixture can be
+    // showing blue while its stored CCT already equals the target (presets carry
+    // both colour models), so a plain set_cct(target) is a no-op and the light
+    // stays blue while intensity still lands. Priming with a nudged CCT first
+    // guarantees the real command below is a genuine value change, which reliably
+    // switches the source out of HSI. Skipped when we already know it's on CCT so
+    // CCT→CCT applies don't flicker.
+    const knownMode = this._states[id]?.mode ?? this._fixtureModes[id] ?? 'cct';
+    if (knownMode !== 'cct') {
+      const nudge = this.clampCct(id, cct >= 4000 ? cct - 300 : cct + 300);
+      if (nudge !== cct) {
+        try { await this.sendRequest('set_cct', id, { cct: nudge, gm, intensity }); } catch { /* prime is best-effort */ }
+        await this.delay(120);
+      }
+    }
+
     for (let attempt = 0; attempt < 2 && !confirmed; attempt++) {
       try {
         await this.sendRequest('set_cct', id, { cct, gm, intensity });
