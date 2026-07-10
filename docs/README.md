@@ -479,7 +479,7 @@ All creation paths (direct + both promotion branches) now provision folders thro
 Drives the studio's Sony cinema bodies over the network: connect, read status (recording / battery / media remaining), set WB + ISO, pull liveview, and fan the studio REC button out to every *armed* camera in the roster. Camera recording is best-effort and never gates the ATEM + mixer core.
 
 ### Key files and entry points
-- `components/slate/AtemPanel.tsx` — camera roster editor (label, host, model, arm toggle, per-camera credentials) + liveness dots.
+- `components/slate/AtemPanel.tsx` — ATEM settings dialog (centered modal, tabbed **Travel / File / Cameras**) containing the camera roster editor (label, host, model, arm toggle) + liveness dots.
 - `components/slate/SonyCameraPanel.tsx` — single-camera control surface (connect, WB/ISO, liveview).
 - `lib/services/camera-control-service.ts` — provider selection, roster roll (`recordAllArmed` / `stopAllArmed`), health polling, bridge process supervision.
 - `lib/store/studio-config-store.ts` — `CameraConfig` (rig-wide) and `SonyCameraDevice` (per-body roster entry).
@@ -492,9 +492,13 @@ LPOS UI → `/api/studio/camera/*` → `CameraControlService` → (provider `son
 The bridge keys sessions by `host|model|username|fingerprint`, so each camera holds its own SDK session.
 
 ### Credentials
-Access Authentication is configured **on each camera body**, so credentials are per-device. `SonyCameraDevice.username` / `.password` / `.fingerprint` override the rig-wide `CameraConfig` values; blank fields fall back to the rig-wide ones, which keeps single-camera rigs working with no per-device setup. A blank fingerprint is fetched trust-on-first-use via `SDK::GetFingerprint`.
+Access Authentication is configured **on each camera body**, so credentials are per-device. `SonyCameraDevice.username` / `.password` / `.fingerprint` override the rig-wide `CameraConfig` values; blank fields fall back to the rig-wide ones. A blank fingerprint is fetched trust-on-first-use via `SDK::GetFingerprint`.
 
-Supplying a non-empty username turns SSH on for that camera (`CrSSHsupport_ON`). A wrong password fails at `SDK::Connect`, not at record time.
+The studio standardizes on one shared credential set (`admin` + a single password on every body), so the per-camera overrides are **not exposed in the settings UI** — the roster rows would carry three redundant password boxes. The fields remain on `SonyCameraDevice` and are honoured by `deviceOverride()`; set them directly in `data/studio-config.json` if a body ever needs its own password, and re-add the inputs to `AtemPanel.tsx` if that becomes the norm.
+
+Supplying a non-empty username turns SSH on for **every** camera (`CrSSHsupport_ON` is derived from the rig-wide config), so all bodies must have Access Authentication in the same state. A wrong password fails at `SDK::Connect`, not at record time.
+
+Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each body has its own — populating it breaks every camera except the one it belongs to.
 
 ### Recording
 Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.

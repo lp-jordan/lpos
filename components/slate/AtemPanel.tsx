@@ -16,6 +16,13 @@ const TRAVEL_ATEM_IP = '10.10.10.241';
 const HOME_ATEM_IP = '172.20.10.241';
 const TRAVEL_BRIDGE_URL = 'http://100.110.17.100:4011';
 
+type SettingsTab = 'travel' | 'file' | 'cameras';
+const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
+  { id: 'travel',  label: 'Travel' },
+  { id: 'file',    label: 'File' },
+  { id: 'cameras', label: 'Cameras' },
+];
+
 interface Props {
   atemState: AtemState | null;
   travelMode: TravelModeState;
@@ -80,6 +87,7 @@ export function AtemPanel({
   const [ipInput, setIpInput] = useState(atemState?.switcherIp ?? '');
   const [filenameInput, setFilenameInput] = useState(atemState?.recording.filename ?? '');
   const [showChecklist, setShowChecklist] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('travel');
 
   // ── Sony camera roster (armed cams follow the studio REC button) ──
   const [cameras, setCameras] = useState<SonyCameraDevice[]>([]);
@@ -287,12 +295,28 @@ export function AtemPanel({
       {settingsOpen && createPortal(
         <div className="at-backdrop" onClick={onSettingsToggle}>
           <div className="at-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="ATEM settings">
-            <div className="at-grabber" />
             <div className="at-sheet-head">
               <h3>ATEM settings</h3>
               <button className="at-sheet-close" type="button" onClick={onSettingsToggle} aria-label="Close"><CloseIcon /></button>
             </div>
 
+            <div className="at-tabs" role="tablist" aria-label="ATEM settings sections">
+              {SETTINGS_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  id={`at-tab-${tab.id}`}
+                  aria-selected={settingsTab === tab.id}
+                  aria-controls={`at-tabpanel-${tab.id}`}
+                  className={`at-tab${settingsTab === tab.id ? ' at-tab--on' : ''}`}
+                  onClick={() => setSettingsTab(tab.id)}
+                >{tab.label}</button>
+              ))}
+            </div>
+
+            {settingsTab === 'travel' && (
+            <div className="at-tabpanel" role="tabpanel" id="at-tabpanel-travel" aria-labelledby="at-tab-travel">
             {/* Travel mode */}
             <div className="at-set-row">
               <div className="at-set-label">
@@ -357,7 +381,11 @@ export function AtemPanel({
                 <button type="button" className="at-btn" onClick={onDisconnect} disabled={!connected}>Disconnect</button>
               </div>
             </div>
+            </div>
+            )}
 
+            {settingsTab === 'file' && (
+            <div className="at-tabpanel" role="tabpanel" id="at-tabpanel-file" aria-labelledby="at-tab-file">
             {/* Record filename */}
             <div className="at-set-block">
               <div className="at-set-label">
@@ -375,7 +403,11 @@ export function AtemPanel({
                 <button type="button" className="at-btn at-btn--pri" onClick={() => onSetFilename(filenameInput)}>Apply</button>
               </div>
             </div>
+            </div>
+            )}
 
+            {settingsTab === 'cameras' && (
+            <div className="at-tabpanel" role="tabpanel" id="at-tabpanel-cameras" aria-labelledby="at-tab-cameras">
             {/* Sony cameras — armed cams start/stop with the studio REC button */}
             <div className="at-set-block">
               <div className="at-set-label">
@@ -434,25 +466,6 @@ export function AtemPanel({
                     <option value="fx6">FX6</option>
                     <option value="fx3">FX3</option>
                   </select>
-                  {/* Access Authentication is set per body. Blank falls back to the
-                      rig-wide credentials in the Camera panel. */}
-                  <input
-                    className="at-input at-cam-user"
-                    placeholder="user"
-                    autoComplete="off"
-                    value={cam.username ?? ''}
-                    onChange={(e) => updateCamera(cam.id, { username: e.target.value })}
-                    title="Access Authentication user for this camera (blank = rig default)"
-                  />
-                  <input
-                    className="at-input at-cam-pass"
-                    placeholder="password"
-                    type="password"
-                    autoComplete="new-password"
-                    value={cam.password ?? ''}
-                    onChange={(e) => updateCamera(cam.id, { password: e.target.value })}
-                    title="Access Authentication password for this camera (blank = rig default)"
-                  />
                   <button
                     type="button"
                     className="at-cam-del"
@@ -500,7 +513,10 @@ export function AtemPanel({
                 </div>
               )}
             </div>
+            </div>
+            )}
 
+            {/* Connection errors are surfaced regardless of the active tab. */}
             {atemState?.lastError && <p className="at-error">{atemState.lastError}</p>}
           </div>
         </div>,

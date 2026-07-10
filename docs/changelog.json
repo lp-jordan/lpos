@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T01:00:00Z",
+    "title": "ATEM settings is now a centered dialog with Travel, File, and Cameras tabs",
+    "summary": "The ATEM settings menu opens as a centered dialog instead of sliding up and sticking to the bottom of the screen, and its contents are split across three tabs: Travel (travel mode, setup checklist, pause reconnect, and the ATEM connection), File (record filename), and Cameras (the Sony camera roster). The per-camera password boxes have been removed from the roster rows, since every camera in the studio shares one login. Connection errors still show no matter which tab you are on."
+  },
+  {
     "timestamp": "2026-07-10T00:00:00Z",
     "title": "Each studio camera can now have its own password",
     "summary": "Cameras in the studio roster can each store their own Access Authentication user and password, instead of every camera being forced to share a single set. Previously, a camera whose password differed from the first one would silently fail to start or stop recording while still showing as online — because the online indicator only checks that the camera answers on the network, not that we can actually control it. That indicator now turns amber when a camera is reachable but the control session fails, the camera bridge reports the real error instead of discarding it, and every start/stop attempt is logged per camera."

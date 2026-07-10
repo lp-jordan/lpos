@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-07-10 — Center the ATEM settings dialog, split it into Travel / File / Cameras tabs, drop per-camera password fields
+
+**Timestamp:** 2026-07-10T01:00:00Z
+
+**User prompt (verbatim):** "I'd rather simplify the settings menu now. Remove the password fields for now.
+
+Also, let's center the settings menu we've been working in, right now it's locked to the bottom of the screen. Also, make tabs: Travel, File, and Cameras.
+
+The content that belongs in each is self explanatory"
+
+**Response summary:** The operator standardized every FX6 on `admin` + one shared password, so the per-camera credential inputs added earlier today were redundant. Removed the inputs from the roster rows (the underlying `SonyCameraDevice` fields and the `deviceOverride()` fallback stay — they're still the mechanism that makes the shared credentials reach each camera). Converted the ATEM settings sheet from a bottom-anchored sheet to a centered modal and split its five sections across three tabs.
+
+**Files changed:**
+- `components/slate/AtemPanel.tsx` — removed per-camera user/password inputs; added `SettingsTab` type + `SETTINGS_TABS` table, `settingsTab` state, an ARIA tablist, and three `role="tabpanel"` wrappers; dropped the `at-grabber` bottom-sheet handle. `atemState.lastError` renders outside the tabs so a connection error is never hidden behind an inactive tab.
+- `app/globals.css` — `.at-backdrop` centers (`align-items: center` + padding) instead of `flex-end`; `.at-sheet` gets a full `18px` radius, symmetric padding, and loses the `env(safe-area-inset-bottom)` bottom padding and `border-bottom: none`; new `.at-tabs` / `.at-tab` / `.at-tab--on` / `.at-tabpanel`; removed `.at-grabber`, `.at-cam-user`, `.at-cam-pass`; restored original `.at-cam-label` / `.at-cam-host` widths.
+- `docs/README.md` — Sony Camera Control section: credentials are config-only now (with the reason and how to re-expose), rig-wide fingerprint warning, settings dialog described as a centered tabbed modal.
+
+**Decision rationale:** Tab mapping follows the existing section semantics: **Travel** takes travel mode + its setup checklist, pause reconnect, and the ATEM IP connection block (all concern *how LPOS reaches the switcher*); **File** takes the record filename; **Cameras** takes the Sony roster. Kept the `username`/`password`/`fingerprint` fields on `SonyCameraDevice` rather than reverting them: deleting them would re-introduce the bug where every body authenticates with the first camera's password, and the shared-credential setup works precisely *because* blank per-camera fields fall back to the rig-wide values. The tablist owns the section divider, so `.at-tabpanel > *:first-child` clears its own `border-top` to avoid a doubled rule. Tabs are conditionally rendered rather than hidden with CSS, so the roster's scan results and unsaved edits reset only on sheet close (the roster loads on `settingsOpen`, not on tab change).
+
+**Alternatives considered:** Reverting the per-camera credential plumbing entirely — rejected, it's the fallback path the shared-password setup relies on. Keeping the grabber on a centered modal — rejected, it's a bottom-sheet drag affordance that no longer means anything.
+
+**Checks run:** `npx tsc --noEmit` — clean (0 errors), which also validates the JSX nesting of the new tab wrappers. Grepped for stale `at-grabber` / `at-cam-user` / `at-cam-pass` references — none remain. `next lint` is not configured in this repo (it prompts for interactive setup), so it was skipped.
+
+**Assumptions / follow-ups:** Tab content assignment was inferred from the section headings as the prompt indicated; "Travel" absorbing the ATEM IP + pause-reconnect controls is the only mapping that leaves no section homeless. Not visually verified in a browser — no dev server was started, per workspace convention. Regenerated `native/sony-camera-bridge/build-mac/` CMake artifacts and the untracked foreign `C:\...docx` were left unstaged.
+
 ## 2026-07-10 — Per-camera Access Authentication credentials for the Sony FX6 roster
 
 **Timestamp:** 2026-07-10T00:00:00Z
