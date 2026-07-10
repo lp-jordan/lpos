@@ -304,7 +304,8 @@ std::string describeConnectError(SDK::CrError error) {
              "Monitor & Control, XDCAM air, or a stale bridge session) already holds "
              "its remote session. Close it, or power-cycle the camera.";
     case SDK::CrWarning_Connect_Already:
-      return "the SDK already holds a session for this camera object.";
+      return "the SDK already holds a session for this camera. Restart the bridge; "
+             "if it persists, power-cycle the camera to drop the session it is holding.";
     case SDK::CrError_Connect_SessionAlreadyOpened:
       return "a remote session is already open on this camera.";
     case SDK::CrWarning_Connect_OverLimitOfDevice:
@@ -852,12 +853,12 @@ private:
   void ensureConnectedLocked() {
     if (handle != 0 && callback.isConnected()) return;
 
-    // We're not connected, but a previous failed attempt can leave the SDK holding a
-    // half-open session on this camera object — and Connect() is called with
-    // CrReconnecting_ON, so the SDK keeps retrying underneath us. Calling Connect()
-    // again on that object returns CrWarning_Connect_Already forever, which masked
-    // the real first-attempt error (CrError_Connect_FailBusy) behind a bogus one on
-    // every subsequent retry. Always start from a freshly created camera object.
+    // We're not connected, but a previous failed attempt can leave a half-open
+    // session on this camera object. Connect() on a poisoned object returns
+    // CrWarning_Connect_Already, which masks the real first-attempt error (e.g.
+    // CrError_Connect_FailBusy) on every retry after the first. Always Connect()
+    // from a freshly created camera object. Note this only clears state we own —
+    // see the CrReconnecting_OFF rationale below for the half the SDK owns.
     resetConnectionLocked();
 
     std::cout << "[sony-camera-bridge] connecting to " << model << " at " << host << '\n';
@@ -905,12 +906,20 @@ private:
     }
 
     callback.resetProperties();   // re-wait for a fresh property publish
+    // CrReconnecting_OFF, deliberately. With the SDK's own reconnect loop ON, a
+    // failed or dropped session leaves the SDK retrying in the background against
+    // this device — a loop that outlives cameraInfo->Release(), because it is keyed
+    // to the device, not to our object. The next explicit Connect() then collides
+    // with that in-flight session and returns CrWarning_Connect_Already forever, and
+    // no amount of resetting on our side clears it. This bridge already reconnects on
+    // demand (ensureConnectedLocked / reconnectLocked), so the SDK's loop is pure
+    // downside: it owns a session we can neither see nor cancel.
     const SDK::CrError connectError = SDK::Connect(
       cameraInfo,
       &callback,
       &handle,
       SDK::CrSdkControlMode_Remote,
-      SDK::CrReconnecting_ON,
+      SDK::CrReconnecting_OFF,
       username.empty() ? nullptr : username.c_str(),
       password.empty() ? nullptr : password.c_str(),
       fingerprint.empty() ? nullptr : fingerprint.c_str(),

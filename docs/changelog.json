@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T04:00:00Z",
+    "title": "Fixed a camera getting permanently stuck as 'already connected'",
+    "summary": "A camera could get wedged in a state where every reconnection attempt was rejected because the camera SDK was silently holding its own background connection — one the studio software could neither see nor close, and which survived every attempt to reset the connection. The bridge now disables the SDK's background reconnection entirely and manages reconnection itself, which it was already doing. A camera stuck in this state before the fix needs one power-cycle to clear it."
+  },
+  {
     "timestamp": "2026-07-10T03:00:00Z",
     "title": "Cameras recover on their own when their connection goes stale",
     "summary": "If a camera's control session quietly dies, the studio would keep talking to the dead connection and every record, stop, and status check would fail until the bridge was restarted. The bridge now recognizes a dead session, rebuilds the connection, and retries once — so a stale connection heals itself instead of taking the camera out for the rest of the shoot. Genuine refusals from the camera are still reported."

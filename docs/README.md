@@ -512,7 +512,9 @@ Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each 
 
 An FX6 accepts **one** remote SDK session. Content Browser Mobile, Monitor & Control, XDCAM air, or a bridge process killed without `Disconnect` will hold it until the camera times out or is power-cycled.
 
-`ensureConnectedLocked()` calls `resetConnectionLocked()` before every connect attempt. `Connect()` is issued with `CrReconnecting_ON`, so a failed attempt leaves the SDK retrying against a half-open camera object; connecting again on that object returns `CrWarning_Connect_Already` indefinitely and masks the real first-attempt error. Always build a fresh camera object.
+`ensureConnectedLocked()` calls `resetConnectionLocked()` before every connect attempt, so `Connect()` always runs against a freshly created camera object. A poisoned object returns `CrWarning_Connect_Already` on every retry, masking the real first-attempt error.
+
+**`Connect()` is issued with `CrReconnecting_OFF`.** The SDK parameter defaults to `CrReconnecting_ON`, which starts an SDK-owned reconnect loop keyed to the *device*, not to our `ICrCameraObjectInfo`. That loop survives `cameraInfo->Release()`, so the next explicit `Connect()` collides with the SDK's in-flight session and returns `CrWarning_Connect_Already` indefinitely — a session the bridge can neither see nor cancel. The bridge reconnects on demand (`ensureConnectedLocked` / `reconnectLocked`), so the SDK's loop is redundant. Do not turn it back on.
 
 ### Stale sessions
 `callback.isConnected()` only goes false when `OnDisconnected` fires. A session that dies without it leaves the handle believed-good, and `ensureConnectedLocked()`'s early-return then trusts it — so every later call fails permanently:

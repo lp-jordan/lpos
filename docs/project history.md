@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Connect with CrReconnecting_OFF to stop the SDK holding an uncancellable session
+
+**Timestamp:** 2026-07-10T04:00:00Z
+
+**User prompt (verbatim):** Screenshot of the ATEM settings Cameras tab: `.44` and `.189` green, `.56` amber with "Reachable but SDK error (172.20.10.56): Sony SDK could not connect to camera at 172.20.10.56 (err=0x20019): the SDK already holds a session for this camera object." — "One is still struggling, seeing this:"
+
+**Response summary:** The tooltip text only exists in the build that also added `resetConnectionLocked()`, which proved the previous fix was live and not working. Root cause found in the SDK header: `Connect()`'s `reconnect` parameter defaults to `CrReconnecting_ON`, and the bridge was passing it explicitly. That starts an SDK-owned reconnect loop keyed to the *device*, not to our `ICrCameraObjectInfo` — so it outlives `cameraInfo->Release()`. Resetting our own objects (the prior fix) can never clear it. Every subsequent explicit `Connect()` collides with that in-flight SDK session and returns `CrWarning_Connect_Already` permanently. Switched to `CrReconnecting_OFF`; the bridge already reconnects on demand via `ensureConnectedLocked()` / `reconnectLocked()`, so the SDK's loop was redundant and was the sole owner of a session we could neither observe nor cancel.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `SDK::Connect(...)` now passes `SDK::CrReconnecting_OFF` with a comment explaining why it must not be turned back on; `describeConnectError()`'s `CrWarning_Connect_Already` text now gives the actual remedy (restart the bridge, then power-cycle the camera) instead of only restating the code; corrected the now-stale `CrReconnecting_ON` comment in `ensureConnectedLocked()`.
+- `docs/README.md` — Connect errors section rewritten around the `CrReconnecting_OFF` requirement and why object-level resets don't reach SDK-owned state.
+
+**Decision rationale:** The bridge's own reconnect path is strictly better than the SDK's for this use: it is synchronous with the call that needs the session, it rebuilds the camera object from scratch, and its failures are observable. The SDK loop offered none of that and produced an unrecoverable state. Chose the flag over trying to cancel the loop (there is no API to do so) or restarting the bridge process on `Connect_Already` (a process bounce to fix one camera would drop the other two).
+
+**Alternatives considered:** Treating `CrWarning_Connect_Already` as success and waiting for `OnConnected` — rejected, the SDK's background session does not hand us a usable `CrDeviceHandle`, so reads and commands would still fail. Keeping `CrReconnecting_ON` and only calling `Disconnect()` on the stale handle — rejected, when `Connect()` fails there is no handle to disconnect.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean, no warnings.
+
+**Assumptions / follow-ups:** `.56` is currently holding a session from a bridge process killed during an earlier rebuild; this change prevents the state recurring but does not clear the existing one — the camera needs a power-cycle once, same as `.44`/`.189` already got. Windows bridge still needs a rebuild. This also likely explains the previous round's `CrError_Api_InvalidCalled` on `.56`: the SDK's background reconnect and our explicit session were fighting over the same device. The stale-session healing added then remains useful and is unaffected. Not verified against live hardware.
+
 ## 2026-07-10 — Heal stale Sony SDK sessions instead of failing on them
 
 **Timestamp:** 2026-07-10T03:00:00Z
