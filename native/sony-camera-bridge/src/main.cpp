@@ -300,9 +300,16 @@ bool isStaleSessionError(SDK::CrError error) {
 std::string describeConnectError(SDK::CrError error) {
   switch (error) {
     case SDK::CrError_Connect_FailBusy:
-      return "the camera is busy — another controller (Content Browser Mobile, "
-             "Monitor & Control, XDCAM air, or a stale bridge session) already holds "
-             "its remote session. Close it, or power-cycle the camera.";
+      // Usually us. An FX6 accepts one remote session, and only a clean bridge exit
+      // sends Disconnect() (SIGTERM -> loop exit -> ~CameraManager). A SIGKILL or a
+      // crash leaves the camera holding its side until its own timeout. Other
+      // controllers can hold it too, but on this rig they rarely do — say so in that
+      // order, because naming them first sends the operator to the wrong machine.
+      return "the camera already holds a remote session. Most likely a previous "
+             "bridge process on this machine exited without disconnecting; it will "
+             "time out, or power-cycle the camera to drop it now. Less commonly, "
+             "another controller (Content Browser Mobile, Monitor & Control, XDCAM "
+             "air) is connected.";
     case SDK::CrWarning_Connect_Already:
       return "the SDK already holds a session for this camera. Restart the bridge; "
              "if it persists, power-cycle the camera to drop the session it is holding.";

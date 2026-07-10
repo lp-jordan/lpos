@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T06:00:00Z",
+    "title": "A busy camera now points at the right cause",
+    "summary": "When a camera reports that it is already in use, the message now says what is actually true most of the time: a previous camera bridge process on this machine exited without letting go of the camera. It will time out on its own, or you can power-cycle the camera to clear it immediately. Other apps connecting to the camera are still mentioned, but no longer listed first — that was sending people to check their phones instead of the studio Mac."
+  },
+  {
     "timestamp": "2026-07-10T05:00:00Z",
     "title": "A camera that never started recording no longer reports a failed stop",
     "summary": "If a camera refused to start recording, pressing stop afterwards would report that the camera failed to stop — implying it might still be rolling, when it had never started. The studio now decides whether a camera is rolling by asking the camera, rather than by whether the last command succeeded. A stop sent to a camera that is not recording is treated as nothing to do. Cameras whose state cannot be read are still flagged as possibly rolling after a stop, since that is the safer assumption. Separately, when a camera refuses to record, the error now suggests checking for a memory card — the most common cause."

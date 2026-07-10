@@ -510,7 +510,12 @@ Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each 
 | `0x8211` `CrError_Connect_SessionAlreadyOpened` | A remote session is already open on the body |
 | `CrError_Connect_SSH_UserAuthenticationFailed` | Wrong Access Authentication user/password |
 
-An FX6 accepts **one** remote SDK session. Content Browser Mobile, Monitor & Control, XDCAM air, or a bridge process killed without `Disconnect` will hold it until the camera times out or is power-cycled.
+An FX6 accepts **one** remote SDK session. In practice the holder is almost always *this machine*, not another controller:
+
+- The bridge only sends `Disconnect()` on a **clean** exit: `SIGTERM`/`SIGINT` → `running = false` → the `select()` accept loop exits → `main` returns → the function-local `static CameraManager` destructor runs → `sessions.clear()` → `~CameraSession` → `close()`. A `SIGKILL` or a crash skips all of it, and the camera holds its side open until its own timeout.
+- Before `CrReconnecting_OFF` (see below), the SDK's own reconnect loop re-established a session in the background that the bridge could neither see nor cancel.
+
+Other controllers (Content Browser Mobile, Monitor & Control, XDCAM air) *can* hold the session, but check for a dead bridge process first. Power-cycling the camera drops the session immediately.
 
 `ensureConnectedLocked()` calls `resetConnectionLocked()` before every connect attempt, so `Connect()` always runs against a freshly created camera object. A poisoned object returns `CrWarning_Connect_Already` on every retry, masking the real first-attempt error.
 

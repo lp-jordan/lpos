@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Correct the FailBusy diagnosis: the held session is our own dead bridge process
+
+**Timestamp:** 2026-07-10T06:00:00Z
+
+**User prompt (verbatim):** "what do you mean by held session? Nothing should be holding it unless previous connections to the mac/lpos are being held"
+
+**Response summary:** The operator was right and the earlier `CrError_Connect_FailBusy` message was misdirecting. Investigated rather than restated. Findings: (1) The bridge only sends `Disconnect()` on a clean exit — `SIGTERM`/`SIGINT` sets the atomic `running` flag, the 1s-timeout `select()` accept loop exits, `main` returns, and the function-local `static CameraManager` destructor runs `sessions.clear()` → `~CameraSession` → `close()` → `Disconnect()` + `ReleaseDevice()`. A `SIGKILL` or a crash skips the entire chain, so the FX6 keeps its side of the single permitted remote session open until its own timeout. This repo already carries a commit for a bridge `SIGABRT`, so crash-exits have happened. (2) Until `d8da015`, `CrReconnecting_ON` had the SDK re-establishing a device-keyed session in the background that the bridge could neither observe nor cancel. Confirmed with `ps` and `lsof` that no bridge process is running and no socket is open to `.56`/`.44`/`.189`, i.e. nothing currently holds a session — consistent with the holders having been prior bridge processes. Corrected the error text and the docs; no behavioural change.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `describeConnectError()`'s `CrError_Connect_FailBusy` text now leads with "a previous bridge process on this machine exited without disconnecting" and demotes the third-party controllers to a trailing "less commonly"; comment records why the ordering matters.
+- `docs/README.md` — Connect errors section: documents the clean-exit-only `Disconnect()` chain, the crash/`SIGKILL` gap, and the pre-`CrReconnecting_OFF` background session, and tells the reader to check for a dead bridge before hunting phone apps.
+
+**Decision rationale:** An error message that names the wrong suspect first is worse than one that names none — it cost the operator a trip to the cameras. Ordered the causes by actual likelihood on this rig, and kept the third-party controllers mentioned since they remain a genuine (if rarer) cause. No code behaviour changed: the crash-exit gap is real but unfixable from inside a `SIGKILL`ed process, and the camera-side timeout plus `CrReconnecting_OFF` already bound the damage.
+
+**Alternatives considered:** Adding a startup sweep that force-drops stale sessions — rejected, the SDK exposes no way to disconnect a session this process does not own. Installing a `SIGKILL` handler — impossible by definition. Having LPOS always call `CameraControlService.stop()` on shutdown so the child gets a clean `SIGTERM` — worth doing, but it only covers orderly LPOS shutdowns and is a separate change; logged as a follow-up.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean. `ps -eo pid,etime,command | grep sony-camera-bridge` — no process. `lsof -nP -iTCP:6107 -sTCP:LISTEN` and `lsof -nP -iTCP | grep 172.20.10.(56|44|189)` — nothing listening, no camera sockets.
+
+**Assumptions / follow-ups:** Follow-up worth taking: ensure LPOS invokes `CameraControlService.stop()` (which `kill()`s the child, i.e. `SIGTERM`) on its own shutdown path, so an orderly LPOS exit always yields a clean bridge exit and a real `Disconnect()`. Separately, `native/sony-camera-bridge/build-mac/` is tracked and dirties on every rebuild — candidate for `.gitignore` + `git rm --cached`. Windows bridge still needs a rebuild. Not verified against live hardware.
+
 ## 2026-07-10 — Derive camera roll state from reported recording state, not command outcomes
 
 **Timestamp:** 2026-07-10T05:00:00Z
