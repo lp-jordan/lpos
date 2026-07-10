@@ -646,91 +646,35 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       {/* ═══ Panel header ═══ */}
-      <div className="sl-atem-header">
-        <span className="sl-atem-title">Lighting Control</span>
+      <div className="st-head">
+        <span className="st-head-title">Lighting Control</span>
       </div>
 
-      {/* ═══ Connection header ═══ */}
-      <div className="lp-lighting-section">
-        <div className="lp-lighting-topbar-actions">
-          <span className={`lp-lighting-dot${connected ? ' lp-lighting-dot--on' : ''}`} />
-          {connected ? (
-            <>
-              <button
-                type="button"
-                className="lp-lighting-btn lp-lighting-btn--icon"
-                onClick={() => void handleRefresh()}
-                disabled={refreshing}
-                title="Refresh fixtures"
-              >
-                <RefreshIcon spinning={refreshing} />
-              </button>
-              <button type="button" className="lp-lighting-btn lp-lighting-btn--muted" onClick={() => void disconnect()}>
-                Disconnect
-              </button>
-            </>
-          ) : (
-            <button type="button" className="lp-lighting-btn lp-lighting-btn--accent" onClick={() => void handleConnect()}>
-              Connect
-            </button>
-          )}
+      {/* ═══ Top control line: [dot] [gear] [Presets] … [All lights] ═══ */}
+      <div className="lp-topline">
+        <span className={`lp-lighting-dot${connected ? ' lp-lighting-dot--on' : ''}`} title={connected ? 'Connected' : 'Not connected'} />
+        <button
+          type="button"
+          className={`at-gear${settingsOpen ? ' at-gear--active' : ''}`}
+          onClick={() => setSettingsOpen((v) => !v)}
+          aria-label="Lighting settings"
+        >
+          <GearIcon />
+        </button>
+        {showSections && (
           <button
             type="button"
-            className={`lp-lighting-btn lp-lighting-btn--icon${settingsOpen ? ' lp-lighting-btn--active' : ''}`}
-            onClick={() => setSettingsOpen((v) => !v)}
-            title="Lighting settings"
+            className="lp-scene lp-topline-presets"
+            onClick={() => setPresetsOpen(true)}
+            title="Apply, save, or edit presets"
           >
-            <GearIcon />
+            Presets
           </button>
-        </div>
-
-        {settingsOpen && (
-          <div className="lp-lighting-settings">
-            <label className="lp-lighting-label">Amaran Desktop port</label>
-            <div className="lp-lighting-settings-row">
-              <input
-                className="lp-lighting-input"
-                type="number" min={1024} max={65535}
-                value={portDraft}
-                onChange={(e) => setPortDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveSettings(); }}
-                placeholder="33782"
-              />
-            </div>
-            <label className="lp-lighting-label" style={{ marginTop: 10 }}>WLED device IP</label>
-            <div className="lp-lighting-settings-row">
-              <input
-                className="lp-lighting-input"
-                type="text"
-                value={wledIpDraft}
-                onChange={(e) => setWledIpDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveSettings(); }}
-                placeholder="192.168.1.50"
-              />
-            </div>
-            <div className="lp-lighting-settings-row" style={{ marginTop: 8 }}>
-              <button type="button" className="lp-lighting-btn lp-lighting-btn--accent" onClick={() => void handleSaveSettings()}>
-                Save
-              </button>
-            </div>
-          </div>
         )}
-
-        {error && <p className="lp-lighting-error">{error}</p>}
-
-        {!connected && !settingsOpen && (
-          <div className="lp-lighting-placeholder">
-            <p className="lp-lighting-hint">Open Amaran Desktop, ensure your lights are paired, then click Connect.</p>
-          </div>
-        )}
-      </div>
-
-      {/* ═══ Master + scenes toolbar ═══ */}
-      {showSections && (
-        <div className="lp-lightbar">
+        {showSections && (
           <button
             type="button"
-            className={`lp-master-c${anyOn ? ' lp-master-c--on' : ''}`}
+            className={`lp-master-c lp-topline-master${anyOn ? ' lp-master-c--on' : ''}`}
             onClick={() => void handleAllPower(!anyOn)}
             disabled={bulkBusy || (fixtures.length === 0 && wledPower === null)}
             aria-pressed={anyOn}
@@ -739,16 +683,84 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
             <span className="lp-master-pg"><TilePowerGlyph /></span>
             <span className="lp-master-label">{bulkBusy ? 'Working…' : 'All lights'}</span>
           </button>
+        )}
+      </div>
 
-          <button
-            type="button"
-            className="lp-scene lp-scene--presets"
-            onClick={() => setPresetsOpen(true)}
-            title="Apply, save, or edit presets"
-          >
-            Presets
-          </button>
+      {error && <p className="lp-lighting-error">{error}</p>}
+
+      {!connected && (
+        <div className="lp-lighting-placeholder">
+          <p className="lp-lighting-hint">Open Amaran Desktop, ensure your lights are paired, then open settings (gear) to connect.</p>
         </div>
+      )}
+
+      {/* ═══ Settings modal — mirrors the ATEM settings chrome ═══ */}
+      {settingsOpen && createPortal(
+        <div className="at-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div className="at-sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Lighting settings">
+            <div className="at-sheet-head">
+              <h3>Lighting settings</h3>
+              <button className="at-sheet-close" type="button" onClick={() => setSettingsOpen(false)} aria-label="Close"><CloseIcon /></button>
+            </div>
+
+            {/* Connection */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">Connection</div>
+                <div className="s">Amaran Desktop link{connected ? ' — connected' : ' — not connected'}</div>
+              </div>
+              <div className="at-set-btns">
+                {connected ? (
+                  <>
+                    <button type="button" className="at-btn at-btn--icon-text" onClick={() => void handleRefresh()} disabled={refreshing}>
+                      <RefreshIcon spinning={refreshing} />
+                      {refreshing ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                    <button type="button" className="at-btn" onClick={() => void disconnect()}>Disconnect</button>
+                  </>
+                ) : (
+                  <button type="button" className="at-btn at-btn--pri" onClick={() => void handleConnect()}>Connect</button>
+                )}
+              </div>
+            </div>
+
+            {/* Amaran port */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">Amaran Desktop port</div>
+                <div className="s">WebSocket port (default 33782)</div>
+              </div>
+              <input
+                className="at-input"
+                type="number" min={1024} max={65535}
+                value={portDraft}
+                onChange={(e) => setPortDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveSettings(); }}
+                placeholder="33782"
+              />
+            </div>
+
+            {/* WLED IP */}
+            <div className="at-set-block">
+              <div className="at-set-label">
+                <div className="t">WLED device IP</div>
+                <div className="s">Bookshelf LED controller address</div>
+              </div>
+              <input
+                className="at-input"
+                type="text"
+                value={wledIpDraft}
+                onChange={(e) => setWledIpDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveSettings(); }}
+                placeholder="192.168.1.50"
+              />
+              <div className="at-set-btns">
+                <button type="button" className="at-btn at-btn--pri" onClick={() => void handleSaveSettings()}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {/* ═══ Unassigned ═══ */}

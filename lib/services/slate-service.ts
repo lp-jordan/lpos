@@ -33,11 +33,17 @@ import type { CameraRollResult, CameraHealth } from './camera-control-service';
 
 /** How often we check whether each rostered camera is still on the network. */
 const CAMERA_HEALTH_INTERVAL_MS = 15_000;
+/** All armed cameras unreachable this long → idle the bridge (stop process, TCP-only probes). */
+const CAMERA_IDLE_AFTER_MS = 10 * 60_000;
+/** No successful SDK connection this long → one-shot admin Slack alert. */
+const CAMERA_ALERT_AFTER_MS = 2 * 60 * 60_000;
 
 /** Liveness of every rostered camera. Broadcast on `cameraHealthState`. */
 interface CameraHealthState {
   cameras: CameraHealth[];
   updatedAt: string;
+  enabled: boolean;   // master switch (camera.enabled). False → whole tier off.
+  idle: boolean;      // auto-idled: bridge stopped, waiting for a camera to reappear.
 }
 
 /**
@@ -898,10 +904,16 @@ export class SlateService {
   // ── Camera liveness ────────────────────────────────────────────────────
   // Purely informational: tells the operator when a camera drops off the
   // network. It NEVER gates the REC button — cameras are a best-effort tier.
-  private cameraHealthState: CameraHealthState = { cameras: [], updatedAt: '' };
+  private cameraHealthState: CameraHealthState = { cameras: [], updatedAt: '', enabled: true, idle: false };
   private cameraHealthInterval: NodeJS.Timeout | null = null;
   private cameraHealthInFlight = false;
   private cameraOnlinePrev = new Map<string, boolean>();
+  // Auto-idle bookkeeping. lastCameraConnectAt starts "now" so the 2h alert clock
+  // doesn't fire the instant the server boots with cameras already off.
+  private lastCameraConnectAt = Date.now();
+  private cameraIdle = false;
+  private cameraIdleAlerted = false;
+  private cameraBridgeStopped = false;
 
   private emitCameraHealthState(
     target: { emit: (ev: string, data: unknown) => void } = this.io.of('/slate')
@@ -921,29 +933,99 @@ export class SlateService {
     if (this.cameraHealthInFlight) return;
     this.cameraHealthInFlight = true;
 
-    let cameras: CameraHealth[];
     try {
       const { getCameraControlService } = await import('./container');
-      cameras = await getCameraControlService().pollCameraHealth();
+      const camera = getCameraControlService();
+      const cfg = readStudioConfig().camera;
+
+      // ── Master switch off → stop the bridge, report the tier disabled, done. ──
+      if (cfg.enabled === false) {
+        await this.stopCameraBridge(camera);
+        this.cameraIdle = false;
+        this.cameraHealthState = { cameras: [], updatedAt: createTimestamp(), enabled: false, idle: false };
+        this.emitCameraHealthState();
+        this.cameraOnlinePrev.clear();
+        return;
+      }
+      this.cameraBridgeStopped = false;
+
+      // While idle, probe TCP only — never spawn the bridge or attempt SDK connects.
+      const cameras = await camera.pollCameraHealth({ sdkReads: !this.cameraIdle });
+
+      const armed = cameras.filter((c) => c.armed);
+      const anyReachable = cameras.some((c) => c.online);
+      // A genuine SDK connection (online AND no error), only possible when not idle.
+      const anySdkConnected = cameras.some((c) => c.online && !c.error);
+      const now = Date.now();
+
+      if (anySdkConnected) {
+        this.lastCameraConnectAt = now;
+        this.cameraIdleAlerted = false;
+      }
+
+      // ── Idle exit: a camera is back on the network → resume normal polling. ──
+      if (this.cameraIdle && anyReachable) {
+        this.cameraIdle = false;
+        this.log('[camera] a camera is reachable again — resuming SDK connections');
+      }
+
+      // ── Idle entry: all armed cameras dark for long enough → stop the bridge. ──
+      if (!this.cameraIdle && armed.length > 0 && !anyReachable
+          && now - this.lastCameraConnectAt > CAMERA_IDLE_AFTER_MS) {
+        this.cameraIdle = true;
+        await this.stopCameraBridge(camera);
+        this.log('[camera] all cameras unreachable — idling the bridge until one returns');
+      }
+
+      // ── One-shot admin alert at the 2h mark. ──
+      if (armed.length > 0 && !this.cameraIdleAlerted
+          && now - this.lastCameraConnectAt >= CAMERA_ALERT_AFTER_MS) {
+        this.cameraIdleAlerted = true;
+        void this.alertCamerasDark(now - this.lastCameraConnectAt);
+      }
+
+      this.cameraHealthState = { cameras, updatedAt: createTimestamp(), enabled: true, idle: this.cameraIdle };
+      this.emitCameraHealthState();
+
+      for (const cam of cameras) {
+        const was = this.cameraOnlinePrev.get(cam.id);
+        this.cameraOnlinePrev.set(cam.id, cam.online);
+        // Alert only on the online→offline edge, so we warn once rather than nag.
+        if (was === true && !cam.online) {
+          this.emitAtemToast(this.io.of('/slate'), 'error', `${cam.label} went offline`);
+          void this.tryRecoverCameraHost(cam.id);
+        } else if (was === false && cam.online) {
+          this.emitAtemToast(this.io.of('/slate'), 'success', `${cam.label} is back online`);
+        }
+      }
     } catch {
-      return; // camera control unavailable — stay quiet, never disturb the shoot
+      // camera control unavailable — stay quiet, never disturb the shoot
     } finally {
       this.cameraHealthInFlight = false;
     }
+  }
 
-    this.cameraHealthState = { cameras, updatedAt: createTimestamp() };
-    this.emitCameraHealthState();
+  /** Stop the Sony bridge process, at most once per idle/disable transition. */
+  private async stopCameraBridge(camera: { stop: () => Promise<void> }): Promise<void> {
+    if (this.cameraBridgeStopped) return;
+    this.cameraBridgeStopped = true;
+    try { await camera.stop(); } catch { /* best-effort */ }
+  }
 
-    for (const cam of cameras) {
-      const was = this.cameraOnlinePrev.get(cam.id);
-      this.cameraOnlinePrev.set(cam.id, cam.online);
-      // Alert only on the online→offline edge, so we warn once rather than nag.
-      if (was === true && !cam.online) {
-        this.emitAtemToast(this.io.of('/slate'), 'error', `${cam.label} went offline`);
-        void this.tryRecoverCameraHost(cam.id);
-      } else if (was === false && cam.online) {
-        this.emitAtemToast(this.io.of('/slate'), 'success', `${cam.label} is back online`);
+  /** One-shot Slack DM to admins when cameras have been dark past the alert window. */
+  private async alertCamerasDark(elapsedMs: number): Promise<void> {
+    try {
+      const [{ getAdmins }, { sendSlackCameraIdleDm }] = await Promise.all([
+        import('@/lib/store/admin-store'),
+        import('./slack-service'),
+      ]);
+      const hours = Math.round(elapsedMs / 3_600_000);
+      for (const email of getAdmins()) {
+        await sendSlackCameraIdleDm({ email, hoursSinceLastConnection: hours });
       }
+      this.log(`[camera] cameras dark ${hours}h — alerted admins`);
+    } catch (err) {
+      this.log('[camera] dark-alert failed', (err as Error).message);
     }
   }
 
@@ -965,6 +1047,7 @@ export class SlateService {
   private async maybePreconnectCameras(): Promise<void> {
     const now = Date.now();
     if (now - this.lastCameraPreconnect < 20_000) return;
+    if (!readStudioConfig().camera.enabled) return;   // tier disabled — don't wake the bridge
     if (getArmedCameras().length === 0) return;
     this.lastCameraPreconnect = now;
     try {
@@ -990,6 +1073,7 @@ export class SlateService {
     target: { emit: (ev: string, data: unknown) => void },
     action: 'start' | 'stop',
   ): Promise<void> {
+    if (!readStudioConfig().camera.enabled) return;   // tier disabled — leave cameras alone
     const armed = getArmedCameras();
     if (armed.length === 0) return;
 

@@ -108,13 +108,11 @@ export function PlaybackPanel({ connection }: Readonly<Props>) {
 
   return (
     <div className="sl-playback-panel">
-      <div className="sl-playback-header">
-        <div>
-          <span className="sl-playback-title">Playback</span>
-        </div>
-        <span className={`sl-playback-badge${connected ? '' : ' sl-playback-badge--off'}`}>
-          {connected ? 'Connected' : 'Not connected'}
-        </span>
+      <div className="st-head">
+        <span className="st-head-title">Playback</span>
+      </div>
+      <div className="at-subline">
+        <span>{connected ? 'Connected' : 'Not connected'}</span>
       </div>
 
       {(playbackUrl || playbackError || loadingClipPath) && (

@@ -1,5 +1,15 @@
 [
   {
+    "timestamp": "2026-07-10T09:10:00Z",
+    "title": "Turn the whole camera tier off — and it idles itself when cameras are away",
+    "summary": "The Cameras tab has a new Camera control switch that stops the Sony bridge entirely when you flip it off — no connection attempts, monitoring, or record fan-out. Even left on, the system now idles itself: after all cameras have been off the network for 10 minutes it stops hammering and quietly waits, then reconnects on its own the moment a camera powers back on. If cameras stay dark for 2 hours, admins get a one-time Slack heads-up. None of this can strand a shoot — a camera you turn on is picked up within seconds."
+  },
+  {
+    "timestamp": "2026-07-10T09:00:00Z",
+    "title": "Cleaner, more consistent studio tabs",
+    "summary": "The studio tabs now share one header style — same size and placement across ATEM, Lighting, Camera, Audio, and Playback. The ATEM tab loses the large program/preview boxes (the live/cued camera still shows on the angle buttons, which are now more square), and the lighting controls collapse onto a single line: status and presets on the left, all-lights on the right, with Refresh and Disconnect tucked into a settings dialog that matches the ATEM one."
+  },
+  {
     "timestamp": "2026-07-10T08:00:00Z",
     "title": "Multiple Sony cameras can finally be controlled at the same time",
     "summary": "Only one camera could ever hold a connection: the studio was telling the Sony SDK that every camera had the same hardware address, so all of them looked like a single device. Connecting one would knock the others offline, and control would rotate unpredictably between them. Each camera's real hardware address, already captured during the network scan, is now used — so all armed cameras can connect and record together. Cameras added by hand rather than by scanning have no hardware address on file; re-run the network scan for those."

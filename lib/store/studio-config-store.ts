@@ -75,6 +75,10 @@ export interface SonyCameraDevice {
 
 export interface CameraConfig {
   provider: CameraProviderKind;
+  // Master switch for all camera control. When false, the Sony bridge is stopped and
+  // no connection attempts, health probes, or REC fan-out happen. Cameras sit off for
+  // days between shoots, so an operator can silence the whole tier here. Defaults true.
+  enabled: boolean;
   model: SonyCameraModel;
   host: string;
   username: string;
@@ -113,6 +117,7 @@ const WLED_DEFAULTS: WledConfig = {
 const DEFAULTS: StudioConfig = {
   camera: {
     provider: 'sony-sdk',
+    enabled: true,
     model: 'fx6',
     host: '',
     username: '',
@@ -153,6 +158,9 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
   const password = camera?.password ?? '';
   const fingerprint = (camera?.fingerprint ?? '').replace(/\s+/g, '');
   const mac = (camera?.mac ?? '').trim().toUpperCase();
+  // Absent → enabled. Only an explicit `false` disables, so pre-existing configs
+  // (written before this field) keep working exactly as before.
+  const enabled = camera?.enabled !== false;
   const port = Number.isFinite(camera?.port) ? Number(camera?.port) : DEFAULTS.camera.port;
 
   // If the stored executable path is for the wrong platform (e.g. a Windows .exe
@@ -168,6 +176,7 @@ function normalizeCameraConfig(camera?: Partial<CameraConfig>): CameraConfig {
   return {
     ...DEFAULTS.camera,
     ...camera,
+    enabled,
     host,
     username,
     password,

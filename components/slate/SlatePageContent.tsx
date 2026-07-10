@@ -793,9 +793,9 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
           {/* ── Camera / Audio soon ── */}
           {studioTab === 'audio' && (
             <div className="sl-audio-panel">
-              <div className="sl-audio-header">
-                <span className="sl-playback-title">Studio Audio</span>
-                <div className="sl-audio-header-actions">
+              <div className="st-head">
+                <span className="st-head-title">Studio Audio</span>
+                <div className="sl-audio-header-actions st-head-actions">
                   {slate.cqMixerState && (
                     <span className={`sl-mixer-chip${slate.cqMixerState.connected ? ' sl-mixer-chip--connected' : ''}`}>
                       <span className="sl-mixer-chip-dot" />

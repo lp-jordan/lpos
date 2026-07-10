@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-07-10 — Studio UI unification + camera enable/auto-idle/dark-alert
+
+**Timestamp:** 2026-07-10T09:00:00Z
+
+**User prompt (verbatim):** "Ok yes, I like your structure. Let's build it. While you're at it, couple more studio changes before I rebuild and restart the server: * Can we unify each studio tabs header? ... I like the size and placement of the ATEM header, so let's just lose the green dot there and then match the other tabs. * Let's lose the giant program/preview boxes in the atem tab for now ... I also want to make the actual camera angle buttons more square ... * Let's put all top level lighting controls on the same line. All lights right justified, then presets left justified with the status dot and gear to the left of that. Let's move the refresh button and the disconnect button inside the settings gear there. Match the settings modal here to what we have in the ATEM tab, as well." Plus, from the prior turn, approval to build the camera enable-toggle + auto-idle + 2h Slack alert. Camera-button shape was chosen via an interactive preview ("i like this size go for it").
+
+**Response summary:** Four changes shipped together.
+1. **Unified tab headers** — new shared `.st-head` / `.st-head-title` treatment (ATEM's larger non-uppercase title, gear right, no status dot) applied to ATEM, Lighting, Camera, Audio, and Playback. Connection status moved to the `.at-subline`.
+2. **ATEM tab** — removed the PROGRAM/PREVIEW monitor boxes (`.at-mons` and its CSS); angle buttons squared to `aspect-ratio: 1.35` with centered content.
+3. **Lighting tab** — collapsed the connection header + master/scenes bar into one `.lp-topline` (status dot + gear + Presets left, All lights right); moved Connect/Disconnect/Refresh + Amaran-port/WLED-IP into a settings modal that reuses the ATEM modal chrome (`.at-backdrop`/`.at-sheet`/`.at-set-block`).
+4. **Camera enable + auto-idle + alert** — `CameraConfig.enabled` master switch (persisted, Cameras-tab toggle, PATCH `/api/studio/camera/config`); `slate-service` auto-idles the bridge after 10 min all-unreachable (TCP-only probing, presence-based resume) and DMs admins once at 2h dark via a new `sendSlackCameraIdleDm`.
+
+**Files changed:**
+- `components/slate/AtemPanel.tsx` — `st-head` header (dot removed); Cameras-tab master toggle + `toggleCamerasEnabled` (immediate PATCH, independent of Save cameras); roster block dims when disabled.
+- `components/slate/CameraPanel.tsx`, `components/slate/PlaybackPanel.tsx`, `components/slate/SlatePageContent.tsx` (audio header) — converted to `st-head`.
+- `components/slate/LightingPanel.tsx` — `st-head` header; `lp-topline` control line; settings modal via `createPortal` reusing ATEM modal classes; `RefreshIcon` kept on the modal's Refresh button.
+- `app/globals.css` — `.st-head*`; removed `.at-dot*` and `.at-mons*`; `.at-cam` aspect-ratio; `.lp-topline*`, `.at-gear--active`, `.at-btn--icon-text`.
+- `lib/store/studio-config-store.ts` — `CameraConfig.enabled` (default true; absent → true).
+- `lib/services/camera-control-service.ts` — `pollCameraHealth({sdkReads})` TCP-only mode.
+- `lib/services/slate-service.ts` — enable/idle/alert state machine in `pollCameraHealthOnce`; `stopCameraBridge`, `alertCamerasDark`; REC roll + preconnect gated on `enabled`; `CameraHealthState` gains `enabled`/`idle`.
+- `lib/services/slack-service.ts` — `sendSlackCameraIdleDm`.
+- `docs/README.md` — new "Studio Tab Chrome" section + camera "Enablement, auto-idle, and alerting".
+
+**Decision rationale:** Introduced a *new* shared header class rather than repurposing `sl-atem-title` (still used by the "Track Control" sub-header) so sub-section labels didn't inherit the tab-title size. Auto-idle keys resume on TCP presence, not a timer, so a powered-on camera is picked up within one 15s cycle and the manual toggle can never strand a shoot — the reason the design favours idle+presence over "notify a human to disable." `enabled` defaults on and treats only an explicit `false` as off, so existing `studio-config.json` is unaffected. The master toggle PATCHes immediately (not via Save cameras) because it's an operational state, not roster editing. Button aspect 1.35 (not a true square) keeps "Cam 1" from cramping; chosen from the interactive preview.
+
+**Alternatives considered:** Redefining `sl-atem-header`/`sl-atem-title` globally to match — rejected, would enlarge sub-headers too. Notify-admins-to-manually-disable (the user's first framing) — folded into auto-idle so no human step is required; the alert stays purely informational. A hard bridge-stop-only toggle without presence resume — rejected as a footgun (forgotten disable = silent no-camera shoot).
+
+**Checks run:** `npx tsc --noEmit` — clean (0 errors) across all touched TS/TSX. No native bridge changes this round. Confirmed reused modal classes (`.at-set-label .t/.s`, `.at-set-btns`, `.at-btn--pri`, `.at-input`, `.at-sw`) exist. Grepped for stale `at-dot`/`at-mon`/`at-title` refs — none. Did not launch a dev server (user runs their own on :3000; live users).
+
+**Assumptions / follow-ups:** Not visually verified in a browser — the running :3000 is the user's live instance and was left untouched; changes render on their next rebuild. Auto-idle/alert thresholds (10 min / 2h) are constants in `slate-service.ts`, easy to tune. `sendSlackCameraIdleDm` no-ops without `SLACK_BOT_TOKEN`. Camera-button aspect can be nudged with one number if it wants to be more square live.
+
 ## 2026-07-10 — Root cause: all three FX6s shared one hardcoded MAC, colliding as a single SDK device
 
 **Timestamp:** 2026-07-10T08:00:00Z

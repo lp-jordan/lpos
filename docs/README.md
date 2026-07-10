@@ -473,6 +473,10 @@ All creation paths (direct + both promotion branches) now provision folders thro
 
 ---
 
+## Studio Tab Chrome
+
+All studio tabs (ATEM, Lighting, Camera, Audio, Playback) share one header treatment: `.st-head` (title left, actions right) + `.st-head-title` (1.15rem, not the old small-caps label), with connection status on an `.at-subline` below rather than a status dot in the header. Settings dialogs share the ATEM modal chrome — `.at-backdrop` (centered) + `.at-sheet` + `.at-set-block`/`.at-set-row`/`.at-btn`. The Lighting tab reuses this exact modal for its Connect/Disconnect/Refresh and Amaran-port/WLED-IP settings, opened from a gear on the single top-control line (`.lp-topline`: status dot + gear + Presets on the left, All lights pushed right). The ATEM tab's PROGRAM/PREVIEW monitor boxes were removed; program/preview state reads off the red/green highlight + LIVE/CUE tags on the angle buttons, which are now `aspect-ratio: 1.35`.
+
 ## Sony Camera Control (FX6 / FX3)
 
 ### What it does
@@ -485,6 +489,15 @@ Drives the studio's Sony cinema bodies over the network: connect, read status (r
 - `lib/store/studio-config-store.ts` — `CameraConfig` (rig-wide) and `SonyCameraDevice` (per-body roster entry).
 - `native/sony-camera-bridge/src/main.cpp` — local HTTP bridge wrapping Sony's Camera Remote SDK, one `CameraSession` per host.
 - `docs/sony-camera-sdk-setup.md` — SDK vendoring + build instructions.
+
+### Enablement, auto-idle, and alerting
+Cameras sit powered-off for days between shoots, so the tier self-manages:
+
+- **Master switch** — `CameraConfig.enabled` (Cameras tab toggle, persisted). When off, `slate-service` stops the bridge and skips all probing/rolling. Defaults on; absent in old configs reads as on. The REC roll and preconnect both bail early when disabled, so nothing respawns the bridge.
+- **Auto-idle** — when every armed camera has been unreachable for `CAMERA_IDLE_AFTER_MS` (10 min), `slate-service` stops the bridge and drops the health poll to TCP-only (`pollCameraHealth({sdkReads:false})`) — no SDK connects, no log churn. The moment any camera answers a TCP probe again, it exits idle and the next sweep reconnects. No operator action, and it can't strand a shoot (a camera you power on is detected within one 15s cycle).
+- **Dark alert** — `CAMERA_ALERT_AFTER_MS` (2h) with no successful SDK connection fires one Slack DM to admins (`sendSlackCameraIdleDm` → `console-alerts`/`admin-store` recipients). Informational, resets on the next successful connection.
+
+`cameraHealthState` broadcast to `/slate` now carries `enabled` and `idle` flags alongside the per-camera list.
 
 ### Data flow (inputs → outputs)
 LPOS UI → `/api/studio/camera/*` → `CameraControlService` → (provider `sony-sdk`) local bridge on `http://127.0.0.1:6107` → Sony Camera Remote SDK → camera over Ethernet.

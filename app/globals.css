@@ -19388,6 +19388,14 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 /* ── Master + scenes toolbar ── */
 .lp-lightbar { align-items: center; display: flex; gap: 9px; }
+/* Unified lighting top line: status dot + gear on the left, Presets next, All lights
+   pushed to the right edge. */
+.lp-topline { align-items: center; display: flex; gap: 9px; margin-top: 14px; }
+.lp-topline-presets { margin-left: 2px; }
+.lp-topline-master { margin-left: auto; }
+.at-gear--active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+/* Refresh button in the lighting settings modal: icon + label inline */
+.at-btn--icon-text { align-items: center; display: inline-flex; gap: 6px; }
 .lp-master-c {
   align-items: center;
   background: var(--surface);
@@ -19687,10 +19695,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
    ═══════════════════════════════════════════════════════════════════════════ */
 .at-panel { display: flex; flex-direction: column; }
 
-.at-head { align-items: center; display: flex; gap: 10px; }
-.at-dot { background: var(--muted); border-radius: 50%; flex: 0 0 auto; height: 9px; width: 9px; }
-.at-dot--on { background: #34d399; box-shadow: 0 0 8px #34d399; }
-.at-title { color: var(--text); flex: 1; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+/* Unified studio-tab header — shared by ATEM, Lighting, Camera, Audio. Title on the
+   left, actions (gear, etc.) on the right; connection status lives on a subline. */
+.st-head { align-items: center; display: flex; gap: 10px; min-height: 34px; }
+.st-head-title { color: var(--text); flex: 1; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+.st-head-actions { align-items: center; display: flex; gap: 8px; }
+
 .at-gear { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; color: var(--muted); cursor: pointer; display: grid; height: 34px; place-items: center; width: 34px; transition: color 0.15s, border-color 0.15s; }
 .at-gear:hover { border-color: var(--accent); color: var(--text); }
 
@@ -19699,21 +19709,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .at-rec-dot { animation: atPulse 1.4s ease-in-out infinite; background: #ff5566; border-radius: 50%; height: 7px; width: 7px; }
 @keyframes atPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-.at-mons { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-top: 16px; }
-.at-mon { aspect-ratio: 16 / 10; background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0 8px, transparent 8px 16px), var(--surface); border: 2px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; padding: 12px 13px; }
-.at-mon-tag { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.12em; }
-.at-mon-cam { color: var(--text); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
-.at-mon--pgm { border-color: #ff5566; box-shadow: 0 0 26px -8px #ff5566, inset 0 0 40px -18px #ff5566; }
-.at-mon--pgm .at-mon-tag { color: #ff8a95; }
-.at-mon--pvw { border-color: #34d399; box-shadow: 0 0 24px -10px #34d399, inset 0 0 40px -20px #34d399; }
-.at-mon--pvw .at-mon-tag { color: #7ef0c0; }
-
 .at-bus { padding-top: 18px; }
 .at-bus-label { align-items: center; display: flex; font-size: 0.72rem; font-weight: 700; gap: 8px; letter-spacing: 0.08em; margin: 0 0 9px; text-transform: uppercase; }
 .at-bus-label--pgm { color: #ff8a95; }
 .at-bus-label--pvw { color: #7ef0c0; }
 .at-grid { display: grid; gap: 9px; grid-template-columns: repeat(3, 1fr); }
-.at-cam { background: var(--surface); border: 1px solid var(--line); border-radius: 13px; color: var(--text); cursor: pointer; font-family: inherit; overflow: hidden; padding: 16px 12px; position: relative; text-align: center; transition: background 0.15s, border-color 0.15s, transform 0.1s; -webkit-tap-highlight-color: transparent; }
+.at-cam { align-items: center; aspect-ratio: 1.35; background: var(--surface); border: 1px solid var(--line); border-radius: 13px; color: var(--text); cursor: pointer; display: flex; font-family: inherit; justify-content: center; overflow: hidden; padding: 8px; position: relative; text-align: center; transition: background 0.15s, border-color 0.15s, transform 0.1s; -webkit-tap-highlight-color: transparent; }
 .at-cam:active { transform: scale(0.97); }
 .at-cam:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .at-cam-n { font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; }

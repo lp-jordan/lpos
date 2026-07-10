@@ -90,9 +90,9 @@ export function CameraPanel({ audioMonitor, onSetAudioMuted }: Props) {
   return (
     <div className={`cam-panel${isFullscreen && !nativeFs ? ' cam-panel--overlay-fs' : ''}`} ref={panelRef}>
       {/* ── Header ── */}
-      <div className="sl-atem-header">
-        <span className="sl-atem-title">Camera Monitoring</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <div className="st-head">
+        <span className="st-head-title">Camera Monitoring</span>
+        <div className="st-head-actions">
 
           {/* Audio monitor button (ATEM mode only) */}
           {source === 'atem' && (

@@ -607,8 +607,13 @@ export class CameraControlService {
    * (no SDK session); armed cameras additionally get a real status read, which
    * doubles as a keepalive so their session stays connected between takes.
    * Purely informational — never throws, never blocks recording.
+   *
+   * With `sdkReads: false` (idle mode) it does TCP probes only — no SDK calls, so
+   * the bridge is never spawned. Used while the tier is idled to detect a camera
+   * returning to the network without paying connect cost every cycle.
    */
-  async pollCameraHealth(): Promise<CameraHealth[]> {
+  async pollCameraHealth(opts: { sdkReads?: boolean } = {}): Promise<CameraHealth[]> {
+    const sdkReads = opts.sdkReads !== false;
     const roster = readStudioConfig().camera.cameras.filter((c) => c.host.length > 0);
     return Promise.all(roster.map(async (device): Promise<CameraHealth> => {
       const base = {
@@ -620,7 +625,7 @@ export class CameraControlService {
       };
 
       if (!(await probeReachable(device.host))) return offline;
-      if (!device.armed) {
+      if (!device.armed || !sdkReads) {
         return { ...base, online: true, recording: false, batteryPercent: null, remainingSeconds: null };
       }
 

@@ -91,6 +91,7 @@ export function AtemPanel({
 
   // ── Sony camera roster (armed cams follow the studio REC button) ──
   const [cameras, setCameras] = useState<SonyCameraDevice[]>([]);
+  const [camEnabled, setCamEnabled] = useState(true);
   const [camSaving, setCamSaving] = useState(false);
   const [camMsg, setCamMsg] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -103,12 +104,29 @@ export function AtemPanel({
     let cancelled = false;
     fetch('/api/studio/camera/config')
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { camera?: { cameras?: SonyCameraDevice[] } } | null) => {
-        if (!cancelled) setCameras(Array.isArray(data?.camera?.cameras) ? data!.camera!.cameras! : []);
+      .then((data: { camera?: { cameras?: SonyCameraDevice[]; enabled?: boolean } } | null) => {
+        if (cancelled) return;
+        setCameras(Array.isArray(data?.camera?.cameras) ? data!.camera!.cameras! : []);
+        setCamEnabled(data?.camera?.enabled !== false);
       })
       .catch(() => { /* leave roster empty on failure */ });
     return () => { cancelled = true; };
   }, [settingsOpen]);
+
+  // Master switch — persists immediately (independent of the roster's Save button).
+  async function toggleCamerasEnabled() {
+    const next = !camEnabled;
+    setCamEnabled(next);
+    try {
+      await fetch('/api/studio/camera/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera: { enabled: next } }),
+      });
+    } catch {
+      setCamEnabled(!next);   // roll back on failure
+    }
+  }
 
   function updateCamera(id: string, patch: Partial<SonyCameraDevice>) {
     setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -212,10 +230,9 @@ export function AtemPanel({
   return (
     <div className="at-panel">
 
-      {/* ── Header ── */}
-      <div className="at-head">
-        <span className={`at-dot${connected ? ' at-dot--on' : ''}`} />
-        <span className="at-title">ATEM</span>
+      {/* ── Header (unified studio header: title + gear, status on the subline) ── */}
+      <div className="st-head">
+        <span className="st-head-title">ATEM</span>
         <button className="at-gear" type="button" onClick={onSettingsToggle} aria-label="ATEM settings">
           <GearIcon />
         </button>
@@ -223,18 +240,6 @@ export function AtemPanel({
       <div className="at-subline">
         <span>{connectionText}</span>
         {isRecording && <span className="at-rec"><span className="at-rec-dot" />REC</span>}
-      </div>
-
-      {/* ── Monitors: what's live / what's cued ── */}
-      <div className="at-mons">
-        <div className="at-mon at-mon--pgm">
-          <span className="at-mon-tag">● PROGRAM</span>
-          <span className="at-mon-cam">{programInput ? `Cam ${programInput}` : '—'}</span>
-        </div>
-        <div className="at-mon at-mon--pvw">
-          <span className="at-mon-tag">● PREVIEW</span>
-          <span className="at-mon-cam">{previewInput ? `Cam ${previewInput}` : '—'}</span>
-        </div>
       </div>
 
       {/* ── Program bus (tap = on air) ── */}
@@ -408,8 +413,25 @@ export function AtemPanel({
 
             {settingsTab === 'cameras' && (
             <div className="at-tabpanel" role="tabpanel" id="at-tabpanel-cameras" aria-labelledby="at-tab-cameras">
+            {/* Master switch — turn the whole camera tier off when cameras are stored away */}
+            <div className="at-set-row">
+              <div className="at-set-label">
+                <div className="t">Camera control</div>
+                <div className="s">{camEnabled
+                  ? 'On — cameras connect, monitor, and follow REC. Auto-idles when all are off for 10 min.'
+                  : 'Off — Sony bridge stopped. No connections, monitoring, or REC fan-out.'}</div>
+              </div>
+              <button
+                type="button"
+                className={`at-sw${camEnabled ? ' at-sw--on' : ''}`}
+                onClick={() => void toggleCamerasEnabled()}
+                aria-pressed={camEnabled}
+                aria-label="Camera control"
+              ><span /></button>
+            </div>
+
             {/* Sony cameras — armed cams start/stop with the studio REC button */}
-            <div className="at-set-block">
+            <div className="at-set-block" style={camEnabled ? undefined : { opacity: 0.5, pointerEvents: 'none' }}>
               <div className="at-set-label">
                 <div className="t">Sony cameras</div>
                 <div className="s">Armed cameras record/stop with the REC button (best-effort — they never block ATEM + mixer)</div>

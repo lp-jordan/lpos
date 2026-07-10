@@ -148,6 +148,24 @@ export async function sendSlackColdStorageReviewDm(input: {
   await postDm(slackUserId, lines.join('\n'));
 }
 
+export async function sendSlackCameraIdleDm(input: {
+  email: string;
+  hoursSinceLastConnection: number;
+}): Promise<void> {
+  if (!TOKEN) return;
+
+  const slackUserId = await lookupSlackUserId(input.email);
+  if (!slackUserId) return;
+
+  const lines: string[] = [
+    ':camera_with_flash: *Studio cameras have been dark*',
+    `No Sony camera has connected in about ${input.hoursSinceLastConnection}h. The camera bridge has auto-idled and will resume on its own the moment a camera comes back on the network.`,
+    'Nothing to do unless you expected a camera to be live — this is just a heads-up.',
+  ];
+
+  await postDm(slackUserId, lines.join('\n'));
+}
+
 async function postDm(slackUserId: string, text: string): Promise<void> {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
