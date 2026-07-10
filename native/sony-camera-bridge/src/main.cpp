@@ -277,6 +277,22 @@ std::string formatIso(std::uint32_t value) {
   return std::to_string(raw);
 }
 
+// Errors that mean "this handle is no longer a live session" rather than "the
+// camera said no". The SDK only clears our `connected` flag when OnDisconnected
+// fires; a session that dies without it leaves the handle believed-good, and every
+// later call fails with one of these forever. Seeing one is the cue to rebuild the
+// session rather than surface the error.
+bool isStaleSessionError(SDK::CrError error) {
+  switch (error) {
+    case SDK::CrError_Api_InvalidCalled:
+    case SDK::CrError_Generic_InvalidHandle:
+    case SDK::CrError_Connect_Disconnected:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Turn a Connect() CrError into something an operator can act on. Only the codes
 // this rig actually hits are named; anything else falls through to the raw hex.
 // Do not guess at the cause here — the SSH codes are the ONLY ones that mean the
@@ -518,9 +534,18 @@ public:
     };
     SDK::CrDeviceProperty* properties = nullptr;
     CrInt32 count = 0;
-    const SDK::CrError error = SDK::GetSelectDeviceProperties(handle, static_cast<CrInt32u>(codes.size()), const_cast<CrInt32u*>(codes.data()), &properties, &count);
+    SDK::CrError error = SDK::GetSelectDeviceProperties(handle, static_cast<CrInt32u>(codes.size()), const_cast<CrInt32u*>(codes.data()), &properties, &count);
+    if (isStaleSessionError(error)) {
+      std::cerr << "[sony-camera-bridge] status read on " << host << " hit a stale session (0x"
+                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      reconnectLocked();
+      error = SDK::GetSelectDeviceProperties(handle, static_cast<CrInt32u>(codes.size()), const_cast<CrInt32u*>(codes.data()), &properties, &count);
+    }
     if (CR_FAILED(error)) {
-      throw std::runtime_error("Failed to load camera status from Sony SDK.");
+      std::ostringstream message;
+      message << "Failed to load camera status from " << host
+              << " (err=0x" << std::hex << static_cast<CrInt32u>(error) << std::dec << ").";
+      throw std::runtime_error(message.str());
     }
 
     // RecorderMainStatus (cinema) is authoritative over RecordingState (Alpha)
@@ -613,15 +638,26 @@ public:
   // firmware, no/full card, session held by another controller). Sony's sample
   // discards it; doing the same turned a refused record into a silent success that
   // propagated all the way to the operator UI. Fail loudly instead.
-  void pressMovieRecordButtonLocked() {
+  // One full press. Returns the first failing half's error, or CrError_None.
+  SDK::CrError sendRecToggleLocked() {
     const SDK::CrError down = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Down);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     const SDK::CrError up = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
-    if (CR_FAILED(down) || CR_FAILED(up)) {
+    return CR_FAILED(down) ? down : up;
+  }
+
+  void pressMovieRecordButtonLocked() {
+    SDK::CrError error = sendRecToggleLocked();
+    if (isStaleSessionError(error)) {
+      std::cerr << "[sony-camera-bridge] REC toggle on " << host << " hit a stale session (0x"
+                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      reconnectLocked();
+      error = sendRecToggleLocked();
+    }
+    if (CR_FAILED(error)) {
       std::ostringstream message;
-      message << "Camera at " << host << " refused the REC toggle (down=0x"
-              << std::hex << static_cast<CrInt32u>(down)
-              << ", up=0x" << static_cast<CrInt32u>(up) << std::dec << ").";
+      message << "Camera at " << host << " refused the REC toggle (err=0x"
+              << std::hex << static_cast<CrInt32u>(error) << std::dec << ").";
       std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
       throw std::runtime_error(message.str());
     }
@@ -751,6 +787,15 @@ public:
   void close() {
     std::lock_guard<std::mutex> lock(mutex);
     resetConnectionLocked();
+  }
+
+  // Tear the session down and build a new one, even if the callback still claims
+  // we're connected. ensureConnectedLocked() alone won't do this: its early-return
+  // trusts `callback.isConnected()`, which is precisely what's wrong on a session
+  // that died without OnDisconnected firing. Caller must hold the mutex.
+  void reconnectLocked() {
+    resetConnectionLocked();   // clears handle, so ensureConnected can't early-return
+    ensureConnectedLocked();
   }
 
   // Drop every SDK object tied to this camera. Caller must hold the mutex.

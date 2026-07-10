@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Heal stale Sony SDK sessions instead of failing on them
+
+**Timestamp:** 2026-07-10T03:00:00Z
+
+**User prompt (verbatim):** "[camera-control] bridge error: [sony-camera-bridge] Camera at 172.20.10.56 refused the REC toggle (down=0x8402, up=0x8402). / [camera-control] start FAILED on Cam 1 (172.20.10.56) ... / [camera-control] stop FAILED on Cam 1 (172.20.10.56): Failed to load camera status from Sony SDK." plus the note that these predate the previous round's rebuild.
+
+**Response summary:** Decoded `0x8402` = `CrError_Api` (0x8400) + 2 = `CrError_Api_InvalidCalled` — the SDK rejecting the call for the session's state, not the camera refusing the command. The same handle then failed its property read. Both symptoms are one cause: the SDK session had died, but `DeviceCallback::connected` only clears when `OnDisconnected` fires, so `ensureConnectedLocked()`'s `if (handle != 0 && callback.isConnected()) return;` early-return kept trusting a dead handle. Every subsequent call failed permanently. The previous round's `resetConnectionLocked()` didn't help here: it only runs once we already *know* we're disconnected. Added stale-session detection with a force-reconnect-and-retry-once around both failing operations.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — new free function `isStaleSessionError()` (`CrError_Api_InvalidCalled`, `CrError_Generic_InvalidHandle`, `CrError_Connect_Disconnected`); new `reconnectLocked()` which resets first so `ensureConnectedLocked()` cannot early-return on the stale `connected` flag; `pressMovieRecordButtonLocked()` split so `sendRecToggleLocked()` returns the first failing half's code, then reconnects and retries once on a stale session; `getStatus()` does the same around `GetSelectDeviceProperties` and now reports the host + error code instead of a bare string.
+- `docs/README.md` — new "Stale sessions" subsection documenting the `connected`-flag gap, the codes involved, and the retry-once contract.
+
+**Decision rationale:** Retrying once (not looping) keeps a genuinely refusing camera from being hammered, while a session that merely went stale heals without operator involvement. Scoped the retry to the two operations the log actually implicated rather than wrapping every SDK call, to avoid masking real refusals behind reconnect churn. `sendRecToggleLocked()` returns the first failing half's error rather than both, since a Down without an Up does not register on the body — there's no partial-press state to reason about. The reconnect deliberately goes through `reconnectLocked()` rather than clearing the callback flag, because the flag is owned by the SDK's callback thread and racing it would be worse than rebuilding the object.
+
+**Alternatives considered:** Polling connection liveness on a timer — rejected, it adds a background SDK call per camera and still races the real command. Treating `CrError_Api_InvalidCalled` as fatal and forcing the operator to reconnect manually — rejected, this is precisely the failure the bridge can recover from unaided.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean, no warnings.
+
+**Assumptions / follow-ups:** Why Cam 1's session died in the first place is still unknown — plausibly collateral from the failed `.44`/`.189` connect attempts churning under `CrReconnecting_ON`, or the body dropping its session independently. If `.56` keeps going stale after this build, that root cause needs its own look. The `FailBusy` on `.44`/`.189` from the prior round remains outstanding (power-cycle pending). Windows bridge still needs a rebuild. Not verified against live hardware.
+
 ## 2026-07-10 — Decode Sony connect errors; fix retry poisoning that masked the real failure
 
 **Timestamp:** 2026-07-10T02:00:00Z

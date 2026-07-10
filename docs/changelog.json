@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T03:00:00Z",
+    "title": "Cameras recover on their own when their connection goes stale",
+    "summary": "If a camera's control session quietly dies, the studio would keep talking to the dead connection and every record, stop, and status check would fail until the bridge was restarted. The bridge now recognizes a dead session, rebuilds the connection, and retries once — so a stale connection heals itself instead of taking the camera out for the rest of the shoot. Genuine refusals from the camera are still reported."
+  },
+  {
     "timestamp": "2026-07-10T02:00:00Z",
     "title": "Camera connection errors now say what actually went wrong",
     "summary": "When a Sony camera fails to connect, the log now explains the reason in plain language instead of always blaming the camera's username and password. The most common cause is that another app or a leftover session is already controlling the camera — an FX6 only allows one remote connection at a time. Also fixed a bug where a single failed connection attempt would poison every retry afterwards with a misleading follow-up error, hiding the original reason the camera refused."

@@ -514,6 +514,16 @@ An FX6 accepts **one** remote SDK session. Content Browser Mobile, Monitor & Con
 
 `ensureConnectedLocked()` calls `resetConnectionLocked()` before every connect attempt. `Connect()` is issued with `CrReconnecting_ON`, so a failed attempt leaves the SDK retrying against a half-open camera object; connecting again on that object returns `CrWarning_Connect_Already` indefinitely and masks the real first-attempt error. Always build a fresh camera object.
 
+### Stale sessions
+`callback.isConnected()` only goes false when `OnDisconnected` fires. A session that dies without it leaves the handle believed-good, and `ensureConnectedLocked()`'s early-return then trusts it — so every later call fails permanently:
+
+| Code | Where it shows up |
+|---|---|
+| `0x8402` `CrError_Api_InvalidCalled` | `SendCommand` (REC toggle) |
+| — | `GetSelectDeviceProperties` (status read) |
+
+`isStaleSessionError()` catches `CrError_Api_InvalidCalled`, `CrError_Generic_InvalidHandle`, and `CrError_Connect_Disconnected`. The REC toggle and the status read each call `reconnectLocked()` (force-reset, then reconnect — bypassing the early-return) and retry **once** before surfacing the error. Only genuine camera refusals reach the operator.
+
 ### Recording
 Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.
 
