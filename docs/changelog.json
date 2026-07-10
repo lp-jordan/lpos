@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T12:30:00Z",
+    "title": "Studio wording and lighting layout polish",
+    "summary": "Clearer captions on the camera settings (what the Camera control switch and Sony cameras section do), and the lighting tab's top controls now sit tight under the header with All lights on the left and the status, settings, and Presets grouped on the right."
+  },
+  {
     "timestamp": "2026-07-10T12:00:00Z",
     "title": "FX3 cameras now show status, not just connect",
     "summary": "An FX3 would connect but show no status — battery, recording state, and the rest stayed blank. The cause: the studio decided whether a camera was reachable by checking a single network port that the FX3 doesn't use, so it was treated as offline despite a working connection. Reachability now checks the ports these cameras actually answer on (including the one the FX3 uses), so FX3 bodies report status like the FX6s. A one-time power-cycle may be needed if an FX3 is still holding an old session."

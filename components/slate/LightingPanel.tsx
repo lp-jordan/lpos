@@ -650,40 +650,44 @@ export function LightingPanel({ isAdmin }: { isAdmin: boolean }) {
         <span className="st-head-title">Lighting Control</span>
       </div>
 
-      {/* ═══ Top control line: [dot] [gear] [Presets] … [All lights] ═══ */}
+      {/* ═══ Top control line: [All lights] … [dot] [gear] [Presets] ═══ */}
       <div className="lp-topline">
-        <span className={`lp-lighting-dot${connected ? ' lp-lighting-dot--on' : ''}`} title={connected ? 'Connected' : 'Not connected'} />
-        <button
-          type="button"
-          className={`at-gear${settingsOpen ? ' at-gear--active' : ''}`}
-          onClick={() => setSettingsOpen((v) => !v)}
-          aria-label="Lighting settings"
-        >
-          <GearIcon />
-        </button>
-        {showSections && (
+        <div className="lp-topline-group">
+          {showSections && (
+            <button
+              type="button"
+              className={`lp-master-c${anyOn ? ' lp-master-c--on' : ''}`}
+              onClick={() => void handleAllPower(!anyOn)}
+              disabled={bulkBusy || (fixtures.length === 0 && wledPower === null)}
+              aria-pressed={anyOn}
+              title={anyOn ? 'Turn all lights off' : 'Turn all lights on'}
+            >
+              <span className="lp-master-pg"><TilePowerGlyph /></span>
+              <span className="lp-master-label">{bulkBusy ? 'Working…' : 'All lights'}</span>
+            </button>
+          )}
+        </div>
+        <div className="lp-topline-group">
+          <span className={`lp-lighting-dot${connected ? ' lp-lighting-dot--on' : ''}`} title={connected ? 'Connected' : 'Not connected'} />
           <button
             type="button"
-            className="lp-scene lp-topline-presets"
-            onClick={() => setPresetsOpen(true)}
-            title="Apply, save, or edit presets"
+            className={`at-gear${settingsOpen ? ' at-gear--active' : ''}`}
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-label="Lighting settings"
           >
-            Presets
+            <GearIcon />
           </button>
-        )}
-        {showSections && (
-          <button
-            type="button"
-            className={`lp-master-c lp-topline-master${anyOn ? ' lp-master-c--on' : ''}`}
-            onClick={() => void handleAllPower(!anyOn)}
-            disabled={bulkBusy || (fixtures.length === 0 && wledPower === null)}
-            aria-pressed={anyOn}
-            title={anyOn ? 'Turn all lights off' : 'Turn all lights on'}
-          >
-            <span className="lp-master-pg"><TilePowerGlyph /></span>
-            <span className="lp-master-label">{bulkBusy ? 'Working…' : 'All lights'}</span>
-          </button>
-        )}
+          {showSections && (
+            <button
+              type="button"
+              className="lp-scene"
+              onClick={() => setPresetsOpen(true)}
+              title="Apply, save, or edit presets"
+            >
+              Presets
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <p className="lp-lighting-error">{error}</p>}

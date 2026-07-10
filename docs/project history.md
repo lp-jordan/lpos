@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-07-10 — Studio copy + lighting top-line tweaks
+
+**Timestamp:** 2026-07-10T12:30:00Z
+
+**User prompt (verbatim):** "Before I restart - Change the editorial stuff beneath camera control to: Enable/Disable connection to Sony camera's. And under Sony Cameras: Connect to and arm Sony cameras over the network. Ditch the small gap on the lighting tab between the head and the row of controls. Also, flip those controls - all lights should be left justified and the other batch right justified."
+
+**Response summary:** Copy + layout polish, no logic changes. Camera-control toggle caption is now the static "Enable/Disable connection to Sony cameras." (was a two-branch on/off description). Sony-cameras block caption is now "Connect to and arm Sony cameras over the network." Lighting top-control line flipped — All lights left-justified, the status dot + gear + Presets grouped and right-justified (via two `.lp-topline-group` flex groups with `justify-content: space-between`) — and the gap between the lighting header and the control row removed (`.lp-topline` margin-top 0).
+
+**Files changed:**
+- `components/slate/AtemPanel.tsx` — two static captions in the Cameras settings tab.
+- `components/slate/LightingPanel.tsx` — `lp-topline` split into a left group (All lights) and a right group (dot, gear, Presets).
+- `app/globals.css` — `.lp-topline` now `justify-content: space-between`, `margin-top: 0`; added `.lp-topline-group`; removed `.lp-topline-presets`/`.lp-topline-master` margin helpers.
+
+**Decision rationale:** Used two flex groups with space-between rather than `margin-left: auto` so the left/right split holds cleanly whether or not the connected-only controls (All lights, Presets) are present — when disconnected, the gear stays right-aligned for opening settings. Fixed the toggle caption to a static description since the on/off state is already shown by the switch itself. Kept the user's phrasing intent while correcting "camera's" → "cameras".
+
+**Alternatives considered:** Reordering the single flat flex row with `margin-left: auto` on the right group's first child — rejected, brittle when the master/Presets buttons are conditionally absent.
+
+**Checks run:** `npx tsc --noEmit` — clean. Grepped for stale `lp-topline-presets`/`lp-topline-master` — none.
+
+**Assumptions / follow-ups:** Not visually verified (user's live :3000 left untouched); renders on their next restart. `margin-top: 0` removes the head/controls gap per request — trivially nudged if it reads too tight live.
+
 ## 2026-07-10 — FX3 shows no status: liveness probe only checked port 80
 
 **Timestamp:** 2026-07-10T12:00:00Z

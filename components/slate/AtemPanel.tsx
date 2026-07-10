@@ -417,9 +417,7 @@ export function AtemPanel({
             <div className="at-set-row">
               <div className="at-set-label">
                 <div className="t">Camera control</div>
-                <div className="s">{camEnabled
-                  ? 'On — cameras connect, monitor, and follow REC. Auto-idles when all are off for 10 min.'
-                  : 'Off — Sony bridge stopped. No connections, monitoring, or REC fan-out.'}</div>
+                <div className="s">Enable/Disable connection to Sony cameras.</div>
               </div>
               <button
                 type="button"
@@ -434,7 +432,7 @@ export function AtemPanel({
             <div className="at-set-block" style={camEnabled ? undefined : { opacity: 0.5, pointerEvents: 'none' }}>
               <div className="at-set-label">
                 <div className="t">Sony cameras</div>
-                <div className="s">Armed cameras record/stop with the REC button (best-effort — they never block ATEM + mixer)</div>
+                <div className="s">Connect to and arm Sony cameras over the network.</div>
               </div>
 
               {cameras.length === 0 && (

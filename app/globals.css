@@ -19388,11 +19388,10 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 /* ── Master + scenes toolbar ── */
 .lp-lightbar { align-items: center; display: flex; gap: 9px; }
-/* Unified lighting top line: status dot + gear on the left, Presets next, All lights
-   pushed to the right edge. */
-.lp-topline { align-items: center; display: flex; gap: 9px; margin-top: 14px; }
-.lp-topline-presets { margin-left: 2px; }
-.lp-topline-master { margin-left: auto; }
+/* Unified lighting top line: All lights left, status dot + gear + Presets right.
+   No gap under the header — the head sits directly above the controls. */
+.lp-topline { align-items: center; display: flex; justify-content: space-between; gap: 9px; margin-top: 0; }
+.lp-topline-group { align-items: center; display: flex; gap: 9px; }
 .at-gear--active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 /* Refresh button in the lighting settings modal: icon + label inline */
 .at-btn--icon-text { align-items: center; display: inline-flex; gap: 6px; }
