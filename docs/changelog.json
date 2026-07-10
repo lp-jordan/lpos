@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T10:00:00Z",
+    "title": "Multi-camera control fix now actually reaches the cameras",
+    "summary": "The recent fix that gives each camera its own hardware address to the Sony SDK wasn't taking effect on the status/monitoring path: the address was being scrambled in transit, so the system kept treating all cameras as one and they fought over a single connection. That transit bug is fixed, so the per-camera addressing now applies everywhere. A camera still stuck holding an old connection from before may need one power-cycle to clear."
+  },
+  {
     "timestamp": "2026-07-10T09:10:00Z",
     "title": "Turn the whole camera tier off — and it idles itself when cameras are away",
     "summary": "The Cameras tab has a new Camera control switch that stops the Sony bridge entirely when you flip it off — no connection attempts, monitoring, or record fan-out. Even left on, the system now idles itself: after all cameras have been off the network for 10 minutes it stops hammering and quietly waits, then reconnects on its own the moment a camera powers back on. If cameras stay dark for 2 hours, admins get a one-time Slack heads-up. None of this can strand a shoot — a camera you turn on is picked up within seconds."

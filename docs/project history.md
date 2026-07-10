@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — URL-decode bridge query params so the real MAC actually reaches the SDK
+
+**Timestamp:** 2026-07-10T10:00:00Z
+
+**User prompt (verbatim):** Post-rebuild LPOS log showing every camera warning `no MAC for <ip> — using a placeholder` and the collision symptoms returning (0x820b, 0x20019, 0x8005 stale, 45s timeouts) despite the roster containing real MACs.
+
+**Response summary:** The MAC-forwarding change from earlier today was correct but a layer below it was silently corrupting the value. LPOS sends bridge parameters through `encodeURIComponent`, so a MAC reaches the bridge as `9C%3A50%3AD1%3A…` in the GET query string. The bridge's `getQueryParam` returned that text verbatim — no percent-decoding — so `parseMacAddress` (which keeps only hex chars) turned each `%3A` colon into stray `3A` hex, blew past 12 characters, and returned "no MAC". Every GET-path connect (status/health/preconnect) then fell back to the placeholder MAC and the three bodies collided as one SDK device again. Confirmed the roster still holds correct MACs, added `urlDecode` to `getQueryParam`, and unit-tested that the real encoded string round-trips to `9C:50:D1:AD:48:9C` (and that the raw encoded form correctly fails).
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — new `urlDecode()` (percent-decode; `+` left as-is since `encodeURIComponent` emits `%20`); `getQueryParam` now decodes the extracted value.
+- `docs/README.md` — documented the encoding pitfall under Device identity (MAC).
+
+**Decision rationale:** Fixed it in `getQueryParam` rather than stripping colons on the LPOS side, because the bug is general: the same path also carries `password`/`username`/`fingerprint`, so any special character in a query-sent password was silently mismatching too. Decoding at the single choke point fixes MAC and credentials at once and matches what the JSON-body path already effectively gets. Left `+` untouched — `encodeURIComponent` never emits it, and treating `+` as space would be wrong for these values.
+
+**Alternatives considered:** Sending the MAC as bare hex (no colons) to dodge encoding — rejected, it only patches the one symptom and leaves the password-encoding bug latent. Moving all params to the POST body — larger change, and GET status is the hot path.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean. Standalone unit test of `urlDecode` + `parseMacAddress`: `9C%3A50%3AD1%3AAD%3A48%3A9C` → decoded `9C:50:D1:AD:48:9C` → 6 bytes; raw-encoded input correctly fails to parse.
+
+**Assumptions / follow-ups:** This is the missing piece for real multi-camera sessions — with decoding in place the three FX6s should present distinct MACs to the SDK and hold simultaneous sessions. Still unverified against live hardware (needs the rebuilt bridge running). Any camera holding a pre-existing session from the collision era still needs its one power-cycle. Windows bridge needs a rebuild.
+
 ## 2026-07-10 — Studio UI unification + camera enable/auto-idle/dark-alert
 
 **Timestamp:** 2026-07-10T09:00:00Z

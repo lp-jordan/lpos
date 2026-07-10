@@ -201,6 +201,27 @@ std::optional<std::uint32_t> tryParseUint(const std::string& text) {
   }
 }
 
+// Percent-decode a query value. LPOS sends values through encodeURIComponent, so a
+// MAC arrives as "9C%3A50%3A..." and a password may contain %-escapes. Without this,
+// getQueryParam returned the raw encoded text: the MAC's %3A colons leaked "3A" into
+// the hex parse (→ no MAC → cameras collide on the placeholder), and any special char
+// in a password silently mismatched. '+' is left as-is (encodeURIComponent emits %20).
+std::string urlDecode(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (value[i] == '%' && i + 2 < value.size()
+        && std::isxdigit(static_cast<unsigned char>(value[i + 1]))
+        && std::isxdigit(static_cast<unsigned char>(value[i + 2]))) {
+      out.push_back(static_cast<char>(std::stoi(value.substr(i + 1, 2), nullptr, 16)));
+      i += 2;
+    } else {
+      out.push_back(value[i]);
+    }
+  }
+  return out;
+}
+
 std::string getQueryParam(const std::string& query, const std::string& key) {
   std::string pattern = key + "=";
   size_t start = 0;
@@ -209,7 +230,7 @@ std::string getQueryParam(const std::string& query, const std::string& key) {
     const size_t end = amp == std::string::npos ? query.size() : amp;
     const std::string part = query.substr(start, end - start);
     if (part.rfind(pattern, 0) == 0) {
-      return part.substr(pattern.size());
+      return urlDecode(part.substr(pattern.size()));
     }
     if (amp == std::string::npos) break;
     start = amp + 1;
