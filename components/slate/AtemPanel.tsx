@@ -389,10 +389,19 @@ export function AtemPanel({
 
               {cameras.map((cam) => {
                 const health = cameraHealth.find((h) => h.id === cam.id);
-                const dot = !health ? 'unknown' : !health.online ? 'offline' : health.recording ? 'recording' : 'online';
+                // `online` is only a TCP probe on :80. A camera can answer that and still
+                // reject the SDK session (wrong Access Auth password, held by another
+                // controller) — that lands in health.error. Showing those as plain "Online"
+                // is what made a failed REC look like a broken camera rather than bad creds.
+                const dot = !health ? 'unknown'
+                  : !health.online ? 'offline'
+                  : health.error ? 'error'
+                  : health.recording ? 'recording'
+                  : 'online';
                 const dotTitle = !health
                   ? 'Not checked yet — save to start monitoring'
                   : !health.online ? `Offline (${cam.host})`
+                  : health.error ? `Reachable but SDK error (${cam.host}): ${health.error}`
                   : health.recording ? `Recording (${cam.host})`
                   : `Online (${cam.host})`;
                 return (
@@ -425,6 +434,25 @@ export function AtemPanel({
                     <option value="fx6">FX6</option>
                     <option value="fx3">FX3</option>
                   </select>
+                  {/* Access Authentication is set per body. Blank falls back to the
+                      rig-wide credentials in the Camera panel. */}
+                  <input
+                    className="at-input at-cam-user"
+                    placeholder="user"
+                    autoComplete="off"
+                    value={cam.username ?? ''}
+                    onChange={(e) => updateCamera(cam.id, { username: e.target.value })}
+                    title="Access Authentication user for this camera (blank = rig default)"
+                  />
+                  <input
+                    className="at-input at-cam-pass"
+                    placeholder="password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={cam.password ?? ''}
+                    onChange={(e) => updateCamera(cam.id, { password: e.target.value })}
+                    title="Access Authentication password for this camera (blank = rig default)"
+                  />
                   <button
                     type="button"
                     className="at-cam-del"

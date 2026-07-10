@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-07-10 — Per-camera Access Authentication credentials for the Sony FX6 roster
+
+**Timestamp:** 2026-07-10T00:00:00Z
+
+**User prompt (verbatim):** "So here's my questino - I can connect to all three of the fx6's, but only our test cam can start/stop record. Do the other two need some sort of verificatoin or login info as well?" followed by "Yes, I want logs available to us and yes, I have password2 and password3 set on the two cams that are not working."
+
+**Response summary:** Yes — the two failing FX6s did need their own login info, and LPOS had no way to supply it. `SonyCameraDevice` (the multi-camera roster entry) carried only `id/label/host/model/armed/mac`; `username`/`password`/`fingerprint` lived rig-wide on `CameraConfig`. `CameraControlService.deviceOverride()` passed only `{host, ip, model}` per camera, so every body authenticated with the first camera's credentials. Cams 2 and 3 (distinct Access Authentication passwords) failed `SDK::Connect`, while the roster status dot kept showing them "Online" because that indicator is a bare TCP probe on port 80 that never opens an SDK session. The failure therefore presented as "connects fine, won't record." Made credentials per-camera (falling back to the rig-wide values when blank), and made every silent failure path along the way loud.
+
+**Files changed:**
+- `lib/store/studio-config-store.ts` — `SonyCameraDevice` gains optional `username`/`password`/`fingerprint`; `normalizeCameraRoster` preserves them.
+- `lib/services/camera-control-service.ts` — `deviceOverride()` forwards per-camera credentials (blank fields fall through to `CameraConfig` via the existing `{...stored, ...override}` merge in `resolveCameraConfig`); `rollOne()` now logs per-camera start/stop success and failure.
+- `native/sony-camera-bridge/src/main.cpp` — `pressMovieRecordButtonLocked()` checks both `SendCommand` `CrError`s and throws with the hex codes instead of discarding them; `SDK::Connect` failure now reports its error code and names the user it authenticated as; start/stop log their idempotency skips.
+- `components/slate/AtemPanel.tsx` — roster rows gain user/password inputs; the liveness dot gains an `error` state so a TCP-reachable-but-SDK-broken camera no longer renders green.
+- `app/globals.css` — `.at-cam-dot--error` (amber), `.at-cam-user` / `.at-cam-pass` row widths.
+
+**Decision rationale:** Access Authentication is configured on each camera body, so credentials are per-device state and belonged on the roster entry, not on the shared rig config. Blank-field fallback to `CameraConfig` keeps existing single-camera rigs working with no migration. The bridge discarded `SendCommand`'s return code (following Sony's own sample), which is what let a refused REC toggle propagate as success — checking it converts the failure into a real error message at the source. The health dot was reporting reachability as if it were SDK connectivity, which actively misdirected this diagnosis; `CameraHealth.error` was already populated for armed cameras and just needed rendering.
+
+**Alternatives considered:** Storing camera passwords in Doppler was rejected — these are per-device operational settings an operator changes on the camera body, not deployment secrets, and `data/studio-config.json` (gitignored) already holds the rig-wide password. Leaving `SendCommand` unchecked to match Sony's sample was rejected: the sample is a CLI where the user sees the camera, whereas LPOS drives a remote roll and needs the error.
+
+**Checks run:** `npx tsc --noEmit` — clean (0 errors). `bash scripts/build-sony-camera-bridge.sh` — bridge compiles and links.
+
+**Assumptions / follow-ups:** The bridge binary must be rebuilt on the Windows studio machine before the new error surfacing is live there (`scripts/build-sony-camera-bridge.cmd`). Passwords for Cams 2 and 3 must be entered in the Sony cameras roster (ATEM panel) and saved — not set here, since `data/` is gitignored and the values weren't provided. Regenerated `native/sony-camera-bridge/build-mac/` CMake artifacts were left unstaged; untracked foreign `C:\...docx` left unstaged. Not verified against live hardware.
+
 ## 2026-07-08 — Fix delayed appearance of comment Edit button after posting
 
 **Timestamp:** 2026-07-08T20:35:25Z

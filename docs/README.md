@@ -470,3 +470,39 @@ Project created (direct OR promotion) → `setupProjectDriveFolders` → `ensure
 
 ### Current status / known gaps
 All creation paths (direct + both promotion branches) now provision folders through the shared helper. Historically the promotion path skipped this, leaving promoted clients without a folder tree; the admin backfill (Settings → Drive) is the one-time repair for any such pre-existing projects. If `GOOGLE_DRIVE_SHARED_DRIVE_ID` is unset, setup is a no-op (`skipped`).
+
+---
+
+## Sony Camera Control (FX6 / FX3)
+
+### What it does
+Drives the studio's Sony cinema bodies over the network: connect, read status (recording / battery / media remaining), set WB + ISO, pull liveview, and fan the studio REC button out to every *armed* camera in the roster. Camera recording is best-effort and never gates the ATEM + mixer core.
+
+### Key files and entry points
+- `components/slate/AtemPanel.tsx` — camera roster editor (label, host, model, arm toggle, per-camera credentials) + liveness dots.
+- `components/slate/SonyCameraPanel.tsx` — single-camera control surface (connect, WB/ISO, liveview).
+- `lib/services/camera-control-service.ts` — provider selection, roster roll (`recordAllArmed` / `stopAllArmed`), health polling, bridge process supervision.
+- `lib/store/studio-config-store.ts` — `CameraConfig` (rig-wide) and `SonyCameraDevice` (per-body roster entry).
+- `native/sony-camera-bridge/src/main.cpp` — local HTTP bridge wrapping Sony's Camera Remote SDK, one `CameraSession` per host.
+- `docs/sony-camera-sdk-setup.md` — SDK vendoring + build instructions.
+
+### Data flow (inputs → outputs)
+LPOS UI → `/api/studio/camera/*` → `CameraControlService` → (provider `sony-sdk`) local bridge on `http://127.0.0.1:6107` → Sony Camera Remote SDK → camera over Ethernet.
+
+The bridge keys sessions by `host|model|username|fingerprint`, so each camera holds its own SDK session.
+
+### Credentials
+Access Authentication is configured **on each camera body**, so credentials are per-device. `SonyCameraDevice.username` / `.password` / `.fingerprint` override the rig-wide `CameraConfig` values; blank fields fall back to the rig-wide ones, which keeps single-camera rigs working with no per-device setup. A blank fingerprint is fetched trust-on-first-use via `SDK::GetFingerprint`.
+
+Supplying a non-empty username turns SSH on for that camera (`CrSSHsupport_ON`). A wrong password fails at `SDK::Connect`, not at record time.
+
+### Recording
+Cinema bodies use `CrCommandId_MovieRecButtonToggle` (Down then Up — a lone Down does not register). The Alpha-style `MovieRecord` command returns `NotSupported (0x8003)` on FX6/FX3. Because the command only *toggles*, `startRecording` / `stopRecording` first read the real state and skip the press if already in the target state.
+
+State is read from `RecorderMainStatus` on cinema bodies (`Standby=3, Recording=4`); Alpha bodies publish `RecordingState` instead. The bridge asks for both and lets `RecorderMainStatus` win.
+
+### Liveness vs. controllability
+The roster status dot is driven by `pollCameraHealth()`. `online` is only a **TCP probe on port 80** — it proves the camera answers, not that the SDK can control it. Armed cameras additionally get a real status read; when that fails the camera is reported `online: true` with an `error`, rendered as an **amber** dot. Green means a working SDK session.
+
+### Current status / known gaps
+Per-camera credentials, bridge error surfacing (`SendCommand` + `Connect` `CrError` codes), and per-camera roll logging landed 2026-07-10. The bridge binary is built per platform and must be rebuilt on the Windows studio machine to pick up bridge-side changes. Cameras are addressed by IP, so a new DHCP lease breaks a roster entry unless its MAC was captured during a scan (`recoverHostByMac`).

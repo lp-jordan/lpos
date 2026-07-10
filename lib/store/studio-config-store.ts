@@ -46,11 +46,16 @@ export interface WledConfig {
 }
 
 /**
- * A single Sony camera in the multi-camera roster. Connection details that are
- * shared across the whole rig (bridge, credentials, port, provider) live on
- * CameraConfig; each device only carries what varies per body plus its arm flag.
+ * A single Sony camera in the multi-camera roster. Bridge/port/provider settings
+ * are shared across the whole rig and live on CameraConfig; everything that can
+ * vary per body lives here.
  * `armed` cameras participate in the coordinated studio REC roll (best-effort —
  * they never gate the ATEM+mixer core). See slate-service REC handlers.
+ *
+ * Access Authentication is configured per camera body, so credentials belong here
+ * too. When blank, the rig-wide CameraConfig credentials are used as the fallback
+ * — that keeps single-camera rigs working without per-device setup. Leaving them
+ * rig-wide only silently broke every body whose password differed from the first.
  */
 export interface SonyCameraDevice {
   id: string;            // stable identifier (never reused)
@@ -58,6 +63,10 @@ export interface SonyCameraDevice {
   host: string;          // camera IP on the studio LAN/WiFi
   model: SonyCameraModel;
   armed: boolean;        // included in the synchronized REC roll for this shoot
+  // Per-body Access Authentication. Blank → fall back to CameraConfig's values.
+  username?: string;
+  password?: string;
+  fingerprint?: string;  // blank → bridge fetches it trust-on-first-use
   // Hardware address, captured during a network scan. The camera is addressed by
   // IP, so if DHCP hands it a new one the roster entry would silently break —
   // the MAC lets us re-find it by scanning instead. Optional (manual adds lack it).
@@ -182,12 +191,18 @@ function normalizeCameraRoster(raw?: unknown): SonyCameraDevice[] {
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const mac = typeof e.mac === 'string' ? e.mac.trim().toUpperCase() : '';
+    const username = typeof e.username === 'string' ? e.username.trim() : '';
+    const password = typeof e.password === 'string' ? e.password : '';
+    const fingerprint = typeof e.fingerprint === 'string' ? e.fingerprint.replace(/\s+/g, '') : '';
     out.push({
       id,
       label: typeof e.label === 'string' && e.label.trim() ? e.label.trim() : host || id,
       host,
       model: e.model === 'fx3' ? 'fx3' : 'fx6',
       armed: e.armed === true,
+      ...(username ? { username } : {}),
+      ...(password ? { password } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
       ...(mac ? { mac } : {}),
     });
   }

@@ -19770,11 +19770,15 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .at-cam-dot--online    { background: #34d399; box-shadow: 0 0 5px rgba(52, 211, 153, 0.7); }
 .at-cam-dot--recording { background: #ff5566; box-shadow: 0 0 5px rgba(255, 85, 102, 0.8); animation: slCamPulse 1s ease-in-out infinite; }
 .at-cam-dot--offline   { background: #6b6b70; }
+/* Reachable on the network but the SDK session failed (bad Access Auth, busy body) */
+.at-cam-dot--error     { background: #f0a020; box-shadow: 0 0 5px rgba(240, 160, 32, 0.7); }
 .at-cam-dot--unknown   { background: transparent; border: 1px solid var(--line-strong); }
 .at-cam-row { align-items: center; display: flex; gap: 6px; margin-bottom: 8px; }
 .at-cam-row .at-input { height: 34px; font-size: 0.85rem; }
-.at-cam-label { flex: 1 1 30%; min-width: 0; }
-.at-cam-host { flex: 1 1 40%; min-width: 0; }
+.at-cam-label { flex: 1 1 24%; min-width: 0; }
+.at-cam-host { flex: 1 1 30%; min-width: 0; }
+.at-cam-user { flex: 0 0 84px; min-width: 0; }
+.at-cam-pass { flex: 0 0 96px; min-width: 0; }
 .at-cam-model { flex: 0 0 74px; padding: 0 6px; }
 .at-cam-del { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; display: flex; flex: 0 0 auto; height: 34px; justify-content: center; width: 34px; }
 .at-cam-del:hover { border-color: #ff5566; color: #ff8a95; }

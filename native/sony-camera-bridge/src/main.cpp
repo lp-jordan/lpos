@@ -576,12 +576,25 @@ public:
   // Fires one full REC-button press (Down then Up), which toggles the recording
   // state exactly once. Cinema bodies (FX6/FX3) use MovieRecButtonToggle — the
   // Alpha-style MovieRecord command returns NotSupported (0x8003). A lone Down
-  // does NOT register; both halves are required. Sony's own sample ignores the
-  // return code, so we don't treat it as fatal.
+  // does NOT register; both halves are required.
+  //
+  // SendCommand's CrError is the only signal that a body refused the toggle (wrong
+  // firmware, no/full card, session held by another controller). Sony's sample
+  // discards it; doing the same turned a refused record into a silent success that
+  // propagated all the way to the operator UI. Fail loudly instead.
   void pressMovieRecordButtonLocked() {
-    SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Down);
+    const SDK::CrError down = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Down);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
+    const SDK::CrError up = SDK::SendCommand(handle, SDK::CrCommandId_MovieRecButtonToggle, SDK::CrCommandParam_Up);
+    if (CR_FAILED(down) || CR_FAILED(up)) {
+      std::ostringstream message;
+      message << "Camera at " << host << " refused the REC toggle (down=0x"
+              << std::hex << static_cast<CrInt32u>(down)
+              << ", up=0x" << static_cast<CrInt32u>(up) << std::dec << ").";
+      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
+      throw std::runtime_error(message.str());
+    }
+    std::cout << "[sony-camera-bridge] REC toggle sent to " << host << '\n';
   }
 
   // MovieRecButtonToggle only toggles, so a stray duplicate call would flip the
@@ -589,14 +602,20 @@ public:
   void startRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    if (isRecordingLocked()) return;   // already rolling
+    if (isRecordingLocked()) {
+      std::cout << "[sony-camera-bridge] " << host << " already recording; skipping toggle\n";
+      return;
+    }
     pressMovieRecordButtonLocked();
   }
 
   void stopRecording() {
     std::lock_guard<std::mutex> lock(mutex);
     ensureConnectedLocked();
-    if (!isRecordingLocked()) return;  // already stopped
+    if (!isRecordingLocked()) {
+      std::cout << "[sony-camera-bridge] " << host << " not recording; skipping toggle\n";
+      return;
+    }
     pressMovieRecordButtonLocked();
   }
 
@@ -809,7 +828,15 @@ private:
       nullptr
     );
     if (CR_FAILED(connectError)) {
-      throw std::runtime_error("Sony SDK could not connect to camera at " + host + ".");
+      std::ostringstream message;
+      message << "Sony SDK could not connect to camera at " << host
+              << " (err=0x" << std::hex << static_cast<CrInt32u>(connectError) << std::dec << ").";
+      if (sshOn) {
+        message << " This camera authenticated as user '" << username
+                << "' — check its Access Authentication user/password.";
+      }
+      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
+      throw std::runtime_error(message.str());
     }
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);

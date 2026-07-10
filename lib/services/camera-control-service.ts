@@ -493,8 +493,24 @@ export class CameraControlService {
   // ATEM+mixer core has committed, and a camera failing here never blocks the
   // shoot — the per-camera result just reports which bodies caught the take.
 
+  /**
+   * Per-camera connection settings for a roster entry. Credentials are per body
+   * (Access Authentication is set on the camera), so a device that carries its own
+   * falls back to the rig-wide values only where it leaves a field blank. Omitting
+   * these entirely made every camera authenticate as the first one's password —
+   * SDK::Connect then failed, while the TCP:80 reachability probe still reported
+   * the camera "online", so the failure looked like a broken REC command.
+   */
   private deviceOverride(device: SonyCameraDevice): Partial<CameraConfig> {
-    return { host: device.host, ip: device.host, model: device.model };
+    const override: Partial<CameraConfig> = {
+      host: device.host,
+      ip: device.host,
+      model: device.model,
+    };
+    if (device.username) override.username = device.username;
+    if (device.password) override.password = device.password;
+    if (device.fingerprint) override.fingerprint = device.fingerprint;
+    return override;
   }
 
   /** Poll a camera's status until `recording` matches `want`, or the timeout elapses. */
@@ -522,9 +538,14 @@ export class CameraControlService {
       if (action === 'start') await this.startMovieRec(override);
       else await this.stopMovieRec(override);
       await this.confirmRecordingState(device, action === 'start');
+      console.log(`[camera-control] ${action} OK on ${device.label} (${device.host})`);
       return { ...base, ok: true };
     } catch (err) {
-      return { ...base, ok: false, error: (err as Error).message };
+      const error = (err as Error).message;
+      // The roll is best-effort and never throws, so without this the only trace of
+      // a camera refusing to record was a transient toast.
+      console.warn(`[camera-control] ${action} FAILED on ${device.label} (${device.host}): ${error}`);
+      return { ...base, ok: false, error };
     }
   }
 
