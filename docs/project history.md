@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-07-10 — Retry the SSH fingerprint fetch; never Connect() without one
+
+**Timestamp:** 2026-07-10T07:00:00Z
+
+**User prompt (verbatim):** Operator pasted a full LPOS startup log showing, for all three cameras, `GetFingerprint failed for <ip> (err=0x8218)` immediately followed by `Sony SDK could not connect to camera at <ip> (err=0x8213)`; then on a later pass `fetched SSH fingerprint for 172.20.10.189 (44 bytes)` → `connected`, a `status read on 172.20.10.189 hit a stale session (0x8005); reconnecting` → `connected`, and `.56` repeatedly returning `err=0x20019`.
+
+**Response summary:** Decoded the codes by compiling a throwaway program against the vendored `CrError.h` rather than counting enum offsets by hand: `0x8218` = `CrError_Connect_SSH_GetFingerprintFailed`, `0x8213` = `CrError_Connect_SSH_InvalidParameter`, `0x8005` = `CrError_Generic_InvalidHandle`. That gives a clean causal chain and exposes a bug: `GetFingerprint()` is transiently flaky right after the bridge starts (the log shows it succeeding seconds later on the same camera), and on failure the code fell through and called `Connect()` anyway with `(nullptr, 0)` while SSH was on — a guaranteed `SSH_InvalidParameter`, which reads as a credentials problem and buries the real cause. Added a bounded retry and made a fingerprint-less SSH connect impossible. The log also confirms the stale-session healing from `eb3bc18` working as designed: `.189` hit `0x8005`, reconnected, and served the status read.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `ensureConnectedLocked()` retries `GetFingerprint()` 5× at 500ms, logging each attempt; if it still has no fingerprint it calls `resetConnectionLocked()` and throws a message naming the likely causes (still booting / Access Authentication off on the body while LPOS has a username set) instead of proceeding to `Connect()`. `describeConnectError()` gains `CrError_Connect_SSH_InvalidParameter` and `CrError_Connect_SSH_GetFingerprintFailed`.
+- `docs/README.md` — connect-error table extended with `0x8213` / `0x8218` / `0x8005` (and `0x8216` given its hex); credentials section documents the retry and the never-connect-without-a-fingerprint rule.
+
+**Decision rationale:** Compiled the enum rather than counting offsets, because an earlier hand-count in this session produced a wrong diagnosis that cost the operator real time at the cameras. The retry is bounded (5 × 500ms ≈ 2s) so a genuinely misconfigured camera fails fast rather than stalling the roll; the camera-ready case resolves on attempt 2–3 per the operator's log. Throwing instead of connecting is the important half: the previous fall-through converted a transient, self-healing condition into a permanent-looking authentication error.
+
+**Alternatives considered:** Unbounded retry with backoff — rejected, `ensureConnectedLocked()` is called on the REC path and must not stall a take. Treating an empty fingerprint as "SSH off" and connecting without it — rejected, that silently downgrades security posture and would fail anyway on a body with Access Authentication on.
+
+**Checks run:** Compiled `scratchpad/decode.cpp` against `vendor/RemoteCli/app/CRSDK` to print the authoritative enum values (`0x8218`, `0x8213`, `0x8005`, `0x8216`, `0x820b`, `0x20019`, `0x8402`). `bash scripts/build-sony-camera-bridge.sh` — compiles and links clean.
+
+**Assumptions / follow-ups:** `.56` is still returning `0x20019 CrWarning_Connect_Already` even under `CrReconnecting_OFF`, and it fetches its fingerprint fine — so the session it is holding is camera-side, from a bridge process that died before `d8da015` landed. It has not been power-cycled yet; that is the remedy. Windows bridge still needs a rebuild. Not verified against live hardware.
+
 ## 2026-07-10 — Correct the FailBusy diagnosis: the held session is our own dead bridge process
 
 **Timestamp:** 2026-07-10T06:00:00Z

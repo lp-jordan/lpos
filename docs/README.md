@@ -500,6 +500,8 @@ Supplying a non-empty username turns SSH on for **every** camera (`CrSSHsupport_
 
 Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each body has its own — populating it breaks every camera except the one it belongs to.
 
+`GetFingerprint()` is transiently flaky right after the bridge starts or a camera boots, returning `0x8218`. `ensureConnectedLocked()` retries it 5× at 500ms. If it still has no fingerprint it **throws rather than calling `Connect()`** — connecting with SSH on and `(nullptr, 0)` yields `0x8213 CrError_Connect_SSH_InvalidParameter`, which looks like a credentials failure and hides the real cause.
+
 ### Connect errors
 `CR_FAILED(e)` is defined as `e != CrError_None`, so SDK **warnings** are surfaced as connect failures too. `describeConnectError()` in the bridge names the codes this rig hits. Only the `CrError_Connect_SSH_*` codes mean the credentials are wrong:
 
@@ -508,7 +510,10 @@ Leave the rig-wide `fingerprint` blank. It is applied to every camera, but each 
 | `0x820b` `CrError_Connect_FailBusy` | Another controller holds the camera's remote session |
 | `0x20019` `CrWarning_Connect_Already` | The SDK already holds a session for this camera object |
 | `0x8211` `CrError_Connect_SessionAlreadyOpened` | A remote session is already open on the body |
-| `CrError_Connect_SSH_UserAuthenticationFailed` | Wrong Access Authentication user/password |
+| `0x8213` `CrError_Connect_SSH_InvalidParameter` | SSH on but no fingerprint passed to `Connect()` (or malformed credentials) |
+| `0x8218` `CrError_Connect_SSH_GetFingerprintFailed` | Camera's SSH server didn't answer — usually still booting |
+| `0x8005` `CrError_Generic_InvalidHandle` | Stale session; see below |
+| `0x8216` `CrError_Connect_SSH_UserAuthenticationFailed` | Wrong Access Authentication user/password |
 
 An FX6 accepts **one** remote SDK session. In practice the holder is almost always *this machine*, not another controller:
 

@@ -323,6 +323,13 @@ std::string describeConnectError(SDK::CrError error) {
     case SDK::CrError_Connect_SSH_ServerConnectFailed:
       return "the camera refused the SSH connection — check that Access "
              "Authentication is enabled on the body.";
+    case SDK::CrError_Connect_SSH_InvalidParameter:
+      // Nearly always a missing fingerprint: Connect() with SSH on and (nullptr, 0).
+      return "the SSH parameters were rejected — the fingerprint is missing or the "
+             "username/password is malformed.";
+    case SDK::CrError_Connect_SSH_GetFingerprintFailed:
+      return "the camera's SSH server did not return a fingerprint; it may still be "
+             "booting.";
     case SDK::CrError_Connect_FailRejected:
       return "the camera rejected the connection.";
     case SDK::CrError_Connect_TimeOut:
@@ -906,18 +913,46 @@ private:
     // SSH fingerprint to be supplied to Connect(). If we weren't given one,
     // fetch it now (trust-on-first-use) — mirrors Sony's RemoteCli sample. Skip
     // the interactive y/n confirm: this is a trusted studio LAN.
+    //
+    // GetFingerprint is transiently flaky: right after the bridge starts (or the
+    // camera boots) it returns CrError_Connect_SSH_GetFingerprintFailed (0x8218),
+    // then succeeds seconds later. Retry before giving up. Critically, if we still
+    // have no fingerprint we must NOT call Connect() — passing (nullptr, 0) with SSH
+    // on is a guaranteed CrError_Connect_SSH_InvalidParameter (0x8213), which reads
+    // like a credentials problem and buries the real cause.
     const bool sshOn = !username.empty() || !password.empty() || !fingerprint.empty();
     if (sshOn && fingerprint.empty()) {
-      char fpBuf[128] = {0};
-      CrInt32u fpLen = 0;
-      const SDK::CrError fpError = SDK::GetFingerprint(cameraInfo, fpBuf, &fpLen);
-      if (CR_SUCCEEDED(fpError) && fpLen > 0) {
-        fingerprint.assign(fpBuf, fpLen);
-        std::cout << "[sony-camera-bridge] fetched SSH fingerprint for " << host
-                  << " (" << fpLen << " bytes)\n";
-      } else {
+      constexpr int kFingerprintAttempts = 5;
+      SDK::CrError fpError = SDK::CrError_None;
+      for (int attempt = 1; attempt <= kFingerprintAttempts && fingerprint.empty(); ++attempt) {
+        char fpBuf[128] = {0};
+        CrInt32u fpLen = 0;
+        fpError = SDK::GetFingerprint(cameraInfo, fpBuf, &fpLen);
+        if (CR_SUCCEEDED(fpError) && fpLen > 0) {
+          fingerprint.assign(fpBuf, fpLen);
+          std::cout << "[sony-camera-bridge] fetched SSH fingerprint for " << host
+                    << " (" << fpLen << " bytes, attempt " << attempt << ")\n";
+          break;
+        }
         std::cerr << "[sony-camera-bridge] GetFingerprint failed for " << host
-                  << " (err=0x" << std::hex << fpError << std::dec << ")\n";
+                  << " (err=0x" << std::hex << static_cast<CrInt32u>(fpError) << std::dec
+                  << ", attempt " << attempt << '/' << kFingerprintAttempts << ")\n";
+        if (attempt < kFingerprintAttempts) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+      }
+
+      if (fingerprint.empty()) {
+        resetConnectionLocked();
+        std::ostringstream message;
+        message << "Could not fetch the SSH fingerprint for " << host << " after "
+                << kFingerprintAttempts << " attempts (err=0x" << std::hex
+                << static_cast<CrInt32u>(fpError) << std::dec
+                << "). The camera is reachable but its SSH server is not answering — "
+                   "it may still be booting, or Access Authentication is off on the body "
+                   "while LPOS is configured with a username.";
+        std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
+        throw std::runtime_error(message.str());
       }
     }
 

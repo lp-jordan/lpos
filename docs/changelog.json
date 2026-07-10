@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-10T07:00:00Z",
+    "title": "Cameras no longer fail to connect on startup with a misleading credentials error",
+    "summary": "Right after LPOS starts, a camera's security handshake can briefly fail while the camera is still waking up. The studio would give up on that first attempt and then report what looked like a wrong username or password. It now retries the handshake a few times, and if it genuinely cannot complete it, says so plainly instead of blaming the credentials."
+  },
+  {
     "timestamp": "2026-07-10T06:00:00Z",
     "title": "A busy camera now points at the right cause",
     "summary": "When a camera reports that it is already in use, the message now says what is actually true most of the time: a previous camera bridge process on this machine exited without letting go of the camera. It will time out on its own, or you can power-cycle the camera to clear it immediately. Other apps connecting to the camera are still mentioned, but no longer listed first — that was sending people to check their phones instead of the studio Mac."
