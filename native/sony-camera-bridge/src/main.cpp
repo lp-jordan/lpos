@@ -51,6 +51,24 @@ namespace {
 std::atomic<bool> running{true};
 constexpr const char* kBoundary = "lposframe";
 
+// Each HTTP request runs on its own thread, so concurrent std::cout/std::cerr writes
+// interleave character-by-character and garble the log. Build the whole line, then
+// write it under a mutex in one shot so every line stays intact.
+std::mutex g_logMutex;
+void logMsg(std::ostream& stream, const std::string& line) {
+  std::lock_guard<std::mutex> lock(g_logMutex);
+  stream << "[sony-camera-bridge] " << line << '\n';
+  stream.flush();
+}
+void logOut(const std::string& line) { logMsg(std::cout, line); }
+void logErr(const std::string& line) { logMsg(std::cerr, line); }
+
+std::string toHex(CrInt32u value) {
+  std::ostringstream ss;
+  ss << "0x" << std::hex << value;
+  return ss.str();
+}
+
 struct CameraIdentity {
   std::string host;
   std::string model;
@@ -643,8 +661,7 @@ public:
     CrInt32 count = 0;
     SDK::CrError error = SDK::GetSelectDeviceProperties(handle, static_cast<CrInt32u>(codes.size()), const_cast<CrInt32u*>(codes.data()), &properties, &count);
     if (isStaleSessionError(error)) {
-      std::cerr << "[sony-camera-bridge] status read on " << host << " hit a stale session (0x"
-                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      logErr("status read on " + host + " hit a stale session (" + toHex(error) + "); reconnecting");
       reconnectLocked();
       error = SDK::GetSelectDeviceProperties(handle, static_cast<CrInt32u>(codes.size()), const_cast<CrInt32u*>(codes.data()), &properties, &count);
     }
@@ -809,8 +826,7 @@ public:
     SDK::CrError error = SDK::GetSelectDeviceProperties(
       handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
     if (isStaleSessionError(error)) {
-      std::cerr << "[sony-camera-bridge] recording-state read on " << host << " hit a stale session (0x"
-                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      logErr("recording-state read on " + host + " hit a stale session (" + toHex(error) + "); reconnecting");
       reconnectLocked();
       error = SDK::GetSelectDeviceProperties(
         handle, static_cast<CrInt32u>(codes.size()), codes.data(), &properties, &count);
@@ -868,9 +884,7 @@ public:
       if (result == SDK::CrError_Generic_NotSupported) continue;   // wrong command for this body
       if (!CR_FAILED(result)) {
         if (preferredRecCommand != command) {
-          std::cout << "[sony-camera-bridge] " << host << " uses "
-                    << (command == SDK::CrCommandId_MovieRecord ? "MovieRecord" : "MovieRecButtonToggle")
-                    << " for REC\n";
+          logOut(host + " uses " + (command == SDK::CrCommandId_MovieRecord ? "MovieRecord" : "MovieRecButtonToggle") + " for REC");
           preferredRecCommand = command;
         }
       }
@@ -882,31 +896,28 @@ public:
   void pressMovieRecordButtonLocked() {
     SDK::CrError error = sendRecToggleLocked();
     if (isStaleSessionError(error)) {
-      std::cerr << "[sony-camera-bridge] REC toggle on " << host << " hit a stale session (0x"
-                << std::hex << static_cast<CrInt32u>(error) << std::dec << "); reconnecting\n";
+      logErr("REC toggle on " + host + " hit a stale session (" + toHex(error) + "); reconnecting");
       reconnectLocked();
       error = sendRecToggleLocked();
     }
     if (CR_FAILED(error)) {
-      std::ostringstream message;
-      message << "Camera at " << host << " refused the REC toggle (err=0x"
-              << std::hex << static_cast<CrInt32u>(error) << std::dec << ")";
+      std::string message = "Camera at " + host + " refused the REC toggle (" + toHex(error) + ")";
       // Survived the reconnect retry above, so the session is live and the body
       // itself is refusing. Confirmed in the field: an FX6 with no SD card reports
       // no media and rejects the toggle with CrError_Api_InvalidCalled.
       if (error == SDK::CrError_Api_InvalidCalled) {
-        message << ": the camera will not record — check for recordable media "
+        message += ": the camera will not record — check for recordable media "
                    "(no card, card full, or write-protected).";
       } else if (error == SDK::CrError_Generic_NotSupported) {
-        message << ": this body accepted neither MovieRecButtonToggle nor MovieRecord "
+        message += ": this body accepted neither MovieRecButtonToggle nor MovieRecord "
                    "— its firmware may use a different record command.";
       } else {
-        message << '.';
+        message += '.';
       }
-      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
-      throw std::runtime_error(message.str());
+      logErr(message);
+      throw std::runtime_error(message);
     }
-    std::cout << "[sony-camera-bridge] REC toggle sent to " << host << '\n';
+    logOut("REC toggle sent to " + host);
   }
 
   // MovieRecButtonToggle only toggles, so a stray duplicate call would flip the
@@ -922,7 +933,7 @@ public:
         "Could not read recording state on " + host + " — refusing to send a blind REC toggle.");
     }
     if (*recording) {
-      std::cout << "[sony-camera-bridge] " << host << " already recording; skipping toggle\n";
+      logOut(host + " already recording; skipping toggle");
       return;
     }
     pressMovieRecordButtonLocked();
@@ -938,7 +949,7 @@ public:
         "Not assuming it stopped.");
     }
     if (!*recording) {
-      std::cout << "[sony-camera-bridge] " << host << " not recording; skipping toggle\n";
+      logOut(host + " not recording; skipping toggle");
       return;
     }
     pressMovieRecordButtonLocked();
@@ -1056,6 +1067,17 @@ public:
     ensureConnectedLocked();
   }
 
+  // Log a connect failure only if it differs from the last one for this camera, then
+  // throw. Collapses the every-15s health-poll retries on a persistently-dead camera
+  // into a single line until the situation changes. Caller must hold the mutex.
+  [[noreturn]] void failConnectLocked(const std::string& message) {
+    if (message != lastConnectFailure) {
+      lastConnectFailure = message;
+      logErr(message);
+    }
+    throw std::runtime_error(message);
+  }
+
   // Drop every SDK object tied to this camera. Caller must hold the mutex.
   void resetConnectionLocked() {
     if (handle != 0) {
@@ -1118,11 +1140,15 @@ private:
     // see the CrReconnecting_OFF rationale below for the half the SDK owns.
     resetConnectionLocked();
 
-    std::cout << "[sony-camera-bridge] connecting to " << model << " at " << host << '\n';
+    // Only announce a connect attempt when we're not already in a known-failed streak,
+    // so a dead camera doesn't reprint "connecting…" every poll.
+    if (lastConnectFailure.empty()) {
+      logOut("connecting to " + model + " at " + host);
+    }
 
     const auto ip = parseIpAddress(host);
     if (!ip) {
-      throw std::runtime_error("Invalid camera host: " + host);
+      failConnectLocked("Invalid camera host: " + host);
     }
 
     if (cameraInfo == nullptr) {
@@ -1136,10 +1162,10 @@ private:
       // fine with the placeholder, and that's the path the standalone camera panel
       // uses. With two or more bodies the placeholder is fatal-by-collision, so warn.
       const auto parsedMac = parseMacAddress(mac);
-      if (!parsedMac) {
-        std::cerr << "[sony-camera-bridge] WARNING: no MAC for " << host
-                  << " — using a placeholder. Safe for ONE camera; with multiple bodies "
-                     "they collide as a single SDK device. Re-run the network scan.\n";
+      if (!parsedMac && lastConnectFailure.empty()) {
+        logErr("WARNING: no MAC for " + host + " — using a placeholder. Safe for ONE "
+               "camera; with multiple bodies they collide as a single SDK device. "
+               "Re-run the network scan.");
       }
       std::array<CrInt8u, 6> macAddress =
         parsedMac.value_or(std::array<CrInt8u, 6>{0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC});
@@ -1155,7 +1181,7 @@ private:
         sshSupport
       );
       if (CR_FAILED(createError) || cameraInfo == nullptr) {
-        throw std::runtime_error("Sony SDK could not create an Ethernet camera object for " + host + ".");
+        failConnectLocked("Sony SDK could not create an Ethernet camera object for " + host + ".");
       }
     }
 
@@ -1180,13 +1206,8 @@ private:
         fpError = SDK::GetFingerprint(cameraInfo, fpBuf, &fpLen);
         if (CR_SUCCEEDED(fpError) && fpLen > 0) {
           fingerprint.assign(fpBuf, fpLen);
-          std::cout << "[sony-camera-bridge] fetched SSH fingerprint for " << host
-                    << " (" << fpLen << " bytes, attempt " << attempt << ")\n";
-          break;
+          break;   // success logged once as "connected" below; no per-attempt chatter
         }
-        std::cerr << "[sony-camera-bridge] GetFingerprint failed for " << host
-                  << " (err=0x" << std::hex << static_cast<CrInt32u>(fpError) << std::dec
-                  << ", attempt " << attempt << '/' << kFingerprintAttempts << ")\n";
         if (attempt < kFingerprintAttempts) {
           std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
@@ -1194,15 +1215,12 @@ private:
 
       if (fingerprint.empty()) {
         resetConnectionLocked();
-        std::ostringstream message;
-        message << "Could not fetch the SSH fingerprint for " << host << " after "
-                << kFingerprintAttempts << " attempts (err=0x" << std::hex
-                << static_cast<CrInt32u>(fpError) << std::dec
-                << "). The camera is reachable but its SSH server is not answering — "
-                   "it may still be booting, or Access Authentication is off on the body "
-                   "while LPOS is configured with a username.";
-        std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
-        throw std::runtime_error(message.str());
+        failConnectLocked(
+          "Could not fetch the SSH fingerprint for " + host + " after "
+          + std::to_string(kFingerprintAttempts) + " attempts (" + toHex(fpError)
+          + "). The camera is reachable but its SSH server is not answering — it may "
+            "still be booting, or Access Authentication is off on the body while LPOS "
+            "is configured with a username.");
       }
     }
 
@@ -1230,14 +1248,9 @@ private:
     // CR_FAILED is just `!= CrError_None`, so SDK *warnings* land here too.
     if (CR_FAILED(connectError)) {
       const std::string reason = describeConnectError(connectError);
-      std::ostringstream message;
-      message << "Sony SDK could not connect to camera at " << host
-              << " (err=0x" << std::hex << static_cast<CrInt32u>(connectError) << std::dec << ")";
-      if (!reason.empty()) message << ": " << reason;
-      else message << '.';
       resetConnectionLocked();
-      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
-      throw std::runtime_error(message.str());
+      failConnectLocked("Sony SDK could not connect to camera at " + host
+        + " (" + toHex(connectError) + ")" + (reason.empty() ? "." : ": " + reason));
     }
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
@@ -1247,12 +1260,9 @@ private:
 
     if (!callback.isConnected()) {
       resetConnectionLocked();
-      std::ostringstream message;
-      message
-        << "Sony SDK connection to " << host
-        << " did not become ready after 45 seconds. Check that the FX6 is in a Sony SDK-supported network remote mode and not locked in another remote-control mode.";
-      std::cerr << "[sony-camera-bridge] " << message.str() << '\n';
-      throw std::runtime_error(message.str());
+      failConnectLocked("Sony SDK connection to " + host
+        + " did not become ready after 45 seconds. Check that the camera is in a Sony "
+          "SDK-supported network remote mode and not locked in another remote-control mode.");
     }
 
     // Connect() returning isn't enough: the SDK's device-property cache is
@@ -1265,11 +1275,17 @@ private:
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (!callback.arePropertiesReady()) {
-      std::cerr << "[sony-camera-bridge] warning: property cache not published by "
-                << host << " within 15s — status reads may be stale\n";
+      logErr("warning: property cache not published by " + host + " within 15s — status reads may be stale");
     }
 
-    std::cout << "[sony-camera-bridge] connected to " << model << " at " << host << '\n';
+    // Recovered — log the success and clear the failure streak so the next failure (if
+    // any) prints again.
+    if (!lastConnectFailure.empty()) {
+      logOut("recovered: connected to " + model + " at " + host);
+    } else {
+      logOut("connected to " + model + " at " + host);
+    }
+    lastConnectFailure.clear();
   }
 
   void ensureLiveViewEnabledLocked() {
@@ -1289,6 +1305,10 @@ private:
   // already correct; sendRecToggleLocked tries this first and re-caches if the fallback
   // ever has to correct it.
   SDK::CrCommandId preferredRecCommand{SDK::CrCommandId_MovieRecButtonToggle};
+  // Last connect-failure message we logged for this camera. The health poll retries a
+  // dead camera every 15s; without this, one broken body spams an identical failure
+  // line forever. Log only when the message changes; clear it on a successful connect.
+  std::string lastConnectFailure;
   std::mutex mutex;
   SDK::ICrCameraObjectInfo* cameraInfo{nullptr};
   SDK::CrDeviceHandle handle{0};
@@ -1377,7 +1397,7 @@ std::vector<DiscoveredCamera> discoverCameras() {
 
   std::vector<DiscoveredCamera> cameras;
   const CrInt32u count = cameraList->GetCount();
-  std::cout << "[sony-camera-bridge] discovered " << count << " camera object(s)\n";
+  logOut("discovered " + std::to_string(count) + " camera object(s)");
   cameras.reserve(count);
   for (CrInt32u i = 0; i < count; ++i) {
     const auto* cameraInfo = cameraList->GetCameraObjectInfo(i);
@@ -1644,7 +1664,7 @@ bool streamLiveView(SOCKET client, const CameraIdentity& identity) {
     try {
       frame = session.getLiveViewFrame();
     } catch (const std::exception& error) {
-      std::cerr << "[sony-camera-bridge] liveview error: " << error.what() << '\n';
+      logErr(std::string("liveview error: ") + error.what());
       return false;
     }
 
@@ -1803,12 +1823,12 @@ int main(int argc, char* argv[]) {
         sendAll(client, response.c_str(), static_cast<int>(response.size()));
         closesocket(client);
       } catch (const std::exception& error) {
-        std::cerr << "[sony-camera-bridge] request handler error: " << error.what() << '\n';
+        logErr(std::string("request handler error: ") + error.what());
         const std::string response = serviceUnavailable(error.what());
         sendAll(client, response.c_str(), static_cast<int>(response.size()));
         closesocket(client);
       } catch (...) {
-        std::cerr << "[sony-camera-bridge] request handler error: unknown exception\n";
+        logErr("request handler error: unknown exception");
         closesocket(client);
       }
     }).detach();

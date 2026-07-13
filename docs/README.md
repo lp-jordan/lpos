@@ -567,6 +567,9 @@ MACs are captured by the network scan into `SonyCameraDevice.mac` and forwarded 
 
 **Query values are percent-encoded.** LPOS sends bridge params through `encodeURIComponent`, so a MAC arrives as `9C%3A50%3A…`. The bridge's `getQueryParam` runs `urlDecode` on the value — without it the `%3A` colons leaked `3A` into the hex parse and every GET-path connect (status/health/preconnect) saw "no MAC" and fell back to the placeholder, re-triggering the single-device collision even with real MACs in the roster. The POST/JSON path was unaffected (colons survive JSON), which is why start/stop could work while status reads collided. `urlDecode` also fixes any special character in a query-sent password.
 
+### Logging
+Each HTTP request runs on its own thread, so the bridge builds each log line fully and writes it under `g_logMutex` (`logOut`/`logErr`) — concurrent raw `std::cout`/`std::cerr` chains were interleaving character-by-character. Connect failures go through `failConnectLocked`, which logs only when the message **changes** and clears on a successful connect (`lastConnectFailure`), so a persistently-dead camera logs its failure once instead of every 15s health poll; recovery logs `recovered: connected to …`. The fingerprint retry no longer logs per attempt. On the LPOS side, `spawnSdkBridge` buffers the pipe and splits on `\n` before prefixing, so a chunk boundary can't insert `[camera-control] bridge:` mid-line.
+
 ### Stale sessions
 `callback.isConnected()` only goes false when `OnDisconnected` fires. A session that dies without it leaves the handle believed-good, and `ensureConnectedLocked()`'s early-return then trusts it — so every later call fails permanently:
 

@@ -848,14 +848,23 @@ export class CameraControlService {
       stdio: 'pipe',
     });
 
-    process.stdout.on('data', (chunk) => {
-      const text = chunk.toString().trim();
-      if (text) console.log(`[camera-control] bridge: ${text}`);
-    });
-    process.stderr.on('data', (chunk) => {
-      const text = chunk.toString().trim();
-      if (text) console.warn(`[camera-control] bridge error: ${text}`);
-    });
+    // Emit one console line per bridge line. The pipe delivers arbitrary chunks — a
+    // chunk can hold several lines or split one mid-way — so buffer and split on '\n',
+    // else the prefix lands in the middle of a line and lines interleave/garble.
+    const lineEmitter = (emit: (line: string) => void) => {
+      let buffer = '';
+      return (chunk: Buffer) => {
+        buffer += chunk.toString();
+        let nl: number;
+        while ((nl = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, nl).trimEnd();
+          buffer = buffer.slice(nl + 1);
+          if (line) emit(line);
+        }
+      };
+    };
+    process.stdout.on('data', lineEmitter((line) => console.log(`[camera-control] bridge: ${line}`)));
+    process.stderr.on('data', lineEmitter((line) => console.warn(`[camera-control] bridge: ${line}`)));
     process.on('exit', (code, signal) => {
       console.warn(`[camera-control] Sony SDK bridge exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`);
       if (this.sdkBridgeProcess === process) {

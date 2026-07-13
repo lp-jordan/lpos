@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-07-10 — Quiet and de-garble the camera bridge log
+
+**Timestamp:** 2026-07-10T16:00:00Z
+
+**User prompt (verbatim):** "[camera-control] bridge error: … GetFingerprint failed … attempt 1/5 … [interleaved/garbled lines across all four cameras] … This kind of stuff is really clogging the log. Is there a better way to do this?"
+
+**Response summary:** The log had three problems: (1) every fingerprint retry attempt logged (5/camera), (2) the health poll re-logged the same failure every 15s for a persistently-dead camera, and (3) concurrent request threads wrote to `std::cout`/`std::cerr` with multi-token `<<` chains that interleaved character-by-character, and LPOS prefixed arbitrary pipe chunks so the prefix landed mid-line. Fixed all three: atomic line logging under a mutex, failure-dedupe per camera, dropped per-attempt fingerprint logs, and LPOS-side line buffering.
+
+**Files changed:**
+- `native/sony-camera-bridge/src/main.cpp` — `g_logMutex` + `logOut`/`logErr` (build-then-write one line) + `toHex`; `failConnectLocked` logs a connect failure only when it differs from the last (`lastConnectFailure`), cleared on success (`recovered: connected …`); `ensureConnectedLocked` suppresses the "connecting…" line and the no-MAC warning during a known-failed streak; fingerprint loop no longer logs per attempt; all request-thread `std::cout`/`std::cerr` writes routed through the helpers (startup writes in `main()` left raw — single-threaded).
+- `lib/services/camera-control-service.ts` — `spawnSdkBridge` buffers stdout/stderr and splits on `\n` before prefixing, so a chunk boundary can't garble a line; both streams now log with the same `bridge:` prefix.
+- `docs/README.md` — new Logging subsection.
+
+**Decision rationale:** Dedupe keyed on the message string (not a rate limit) so a *changed* condition still logs immediately while identical repeats stay silent — the health poll's 15s cadence made a fixed camera spam otherwise. Atomic whole-line writes are the correct fix for the garbling; per-`<<` interleaving is inherent to concurrent stream use. Kept a single line on entry ("connecting…") and on outcome (connected / one failure) so the happy path and first failure are visible without the retry noise. LPOS line-buffering is needed regardless of the bridge fix because pipe chunk boundaries are independent of line boundaries.
+
+**Alternatives considered:** A severity/verbosity flag — heavier than needed; the real issues were duplication and interleaving, not level. Rate-limiting by time — rejected, message-change dedupe is more precise (logs a genuinely new error instantly). Leaving LPOS as-is — rejected, the mid-line prefix garbling originates at the pipe read, not the bridge.
+
+**Checks run:** `bash scripts/build-sony-camera-bridge.sh` — clean. `npx tsc --noEmit` — clean. Confirmed the only remaining raw `std::cout`/`std::cerr` are in `main()` startup (pre-threads).
+
+**Assumptions / follow-ups:** The underlying `0x8218` (GetFingerprint failing on all four cameras post-restart) is a separate connectivity issue — likely the cameras' SSH not yet up, or a prior bridge still holding sessions; the cleaner log will make it legible. Takes effect on LPOS restart; Windows bridge needs a rebuild.
+
 ## 2026-07-10 — Software timecode soft-jam (Sync TC) for armed Sony cameras
 
 **Timestamp:** 2026-07-10T15:00:00Z
