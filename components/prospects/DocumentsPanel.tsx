@@ -30,6 +30,7 @@ function slotLabel(type: ProspectDocumentType): string {
 function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: ProspectDocument; onEdit: () => void }) {
   const [thumbOk, setThumbOk] = useState(false);
   const [copied,  setCopied]  = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   const fill  = TYPE_FILL[doc.type];
   const label = TYPE_LABEL_COLOR[doc.type];
@@ -58,6 +59,8 @@ function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: P
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div
         className="doc-cover"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{
           position: 'relative', aspectRatio: '3 / 4', borderRadius: 6,
           border: '1px solid var(--line)', background: 'var(--surface-1)',
@@ -68,7 +71,7 @@ function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: P
         <div style={{ height: 4, background: fill, flexShrink: 0 }} />
 
         {/* generated placeholder body */}
-        <div style={{ flex: 1, padding: 8, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ flex: 1, padding: 8, display: 'flex', flexDirection: 'column', minHeight: 0, filter: hovered ? 'blur(1.5px)' : 'none', transition: 'filter 140ms ease' }}>
           <span style={{ fontSize: '0.55rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: label, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {badge}
           </span>
@@ -92,16 +95,21 @@ function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: P
             style={{
               position: 'absolute', top: 4, left: 0, right: 0, bottom: 0,
               width: '100%', height: 'calc(100% - 4px)', objectFit: 'cover',
-              objectPosition: 'top', opacity: thumbOk ? 1 : 0, transition: 'opacity 160ms ease',
+              objectPosition: 'top', opacity: thumbOk ? 1 : 0,
+              filter: hovered ? 'blur(1.5px)' : 'none',
+              transition: 'opacity 160ms ease, filter 140ms ease',
             }}
           />
         )}
 
-        {/* hover actions */}
-        <div className="doc-cover-actions" style={{
+        {/* hover actions — opacity + pointer-events driven by state so an
+            invisible overlay never intercepts clicks (inline opacity would
+            beat a CSS :hover rule, so we don't use one). */}
+        <div style={{
           position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-          opacity: 0, transition: 'opacity 140ms ease',
+          opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none',
+          transition: 'opacity 140ms ease',
         }}>
           <a href={doc.url} target="_blank" rel="noopener noreferrer" title="Open" style={iconBtn} onClick={(e) => e.stopPropagation()}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -175,7 +183,6 @@ export function DocumentsPanel({ personId, documents, onChange }: { personId: st
 
   return (
     <div className="panel" style={{ padding: 20 }}>
-      <style>{`.doc-cover:hover .doc-cover-actions { opacity: 1; }`}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <p className="eyebrow" style={{ margin: 0 }}>Documents</p>
         <button type="button" onClick={() => setModal({ doc: null, type: 'other' })} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-strong)', fontSize: '0.8rem', padding: 0 }}>
