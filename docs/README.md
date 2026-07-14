@@ -421,6 +421,31 @@ lands, select the model in Settings — the card shows a "NOT INSTALLED" warning
 - Fresh-upload path does not pass duration to the length-aware timeout (duration is probed in
   parallel); only the manual retranscribe path is length-aware today.
 
+## Task Board Stale Nudges (Handoff + Review Check-in)
+
+### What it does
+Two background monitors keep tasks from silently stalling on the task board. Both run under the in-process `MonitorRegistry` (`setInterval`-based, per-monitor enable toggle + tick cadence in `lpos_settings`, 30s staggered first tick, overlapping-tick skip, per-monitor error isolation), and both re-ping via the shared `notifyTaskEvent` fan-out (in-app bell + Slack DM + web push).
+
+- **Handoff stale re-ping** — when a task is handed off (`Handoff` button), a `task_handoffs` row starts a clock. If the new target assignee doesn't engage within the threshold (default 3 days), `HandoffStaleMonitor` re-pings them. Real activity (status change or comment) by a *target* completes the handoff; acknowledge only resets the clock.
+- **Review check-in** — when an **Editing** task enters the `in_review` status, a `task_review_checkins` row starts a clock. `ReviewStaleMonitor` re-pings the task's assignees every threshold (default 3 days) while it sits in Review. The key difference from handoffs: **activity only RESETS the clock** (the task is legitimately still in Review) — the check-in completes only when the task leaves Review, is reassigned via Handoff (the handoff monitor takes over), or is deleted.
+
+### Key files and entry points
+- Monitors: `lib/services/monitors/handoff-stale-monitor.ts`, `lib/services/monitors/review-stale-monitor.ts` (registered in `lib/services/container.ts` → `initServices`).
+- Registry: `lib/services/monitor-registry.ts`.
+- State: `lib/store/task-handoff-store.ts` + `lib/store/task-review-checkin-store.ts` (tables `task_handoffs`, `task_review_checkins` in `lib/store/core-db.ts`; both use a partial index `(next_check_at) WHERE completed_at IS NULL` for a cheap sweep).
+- Settings: `handoff.stale_threshold_days` / `handoff.monitor_tick_minutes`, `review.stale_threshold_days` / `review.monitor_tick_minutes` (defaults 3 days / 15 min) — `lib/store/lpos-settings-store.ts`.
+- API: `app/api/tasks/[taskId]/handoff/**`, `app/api/tasks/[taskId]/review-checkin/**` (GET pending + POST acknowledge); lifecycle hooks in `app/api/tasks/[taskId]/route.ts` (status change) and `.../comments/route.ts` (comment).
+- UI: `components/tasks/TaskDetailModal.tsx` (Review check-in banner + Acknowledge), `components/tasks/CommentThread.tsx` (`handoff` / `handoff_ack` / `review_ack` thread entries), `components/shell/NotifBell.tsx` labels.
+
+### Data flow (inputs → outputs)
+- Enter Review (Editing) → PATCH hook opens a check-in → monitor sweep finds it due after N days → re-pings assignees → `markAlerted` re-arms.
+- Comment / Acknowledge / in-place reassign → clock reset (`resetForTask` / `acknowledge`). Leave Review / terminal / delete → `completeForTask('status_change' | 'task_deleted')`. Handoff → `completeForTask('handoff')`.
+- Each monitor tick also **backfills**: opens a check-in for any Editing task currently in Review without one, so tasks already stuck when the feature shipped get covered.
+
+### Current status / known gaps
+- Scoped to Editing `in_review` only (per request); Platform's `in_review` is not watched.
+- No admin Settings UI for the two `review.*` knobs yet — they default sensibly and are tunable directly in `lpos_settings`. Surfacing them next to the handoff knobs is a natural follow-up.
+
 ## Build / Version Tag
 
 ### What it does

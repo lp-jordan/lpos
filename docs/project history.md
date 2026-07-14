@@ -2880,3 +2880,43 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit -p tsconfig.json` — 0 errors across the project.
 
 **Assumptions / follow-ups:** Assumed the canonical client-prefixed project route is the desired share target. Not verified in a running browser (user manages the dev server); change is type-checked and self-contained. No new dependencies.
+
+## 2026-07-14T17:28:23Z — LPOS: 3-day check-in for tasks sitting in Review (edit dashboard)
+
+**User prompt:** "Tasks are getting stuck in \"Review\", specifically on the edit task dashboard. Can we enable a 3-day check in for tasks that have just been sitting? Similiarly to the handoff, it would just prompt the user to make an update or simply acknowledge. In either case, the 3 day check in resets until the task is moved out of review or reassigned. Make sense?"
+
+**Response summary:** Built a Review stale-check-in system modelled on the existing handoff stale flow. When an Editing task enters the `in_review` status, LPOS opens a check-in that re-pings the task's assignees (bell + Slack + web push) every 3 days until the task leaves Review. Posting an update or clicking a new "Acknowledge" control resets the 3-day clock; moving the task out of Review completes the check-in; reassigning via Handoff hands watching over to the handoff monitor (user decision: handoff takes over, no double-nudge). Threshold + tick cadence are admin-tunable via `lpos_settings` (default 3 days / 15 min), mirroring the handoff knobs.
+
+**Files changed:**
+- `lib/models/task-review-checkin.ts` (new) — model + `REVIEW_STATUS` const + completed-reason union
+- `lib/store/task-review-checkin-store.ts` (new) — `TaskReviewCheckinStore` (create/getPending/listDue/acknowledge/resetForTask/markAlerted/markCompleted/completeForTask/pendingTaskIds)
+- `lib/services/monitors/review-stale-monitor.ts` (new) — `ReviewStaleMonitor` (backfill + due-sweep)
+- `app/api/tasks/[taskId]/review-checkin/route.ts` (new) — GET pending check-in
+- `app/api/tasks/[taskId]/review-checkin/acknowledge/route.ts` (new) — POST acknowledge
+- `lib/store/core-db.ts` — `task_review_checkins` table + partial index in `initSchema`
+- `lib/store/lpos-settings-store.ts` — `review.stale_threshold_days` (3) + `review.monitor_tick_minutes` (15)
+- `lib/models/task-notification.ts` — `review_stale` notif type
+- `lib/services/task-notification-service.ts`, `lib/services/slack-service.ts`, `components/shell/NotifBell.tsx` — `review_stale` labels (exhaustive maps)
+- `lib/models/task-comment.ts` — `review_ack` comment kind
+- `lib/services/container.ts` — store getter + globalThis slot + monitor registration
+- `app/api/tasks/[taskId]/route.ts` — open on entering Review / complete on leaving / reset on in-place reassign
+- `app/api/tasks/[taskId]/comments/route.ts` — reset check-in on comment
+- `app/api/tasks/[taskId]/handoff/route.ts` — complete check-in on handoff (handoff takes over)
+- `components/tasks/CommentThread.tsx` — render `review_ack` thread entry
+- `components/tasks/TaskDetailModal.tsx` — Review check-in banner + Acknowledge button (fetch/ack/reset)
+- `app/globals.css` — amber `.review-checkin-banner` styles
+- `docs/README.md`, `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- Reused the handoff pattern wholesale: a `task_review_checkins` row carries `next_check_at` with a partial index (`WHERE completed_at IS NULL`) so the monitor sweep stays cheap, and `addDaysIso` is shared from the handoff store.
+- Key semantic difference from handoffs: activity (comment / Acknowledge / in-place reassign) only RESETS the clock — the check-in completes solely when the task leaves Review, is reassigned via handoff, or is deleted. This matches "resets until moved out of review or reassigned."
+- `ReviewStaleMonitor` registered next to `HandoffStaleMonitor`. Each tick first backfills a check-in for any Editing task currently in `in_review` without one (covers tasks already stuck at deploy) then re-pings due check-ins' assignees (falling back to the creator if unassigned) and re-arms.
+- Acknowledge writes a companion `kind='review_ack'` comment for a visible trail; the modal shows an amber banner with the Acknowledge button whenever a pending check-in exists.
+
+**Decision rationale:** Mirroring the handoff subsystem (table + store + MonitorRegistry monitor + settings knobs) keeps one consistent mechanism for stale-task nudges and reuses the admin enable/disable + tick plumbing. A dedicated row (vs. computing due-ness from a status-change timestamp) is required because `tasks` has no per-status-change timestamp and acknowledge/re-ping need persisted state. Scoped to `taskType==='editing' && status==='in_review'` per the explicit "edit task dashboard" request; platform's `in_review` is intentionally not watched.
+
+**Alternatives considered:** (1) Add a `status_changed_at` column and compute due-ness on read — rejected: still needs persisted state for ack/alert counting and re-ping re-arming, so a row is cleaner. (2) Run both the Review check-in and the handoff re-ping in parallel after a reassignment — rejected per user decision (double-nudges the same task); handoff takes over.
+
+**Commands/checks run:** `npx tsc --noEmit -p tsconfig.json` — 0 errors. Isolated `tsx` harness against a throwaway `LPOS_DATA_DIR` exercised the store lifecycle end-to-end (create/dedupe/listDue partial-index/markAlerted/acknowledge/resetForTask/completeForTask/re-open/FK-cascade) — all 15 assertions passed.
+
+**Assumptions / follow-ups:** Not driven in a running browser (user manages the dev server); DB + store layer verified directly, routes/monitor are type-checked thin wrappers over the verified store. In-place assignee-checkbox changes reset the clock (only Handoff fully hands off). Admin Settings UI for the two new knobs was not added (they default sensibly and are tunable via `lpos_settings`); surfacing them alongside the handoff knobs is a natural follow-up.

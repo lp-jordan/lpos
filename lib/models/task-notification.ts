@@ -5,7 +5,8 @@ export type TaskNotifType =
   | 'commented'
   | 'handoff'              // new target assignee was just handed the task
   | 'handoff_acknowledged' // handoff-er, the target ack'd
-  | 'handoff_stale';       // re-ping fired on a pending handoff with no activity
+  | 'handoff_stale'        // re-ping fired on a pending handoff with no activity
+  | 'review_stale';        // re-ping fired on a task sitting in Review past the threshold
 
 export interface TaskNotification {
   notifId: string;

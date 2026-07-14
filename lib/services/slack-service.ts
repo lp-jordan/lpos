@@ -47,6 +47,7 @@ const LABELS: Record<TaskNotifType, (fromName?: string) => string> = {
   handoff:              (from) => `${from ?? 'Someone'} handed off a task to you`,
   handoff_acknowledged: (from) => `${from ?? 'Someone'} acknowledged your handoff`,
   handoff_stale:        ()     => 'A handoff to you has been idle — please take a look',
+  review_stale:         ()     => 'A task you\'re on has been sitting in Review — post an update or acknowledge',
 };
 
 export async function sendSlackTaskDm(input: {

@@ -93,6 +93,7 @@ export async function notifyTaskEvent(input: {
       handoff: 'A task was handed off to you',
       handoff_acknowledged: 'Your handoff was acknowledged',
       handoff_stale: 'A handoff to you needs attention',
+      review_stale: 'A task in Review needs an update',
     };
     const payload = JSON.stringify({
       title: label[input.type],

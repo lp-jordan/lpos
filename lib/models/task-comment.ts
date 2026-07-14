@@ -13,8 +13,11 @@ export interface TaskCommentAttachment {
  *   - 'handoff_ack'  : auto-written when a target assignee acknowledges the
  *                      handoff. Resets the stale clock but does NOT complete
  *                      the handoff — only real activity does.
+ *   - 'review_ack'   : auto-written when an assignee acknowledges a Review
+ *                      check-in ("still on it"). Resets the check-in clock; the
+ *                      task stays in Review. Companion to task_review_checkins.
  */
-export type TaskCommentKind = 'comment' | 'handoff' | 'handoff_ack';
+export type TaskCommentKind = 'comment' | 'handoff' | 'handoff_ack' | 'review_ack';
 
 /** Structured payload on `metadata` when kind='handoff'. */
 export interface HandoffCommentMetadata {

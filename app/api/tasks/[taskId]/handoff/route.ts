@@ -23,7 +23,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskStore, getTaskCommentStore, getTaskHandoffStore } from '@/lib/services/container';
+import { getTaskStore, getTaskCommentStore, getTaskHandoffStore, getTaskReviewCheckinStore } from '@/lib/services/container';
 import { getUserById, getAllUsers } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 import { emitTaskUpdated } from '@/lib/services/task-broadcasts';
@@ -83,6 +83,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (existingPending) {
     handoffStore.markCompleted(existingPending.handoffId, 'next_handoff');
   }
+
+  // Reassignment supersedes a Review check-in: the new handoff starts its own
+  // 3-day stale re-ping on the new assignee, so stand the Review check-in down
+  // to avoid double-nudging the same task. (User decision: handoff takes over.)
+  getTaskReviewCheckinStore().completeForTask(taskId, 'handoff');
 
   // ── Replace assignees on the task ───────────────────────────────────────
   const updatedTask = taskStore.update(taskId, { assignedTo: toUserIds });

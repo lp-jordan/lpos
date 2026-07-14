@@ -62,6 +62,11 @@ export const SETTING_KEYS = {
   /** How often the HandoffStaleMonitor sweeps for due re-pings (minutes). */
   HANDOFF_MONITOR_TICK_MINUTES: 'handoff.monitor_tick_minutes',
 
+  /** How many days an Editing task may sit in Review before LPOS re-pings its assignees. */
+  REVIEW_STALE_THRESHOLD_DAYS: 'review.stale_threshold_days',
+  /** How often the ReviewStaleMonitor sweeps for due Review check-ins (minutes). */
+  REVIEW_MONITOR_TICK_MINUTES: 'review.monitor_tick_minutes',
+
   // ── Transcription (whisper.cpp) ──────────────────────────────────────────
   /** whisper.cpp ggml model name (without the `ggml-` prefix or `.bin` suffix). */
   TRANSCRIPTION_MODEL: 'transcription.model',
@@ -93,6 +98,9 @@ export const TRANSCRIPTION_MODEL_OPTIONS = [
 export const SETTING_DEFAULTS = {
   [SETTING_KEYS.HANDOFF_STALE_THRESHOLD_DAYS]: 3,
   [SETTING_KEYS.HANDOFF_MONITOR_TICK_MINUTES]: 15,
+
+  [SETTING_KEYS.REVIEW_STALE_THRESHOLD_DAYS]: 3,
+  [SETTING_KEYS.REVIEW_MONITOR_TICK_MINUTES]: 15,
 
   // Keep `base` as the fallback so enabling the feature never silently changes
   // transcription behavior until an admin explicitly opts into a bigger model.

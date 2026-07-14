@@ -2,9 +2,10 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskStore, getTaskCommentStore, getTaskHandoffStore } from '@/lib/services/container';
+import { getTaskStore, getTaskCommentStore, getTaskHandoffStore, getTaskReviewCheckinStore } from '@/lib/services/container';
 import { getAllUsers } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
+import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
 
 type Params = { params: Promise<{ taskId: string }> };
 
@@ -62,6 +63,17 @@ export async function POST(req: NextRequest, { params }: Params) {
   // comments reach this route (handoff + handoff_ack are written by their own
   // typed endpoints), so we don't need to inspect the kind here.
   getTaskHandoffStore().completeOnActivity(taskId, session.userId, 'comment');
+
+  // Posting an update on a task that's in Review counts as "making an update":
+  // it RESETS the check-in clock (the task legitimately stays in Review) rather
+  // than completing it. No-ops when there's no pending check-in.
+  getTaskReviewCheckinStore().resetForTask(
+    taskId,
+    getSetting<number>(
+      SETTING_KEYS.REVIEW_STALE_THRESHOLD_DAYS,
+      SETTING_DEFAULTS[SETTING_KEYS.REVIEW_STALE_THRESHOLD_DAYS],
+    ),
+  );
 
   // Notify: assignees (except commenter) + @mentioned users
   const actorName = allUsers.find((u) => u.id === session.userId)?.name;

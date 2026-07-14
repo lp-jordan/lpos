@@ -41,6 +41,7 @@ import { TaskCommentStore } from '@/lib/store/task-comment-store';
 import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
 import { TaskHandoffStore } from '@/lib/store/task-handoff-store';
+import { TaskReviewCheckinStore } from '@/lib/store/task-review-checkin-store';
 import { DeliveryNotificationStore } from '@/lib/store/delivery-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
@@ -63,6 +64,7 @@ import { CloudflareOrphanReconciler } from './cloudflare-orphan-reconciler';
 import { MediaCommentMirrorService } from './media-comment-mirror';
 import { getMonitorRegistry } from './monitor-registry';
 import { HandoffStaleMonitor } from './monitors/handoff-stale-monitor';
+import { ReviewStaleMonitor } from './monitors/review-stale-monitor';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -92,6 +94,8 @@ declare global {
   var __lpos_taskNotificationStore: TaskNotificationStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_taskHandoffStore: TaskHandoffStore | undefined;
+  // eslint-disable-next-line no-var
+  var __lpos_taskReviewCheckinStore: TaskReviewCheckinStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_deliveryNotificationStore: DeliveryNotificationStore | undefined;
   // eslint-disable-next-line no-var
@@ -154,6 +158,7 @@ let taskCommentStore: TaskCommentStore | null = null;
 let taskCategoryStore: TaskCategoryStore | null = null;
 let taskNotificationStore: TaskNotificationStore | null = null;
 let taskHandoffStore: TaskHandoffStore | null = null;
+let taskReviewCheckinStore: TaskReviewCheckinStore | null = null;
 let deliveryNotificationStore: DeliveryNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
@@ -308,6 +313,7 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   // First consumer: HandoffStaleMonitor (re-pings idle task handoffs).
   const monitors = getMonitorRegistry();
   monitors.register(new HandoffStaleMonitor());
+  monitors.register(new ReviewStaleMonitor());
   monitors.startAll();
 
   await Promise.all([
@@ -543,6 +549,14 @@ export function getTaskHandoffStore(): TaskHandoffStore {
   taskHandoffStore = new TaskHandoffStore();
   globalThis.__lpos_taskHandoffStore = taskHandoffStore;
   return taskHandoffStore;
+}
+
+export function getTaskReviewCheckinStore(): TaskReviewCheckinStore {
+  if (globalThis.__lpos_taskReviewCheckinStore) return globalThis.__lpos_taskReviewCheckinStore;
+  if (taskReviewCheckinStore) return taskReviewCheckinStore;
+  taskReviewCheckinStore = new TaskReviewCheckinStore();
+  globalThis.__lpos_taskReviewCheckinStore = taskReviewCheckinStore;
+  return taskReviewCheckinStore;
 }
 
 export function getDeliveryNotificationStore(): DeliveryNotificationStore {

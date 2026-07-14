@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-14T17:28:23Z",
+    "title": "3-day check-in for tasks sitting in Review",
+    "summary": "Editing tasks that sit in the In Review status now get a gentle 3-day check-in, modelled on the handoff nudge. LPOS re-pings the task assignees (in-app bell, Slack, and web push) every 3 days while a task waits in Review. Posting an update or clicking the new Acknowledge button in the task resets the 3-day clock; moving the task out of Review ends the check-in, and reassigning it via Handoff lets the handoff nudge take over instead. The threshold and sweep cadence are admin-tunable (default 3 days / 15 min)."
+  },
+  {
     "timestamp": "2026-07-14T17:25:42Z",
     "title": "Right-click Copy Path on project tabs",
     "summary": "You can now right-click any tab inside a project (Media, Photos, Scripts, Transcripts, Assets, Pass Prep, Client Uploads) and choose Copy Path to get a shareable deep link straight to that tab. Paste the link to a teammate and it opens the project on the exact tab. To make this work the active tab is now reflected in the URL as a ?tab= parameter, so links copied from the address bar deep-link too."

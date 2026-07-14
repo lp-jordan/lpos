@@ -2,14 +2,24 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskStore, getTaskHandoffStore } from '@/lib/services/container';
+import { getTaskStore, getTaskHandoffStore, getTaskReviewCheckinStore } from '@/lib/services/container';
 import type { TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
 import { isTerminalStatus } from '@/lib/models/task-phase';
+import { REVIEW_STATUS } from '@/lib/models/task-review-checkin';
+import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { getUserById } from '@/lib/store/user-store';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 import { emitTaskDeleted, emitTaskUpdated } from '@/lib/services/task-broadcasts';
+
+/** Days a task may sit in Review before a re-ping — admin-tunable, no redeploy. */
+function reviewThresholdDays(): number {
+  return getSetting<number>(
+    SETTING_KEYS.REVIEW_STALE_THRESHOLD_DAYS,
+    SETTING_DEFAULTS[SETTING_KEYS.REVIEW_STALE_THRESHOLD_DAYS],
+  );
+}
 
 export async function PATCH(
   req: NextRequest,
@@ -88,6 +98,26 @@ export async function PATCH(
     } else {
       handoffStore.completeOnActivity(taskId, session.userId, 'status_change');
     }
+
+    // Review check-in lifecycle: open one when an Editing task enters Review,
+    // close it when it leaves. Only the edit dashboard (taskType 'editing') is
+    // watched. `prev` is non-null here (statusChanged requires it).
+    const reviewStore   = getTaskReviewCheckinStore();
+    const wasInReview   = prev!.taskType === 'editing' && prev!.status === REVIEW_STATUS;
+    const nowInReview   = updated.taskType === 'editing' && updated.status === REVIEW_STATUS;
+    if (nowInReview && !wasInReview) {
+      reviewStore.create(taskId, reviewThresholdDays());
+    } else if (wasInReview && !nowInReview) {
+      reviewStore.completeForTask(taskId, 'status_change');
+    }
+  }
+
+  // In-place reassignment (assignee checkboxes, not a handoff) while a task is
+  // still in Review: give the new assignee a fresh window rather than firing
+  // immediately. A handoff, by contrast, hands watching over to the handoff
+  // monitor — see app/api/tasks/[taskId]/handoff/route.ts.
+  if (assigneesChanged && updated.taskType === 'editing' && updated.status === REVIEW_STATUS) {
+    getTaskReviewCheckinStore().resetForTask(taskId, reviewThresholdDays());
   }
 
   // Notify newly added assignees

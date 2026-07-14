@@ -443,6 +443,22 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
               </div>
             );
           }
+          if (c.kind === 'review_ack') {
+            const author = userMap.get(c.authorId);
+            return (
+              <div key={c.commentId} className="comment-item comment-item--handoff-ack">
+                <div className="handoff-ack-entry">
+                  <span className="handoff-ack-icon" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </span>
+                  <span><strong>{author?.name.split(' ')[0] ?? 'Someone'}</strong> acknowledged the review check-in</span>
+                  <span className="comment-time">{relativeTime(c.createdAt)}</span>
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={c.commentId} className="comment-item">
               <div className="comment-author-col">

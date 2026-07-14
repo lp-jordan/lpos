@@ -429,6 +429,28 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_handoffs_task    ON task_handoffs(task_id);
     CREATE INDEX IF NOT EXISTS idx_handoffs_pending ON task_handoffs(next_check_at) WHERE completed_at IS NULL;
 
+    -- Review check-ins — nudges for Editing tasks that have sat in the
+    -- 'in_review' status past the threshold (default 3 days). Modelled on
+    -- task_handoffs (same partial-indexed sweep) but with different semantics:
+    -- activity (comment / Acknowledge / in-place reassign) only RESETS
+    -- next_check_at; the row is COMPLETED only when the task leaves Review or is
+    -- reassigned via handoff (handoff monitor takes over). See
+    -- lib/models/task-review-checkin.ts for the lifecycle.
+    CREATE TABLE IF NOT EXISTS task_review_checkins (
+      checkin_id        TEXT PRIMARY KEY,
+      task_id           TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+      opened_at         TEXT NOT NULL,
+      last_ack_at       TEXT,
+      last_ack_user_id  TEXT,
+      completed_at      TEXT,
+      completed_reason  TEXT,                   -- 'status_change' | 'handoff' | 'task_deleted' | 'manual'
+      next_check_at     TEXT,                   -- NULL once completed
+      last_alert_at     TEXT,
+      alert_count       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_checkins_task    ON task_review_checkins(task_id);
+    CREATE INDEX IF NOT EXISTS idx_review_checkins_pending ON task_review_checkins(next_check_at) WHERE completed_at IS NULL;
+
     -- Generic operational-knob KV (per workspace memory feedback_doppler_vs_admin_settings:
     -- knobs go in SQLite, not Doppler — credentials stay in Doppler). Values
     -- are JSON-encoded so the same table holds numbers, strings, booleans, and

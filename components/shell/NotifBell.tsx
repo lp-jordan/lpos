@@ -51,6 +51,7 @@ const TASK_NOTIF_LABEL: Record<TaskNotifType, string> = {
   handoff:              'Handed off to you',
   handoff_acknowledged: 'Handoff acknowledged',
   handoff_stale:        'Handoff needs attention',
+  review_stale:         'Sitting in Review',
 };
 
 const PROSPECT_NOTIF_LABEL: Record<ProspectNotifType, string> = {
