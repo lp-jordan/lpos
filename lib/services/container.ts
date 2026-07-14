@@ -65,6 +65,7 @@ import { MediaCommentMirrorService } from './media-comment-mirror';
 import { getMonitorRegistry } from './monitor-registry';
 import { HandoffStaleMonitor } from './monitors/handoff-stale-monitor';
 import { ReviewStaleMonitor } from './monitors/review-stale-monitor';
+import { CatchupWarmMonitor } from './monitors/catchup-warm-monitor';
 
 // ── globalThis augmentation ───────────────────────────────────────────────
 declare global {
@@ -314,6 +315,7 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   const monitors = getMonitorRegistry();
   monitors.register(new HandoffStaleMonitor());
   monitors.register(new ReviewStaleMonitor());
+  monitors.register(new CatchupWarmMonitor());
   monitors.startAll();
 
   await Promise.all([

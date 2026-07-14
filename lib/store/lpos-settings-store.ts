@@ -90,6 +90,13 @@ export const SETTING_KEYS = {
   CATCHUP_AI_ENABLED: 'catchup.ai_enabled',
   /** Model used for the Daily Catch-Up headline. Haiku is plenty for a 1-sentence recap. */
   CATCHUP_HEADLINE_MODEL: 'catchup.headline_model',
+  /**
+   * Local (Eastern, server-clock) "HH:MM" at which CatchupWarmMonitor pre-generates
+   * yesterday's Daily Catch-Up (incl. the AI headline) so the first viewer of the
+   * morning doesn't wait for the model. After this time, if the day isn't cached
+   * yet, the next monitor tick warms it. Admin-tunable without a restart.
+   */
+  CATCHUP_WARM_TIME: 'catchup.warm_time',
 } as const;
 
 /**
@@ -122,4 +129,5 @@ export const SETTING_DEFAULTS = {
 
   [SETTING_KEYS.CATCHUP_AI_ENABLED]: true,
   [SETTING_KEYS.CATCHUP_HEADLINE_MODEL]: 'claude-haiku-4-5',
+  [SETTING_KEYS.CATCHUP_WARM_TIME]: '05:30',
 } as const;
