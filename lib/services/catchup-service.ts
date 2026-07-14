@@ -226,11 +226,15 @@ function buildDeterministic(date: string): DeterministicRecap {
   }
 
   for (const c of taskComments) {
+    // "Comment" is reserved for feedback on video assets (media_comments). A
+    // note left on a task is task activity, not a media comment — badge it
+    // "Note" (neutral) so it doesn't read as footage feedback and doesn't
+    // inflate the header "comments" count, which counts media comments only.
     push('tasks', {
       id: c.comment_id,
       title: c.description,
       project: c.client_name || null,
-      badge: { label: 'Comment', tone: 'comment' },
+      badge: { label: 'Note', tone: 'neutral' },
       time: c.created_at,
       href: `/dashboard?task=${c.task_id}`,
     });
