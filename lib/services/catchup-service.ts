@@ -128,11 +128,29 @@ interface ActivityRowRaw {
   asset_id: string | null;
 }
 
+interface SectionBreakdown {
+  key: CatchupSectionKey;
+  label: string;
+  total: number;
+  badges: Array<{ label: string; count: number }>;
+  sample: string[]; // a few "Title (Project)" strings for the AI digest
+}
+
 interface DeterministicRecap {
   label: string;
-  totals: { failures: number; comments: number; completed: number };
+  totals: { failures: number; comments: number; updates: number };
   sections: CatchupSection[];
+  breakdown: SectionBreakdown[];
 }
+
+// Plain-English meaning of each section, handed to the AI so it never conflates
+// (e.g. reads 47 uploads as "47 tasks completed").
+const SECTION_MEANING: Record<CatchupSectionKey, string> = {
+  uploads: 'new media assets that were uploaded',
+  media: 'changes to media and comments left on video assets',
+  tasks: 'task-dashboard activity (new tasks, status changes, notes) — this is task activity, NOT video comments, and these are not "completed tasks" unless a status change says so',
+  jobs: 'render / transcription / publish job outcomes',
+};
 
 function buildDeterministic(date: string): DeterministicRecap {
   const { startIso, endIso, label } = dayWindow(date);
@@ -240,25 +258,32 @@ function buildDeterministic(date: string): DeterministicRecap {
     });
   }
 
-  // Totals partition every surfaced item into failures / comments / completed
-  // (completed = everything that isn't a failure or a comment), so the three
-  // header numbers always sum to the total activity shown.
-  const totals = { failures: 0, comments: 0, completed: 0 };
+  // Totals partition every surfaced item into failures / comments / updates.
+  // "updates" is a neutral catch-all for all other activity (uploads, moves,
+  // task activity, publishes) — deliberately NOT "completed", which would imply
+  // finished tasks. The three header numbers always sum to the total shown.
+  const totals = { failures: 0, comments: 0, updates: 0 };
   const sections: CatchupSection[] = [];
+  const breakdown: SectionBreakdown[] = [];
   for (const { key, label: sectionLabel } of CATCHUP_SECTION_ORDER) {
     const rows = bySection.get(key);
     if (!rows || rows.length === 0) continue;
+
+    const hist = new Map<string, number>();
     for (const row of rows) {
       if (row.badge.tone === 'failed') totals.failures += 1;
       else if (row.badge.tone === 'comment') totals.comments += 1;
-      else totals.completed += 1;
+      else totals.updates += 1;
+      hist.set(row.badge.label, (hist.get(row.badge.label) ?? 0) + 1);
     }
+
     rows.sort((a, b) => {
       const pa = TONE_PRIORITY[a.badge.tone] ?? 2;
       const pb = TONE_PRIORITY[b.badge.tone] ?? 2;
       if (pa !== pb) return pa - pb;
       return a.time < b.time ? 1 : a.time > b.time ? -1 : 0;
     });
+
     sections.push({
       key,
       label: sectionLabel,
@@ -266,22 +291,39 @@ function buildDeterministic(date: string): DeterministicRecap {
       items: rows.slice(0, CATCHUP_ITEMS_PER_SECTION),
       hasMore: rows.length > CATCHUP_ITEMS_PER_SECTION,
     });
+    breakdown.push({
+      key,
+      label: sectionLabel,
+      total: rows.length,
+      badges: [...hist.entries()].map(([label, count]) => ({ label, count })),
+      sample: rows.slice(0, 3).map((r) => `${r.title}${r.project ? ` (${r.project})` : ''}`),
+    });
   }
 
-  return { label, totals, sections };
+  return { label, totals, sections, breakdown };
 }
 
 function buildDigest(recap: DeterministicRecap): string {
-  const lines = [
-    `Date: ${recap.label}`,
-    `Totals: ${recap.totals.failures} failures, ${recap.totals.comments} comments, ${recap.totals.completed} completed`,
-  ];
-  for (const section of recap.sections) {
-    const top = section.items
-      .slice(0, 4)
-      .map((r) => `${r.title}${r.project ? ` (${r.project})` : ''} — ${r.badge.label}`)
-      .join('; ');
-    lines.push(`${section.label} (${section.count}): ${top}`);
+  const lines = [`Studio activity for ${recap.label}.`];
+
+  lines.push(
+    recap.totals.failures > 0
+      ? `Failures needing attention: ${recap.totals.failures}.`
+      : 'Failures needing attention: none.',
+  );
+  lines.push(
+    recap.totals.comments > 0
+      ? `Comments left on video assets: ${recap.totals.comments}.`
+      : 'Comments left on video assets: none.',
+  );
+
+  lines.push('', 'Activity by category (only what is listed happened; do not invent totals):');
+  if (recap.breakdown.length === 0) {
+    lines.push('  (no activity)');
+  }
+  for (const b of recap.breakdown) {
+    const badges = b.badges.map((x) => `${x.count} ${x.label}`).join(', ');
+    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}. e.g. ${b.sample.join('; ')}`);
   }
   return lines.join('\n');
 }
@@ -300,7 +342,13 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
     model,
     max_tokens: 200,
     system:
-      "You write a one or two sentence, plain-English recap of what happened across a video-production studio's operating system yesterday, for the team's morning catch-up. Be factual and specific: name the busiest project or the standout activity, and if there were failures, call them out as needing attention. No greeting, no preamble, no bullet points, no markdown — just the recap sentence(s).",
+      "You write a one or two sentence, plain-English recap of what happened across a video-production studio's operating system yesterday, for the team's morning catch-up. " +
+      'Rules: Report ONLY what the digest states — never invent or add up numbers into a new total. ' +
+      "Use each category's stated meaning exactly. In this studio, a \"comment\" means feedback left on a video asset — only call something a comment if it is under \"Comments left on video assets\". " +
+      'The word "task" refers only to the task-dashboard category; do NOT describe uploads, media, or job activity as tasks. ' +
+      'Only say something was "completed" or "done" if the breakdown explicitly marks it Completed/Published; uploads and task activity are not completions. ' +
+      'Be factual and specific: name the busiest category and the project driving it, and call out any failures as needing attention. ' +
+      'No greeting, no preamble, no bullet points, no markdown — just the recap sentence(s).',
     messages: [{ role: 'user', content: `Summarize yesterday from this digest:\n${buildDigest(recap)}` }],
   });
 

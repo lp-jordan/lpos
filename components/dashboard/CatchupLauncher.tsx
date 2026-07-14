@@ -138,7 +138,7 @@ export function CatchupLauncher() {
                   <span className="catchup-total-sep">·</span>
                   <span className="catchup-total catchup-total--comment">{data.totals.comments} comments</span>
                   <span className="catchup-total-sep">·</span>
-                  <span className="catchup-total">{data.totals.completed} completed</span>
+                  <span className="catchup-total">{data.totals.updates} updates</span>
                 </div>
               )}
             </div>

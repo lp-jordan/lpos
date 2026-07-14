@@ -38,8 +38,8 @@ export interface CatchupSection {
 
 export interface CatchupTotals {
   failures: number;
-  comments: number;
-  completed: number;
+  comments: number; // video-asset comments only (media_comments)
+  updates: number; // all other activity (uploads, moves, task activity, publishes) — NOT "completed"
 }
 
 export interface CatchupPayload {
