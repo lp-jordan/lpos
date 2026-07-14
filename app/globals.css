@@ -19908,7 +19908,11 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  margin: 0 auto var(--space-2);
+  /* Negative vertical margins pull the pill toward the brand above and the tiles
+     below, tightening the home-hero's uniform 40px flex gap (28px on mobile)
+     without touching the spacing around the tiles/divider/Studio. Values stay
+     safe at the smaller mobile gap. */
+  margin: -20px auto -16px;
   padding: 0.6rem 1.1rem;
   background: var(--surface-2);
   border: 1px solid var(--line);
