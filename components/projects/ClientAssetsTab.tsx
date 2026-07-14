@@ -20,9 +20,11 @@ interface IngestFile {
 }
 
 interface IngestData {
-  token:     string | null;
-  clientUrl: string | null;
-  files:     IngestFile[];
+  token:       string | null;
+  clientUrl:   string | null;
+  welcomeName: string | null;
+  firstName:   string | null;
+  files:       IngestFile[];
 }
 
 interface FileWithType extends IngestFile {
@@ -228,6 +230,10 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
   const [promoteError,    setPromoteError]    = useState<string | null>(null);
   const [preview,         setPreview]         = useState<FileWithType | null>(null);
   const [promotedOpen,    setPromotedOpen]    = useState(false);
+  const [settingsOpen,    setSettingsOpen]    = useState(false);
+  const [welcomeInput,    setWelcomeInput]    = useState('');
+  const [savingWelcome,   setSavingWelcome]   = useState(false);
+  const [welcomeSaved,    setWelcomeSaved]    = useState(false);
   const pollRef         = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSelectedIdx = useRef<number>(-1);
   const fileListRef     = useRef<HTMLDivElement>(null);
@@ -250,6 +256,11 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
     pollRef.current = setInterval(() => void load(true), 20_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [load]);
+
+  // Keep the welcome-name input in sync with the loaded value
+  useEffect(() => {
+    setWelcomeInput(data?.welcomeName ?? '');
+  }, [data?.welcomeName]);
 
   // Deselect when clicking outside the file list
   useEffect(() => {
@@ -275,6 +286,25 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
       if (res.ok) await load();
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleSaveWelcome() {
+    if (savingWelcome) return;
+    setSavingWelcome(true);
+    try {
+      const res = await fetch(`/api/ingest/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ welcomeName: welcomeInput.trim() }),
+      });
+      if (res.ok) {
+        await load(true);
+        setWelcomeSaved(true);
+        setTimeout(() => setWelcomeSaved(false), 2000);
+      }
+    } finally {
+      setSavingWelcome(false);
     }
   }
 
@@ -421,6 +451,51 @@ export function ClientAssetsTab({ projectId, projectName: _projectName, clientNa
     <div className="ca-tab proj-tab-content page-stack">
 
       <div className="ca-main" ref={fileListRef}>
+
+        {/* ── Link settings (gear) ── */}
+        <div className="ca-settings-bar">
+          <button
+            type="button"
+            className={`ca-gear-btn${settingsOpen ? ' ca-gear-btn--active' : ''}`}
+            onClick={() => setSettingsOpen((o) => !o)}
+            title="Link settings"
+            aria-expanded={settingsOpen}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+            <span>Settings</span>
+          </button>
+
+          {settingsOpen && (
+            <div className="ca-settings-panel">
+              <span className="ca-settings-label">Custom welcome name</span>
+              <span className="ca-settings-hint">
+                Shown to the client in the “Hi, ___!” greeting on their upload page. Leave blank to use the client name{data?.firstName ? ` (${data.firstName})` : ''}.
+              </span>
+              <div className="ca-settings-row">
+                <input
+                  type="text"
+                  className="ca-settings-input"
+                  value={welcomeInput}
+                  placeholder={data?.firstName ?? 'Client name'}
+                  maxLength={80}
+                  onChange={(e) => setWelcomeInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveWelcome(); }}
+                />
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={handleSaveWelcome}
+                  disabled={savingWelcome || welcomeInput.trim() === (data?.welcomeName ?? '')}
+                >
+                  {savingWelcome ? 'Saving…' : welcomeSaved ? 'Saved ✓' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* ── Portal URL bar ── */}
         <div className="ca-url-bar">

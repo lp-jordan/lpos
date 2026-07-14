@@ -13629,6 +13629,50 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Portal URL bar ─────────────────────────────────────────────────────── */
+.ca-settings-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ca-gear-btn {
+  align-items: center;
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.8rem;
+  gap: 6px;
+  padding: 7px 12px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.ca-gear-btn:hover,
+.ca-gear-btn--active { background: var(--surface-3); border-color: var(--line-strong); color: var(--text); }
+.ca-settings-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+}
+.ca-settings-label { color: var(--text); font-size: 0.82rem; font-weight: 600; }
+.ca-settings-hint { color: var(--muted); font-size: 0.78rem; margin-bottom: 8px; max-width: 460px; }
+.ca-settings-row { align-items: center; display: flex; gap: 8px; }
+.ca-settings-input {
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  flex: 1;
+  font-size: 0.85rem;
+  max-width: 320px;
+  padding: 8px 10px;
+}
+.ca-settings-input:focus { border-color: var(--gold, #dbaf5f); outline: none; }
 .ca-url-bar {
   align-items: center;
   background: var(--surface-2);
