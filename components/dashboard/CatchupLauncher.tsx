@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ActivityHistoryModal } from './ActivityHistoryModal';
 import type { CatchupPayload, CatchupRow, CatchupSectionKey } from '@/lib/models/catchup';
 
 // Per-user "already read today" marker. Stores the local calendar date the user
@@ -50,6 +51,9 @@ export function CatchupLauncher() {
   const [collapsed, setCollapsed] = useState<Partial<Record<CatchupSectionKey, boolean>>>({});
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [read, setRead] = useState(false); // true once opened today → collapse to a thin line
+  const [showActivity, setShowActivity] = useState(false); // full activity monitor, opened in place
+  const [projectMap, setProjectMap] = useState<Map<string, string>>(new Map());
+  const projectsLoaded = useRef(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -100,6 +104,26 @@ export function CatchupLauncher() {
   function navigate(href: string) {
     router.push(href);
     setOpen(false);
+  }
+
+  // "View all activity" opens the full activity monitor right here on the home
+  // screen (the same modal the dashboard uses) instead of navigating away. Fetch
+  // the project id→name map once so the modal can label + filter by project.
+  function openActivity() {
+    setOpen(false);
+    setShowActivity(true);
+    if (projectsLoaded.current) return;
+    projectsLoaded.current = true;
+    fetch('/api/projects')
+      .then((r) => r.json())
+      .then((d: { projects?: Array<{ projectId: string; name: string }> }) => {
+        const m = new Map<string, string>();
+        for (const p of d.projects ?? []) m.set(p.projectId, p.name);
+        setProjectMap(m);
+      })
+      .catch(() => {
+        // Non-fatal — the modal falls back to truncated ids for project labels.
+      });
   }
 
   const sections = data?.sections ?? [];
@@ -238,10 +262,7 @@ export function CatchupLauncher() {
               <button
                 type="button"
                 className="catchup-viewall"
-                onClick={() => {
-                  router.push('/dashboard');
-                  setOpen(false);
-                }}
+                onClick={openActivity}
               >
                 View all activity
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -251,6 +272,13 @@ export function CatchupLauncher() {
             </div>
           </aside>
         </div>
+      )}
+
+      {showActivity && (
+        <ActivityHistoryModal
+          projectMap={projectMap}
+          onClose={() => setShowActivity(false)}
+        />
       )}
     </>
   );
