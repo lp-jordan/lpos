@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { MediaAsset } from '@/lib/models/media-asset';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -286,9 +286,20 @@ function CreateDeliveryModal({
   );
 }
 
-// ── Manage videos modal (frame-review-link style) ──────────────────────────────
-// Opened from the row's "N files" meta button. Lists the link's videos with
-// version badges + a "Refresh to latest" action, and an add-videos checkbox list.
+// ── Edit videos modal (frame-review-link "Edit assets" style) ───────────────────
+// Opened from the row's "N files" meta button. One checkbox list of every project
+// video: the ones already on the link are pre-checked — check to add, uncheck to
+// remove. Included rows carry a version badge, with a "Refresh to latest" action.
+
+/** Client mirror of the server `sanitize` (delivery-upload.ts) — lets us match an
+ *  untracked/legacy delivery item back to its project asset by filename. */
+function sanitizeFilename(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9._\-() ]/g, '_')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[\s.]+|[\s.]+$/g, '')
+    .slice(0, 200) || 'file';
+}
 
 function ManageVideosModal({
   projectId,
@@ -297,25 +308,58 @@ function ManageVideosModal({
   items,
   onClose,
   onRefetch,
+  onReloadItems,
 }: {
-  projectId: string;
-  link:      DeliveryLink;
-  assets:    MediaAsset[];
-  items:     DeliveryItem[] | null;
-  onClose:   () => void;
-  onRefetch: () => void;
+  projectId:     string;
+  link:          DeliveryLink;
+  assets:        MediaAsset[];
+  items:         DeliveryItem[] | null;
+  onClose:       () => void;
+  onRefetch:     () => void;
+  onReloadItems: () => void;
 }) {
-  const [checked,    setChecked]    = useState<Set<string>>(new Set());
-  const [adding,     setAdding]     = useState(false);
+  const displayName = link.label || link.project_name;
+
+  // Match each delivery item to a project asset (by asset_id, then filename).
+  const itemByAssetId = useMemo(() => {
+    const m = new Map<string, DeliveryItem>();
+    for (const it of items ?? []) if (it.assetId) m.set(it.assetId, it);
+    return m;
+  }, [items]);
+  const itemByFilename = useMemo(() => {
+    const m = new Map<string, DeliveryItem>();
+    for (const it of items ?? []) m.set(it.filename, it);
+    return m;
+  }, [items]);
+
+  function itemForAsset(a: MediaAsset): DeliveryItem | undefined {
+    return itemByAssetId.get(a.assetId) ?? itemByFilename.get(sanitizeFilename(a.originalFilename ?? a.name));
+  }
+
+  // Rows = every project asset. Included ones keyed `item:{id}` (start checked);
+  // the rest keyed `asset:{assetId}`. Orphan items (on the link but no matching
+  // project asset — e.g. a deleted asset) are appended as checked, removable rows.
+  const matchedItemIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const a of assets) { const it = itemForAsset(a); if (it) s.add(it.id); }
+    return s;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, itemByAssetId, itemByFilename]);
+  const orphanItems = (items ?? []).filter((it) => !matchedItemIds.has(it.id));
+
+  const initialChecked = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of items ?? []) s.add(`item:${it.id}`);
+    return s;
+  }, [items]);
+
+  const [checked, setChecked] = useState<Set<string>>(initialChecked);
+  const [saving,     setSaving]     = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [notice,     setNotice]     = useState<string | null>(null);
 
-  const displayName = link.label || link.project_name;
-  const existingAssetIds = new Set((items ?? []).map((i) => i.assetId).filter((x): x is string => !!x));
-  const addable = assets.filter((a) => a.filePath && !existingAssetIds.has(a.assetId));
-  const refreshableCount = (items ?? []).filter((i) => i.canRefresh).length;
-  const staleCount       = (items ?? []).filter((i) => i.isStale).length;
+  useEffect(() => { setChecked(initialChecked); }, [initialChecked]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
@@ -323,34 +367,52 @@ function ManageVideosModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  function toggle(id: string) {
+  function toggle(key: string) {
     setChecked((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   }
 
-  async function handleAdd() {
-    const assetIds = [...checked];
-    if (!assetIds.length) return;
-    setAdding(true);
+  // Diff against the link's current membership.
+  const toAdd = assets.filter((a) => a.filePath && !itemForAsset(a) && checked.has(`asset:${a.assetId}`)).map((a) => a.assetId);
+  const toRemove = (items ?? []).filter((it) => !checked.has(`item:${it.id}`)).map((it) => it.id);
+  const includedCount = (items?.length ?? link.asset_count);
+  const refreshableCount = (items ?? []).filter((i) => i.canRefresh).length;
+  const staleCount       = (items ?? []).filter((i) => i.isStale).length;
+  const hasChanges = toAdd.length > 0 || toRemove.length > 0;
+
+  async function handleSave() {
+    if (!hasChanges) { onClose(); return; }
+    setSaving(true);
     setError(null);
     try {
-      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/assets`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ assetIds }),
-      });
-      const data = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok) { setError(data.error ?? 'Failed to add videos'); return; }
-      setChecked(new Set());
-      setNotice('Videos queued — watch the upload tray. They’ll appear on the link when ready.');
+      // Removes first (immediate), then queue adds (background upload job).
+      for (const id of toRemove) {
+        const res = await fetch(`/api/projects/${projectId}/delivery/${link.token}/assets/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(data.error ?? `Failed to remove a video (HTTP ${res.status})`);
+        }
+      }
+      if (toAdd.length) {
+        const res = await fetch(`/api/projects/${projectId}/delivery/${link.token}/assets`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ assetIds: toAdd }),
+        });
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        if (!res.ok) throw new Error(data.error ?? `Failed to add videos (HTTP ${res.status})`);
+      }
+      onReloadItems();
       onRefetch();
-    } catch {
-      setError('Network error — could not add videos');
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+      onReloadItems();
     } finally {
-      setAdding(false);
+      setSaving(false);
     }
   }
 
@@ -371,11 +433,23 @@ function ManageVideosModal({
     }
   }
 
+  function versionBadge(it: DeliveryItem) {
+    if (it.isStale) {
+      return (
+        <span className="dlp-item-badge dlp-item-badge--stale" title={it.missingLocalFile ? 'A newer version exists but its file is not on disk' : 'A newer version is available'}>
+          v{it.deliveredVersion} → v{it.currentVersion}{it.missingLocalFile ? ' (offline)' : ''}
+        </span>
+      );
+    }
+    if (it.deliveredVersion != null) return <span className="dlp-item-badge">v{it.deliveredVersion}</span>;
+    return null;
+  }
+
   return (
     <div className="sh-modal-backdrop" onClick={onClose} role="presentation">
-      <div className="sh-modal" role="dialog" aria-modal="true" aria-label="Manage videos" onClick={(e) => e.stopPropagation()}>
+      <div className="sh-modal" role="dialog" aria-modal="true" aria-label="Edit videos" onClick={(e) => e.stopPropagation()}>
         <div className="sh-modal-header">
-          <span>Manage videos — {displayName}</span>
+          <span>Edit videos — {displayName}</span>
           <button type="button" className="sh-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -383,61 +457,58 @@ function ManageVideosModal({
           </button>
         </div>
         <div className="sh-modal-body">
-
-          {/* Current videos + refresh */}
           <div className="sh-modal-field">
             <div className="dlp-manage-head">
               <label className="sh-modal-label" style={{ margin: 0 }}>
-                Videos in this link ({items?.length ?? link.asset_count})
+                Videos ({includedCount} on this link)
               </label>
-              <button
-                type="button"
-                className="sh-btn sh-btn--primary"
-                style={{ fontSize: '0.72rem', padding: '4px 9px' }}
-                disabled={refreshing || refreshableCount === 0}
-                title={
-                  staleCount === 0 ? 'All videos are the latest version'
-                  : refreshableCount === 0 ? 'Newer versions exist but their files are not on disk'
-                  : 'Rebuild stale videos from their latest version'
-                }
-                onClick={() => void handleRefresh()}
-              >
-                {refreshing ? 'Refreshing…' : refreshableCount > 0 ? `Refresh to latest (${refreshableCount})` : 'Refresh to latest'}
-              </button>
+              {staleCount > 0 && (
+                <button
+                  type="button"
+                  className="sh-btn sh-btn--primary"
+                  style={{ fontSize: '0.72rem', padding: '4px 9px' }}
+                  disabled={refreshing || refreshableCount === 0}
+                  title={refreshableCount === 0 ? 'Newer versions exist but their files are not on disk' : 'Rebuild stale videos from their latest version'}
+                  onClick={() => void handleRefresh()}
+                >
+                  {refreshing ? 'Refreshing…' : `Refresh to latest (${refreshableCount})`}
+                </button>
+              )}
             </div>
             <div className="sh-modal-asset-list">
               {!items && <p className="sh-empty" style={{ padding: '6px 0' }}>Loading…</p>}
-              {items && items.length === 0 && <p className="sh-empty" style={{ padding: '6px 0' }}>No videos on this link.</p>}
-              {items?.map((it) => (
-                <div key={it.id} className="dlp-item-row">
-                  <span className="dlp-item-name" title={it.filename}>{it.filename}</span>
-                  {it.isStale ? (
-                    <span className="dlp-item-badge dlp-item-badge--stale" title={it.missingLocalFile ? 'A newer version exists but its file is not on disk' : 'A newer version is available'}>
-                      v{it.deliveredVersion} → v{it.currentVersion}{it.missingLocalFile ? ' (offline)' : ''}
-                    </span>
-                  ) : it.deliveredVersion != null ? (
-                    <span className="dlp-item-badge">v{it.deliveredVersion}</span>
-                  ) : null}
-                  <span className="dlp-item-size">{formatBytes(it.fileSize)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
 
-          {/* Add videos */}
-          <div className="sh-modal-field">
-            <label className="sh-modal-label">Add videos ({checked.size} selected)</label>
-            <div className="sh-modal-asset-list">
-              {addable.map((a) => (
-                <label key={a.assetId} className="sh-modal-asset-row">
-                  <input type="checkbox" checked={checked.has(a.assetId)} onChange={() => toggle(a.assetId)} />
-                  <span>{a.name}</span>
-                  {a.fileSize !== null && <span className="deliverable-modal-asset-note">— {formatBytes(a.fileSize)}</span>}
+              {items && assets.map((a) => {
+                const it = itemForAsset(a);
+                const included = !!it;
+                const key = included ? `item:${it!.id}` : `asset:${a.assetId}`;
+                const disabled = !included && !a.filePath;
+                return (
+                  <label
+                    key={a.assetId}
+                    className={`sh-modal-asset-row${disabled ? ' deliverable-modal-asset-row--disabled' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked.has(key)}
+                      disabled={disabled}
+                      onChange={() => toggle(key)}
+                    />
+                    <span>{a.name}</span>
+                    {included && it && versionBadge(it)}
+                    {disabled && <span className="deliverable-modal-asset-note">— no local file</span>}
+                  </label>
+                );
+              })}
+
+              {/* Orphan items — on the link but no matching project asset. */}
+              {orphanItems.map((it) => (
+                <label key={`orphan-${it.id}`} className="sh-modal-asset-row">
+                  <input type="checkbox" checked={checked.has(`item:${it.id}`)} onChange={() => toggle(`item:${it.id}`)} />
+                  <span>{it.filename}</span>
+                  <span className="deliverable-modal-asset-note">— not in project</span>
                 </label>
               ))}
-              {addable.length === 0 && (
-                <p className="sh-empty" style={{ padding: '6px 0' }}>Every deliverable asset is already on this link.</p>
-              )}
             </div>
           </div>
 
@@ -445,21 +516,20 @@ function ManageVideosModal({
           {notice && <p className="dlp-item-notice">{notice}</p>}
         </div>
         <div className="sh-modal-footer">
-          <button type="button" className="sh-btn" onClick={onClose}>Close</button>
+          <button type="button" className="sh-btn" onClick={onClose} disabled={saving}>Cancel</button>
           <button
             type="button"
             className="sh-btn sh-btn--primary"
-            onClick={() => void handleAdd()}
-            disabled={adding || checked.size === 0}
+            onClick={() => void handleSave()}
+            disabled={saving || !hasChanges}
           >
-            {adding ? 'Adding…' : checked.size > 0 ? `Add ${checked.size} video${checked.size !== 1 ? 's' : ''}` : 'Add videos'}
+            {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
 // ── Delivery link row (frame-review-link style) ─────────────────────────────────
 
 function DeliveryLinkRow({
@@ -631,6 +701,7 @@ function DeliveryLinkRow({
           items={items}
           onClose={() => setShowManage(false)}
           onRefetch={onRefetch}
+          onReloadItems={() => void loadItems()}
         />
       )}
     </div>
