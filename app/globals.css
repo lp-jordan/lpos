@@ -20003,13 +20003,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   color: var(--text-strong);
 }
 .catchup-head-title svg { color: var(--accent); }
-.catchup-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.15rem;
-}
-.catchup-close,
-.catchup-refresh {
+.catchup-close {
   background: none;
   border: none;
   color: var(--muted-soft);
@@ -20018,15 +20012,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   border-radius: var(--radius-sm);
   line-height: 0;
 }
-.catchup-close:hover,
-.catchup-refresh:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
-.catchup-refresh:hover:not(:disabled) { color: var(--accent); }
-.catchup-refresh:disabled { cursor: default; opacity: 0.6; }
-.catchup-refresh--spinning svg { animation: catchup-spin 0.8s linear infinite; }
-@keyframes catchup-spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
+.catchup-close:hover { color: var(--text); background: var(--surface-hover); }
 
 .catchup-date {
   margin-top: 0.5rem;

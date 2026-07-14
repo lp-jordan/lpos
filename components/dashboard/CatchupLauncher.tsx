@@ -69,11 +69,11 @@ export function CatchupLauncher() {
     setRead(true);
   }
 
-  const load = useCallback(async (refresh = false) => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
-      const res = await fetch(refresh ? '/api/catchup?refresh=1' : '/api/catchup');
+      const res = await fetch('/api/catchup');
       if (!res.ok) throw new Error('bad status');
       setData((await res.json()) as CatchupPayload);
     } catch {
@@ -154,29 +154,12 @@ export function CatchupLauncher() {
                   </svg>
                   Daily Catch-Up
                 </span>
-                <div className="catchup-head-actions">
-                  <button
-                    type="button"
-                    className={`catchup-refresh${loading ? ' catchup-refresh--spinning' : ''}`}
-                    onClick={() => load(true)}
-                    disabled={loading}
-                    aria-label="Regenerate today's catch-up"
-                    title="Regenerate today's catch-up"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M21 2v6h-6" />
-                      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                      <path d="M3 22v-6h6" />
-                      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                    </svg>
-                  </button>
-                  <button type="button" className="catchup-close" onClick={() => setOpen(false)} aria-label="Close">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </div>
+                <button type="button" className="catchup-close" onClick={() => setOpen(false)} aria-label="Close">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
 
               {data && <div className="catchup-date">{data.label}</div>}
@@ -206,7 +189,7 @@ export function CatchupLauncher() {
               {error && !loading && (
                 <div className="catchup-state">
                   Couldn&rsquo;t load the catch-up.{' '}
-                  <button type="button" className="catchup-retry" onClick={() => load()}>Retry</button>
+                  <button type="button" className="catchup-retry" onClick={load}>Retry</button>
                 </div>
               )}
               {!loading && !error && data && visibleSections.length === 0 && (
