@@ -79,6 +79,17 @@ export const SETTING_KEYS = {
   TRANSCRIPTION_TIMEOUT_MINUTES: 'transcription.timeout_minutes',
   /** If true, derive the per-job timeout from the media duration (recommended for big models). */
   TRANSCRIPTION_TIMEOUT_LENGTH_AWARE: 'transcription.timeout_length_aware',
+
+  // ── Daily Catch-Up ────────────────────────────────────────────────────────
+  /**
+   * Master switch for the AI headline on the Daily Catch-Up drawer. When false,
+   * the drawer still renders the full deterministic recap — it just skips the
+   * one-sentence Claude summary and makes zero API calls (mirrors the old
+   * WHATS_NEW_ENABLED kill switch). The grouped recap never depends on Claude.
+   */
+  CATCHUP_AI_ENABLED: 'catchup.ai_enabled',
+  /** Model used for the Daily Catch-Up headline. Haiku is plenty for a 1-sentence recap. */
+  CATCHUP_HEADLINE_MODEL: 'catchup.headline_model',
 } as const;
 
 /**
@@ -108,4 +119,7 @@ export const SETTING_DEFAULTS = {
   [SETTING_KEYS.TRANSCRIPTION_WORKERS]: 2,
   [SETTING_KEYS.TRANSCRIPTION_TIMEOUT_MINUTES]: 15,
   [SETTING_KEYS.TRANSCRIPTION_TIMEOUT_LENGTH_AWARE]: false,
+
+  [SETTING_KEYS.CATCHUP_AI_ENABLED]: true,
+  [SETTING_KEYS.CATCHUP_HEADLINE_MODEL]: 'claude-haiku-4-5',
 } as const;

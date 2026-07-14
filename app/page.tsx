@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
+import { CatchupLauncher } from '@/components/dashboard/CatchupLauncher';
 // import { WhatsNewWidget } from '@/components/home/WhatsNewWidget'; // disabled — nobody using it
 
 export default async function HomePage() {
@@ -20,6 +21,8 @@ export default async function HomePage() {
         </span>
         <p className="home-subtitle">LeaderPass Operating System</p>
       </div>
+
+      {session && session.role !== 'guest' && <CatchupLauncher />}
 
       <div className="home-tiles">
         {showProspects && (

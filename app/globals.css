@@ -19894,3 +19894,238 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 @keyframes atFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes atSlideUp { from { opacity: 0.6; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .at-backdrop, .at-sheet { animation: none; } }
+
+/* ── Daily Catch-Up ─────────────────────────────────────────────────────────── */
+
+.catchup-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0 auto var(--space-2);
+  padding: 0.6rem 1.1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
+}
+.catchup-pill:hover { border-color: var(--line-strong); background: var(--surface-3); }
+.catchup-pill:active { transform: scale(0.99); }
+.catchup-pill svg { color: var(--accent); }
+.catchup-pill-chevron { color: var(--muted-soft); }
+
+.catchup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 14, 0.5);
+  z-index: 1200;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.catchup-drawer {
+  width: min(440px, 100%);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-lg);
+  animation: catchup-slide-in 0.18s ease-out;
+}
+@keyframes catchup-slide-in {
+  from { transform: translateX(24px); opacity: 0.4; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.catchup-head {
+  padding: 1.1rem 1.25rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+.catchup-head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.catchup-head-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--text-strong);
+}
+.catchup-head-title svg { color: var(--accent); }
+.catchup-close {
+  background: none;
+  border: none;
+  color: var(--muted-soft);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  line-height: 0;
+}
+.catchup-close:hover { color: var(--text); background: var(--surface-hover); }
+
+.catchup-date {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted-soft);
+}
+.catchup-headline {
+  margin: 0.6rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.catchup-totals {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  font-size: 0.82rem;
+}
+.catchup-total {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.82rem;
+  color: var(--muted-soft);
+}
+.catchup-total-sep { color: var(--muted-soft); opacity: 0.6; }
+.catchup-total--fail { color: #e2726a; cursor: pointer; }
+.catchup-total--fail:disabled { color: var(--muted-soft); cursor: default; }
+.catchup-total--fail.catchup-total--active { text-decoration: underline; }
+.catchup-total--comment { color: var(--accent); }
+
+.catchup-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0.85rem 1rem;
+}
+.catchup-state {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--muted-soft);
+  font-size: 0.9rem;
+}
+.catchup-retry {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.9rem;
+}
+
+.catchup-section { margin-top: 0.75rem; }
+.catchup-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.4rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+.catchup-section-head:hover { color: var(--text); }
+.catchup-section-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.catchup-section-count {
+  min-width: 1.25rem;
+  padding: 0.05rem 0.4rem;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-align: center;
+}
+.catchup-section-chevron {
+  margin-left: auto;
+  color: var(--muted-soft);
+  transition: transform 0.15s ease;
+  transform: rotate(-90deg);
+}
+.catchup-section-chevron--open { transform: rotate(0deg); }
+
+.catchup-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 0.2rem;
+}
+.catchup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.5rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  color: var(--text);
+}
+.catchup-row--clickable { cursor: pointer; }
+.catchup-row--clickable:hover { background: var(--surface-hover); }
+.catchup-row:disabled { cursor: default; }
+.catchup-row-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.catchup-row-title {
+  font-size: 0.88rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 15rem;
+}
+.catchup-row-project { font-size: 0.75rem; color: var(--muted-soft); }
+.catchup-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+.catchup-row-time { font-size: 0.72rem; color: var(--muted-soft); }
+
+.catchup-badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+.catchup-badge--failed    { background: rgba(226, 114, 106, 0.15); color: #e79a94; }
+.catchup-badge--completed { background: rgba(151, 185, 137, 0.15); color: var(--success); }
+.catchup-badge--comment   { background: var(--accent-soft); color: var(--accent-strong); }
+.catchup-badge--neutral   { background: rgba(255, 255, 255, 0.05); color: var(--muted); }
+
+.catchup-section-more {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted-soft);
+}
+
+.catchup-foot {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+.catchup-viewall {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.catchup-viewall:hover { color: var(--accent-strong); }

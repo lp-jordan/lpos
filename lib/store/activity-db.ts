@@ -123,6 +123,16 @@ function initSchema(db: DatabaseSync): void {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_summary_windows_scope_window
       ON activity_summary_windows(scope_kind, scope_id, window_start, window_end, summary_kind);
+
+    -- Daily Catch-Up: one cached, fully-assembled payload per past calendar day.
+    -- Yesterday's data is static, so the whole payload (including the AI headline)
+    -- caches safely — everyone who opens the drawer reads the same row, and the
+    -- headline is generated exactly once per day. Keyed by YYYY-MM-DD (Eastern).
+    CREATE TABLE IF NOT EXISTS catchup_cache (
+      date TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL,
+      generated_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -143,6 +153,29 @@ export function getActivityDbPath(): string {
 export function resetActivityDbForTests(): void {
   globalThis.__lpos_activity_db?.close();
   globalThis.__lpos_activity_db = undefined;
+}
+
+// ── Daily Catch-Up cache ───────────────────────────────────────────────────────
+
+/** Read a cached catch-up payload for a past day; null on miss. */
+export function getCatchupCache(date: string): string | null {
+  const row = getActivityDb()
+    .prepare('SELECT payload_json FROM catchup_cache WHERE date = ?')
+    .get(date) as { payload_json: string } | undefined;
+  return row?.payload_json ?? null;
+}
+
+/** Store (or replace) the cached catch-up payload for a day. */
+export function setCatchupCache(date: string, payloadJson: string): void {
+  getActivityDb()
+    .prepare(
+      `INSERT INTO catchup_cache (date, payload_json, generated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(date) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         generated_at = excluded.generated_at`,
+    )
+    .run(date, payloadJson, new Date().toISOString());
 }
 
 /**
