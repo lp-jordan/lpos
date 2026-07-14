@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ColdStorageBrowser } from './ColdStorageBrowser';
 
 interface ColdStorageObject {
@@ -51,12 +51,23 @@ interface Config {
   updatedAt:  string;
 }
 
+interface ApproveAllProgress {
+  running:    boolean;
+  total:      number;
+  done:       number;
+  failed:     number;
+  startedAt:  string | null;
+  finishedAt: string | null;
+  errors:     Array<{ key: string; error: string }>;
+}
+
 interface OverviewResponse {
   status:                 SyncStatus;
   config:                 Config;
   stats:                  ColdStorageStats;
   queuedForDeletion:      ColdStorageObject[];
   missingWithinRetention: ColdStorageObject[];
+  approveAll:             ApproveAllProgress;
 }
 
 interface BucketFootprint {
@@ -129,7 +140,10 @@ export function ColdStorageSection() {
   const [cancelling, setCancelling] = useState(false);
   const [pausing,    setPausing]    = useState(false);
   const [reviewBusy,     setReviewBusy]     = useState<string | null>(null); // per-row key being acted on
-  const [approveAllBusy, setApproveAllBusy] = useState(false);
+  const [startingBulk,   setStartingBulk]   = useState(false); // POST to kick off approve-all in flight
+  const [bulkNotice,     setBulkNotice]     = useState<string | null>(null); // completion summary for a run started this session
+  const bulkWasRunning   = useRef(false); // tracks running true→false transition
+  const bulkThisSession  = useRef(false); // only surface a completion notice for a run we started/observed here
 
   const [footprint,     setFootprint]     = useState<ReconcileResponse | null>(null);
   const [footprintBusy, setFootprintBusy] = useState(false);
@@ -159,6 +173,31 @@ export function ColdStorageSection() {
     const id = setInterval(() => { void load(); }, 60_000);
     return () => clearInterval(id);
   }, [load]);
+
+  // While a bulk approve-all is running, poll fast so "Purging N of M" and the
+  // shrinking review list update live (the deletes happen server-side).
+  const bulkRunning = data?.approveAll?.running ?? false;
+  useEffect(() => {
+    if (!bulkRunning) return;
+    bulkThisSession.current = true;
+    const id = setInterval(() => { void load(); }, 1500);
+    return () => clearInterval(id);
+  }, [bulkRunning, load]);
+
+  // Surface a one-line summary when a run we observed here finishes.
+  useEffect(() => {
+    if (bulkRunning) { bulkWasRunning.current = true; return; }
+    if (bulkWasRunning.current && bulkThisSession.current && data?.approveAll) {
+      const { done, failed } = data.approveAll;
+      setBulkNotice(
+        failed > 0
+          ? `Approve all finished — ${done} purged, ${failed} failed (see below).`
+          : `Approve all finished — ${done} purged.`,
+      );
+    }
+    bulkWasRunning.current  = false;
+    bulkThisSession.current = false;
+  }, [bulkRunning, data?.approveAll]);
 
   async function saveConfig() {
     setSaving(true);
@@ -278,26 +317,27 @@ export function ColdStorageSection() {
 
   async function approveAll() {
     if (!data) return;
-    const count = data.queuedForDeletion.length;
+    const count = data.stats.queuedForDelete;
     if (count === 0) return;
-    if (!confirm(`Permanently purge all ${count} files from Backblaze?\n\nThis deletes every version and reclaims the space immediately. It is final — the cold-storage copies are gone. All source files are already missing locally.`)) return;
-    setApproveAllBusy(true);
+    if (!confirm(`Permanently purge all ${count} files from Backblaze?\n\nThis deletes every version and reclaims the space immediately. It is final — the cold-storage copies are gone. All source files are already missing locally.\n\nDeletions run in the background — you'll see live progress.`)) return;
+    setStartingBulk(true);
+    setBulkNotice(null);
     setError(null);
+    bulkThisSession.current = true;
     try {
       const res = await fetch('/api/admin/cold-storage/approve-all', { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(body.error ?? 'Approve-all failed');
       }
-      const result = await res.json() as { approved: number; deleted: number; errors: Array<{ key: string; error: string }> };
+      // Server runs the deletes in the background; pick up the running state so
+      // the fast-poll effect takes over and drives the "Purging N of M" UI.
       await load();
-      if (result.errors.length > 0) {
-        setError(`Approved ${result.deleted}/${result.approved}; ${result.errors.length} failed`);
-      }
     } catch (err) {
       setError((err as Error).message);
+      bulkThisSession.current = false;
     } finally {
-      setApproveAllBusy(false);
+      setStartingBulk(false);
     }
   }
 
@@ -344,6 +384,7 @@ export function ColdStorageSection() {
 
   const { status, stats, queuedForDeletion, missingWithinRetention } = data;
   const credsOk = status.configured;
+  const bulk    = data.approveAll;
 
   // Status dot — paused trumps everything; otherwise idle | running | recent-ok | recent-error
   let dotClass = 'cold-storage-dot--idle';
@@ -389,6 +430,22 @@ export function ColdStorageSection() {
       )}
       {error && (
         <p className="storage-settings-muted" style={{ color: '#ffb4ab', marginTop: 12 }}>{error}</p>
+      )}
+
+      {/* Bulk approve-all progress — kept outside the review table so it stays
+          visible even once the queue drains to zero and the table unmounts. */}
+      {bulk.running && (
+        <p className="storage-settings-muted" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="cold-storage-dot cold-storage-dot--running" aria-hidden />
+          <span>
+            Purging from Backblaze — <strong>{bulk.done.toLocaleString()} of {bulk.total.toLocaleString()}</strong> done
+            {bulk.failed > 0 && <span style={{ color: '#ffb4ab' }}> · {bulk.failed} failed</span>}.
+            {' '}Deletions run in the background — you can leave this page.
+          </span>
+        </p>
+      )}
+      {!bulk.running && bulkNotice && (
+        <p className="storage-settings-muted" style={{ marginTop: 12 }}>{bulkNotice}</p>
       )}
 
       {/* Stats strip */}
@@ -665,9 +722,13 @@ export function ColdStorageSection() {
               type="button"
               className="cold-storage-approve-all-btn"
               onClick={() => void approveAll()}
-              disabled={approveAllBusy}
+              disabled={startingBulk || bulk.running}
             >
-              {approveAllBusy ? 'Approving…' : `Approve all (${queuedForDeletion.length})`}
+              {bulk.running
+                ? `Purging ${bulk.done} of ${bulk.total}…`
+                : startingBulk
+                  ? 'Starting…'
+                  : `Approve all (${stats.queuedForDelete})`}
             </button>
           </div>
           <div className="cold-storage-table">
@@ -683,7 +744,7 @@ export function ColdStorageSection() {
                     type="button"
                     className="cold-storage-approve-btn"
                     onClick={() => void approveOne(obj.key)}
-                    disabled={reviewBusy === obj.key}
+                    disabled={reviewBusy === obj.key || bulk.running}
                   >
                     {reviewBusy === obj.key ? '…' : 'Approve delete'}
                   </button>
@@ -691,7 +752,7 @@ export function ColdStorageSection() {
                     type="button"
                     className="cold-storage-spare-btn"
                     onClick={() => void spareOne(obj.key)}
-                    disabled={reviewBusy === obj.key}
+                    disabled={reviewBusy === obj.key || bulk.running}
                   >
                     Spare
                   </button>

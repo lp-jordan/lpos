@@ -2947,3 +2947,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit` — 0 errors across the project.
 
 **Assumptions / follow-ups:** Could not correlate crash timestamps to a specific feature, so all four latent instances were fixed rather than one. Not driven in a running browser (user manages the server); the fixes are type-checked and mirror the proven `atem-liveview` pattern. A future `safeReadableStream` helper could dedupe the guard if more streaming routes are added.
+
+## 2026-07-14T19:18:26Z — Guard cold-storage "Approve all" and show live purge progress
+
+**User prompt:** "Can you triple check the logic for when I approve a delete from cloudflare in admin? I just approved, it hung on 'approving', I refreshed and the total file count dropped but those files still showed as needing approval for deleting or spating. I hit approve again, it hung again, refreshed again, and the total file count dropped AGAIN." → follow-up: "Yeah let's just guard it and make it clear that the approval and deletions are in progress".
+
+**Response summary:** Diagnosed the reported behaviour as the B2 Raw-Footage Cold-Storage review flow (`ColdStorageSection`), not the Cloudflare orphans panel — the "Approving…"/total-count/approve-or-spare vocabulary all belongs there. Concluded the delete logic was already correct and idempotent (stamping `deleted_at` drops a row from both the active count and the awaiting-review list; no double-delete, no data loss). The symptom was the expected mid-flight state of a fully-synchronous serial bulk purge (one `ListObjectVersions` + versioned delete per key) whose single HTTP request ran far longer than the user waited — refreshing caught it partway (some purged → total dropped; the rest still awaiting review), and re-clicking spawned a second overlapping loop. Fixed the UX/robustness issues the user asked for: guarded the bulk run against concurrent/duplicate starts and made progress visible.
+
+**Files changed:**
+- `lib/services/cold-storage-approve-all.ts` (new) — guarded, non-blocking approve-all runner with `globalThis`-backed progress state
+- `app/api/admin/cold-storage/approve-all/route.ts` — POST now kicks off the background run and returns immediately with `{ started, progress }`
+- `app/api/admin/cold-storage/route.ts` — overview GET now includes `approveAll` progress
+- `components/settings/ColdStorageSection.tsx` — fire-and-poll approve-all; "Purging N of M…" button + live banner; per-row Approve/Spare disabled during a bulk run; completion summary
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- New module holds an `ApproveAllProgress` object on `globalThis` (`{running,total,done,failed,startedAt,finishedAt,errors}`). `startApproveAll()` is the guard: if `running`, it's a no-op returning live progress with `started:false`; otherwise it snapshots the queue, flips `running`, and drives `deleteOne` per key in the background (deliberately not awaited). Reuses the existing single-object purge path, so per-key partial failures are recorded and don't abort the batch.
+- The POST route returns instantly; the client relies on the overview endpoint (now carrying `approveAll`) for state. The component polls every 1.5s while `approveAll.running`, shows a "Purging N of M · K failed" banner outside the review table (so it survives the queue draining to zero), disables the per-row and bulk buttons during a run, and prints a one-line completion summary for a run observed in-session.
+
+**Decision rationale:** User explicitly chose the lighter "guard + show progress" option over a full job queue. Backgrounding the loop and polling a shared progress object delivers both with minimal surface: it kills the apparent hang, removes the double-click/concurrent-run race via the `running` guard, and incidentally survives any reverse-proxy request timeout (the work no longer lives inside the HTTP request). Progress state on `globalThis` mirrors the service-container singleton pattern already used in this codebase and survives dev HMR. Kept the serial per-key delete (correct and idempotent) rather than batching, since batching was not requested and the guard already fixes the reported problem.
+
+**Alternatives considered:** (1) Full background job with its own status endpoint — rejected as heavier than asked. (2) Keep the blocking request and only add a server-side in-progress flag — would still hang the request and be vulnerable to proxy timeouts. (3) Batch the deletes into a single `ListObjectVersions`/`DeleteObjects` sweep — deferred; a real efficiency win but out of scope for this request.
+
+**Commands/checks run:** `npx tsc --noEmit` — 0 errors across the project.
+
+**Assumptions / follow-ups:** Not driven in a running browser (user manages the server); verified by full typecheck + logic review. Assumes the long-lived custom `server.ts` Node process (not serverless), so the un-awaited background loop runs to completion — consistent with this deployment. Per-row Approve still uses the synchronous single-key DELETE (fast, one key) and was left unchanged. Possible follow-ups: batch the version sweep for large lists, and stamp `deleted_at` even on partial-purge failure if the object is confirmed gone.

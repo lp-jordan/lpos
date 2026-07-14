@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-14T19:18:26Z",
+    "title": "Clearer, safer \"Approve all\" for cold-storage cleanup",
+    "summary": "The \"Approve all\" button in Raw Footage Cold Storage no longer looks frozen while it works. Deleting a large batch from Backblaze now runs in the background with live \"Purging N of M\" progress and a shrinking review list, so you can even leave the page. Clicking again while a run is in progress no longer starts a second overlapping deletion — the button is guarded — and per-file Approve/Spare are paused until the batch finishes. No change to what actually gets deleted; the delete logic was already correct, this just makes the progress visible and prevents duplicate runs."
+  },
+  {
     "timestamp": "2026-07-14T18:00:00Z",
     "title": "Fix crash when a streaming page is closed early",
     "summary": "Fixed a recurring server crash (\"ReadableStream is already closed\") that could take down the app when someone navigated away from, or lost connection to, a page that streams live data — slate playback downloads, Cami chat, poster images, and Sony camera live-view. These streams now stop cleanly the moment the viewer disconnects instead of trying to keep sending data to a closed connection."

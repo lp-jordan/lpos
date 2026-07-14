@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
 import { getB2MediaSyncService } from '@/lib/services/container';
+import { getApproveAllProgress } from '@/lib/services/cold-storage-approve-all';
 import { getB2SyncConfig } from '@/lib/store/b2-sync-config-store';
 import {
   getColdStorageStats,
@@ -42,5 +43,6 @@ export async function GET(req: NextRequest) {
     stats,
     queuedForDeletion: queued,
     missingWithinRetention: missing,
+    approveAll: getApproveAllProgress(),
   });
 }
