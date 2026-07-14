@@ -25,25 +25,33 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   const sseEvent = (data: object) => encoder.encode(`data: ${JSON.stringify(data)}\n\n`);
 
+  let closed = false;
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (data: object) => {
+        if (closed) return;
+        try { controller.enqueue(sseEvent(data)); } catch { closed = true; }
+      };
       try {
         const cached = await cacheFtpPlaybackFile(host, remotePath, (received, total) => {
           const percent = Math.min(99, Math.round((received / total) * 100));
-          controller.enqueue(sseEvent({ percent }));
+          emit({ percent });
         });
 
-        controller.enqueue(sseEvent({
+        emit({
           done: true,
           cacheKey: cached.cacheKey,
           playbackUrl: `/api/slate/playback?key=${encodeURIComponent(cached.cacheKey)}`,
           filename: cached.filename,
-        }));
+        });
       } catch (err) {
-        controller.enqueue(sseEvent({ error: (err as Error).message }));
+        emit({ error: (err as Error).message });
       } finally {
-        controller.close();
+        if (!closed) { closed = true; try { controller.close(); } catch {} }
       }
+    },
+    cancel() {
+      closed = true;
     },
   });
 

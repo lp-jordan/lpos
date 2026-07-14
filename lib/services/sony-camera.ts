@@ -214,11 +214,19 @@ export function sonyBinaryToMjpeg(sonyStream: ReadableStream<Uint8Array>): Reada
     buffer = merged;
   }
 
+  let closed = false;
+  let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = sonyStream.getReader();
+      activeReader = reader;
+      const emit = (chunk: Uint8Array) => {
+        if (closed) return;
+        try { controller.enqueue(chunk); } catch { closed = true; }
+      };
       try {
-        while (true) {
+        while (!closed) {
           const { done, value } = await reader.read();
           if (done) break;
           if (value) grow(value);
@@ -250,9 +258,9 @@ export function sonyBinaryToMjpeg(sonyStream: ReadableStream<Uint8Array>): Reada
                 `--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${dataSize}\r\n\r\n`,
               );
 
-              controller.enqueue(header);
-              controller.enqueue(jpeg);
-              controller.enqueue(enc.encode('\r\n'));
+              emit(header);
+              emit(jpeg);
+              emit(enc.encode('\r\n'));
 
               buffer = buffer.slice(totalSize);
 
@@ -271,11 +279,15 @@ export function sonyBinaryToMjpeg(sonyStream: ReadableStream<Uint8Array>): Reada
           }
         }
       } catch (err) {
-        controller.error(err);
+        if (!closed) { closed = true; try { controller.error(err); } catch {} }
       } finally {
-        controller.close();
+        if (!closed) { closed = true; try { controller.close(); } catch {} }
         reader.releaseLock();
       }
+    },
+    async cancel() {
+      closed = true;
+      try { await activeReader?.cancel(); } catch {}
     },
   });
 }

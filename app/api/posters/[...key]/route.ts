@@ -33,11 +33,27 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     if (!res.Body) return NextResponse.json({ error: 'Empty object' }, { status: 404 });
 
     const stream = res.Body as Readable;
+    let closed = false;
     const webStream = new ReadableStream<Uint8Array>({
       start(controller) {
-        stream.on('data', (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-        stream.on('end',  () => controller.close());
-        stream.on('error', (err) => controller.error(err));
+        stream.on('data', (chunk: Buffer) => {
+          if (closed) return;
+          try { controller.enqueue(new Uint8Array(chunk)); } catch { closed = true; stream.destroy(); }
+        });
+        stream.on('end', () => {
+          if (closed) return;
+          closed = true;
+          try { controller.close(); } catch {}
+        });
+        stream.on('error', (err) => {
+          if (closed) return;
+          closed = true;
+          try { controller.error(err); } catch {}
+        });
+      },
+      cancel() {
+        closed = true;
+        stream.destroy();
       },
     });
 

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-14T18:00:00Z",
+    "title": "Fix crash when a streaming page is closed early",
+    "summary": "Fixed a recurring server crash (\"ReadableStream is already closed\") that could take down the app when someone navigated away from, or lost connection to, a page that streams live data — slate playback downloads, Cami chat, poster images, and Sony camera live-view. These streams now stop cleanly the moment the viewer disconnects instead of trying to keep sending data to a closed connection."
+  },
+  {
     "timestamp": "2026-07-14T17:28:23Z",
     "title": "3-day check-in for tasks sitting in Review",
     "summary": "Editing tasks that sit in the In Review status now get a gentle 3-day check-in, modelled on the handoff nudge. LPOS re-pings the task assignees (in-app bell, Slack, and web push) every 3 days while a task waits in Review. Posting an update or clicking the new Acknowledge button in the task resets the 3-day clock; moving the task out of Review ends the check-in, and reassigning it via Handoff lets the handoff nudge take over instead. The threshold and sweep cadence are admin-tunable (default 3 days / 15 min)."

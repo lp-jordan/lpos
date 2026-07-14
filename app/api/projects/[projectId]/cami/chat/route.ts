@@ -30,8 +30,13 @@ export async function POST(req: NextRequest, { params }: Params) {
     return encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
   }
 
+  let closed = false;
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (event: object) => {
+        if (closed) return;
+        try { controller.enqueue(makeEvent(event)); } catch { closed = true; }
+      };
       try {
         const chatInput: CamiChatInput = {
           projectId,
@@ -43,22 +48,25 @@ export async function POST(req: NextRequest, { params }: Params) {
         };
 
         const result = await runCamiChat(chatInput, (statusText) => {
-          controller.enqueue(makeEvent({ type: 'status', text: statusText }));
+          emit({ type: 'status', text: statusText });
         });
 
-        controller.enqueue(makeEvent({
+        emit({
           type: 'done',
           answer: result.answer,
           sources: result.sources,
           threadSummary: result.threadSummary,
-        }));
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Cami chat failed.';
         console.error('[cami chat]', message);
-        controller.enqueue(makeEvent({ type: 'error', text: message }));
+        emit({ type: 'error', text: message });
       } finally {
-        controller.close();
+        if (!closed) { closed = true; try { controller.close(); } catch {} }
       }
+    },
+    cancel() {
+      closed = true;
     },
   });
 

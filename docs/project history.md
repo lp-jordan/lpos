@@ -2920,3 +2920,30 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit -p tsconfig.json` — 0 errors. Isolated `tsx` harness against a throwaway `LPOS_DATA_DIR` exercised the store lifecycle end-to-end (create/dedupe/listDue partial-index/markAlerted/acknowledge/resetForTask/completeForTask/re-open/FK-cascade) — all 15 assertions passed.
 
 **Assumptions / follow-ups:** Not driven in a running browser (user manages the dev server); DB + store layer verified directly, routes/monitor are type-checked thin wrappers over the verified store. In-place assignee-checkbox changes reset the clock (only Handoff fully hands off). Admin Settings UI for the two new knobs was not added (they default sensibly and are tunable via `lpos_settings`); surfacing them alongside the handoff knobs is a natural follow-up.
+
+## 2026-07-14T00:00:00Z — Fix recurring uncaughtException: ReadableStream is already closed
+
+**User prompt:** (pasted runtime crash output) "[lpos] uncaughtException: [TypeError: Invalid state: ReadableStream is already closed] { code: 'ERR_INVALID_STATE' }" (repeated).
+
+**Response summary:** Traced the recurring `uncaughtException` to streaming HTTP routes that call `controller.enqueue()`/`controller.close()` after the client has disconnected and the `ReadableStream` is already closed. Four producers lacked the closed-state guard + `cancel()` handler that `atem-liveview` already uses. Hardened all four so a client disconnect mid-stream no longer crashes the Node process.
+
+**Files changed:**
+- `app/api/slate/playback/route.ts` — SSE FTP-download progress stream
+- `app/api/projects/[projectId]/cami/chat/route.ts` — SSE Cami chat stream
+- `app/api/posters/[...key]/route.ts` — R2 poster proxy stream
+- `lib/services/sony-camera.ts` — `sonyBinaryToMjpeg` live-view MJPEG stream
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- Added a `closed` flag to each `ReadableStream`, wrapped every `enqueue` in a `try/catch` that no-ops once closed, wrapped `close()`/`error()` in `try/catch`, and added a `cancel()` handler (fired by the platform on client disconnect) that sets the flag and halts the producer.
+- slate/playback + cami/chat: introduced an `emit()` helper so the long-running progress/status callbacks and the `finally { close }` can no longer throw after disconnect.
+- posters: `cancel()` and enqueue-failure now `stream.destroy()` the source S3/R2 Node readable so its `data`/`end` events stop firing into a closed controller.
+- sony-camera: the infinite MJPEG read loop now checks `closed` (`while (!closed)`), routes frame writes through the guarded `emit()`, and `cancel()` cancels the upstream reader to break the loop.
+
+**Decision rationale:** The crash surfaces as an `uncaughtException` (not a caught route error) because these `enqueue`/`close` calls fire from detached event-loop callbacks — FTP/LLM progress callbacks, Node stream `data` events, an async read loop — outside any request-scoped try/catch. The only durable fix is to guard the controller at the producer and stop producing on `cancel()`. Reused the existing `atem-liveview` guard pattern rather than inventing a new abstraction, keeping the four streams consistent with the one that was already correct.
+
+**Alternatives considered:** (1) A shared `safeStream` wrapper helper — deferred; the four call sites differ enough (SSE vs binary, callback vs event vs loop) that inlining the same small guard is clearer and lower-risk than a premature abstraction. (2) A global `process.on('uncaughtException')` swallow — rejected as masking the symptom rather than fixing the disconnect race.
+
+**Commands/checks run:** `npx tsc --noEmit` — 0 errors across the project.
+
+**Assumptions / follow-ups:** Could not correlate crash timestamps to a specific feature, so all four latent instances were fixed rather than one. Not driven in a running browser (user manages the server); the fixes are type-checked and mirror the proven `atem-liveview` pattern. A future `safeReadableStream` helper could dedupe the guard if more streaming routes are added.
