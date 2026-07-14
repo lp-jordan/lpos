@@ -16920,6 +16920,64 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 .dlp-submit-btn { width: 100%; justify-content: center; }
 
+/* Delivery card — expandable video list (add / refresh) */
+.dlp-stale-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 3px;
+  flex: none;
+}
+.dlp-items {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dlp-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  font-size: 0.82rem;
+}
+.dlp-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.dlp-item-size { flex: none; color: var(--muted); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.dlp-item-badge {
+  flex: none;
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--line);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.dlp-item-badge--stale {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border: 1px solid rgba(219,175,95,0.4);
+}
+.dlp-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.dlp-item-notice {
+  margin: 8px 0 2px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 /* Uploading state */
 .dlp-uploading {
   align-items: center;

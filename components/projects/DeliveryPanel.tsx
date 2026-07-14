@@ -18,6 +18,20 @@ interface DeliveryLink {
   url:              string;
 }
 
+interface DeliveryItem {
+  id:               number;
+  assetId:          string | null;
+  filename:         string;
+  fileSize:         number;
+  mimeType:         string;
+  thumbnailUrl:     string | null;
+  deliveredVersion: number | null;
+  currentVersion:   number | null;
+  isStale:          boolean;
+  canRefresh:       boolean;
+  missingLocalFile: boolean;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatDate(iso: string) {
@@ -272,18 +286,121 @@ function CreateDeliveryModal({
   );
 }
 
+// ── Add videos modal ───────────────────────────────────────────────────────────
+
+function AddVideosModal({
+  projectId,
+  token,
+  assets,
+  existingAssetIds,
+  onClose,
+  onQueued,
+}: {
+  projectId:        string;
+  token:            string;
+  assets:           MediaAsset[];
+  existingAssetIds: Set<string>;
+  onClose:          () => void;
+  onQueued:         () => void;
+}) {
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
+
+  // Only assets with a local file and not already on the link can be added.
+  const addable = assets.filter((a) => a.filePath && !existingAssetIds.has(a.assetId));
+
+  function toggle(id: string) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleAdd() {
+    const assetIds = [...checkedIds];
+    if (!assetIds.length) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/delivery/${token}/assets`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ assetIds }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok) { setError(data.error ?? 'Failed to add videos'); setSubmitting(false); return; }
+      onQueued();
+      onClose();
+    } catch {
+      setError('Network error — could not add videos');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="sh-modal-backdrop" onClick={onClose} aria-hidden="true">
+      <div className="sh-modal dlp-create-modal" role="dialog" aria-label="Add videos to delivery link" onClick={(e) => e.stopPropagation()}>
+        <div className="sh-modal-header">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          <span>Add videos</span>
+          <button type="button" className="sh-modal-close" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        <p className="sh-modal-section-label">Videos to add</p>
+        <div className="dlp-asset-list">
+          {addable.map((a) => (
+            <label key={a.assetId} className="dlp-asset-row">
+              <input type="checkbox" checked={checkedIds.has(a.assetId)} onChange={() => toggle(a.assetId)} className="dlp-asset-check" />
+              <span className="dlp-asset-name" title={a.name}>{a.name}</span>
+              {a.fileSize !== null && <span className="dlp-asset-size">{formatBytes(a.fileSize)}</span>}
+            </label>
+          ))}
+          {addable.length === 0 && (
+            <p className="sh-empty" style={{ padding: '8px 0' }}>
+              No videos left to add — every deliverable asset is already on this link.
+            </p>
+          )}
+        </div>
+
+        {error && <p className="sh-error" style={{ marginTop: 8 }}>{error}</p>}
+
+        <button
+          type="button"
+          className="sh-btn sh-btn--primary dlp-submit-btn"
+          disabled={checkedIds.size === 0 || submitting}
+          onClick={() => void handleAdd()}
+        >
+          {submitting ? 'Adding…' : checkedIds.size > 0 ? `Add ${checkedIds.size} video${checkedIds.size !== 1 ? 's' : ''}` : 'Add videos'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Delivery link card ────────────────────────────────────────────────────────
 
 function DeliveryLinkCard({
   link,
   projectId,
+  assets,
   onRevoked,
   onUpdated,
+  onRefetch,
 }: {
   link:      DeliveryLink;
   projectId: string;
+  assets:    MediaAsset[];
   onRevoked: (token: string) => void;
   onUpdated: (token: string, patch: Partial<DeliveryLink>) => void;
+  onRefetch: () => void;
 }) {
   const [copied,      setCopied]      = useState(false);
   const [revoking,    setRevoking]    = useState(false);
@@ -292,6 +409,56 @@ function DeliveryLinkCard({
   const [editLabel,   setEditLabel]   = useState(link.label ?? '');
   const [editSaving,  setEditSaving]  = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Expandable video list + version tracking
+  const [expanded,     setExpanded]     = useState(false);
+  const [items,        setItems]        = useState<DeliveryItem[] | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsError,   setItemsError]   = useState<string | null>(null);
+  const [refreshing,   setRefreshing]   = useState(false);
+  const [showAdd,      setShowAdd]      = useState(false);
+  const [notice,       setNotice]       = useState<string | null>(null);
+
+  const loadItems = useCallback(async () => {
+    setItemsLoading(true);
+    setItemsError(null);
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/items`);
+      const data = await res.json() as { items?: DeliveryItem[]; error?: string };
+      if (!res.ok) { setItemsError(data.error ?? 'Failed to load videos'); return; }
+      setItems(data.items ?? []);
+    } catch {
+      setItemsError('Network error — could not load videos');
+    } finally {
+      setItemsLoading(false);
+    }
+  }, [projectId, link.token]);
+
+  function toggleExpanded() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && items === null) void loadItems();
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setNotice(null);
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/refresh`, { method: 'POST' });
+      const data = await res.json() as { ok?: boolean; refreshed?: number; error?: string };
+      if (!res.ok) { setNotice(data.error ?? 'Refresh failed'); return; }
+      if (!data.refreshed) { setNotice('Everything is already up to date.'); return; }
+      setNotice(`Updating ${data.refreshed} video${data.refreshed !== 1 ? 's' : ''} to the latest version — watch the upload tray.`);
+    } catch {
+      setNotice('Network error — could not refresh');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const staleCount = items?.filter((i) => i.isStale).length ?? 0;
+  const refreshableCount = items?.filter((i) => i.canRefresh).length ?? 0;
+  const existingAssetIds = new Set((items ?? []).map((i) => i.assetId).filter((x): x is string => !!x));
 
   const expiry = expiryMeta(link.expires_at);
 
@@ -394,6 +561,18 @@ function DeliveryLinkCard({
         <div className="sh-card-actions">
           <button
             type="button"
+            className="sh-card-action-btn"
+            title={expanded ? 'Hide videos' : 'Show videos'}
+            aria-expanded={expanded}
+            onClick={toggleExpanded}
+          >
+            {staleCount > 0 && <span className="dlp-stale-dot" title={`${staleCount} newer version${staleCount !== 1 ? 's' : ''} available`} />}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}>
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <button
+            type="button"
             className="sh-card-action-btn sh-card-action-btn--accent"
             title="Copy delivery link"
             onClick={handleCopy}
@@ -444,6 +623,74 @@ function DeliveryLinkCard({
       <div className="sh-card-url-row">
         <span className="sh-card-url">{link.url}</span>
       </div>
+
+      {/* Expandable: videos + add / refresh */}
+      {expanded && (
+        <div className="dlp-items">
+          {itemsLoading && <p className="sh-empty" style={{ padding: '6px 0' }}>Loading videos…</p>}
+          {itemsError   && <p className="sh-error">{itemsError}</p>}
+
+          {!itemsLoading && !itemsError && items && (
+            <>
+              {items.length === 0 && <p className="sh-empty" style={{ padding: '6px 0' }}>No videos on this link.</p>}
+              {items.map((it) => (
+                <div key={it.id} className="dlp-item-row">
+                  <span className="dlp-item-name" title={it.filename}>{it.filename}</span>
+                  {it.isStale ? (
+                    <span className="dlp-item-badge dlp-item-badge--stale" title={it.missingLocalFile ? 'A newer version exists but its file is not on disk' : 'A newer version is available'}>
+                      v{it.deliveredVersion} → v{it.currentVersion}{it.missingLocalFile ? ' (offline)' : ''}
+                    </span>
+                  ) : it.deliveredVersion != null ? (
+                    <span className="dlp-item-badge">v{it.deliveredVersion}</span>
+                  ) : null}
+                  <span className="dlp-item-size">{formatBytes(it.fileSize)}</span>
+                </div>
+              ))}
+
+              <div className="dlp-item-actions">
+                <button
+                  type="button"
+                  className="sh-btn"
+                  style={{ fontSize: '0.75rem', padding: '5px 10px' }}
+                  onClick={() => setShowAdd(true)}
+                >
+                  + Add videos
+                </button>
+                <button
+                  type="button"
+                  className="sh-btn sh-btn--primary"
+                  style={{ fontSize: '0.75rem', padding: '5px 10px' }}
+                  disabled={refreshing || refreshableCount === 0}
+                  title={
+                    staleCount === 0 ? 'All videos are the latest version'
+                    : refreshableCount === 0 ? 'Newer versions exist but their files are not on disk'
+                    : 'Rebuild stale videos from their latest version'
+                  }
+                  onClick={() => void handleRefresh()}
+                >
+                  {refreshing ? 'Refreshing…' : refreshableCount > 0 ? `Refresh to latest (${refreshableCount})` : 'Refresh to latest'}
+                </button>
+              </div>
+
+              {notice && <p className="dlp-item-notice">{notice}</p>}
+            </>
+          )}
+        </div>
+      )}
+
+      {showAdd && (
+        <AddVideosModal
+          projectId={projectId}
+          token={link.token}
+          assets={assets}
+          existingAssetIds={existingAssetIds}
+          onClose={() => setShowAdd(false)}
+          onQueued={() => {
+            setNotice('Videos queued — watch the upload tray. They’ll appear on the link when ready.');
+            onRefetch();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -541,8 +788,10 @@ export function DeliveryPanelBody({
                 key={l.token}
                 link={l}
                 projectId={projectId}
+                assets={assets}
                 onRevoked={handleRevoked}
                 onUpdated={handleUpdated}
+                onRefetch={() => void fetchLinks()}
               />
             ))}
           </div>
