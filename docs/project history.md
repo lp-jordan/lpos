@@ -2837,3 +2837,21 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `tsc --noEmit -p tsconfig.json` → 0 errors (project-wide). ESLint CLI not runnable non-interactively in this repo (flat-config/next-lint prompts); relied on tsc. Not manually run in-app (dev server is user-managed).
 
 **Assumptions / follow-ups:** Assumes the internal Assets tab is the intended surface (confirmed with user). Edge case: if a folder and one of its descendant files are both selected, the file is included once (first occurrence wins). The client-facing delivery page still lacks a zip bulk-download (separate stored priority) — not touched here.
+
+## 2026-07-14T13:15:10Z — Architecture analysis: public-web split & studio bridge (analysis only, no files changed)
+
+**User prompt:** "We've done this exercise a few times, but let's think through what would need to change to allow some parts of LPOS to be accessible publically on the web and what parts would then need a bridge to this pc to run local processes and connect to hardware physically at the studio."
+
+**Response summary:** Analysis-only. Mapped the current serving/auth boundary and the full hardware/local-process inventory, then framed the public/local split. Key findings: LPOS today is a single process on the studio PC (`server.ts`, plain HTTP `0.0.0.0:3000`) with Tailscale (`lpos.tail856ed3.ts.net`) as the de-facto security perimeter; every `app/api/studio/*` route reaches hardware via localhost bridges (ATEM `:4011`, Sony SDK `:6107`, Amaran Desktop `:33782`, WLED/cameras by LAN IP) plus local ffmpeg/avfoundation, Resolve Python worker, whisper, LibreOffice, and B2 source-dir walks — so any surface that goes truly public loses the localhost adjacency those routes depend on. Proposed a three-tier partition: (1) Public/cloud = `/platform`, LeaderPass delivery, CF Stream playback, client comments (already cloud-leaning); (2) Internal-portable = SQLite CRUD, portable only if the DB moves or an agent serves it; (3) Studio-bound = all hardware + local FS, needs a bridge. Recommended the outbound-agent bridge topology (studio dials out to cloud, cloud never dials in) as a generalization of the existing editpanel `X-EP-Token` + 10s heartbeat pattern, over an inbound tunnel. Flagged required changes: carve the process boundary, harden the auth perimeter (drop Tailscale-as-perimeter assumptions, `LPOS_SKIP_AUTH`, generous `isPublicPath`), turn `app/api/studio/*` into a command bus, and solve realtime media (liveview MJPEG / slate-audio WebRTC / Socket.IO) separately from request/response. Tied to existing plans: `project_platform_quarantine` (tier-1 reference), `project_cloudflare_auto_upload` (removes media from studio-availability path).
+
+**Files changed:** None (analysis/discussion only). Only this project-history entry and the matching changelog.json entry were written.
+
+**Implementation summary:** No code. Two Explore agents mapped (a) the serving/middleware/auth boundary and (b) the hardware/local-process integration inventory across lpos-dashboard, lpos-server-app, editpanel, leaderprompt.
+
+**Decision rationale:** Recommended outbound-agent over inbound-tunnel because it avoids exposing the studio box to the public edge, survives NAT/firewalls, and reuses the already-working editpanel heartbeat + hashed per-device token model. Recommended treating LeaderPass/`/platform` as the only genuinely public tier and keeping the internal core reachable by scoped token only, per the platform-quarantine plan.
+
+**Alternatives considered:** Inbound Tailscale Funnel / Cloudflare Tunnel keeping the monolith (rejected as the default — exposes the whole studio surface). Keeping all data local with a thin cloud proxy vs. splitting client-facing tables to a cloud DB — presented as the central fork, not decided.
+
+**Commands/checks run:** None (no code changed). Codebase mapped via read-only exploration.
+
+**Assumptions / follow-ups:** Open decision left with the user: data location (local-only + agent-served vs. split to cloud). Offered next deep-dives: the command-bus contract for `app/api/studio/*`, the outbound-agent auth handshake, or the realtime-media relay split. No implementation started.

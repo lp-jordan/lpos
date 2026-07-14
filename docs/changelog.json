@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-14T13:15:10Z",
+    "title": "Architecture analysis: public-web split & studio bridge",
+    "summary": "Planning/analysis only — no product change. Mapped what it would take to run parts of LPOS on the public web while keeping hardware and local processes on the studio PC behind a bridge. Concluded LPOS is currently one process on the studio machine with Tailscale as its de-facto security perimeter, proposed a three-tier split (public/cloud, internal-portable, studio-bound), and recommended promoting the existing editpanel token+heartbeat pattern into a first-class outbound studio agent rather than exposing the studio via an inbound tunnel."
+  },
+  {
     "timestamp": "2026-07-10T16:00:00Z",
     "title": "Cleaner camera logs",
     "summary": "Camera connection messages no longer flood or garble the log. A camera that keeps failing to connect now reports it once instead of repeating every 15 seconds, retry attempts aren't spelled out line by line, and messages from different cameras no longer scramble together — each line stays intact and readable."
