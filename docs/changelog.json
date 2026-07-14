@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-14T17:25:42Z",
+    "title": "Right-click Copy Path on project tabs",
+    "summary": "You can now right-click any tab inside a project (Media, Photos, Scripts, Transcripts, Assets, Pass Prep, Client Uploads) and choose Copy Path to get a shareable deep link straight to that tab. Paste the link to a teammate and it opens the project on the exact tab. To make this work the active tab is now reflected in the URL as a ?tab= parameter, so links copied from the address bar deep-link too."
+  },
+  {
     "timestamp": "2026-07-14T13:15:10Z",
     "title": "Architecture analysis: public-web split & studio bridge",
     "summary": "Planning/analysis only — no product change. Mapped what it would take to run parts of LPOS on the public web while keeping hardware and local processes on the studio PC behind a bridge. Concluded LPOS is currently one process on the studio machine with Tailscale as its de-facto security perimeter, proposed a three-tier split (public/cloud, internal-portable, studio-bound), and recommended promoting the existing editpanel token+heartbeat pattern into a first-class outbound studio agent rather than exposing the studio via an inbound tunnel."

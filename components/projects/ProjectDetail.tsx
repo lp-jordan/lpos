@@ -15,6 +15,7 @@ import { LeaderPassAiToggle } from '@/components/projects/LeaderPassAiToggle';
 import { TranscriptViewerPanel } from '@/components/media/TranscriptViewerPanel';
 import type { TranscriptEntry } from '@/app/api/projects/[projectId]/transcripts/route';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
+import { useToast } from '@/contexts/ToastContext';
 import { clientProjectsHref, projectHref } from '@/lib/urls/project-url';
 
 function formatDate(iso: string): string {
@@ -27,6 +28,29 @@ function formatTranscriptLabel(filename: string): string {
 }
 
 type Tab = 'scripts' | 'media' | 'photos' | 'transcripts' | 'assets' | 'passPrep' | 'clientAssets';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'clientAssets', label: 'Client Uploads' },
+  { id: 'scripts',      label: 'Scripts' },
+  { id: 'media',        label: 'Media' },
+  { id: 'photos',       label: 'Photos' },
+  { id: 'transcripts',  label: 'Transcripts' },
+  { id: 'assets',       label: 'Assets' },
+  { id: 'passPrep',     label: 'Pass Prep' },
+];
+
+function isTab(value: string | null): value is Tab {
+  return value != null && TABS.some((t) => t.id === value);
+}
+
+function IconLink() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
 
 interface Props {
   project: Project;
@@ -47,7 +71,12 @@ function Checkbox({ checked }: Readonly<{ checked: boolean }>) {
 export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Props>) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>('media');
+  const { openMenu } = useContextMenu();
+  const { toast } = useToast();
+  const [tab, setTab] = useState<Tab>(() => {
+    const fromUrl = searchParams.get('tab');
+    return isTab(fromUrl) ? fromUrl : 'media';
+  });
   const [passPrepTranscripts, setPassPrepTranscripts] = useState<string[]>([]);
   const [selectedTranscriptJobId, setSelectedTranscriptJobId] = useState<string | null>(null);
   const [sentScriptAssetIds, setSentScriptAssetIds] = useState<Set<string>>(new Set());
@@ -70,19 +99,48 @@ export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Pro
     setTab('scripts');
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'clientAssets', label: 'Client Uploads' },
-    { id: 'scripts',      label: 'Scripts' },
-    { id: 'media',        label: 'Media' },
-    { id: 'photos',       label: 'Photos' },
-    { id: 'transcripts',  label: 'Transcripts' },
-    { id: 'assets',       label: 'Assets' },
-    { id: 'passPrep',     label: 'Pass Prep' },
-  ];
-
   useEffect(() => {
     if (deepLinkedAssetId) setTab('media');
   }, [deepLinkedAssetId]);
+
+  // Keep the URL bar in sync with the active tab so a link copied from the
+  // address bar (or shared via the tab context menu) deep-links back here.
+  // history.replaceState avoids a Next navigation / re-fetch of tab content.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tab') !== tab) {
+      url.searchParams.set('tab', tab);
+      window.history.replaceState(window.history.state, '', url.toString());
+    }
+  }, [tab]);
+
+  const tabPathFor = useCallback((tabId: Tab): string => {
+    const path = project.clientName
+      ? projectHref(project.clientName, project.projectId)
+      : `/projects/${project.projectId}`;
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `${origin}${path}?tab=${tabId}`;
+  }, [project.clientName, project.projectId]);
+
+  const openTabMenu = useCallback((tabId: Tab, label: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY, [
+      {
+        type: 'item',
+        label: 'Copy Path',
+        icon: <IconLink />,
+        onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(tabPathFor(tabId));
+            toast({ id: `copy-tab-path:${project.projectId}:${tabId}`, kind: 'publish', tone: 'success', title: 'Path copied', body: `${label} — ${project.name}` });
+          } catch {
+            toast({ id: `copy-tab-path-err:${project.projectId}:${tabId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard.' });
+          }
+        },
+      },
+    ]);
+  }, [openMenu, tabPathFor, toast, project.projectId, project.name]);
 
   const backHref = project.clientName ? clientProjectsHref(project.clientName) : '/projects';
 
@@ -114,12 +172,14 @@ export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Pro
       </div>
 
       <div className="proj-tabs">
-        {tabs.map((item) => (
+        {TABS.map((item) => (
           <button
             key={item.id}
             type="button"
             className={`proj-tab${tab === item.id ? ' active' : ''}`}
             onClick={() => setTab(item.id)}
+            onContextMenu={(e) => openTabMenu(item.id, item.label, e)}
+            title="Right-click to copy a shareable path to this tab"
           >
             {item.label}
           </button>

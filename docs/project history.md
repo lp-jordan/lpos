@@ -2855,3 +2855,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** None (no code changed). Codebase mapped via read-only exploration.
 
 **Assumptions / follow-ups:** Open decision left with the user: data location (local-only + agent-served vs. split to cloud). Offered next deep-dives: the command-bus contract for `app/api/studio/*`, the outbound-agent auth handshake, or the realtime-media relay split. No implementation started.
+
+## 2026-07-14T17:25:42Z — LPOS: right-click Copy Path on project tabs (tab deep-linking)
+
+**User prompt:** "Can we add the ability to right click on the individual tabs inside a project and \"Copy Path\" to deeplink straight to that project/tab? For example, right click and copy photo path on Steve Heroux, send it to team member, bam."
+
+**Response summary:** Added a right-click context menu on each intra-project tab (Media, Photos, Scripts, Transcripts, Assets, Pass Prep, Client Uploads) with a single "Copy Path" item that copies an absolute shareable URL deep-linking to that project + tab. Made the active tab URL-addressable via a `?tab=<id>` query param so pasted links land on the correct tab.
+
+**Files changed:**
+- `components/projects/ProjectDetail.tsx`
+- `docs/project history.md`, `docs/changelog.json`
+
+**Implementation summary:**
+- Promoted the previously in-component `tabs` array to a module-level `TABS` constant plus an `isTab()` type guard so both the initial-state resolver and the menu can reference it.
+- Initial tab state now reads `?tab=` from `useSearchParams()` (falls back to `media` when absent/invalid), so a pasted deep link opens on the right tab.
+- Added a lightweight URL sync effect that writes the active tab into the address bar via `window.history.replaceState` (not the Next router) whenever the tab changes — keeps the URL truthful without triggering a soft navigation / tab-content refetch.
+- Wired `onContextMenu` on each `.proj-tab` button to the existing global `useContextMenu()` menu, showing one "Copy Path" item (link icon). It builds `origin + projectHref(clientName, projectId) + ?tab=<id>` and writes it to the clipboard, with success/error feedback via the existing `useToast()` toast (mirrors MediaTab's "Copy Stream URL").
+- Falls back to the legacy `/projects/<projectId>?tab=<id>` route when a project has no client name (the legacy route redirects to the canonical client-prefixed URL and preserves the query string).
+
+**Decision rationale:** Reused the app-wide `ContextMenuProvider` + `ToastContext` already mounted globally rather than building bespoke UI, matching the existing "Copy Stream URL" pattern in MediaTab for consistency. Chose a `?tab=` query param over the existing (unused-in-this-view) sub-route pages because the live tab UI is local state within one page; a query param is the minimal, low-risk way to make it addressable without restructuring routing. Used `history.replaceState` instead of `router.replace` to avoid re-rendering/refetching tab content on every tab click in a production tree with live users.
+
+**Alternatives considered:** (1) Point deep links at the existing `/scripts`, `/shoot`, etc. sub-route pages — rejected because those render a different component tree and the tab ids don't map cleanly onto them. (2) `router.replace` for URL sync — rejected due to soft-navigation churn.
+
+**Commands/checks run:** `npx tsc --noEmit -p tsconfig.json` — 0 errors across the project.
+
+**Assumptions / follow-ups:** Assumed the canonical client-prefixed project route is the desired share target. Not verified in a running browser (user manages the dev server); change is type-checked and self-contained. No new dependencies.
