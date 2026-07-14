@@ -3,11 +3,14 @@ import type {
   EntityType,
   Prospect,
   ProspectContact,
+  ProspectDocument,
+  ProspectDocumentType,
   ProspectStatus,
   ProspectStatusHistory,
   ProspectUpdate,
   ProspectUpdateAttachment,
 } from '@/lib/models/prospect';
+import { extractGoogleFileId } from '@/lib/utils/google-doc';
 import { getCoreDb, withTransaction } from './core-db';
 
 // ── Row types ─────────────────────────────────────────────────────────────────
@@ -59,6 +62,17 @@ interface ContactRow {
   phone:       string | null;
   linkedin:    string | null;
   created_at:  string;
+}
+
+interface DocumentRow {
+  document_id: string;
+  prospect_id: string;
+  type:        string;
+  title:       string | null;
+  url:         string;
+  file_id:     string | null;
+  created_at:  string;
+  updated_at:  string;
 }
 
 interface UpdateRow {
@@ -128,6 +142,19 @@ function rowToContact(row: ContactRow): ProspectContact {
     phone:      row.phone,
     linkedin:   row.linkedin,
     createdAt:  row.created_at,
+  };
+}
+
+function rowToDocument(row: DocumentRow): ProspectDocument {
+  return {
+    documentId: row.document_id,
+    prospectId: row.prospect_id,
+    type:       row.type as ProspectDocumentType,
+    title:      row.title,
+    url:        row.url,
+    fileId:     row.file_id,
+    createdAt:  row.created_at,
+    updatedAt:  row.updated_at,
   };
 }
 
@@ -435,6 +462,7 @@ export class ProspectStore {
     withTransaction(db, () => {
       db.prepare('DELETE FROM prospect_users WHERE prospect_id = ?').run(prospectId);
       db.prepare('DELETE FROM prospect_contacts WHERE prospect_id = ?').run(prospectId);
+      db.prepare('DELETE FROM prospect_documents WHERE prospect_id = ?').run(prospectId);
       db.prepare('DELETE FROM prospect_updates WHERE prospect_id = ?').run(prospectId);
       db.prepare('DELETE FROM prospect_status_history WHERE prospect_id = ?').run(prospectId);
       db.prepare('DELETE FROM prospect_notifications WHERE prospect_id = ?').run(prospectId);
@@ -542,6 +570,70 @@ export class ProspectStore {
     const result = getCoreDb()
       .prepare('DELETE FROM prospect_contacts WHERE contact_id = ?')
       .run(contactId) as { changes: number };
+    return result.changes > 0;
+  }
+
+  // ── Documents ──────────────────────────────────────────────────────────────
+
+  getDocuments(prospectId: string): ProspectDocument[] {
+    return (
+      getCoreDb()
+        .prepare('SELECT * FROM prospect_documents WHERE prospect_id = ? ORDER BY created_at ASC')
+        .all(prospectId) as DocumentRow[]
+    ).map(rowToDocument);
+  }
+
+  addDocument(
+    prospectId: string,
+    input: { type: ProspectDocumentType; url: string; title?: string | null },
+  ): ProspectDocument {
+    const now = new Date().toISOString();
+    const doc: ProspectDocument = {
+      documentId: randomUUID(),
+      prospectId,
+      type:       input.type,
+      title:      input.title ?? null,
+      url:        input.url.trim(),
+      fileId:     extractGoogleFileId(input.url),
+      createdAt:  now,
+      updatedAt:  now,
+    };
+    getCoreDb().prepare(`
+      INSERT INTO prospect_documents (document_id, prospect_id, type, title, url, file_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(doc.documentId, doc.prospectId, doc.type, doc.title, doc.url, doc.fileId, doc.createdAt, doc.updatedAt);
+    return doc;
+  }
+
+  updateDocument(
+    documentId: string,
+    patch: { type?: ProspectDocumentType; url?: string; title?: string | null },
+  ): ProspectDocument | null {
+    const row = getCoreDb()
+      .prepare('SELECT * FROM prospect_documents WHERE document_id = ?')
+      .get(documentId) as DocumentRow | undefined;
+    if (!row) return null;
+    const current = rowToDocument(row);
+    const next: ProspectDocument = {
+      ...current,
+      type:      patch.type  ?? current.type,
+      title:     patch.title !== undefined ? patch.title : current.title,
+      url:       patch.url   !== undefined ? patch.url.trim() : current.url,
+      updatedAt: new Date().toISOString(),
+    };
+    // Re-derive the Google file id whenever the URL changes.
+    next.fileId = patch.url !== undefined ? extractGoogleFileId(next.url) : current.fileId;
+    getCoreDb().prepare(`
+      UPDATE prospect_documents SET type = ?, title = ?, url = ?, file_id = ?, updated_at = ?
+      WHERE document_id = ?
+    `).run(next.type, next.title, next.url, next.fileId, next.updatedAt, documentId);
+    return next;
+  }
+
+  deleteDocument(documentId: string): boolean {
+    const result = getCoreDb()
+      .prepare('DELETE FROM prospect_documents WHERE document_id = ?')
+      .run(documentId) as { changes: number };
     return result.changes > 0;
   }
 

@@ -25,6 +25,7 @@ export default async function PersonDetailPage({
   if (!person) notFound();
 
   const contacts      = store.getContacts(personId);
+  const documents     = store.getDocuments(personId);
   const statusHistory = store.getStatusHistory(personId);
   const initialUpdates = store.getUpdates(personId);
   const currentUser   = toUserSummary(getUserById(session.userId));
@@ -41,6 +42,7 @@ export default async function PersonDetailPage({
     <PersonDetailClient
       initialPerson={person}
       initialContacts={contacts}
+      initialDocuments={documents}
       initialStatusHistory={statusHistory}
       initialUpdates={initialUpdates}
       accessUsers={accessUsers}

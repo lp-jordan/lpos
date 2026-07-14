@@ -68,6 +68,20 @@ export const ENTITY_TYPES = [
 
 export type EntityType = 'individual' | 'organization';
 
+/** Document slots shown on a person page. The first three are the fixed,
+ *  always-rendered slots (empty if unlinked); `other` backs user-added extras
+ *  (SOW, invoice, etc.) whose label is stored per-document in `title`. */
+export const PROSPECT_DOCUMENT_TYPES = [
+  { value: 'proposal',  label: 'Proposal'           },
+  { value: 'contract',  label: 'Contract'           },
+  { value: 'blueprint', label: 'Blueprint Outcomes' },
+] as const;
+
+export type ProspectDocumentType = 'proposal' | 'contract' | 'blueprint' | 'other';
+
+/** The three fixed slots, in display order. Extras (`other`) render after them. */
+export const FIXED_DOCUMENT_TYPES: ProspectDocumentType[] = ['proposal', 'contract', 'blueprint'];
+
 export interface Prospect {
   prospectId:  string;
   company:     string;
@@ -120,6 +134,21 @@ export interface ProspectContact {
   phone:       string | null;
   linkedin:    string | null;
   createdAt:   string;
+}
+
+export interface ProspectDocument {
+  documentId:  string;
+  prospectId:  string;
+  type:        ProspectDocumentType;
+  /** Display caption under the cover. For `other` docs this is the slot label. */
+  title:       string | null;
+  /** The living Google Doc (or any) URL. */
+  url:         string;
+  /** Google file id extracted from `url`, when it is a Google Docs/Drive link.
+   *  Drives thumbnail fetch + PDF export; null for non-Google URLs. */
+  fileId:      string | null;
+  createdAt:   string;
+  updatedAt:   string;
 }
 
 export interface ProspectUpdateAttachment {

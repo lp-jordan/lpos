@@ -3,11 +3,12 @@
 import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { EntityType, Prospect, ProspectContact, ProspectStatus, ProspectStatusHistory, ProspectUpdate } from '@/lib/models/prospect';
+import type { EntityType, Prospect, ProspectContact, ProspectDocument, ProspectStatus, ProspectStatusHistory, ProspectUpdate } from '@/lib/models/prospect';
 import { ACCOUNT_MODELS, BILLING_STATUSES, ENTITY_TYPES, EXPANSION_POTENTIALS, PERSON_SOURCES, PROSPECT_STAGES, REVENUE_TYPES } from '@/lib/models/prospect';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ContactModal } from '@/components/prospects/ContactModal';
+import { DocumentsPanel } from '@/components/prospects/DocumentsPanel';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { UpdatesLog } from '@/components/prospects/UpdatesLog';
 import { PromoteModal } from '@/components/prospects/PromoteModal';
@@ -814,6 +815,7 @@ function OverflowMenu({ person, onArchiveToggle }: { person: Prospect; onArchive
 interface Props {
   initialPerson:        Prospect;
   initialContacts:      ProspectContact[];
+  initialDocuments:     ProspectDocument[];
   initialStatusHistory: ProspectStatusHistory[];
   initialUpdates:       ProspectUpdate[];
   accessUsers:          UserSummary[];
@@ -821,11 +823,12 @@ interface Props {
   currentUser:          UserSummary | null;
 }
 
-export function PersonDetailClient({ initialPerson, initialContacts, initialUpdates, accessUsers, allUsers, currentUser }: Props) {
+export function PersonDetailClient({ initialPerson, initialContacts, initialDocuments, initialUpdates, accessUsers, allUsers, currentUser }: Props) {
   const router = useRouter();
 
   const [person,         setPerson]         = useState(initialPerson);
   const [contacts,       setContacts]       = useState(initialContacts);
+  const [documents,      setDocuments]      = useState(initialDocuments);
   const [savingStatus,   setSavingStatus]   = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [savingArchive,  setSavingArchive]  = useState(false);
@@ -965,18 +968,21 @@ export function PersonDetailClient({ initialPerson, initialContacts, initialUpda
         </div>
 
         {/* Right column */}
-        <Panel style={{ minHeight: 300 }}>
-          <SectionLabel>Updates</SectionLabel>
-          <UpdatesLog
-            prospectId={person.prospectId}
-            companyName={person.company}
-            personStatus={person.status}
-            initialUpdates={initialUpdates}
-            currentUserId={currentUser?.id ?? ''}
-            allUsers={allUsers}
-            mentionUsers={accessUsers}
-          />
-        </Panel>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Panel style={{ minHeight: 300 }}>
+            <SectionLabel>Updates</SectionLabel>
+            <UpdatesLog
+              prospectId={person.prospectId}
+              companyName={person.company}
+              personStatus={person.status}
+              initialUpdates={initialUpdates}
+              currentUserId={currentUser?.id ?? ''}
+              allUsers={allUsers}
+              mentionUsers={accessUsers}
+            />
+          </Panel>
+          <DocumentsPanel personId={person.prospectId} documents={documents} onChange={setDocuments} />
+        </div>
       </div>
 
       {/* Promote modal */}

@@ -277,6 +277,18 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_prospect_contacts_prospect ON prospect_contacts(prospect_id);
 
+    CREATE TABLE IF NOT EXISTS prospect_documents (
+      document_id TEXT PRIMARY KEY,
+      prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,
+      type        TEXT NOT NULL,
+      title       TEXT,
+      url         TEXT NOT NULL,
+      file_id     TEXT,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_documents_prospect ON prospect_documents(prospect_id);
+
     CREATE TABLE IF NOT EXISTS prospect_updates (
       update_id   TEXT PRIMARY KEY,
       prospect_id TEXT NOT NULL REFERENCES prospects(prospect_id) ON DELETE CASCADE,

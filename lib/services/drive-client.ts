@@ -31,6 +31,7 @@ function driveCall<T>(fn: () => Promise<T>): Promise<T> {
 // ── Singleton ─────────────────────────────────────────────────────────────────
 
 let _drive: drive_v3.Drive | null = null;
+let _auth:  InstanceType<typeof google.auth.GoogleAuth> | null = null;
 
 export function getDriveClient(): drive_v3.Drive {
   if (_drive) return _drive;
@@ -53,6 +54,7 @@ export function getDriveClient(): drive_v3.Drive {
     scopes: ['https://www.googleapis.com/auth/drive'],
   });
 
+  _auth  = auth;
   _drive = google.drive({ version: 'v3', auth });
   return _drive;
 }
@@ -205,6 +207,39 @@ export async function getFileMetadata(fileId: string): Promise<drive_v3.Schema$F
     fields: 'id, name, mimeType, parents, modifiedTime, webViewLink, trashed',
   }));
   return res.data;
+}
+
+/**
+ * Fetch a file's preview thumbnail bytes, or null when unavailable.
+ *
+ * Drive returns `thumbnailLink` (a short-lived googleusercontent URL) only for
+ * files the service account can actually read — i.e. files inside the Shared
+ * Team Drive it's a member of. Docs living in someone's personal Drive resolve
+ * to null here, and callers fall back to a generated cover. The link needs the
+ * service-account bearer token to fetch, so we proxy it rather than hand the
+ * raw URL to the browser.
+ */
+export async function getFileThumbnail(
+  fileId: string,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const drive = getDriveClient();
+  const meta = await driveCall(() => drive.files.get({
+    ...SHARED_DRIVE_PARAMS,
+    fileId,
+    fields: 'thumbnailLink, trashed',
+  }));
+  const link = meta.data.thumbnailLink;
+  if (!link || meta.data.trashed) return null;
+
+  const client = await _auth!.getClient();
+  const { token } = await client.getAccessToken();
+  if (!token) return null;
+
+  const res = await fetch(link, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) return null;
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, contentType: res.headers.get('content-type') ?? 'image/jpeg' };
 }
 
 /**
