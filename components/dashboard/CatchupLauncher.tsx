@@ -4,6 +4,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { CatchupPayload, CatchupRow, CatchupSectionKey } from '@/lib/models/catchup';
 
+// Per-user "already read today" marker. Stores the local calendar date the user
+// last opened the catch-up; when it matches today, the launcher collapses to a
+// thin glowing line. Naturally resets at local midnight (new date → no match →
+// full pill returns for the new day's recap).
+const READ_KEY = 'lpos-catchup-read';
+
+function todayKey(): string {
+  const d = new Date();
+  const p = (n: number) => (n < 10 ? `0${n}` : String(n));
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
@@ -37,7 +49,25 @@ export function CatchupLauncher() {
   const [error, setError] = useState(false);
   const [collapsed, setCollapsed] = useState<Partial<Record<CatchupSectionKey, boolean>>>({});
   const [failuresOnly, setFailuresOnly] = useState(false);
+  const [read, setRead] = useState(false); // true once opened today → collapse to a thin line
   const router = useRouter();
+
+  useEffect(() => {
+    try {
+      setRead(localStorage.getItem(READ_KEY) === todayKey());
+    } catch {
+      // localStorage unavailable — stay expanded.
+    }
+  }, []);
+
+  function markRead() {
+    try {
+      localStorage.setItem(READ_KEY, todayKey());
+    } catch {
+      // ignore
+    }
+    setRead(true);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,6 +85,7 @@ export function CatchupLauncher() {
 
   function openDrawer() {
     setOpen(true);
+    markRead();
     if (!data && !loading) load();
   }
 
@@ -80,18 +111,28 @@ export function CatchupLauncher() {
 
   return (
     <>
-      <button type="button" className="catchup-pill" onClick={openDrawer}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="3" y="4" width="18" height="18" rx="2" />
-          <line x1="16" y1="2" x2="16" y2="6" />
-          <line x1="8" y1="2" x2="8" y2="6" />
-          <line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-        <span>Daily Catch-Up</span>
-        <svg className="catchup-pill-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <polyline points="9 18 15 12 9 6" />
-        </svg>
-      </button>
+      {read ? (
+        <button
+          type="button"
+          className="catchup-line"
+          onClick={openDrawer}
+          aria-label="Open Daily Catch-Up"
+          title="Daily Catch-Up"
+        />
+      ) : (
+        <button type="button" className="catchup-pill" onClick={openDrawer}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="18" rx="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          <span>Daily Catch-Up</span>
+          <svg className="catchup-pill-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </button>
+      )}
 
       {open && (
         <div className="catchup-overlay" onClick={() => setOpen(false)}>

@@ -19927,6 +19927,40 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .catchup-pill svg { color: var(--accent); }
 .catchup-pill-chevron { color: var(--muted-soft); }
 
+/* Collapsed state — after the user's first read of the day, the pill becomes a
+   thin, subtly glowing gold line. Same layout slot / negative margins as the
+   pill; the visible 3px line is drawn via ::before inside a taller hit area. */
+.catchup-line {
+  width: 156px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  margin: -20px auto -20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.catchup-line::before {
+  content: "";
+  display: block;
+  width: 130px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(219, 175, 95, 0.12), var(--accent), rgba(219, 175, 95, 0.12));
+  animation: catchup-line-glow 3.4s ease-in-out infinite;
+  transition: width 0.16s ease, box-shadow 0.16s ease;
+}
+.catchup-line:hover::before {
+  width: 156px;
+  box-shadow: 0 0 16px rgba(219, 175, 95, 0.75);
+}
+@keyframes catchup-line-glow {
+  0%, 100% { box-shadow: 0 0 7px rgba(219, 175, 95, 0.35); opacity: 0.72; }
+  50%      { box-shadow: 0 0 15px rgba(219, 175, 95, 0.7);  opacity: 0.98; }
+}
+
 .catchup-overlay {
   position: fixed;
   inset: 0;
