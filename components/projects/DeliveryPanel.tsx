@@ -286,32 +286,45 @@ function CreateDeliveryModal({
   );
 }
 
-// ── Add videos modal ───────────────────────────────────────────────────────────
+// ── Manage videos modal (frame-review-link style) ──────────────────────────────
+// Opened from the row's "N files" meta button. Lists the link's videos with
+// version badges + a "Refresh to latest" action, and an add-videos checkbox list.
 
-function AddVideosModal({
+function ManageVideosModal({
   projectId,
-  token,
+  link,
   assets,
-  existingAssetIds,
+  items,
   onClose,
-  onQueued,
+  onRefetch,
 }: {
-  projectId:        string;
-  token:            string;
-  assets:           MediaAsset[];
-  existingAssetIds: Set<string>;
-  onClose:          () => void;
-  onQueued:         () => void;
+  projectId: string;
+  link:      DeliveryLink;
+  assets:    MediaAsset[];
+  items:     DeliveryItem[] | null;
+  onClose:   () => void;
+  onRefetch: () => void;
 }) {
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [submitting, setSubmitting] = useState(false);
+  const [checked,    setChecked]    = useState<Set<string>>(new Set());
+  const [adding,     setAdding]     = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error,      setError]      = useState<string | null>(null);
+  const [notice,     setNotice]     = useState<string | null>(null);
 
-  // Only assets with a local file and not already on the link can be added.
+  const displayName = link.label || link.project_name;
+  const existingAssetIds = new Set((items ?? []).map((i) => i.assetId).filter((x): x is string => !!x));
   const addable = assets.filter((a) => a.filePath && !existingAssetIds.has(a.assetId));
+  const refreshableCount = (items ?? []).filter((i) => i.canRefresh).length;
+  const staleCount       = (items ?? []).filter((i) => i.isStale).length;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   function toggle(id: string) {
-    setCheckedIds((prev) => {
+    setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
@@ -319,75 +332,137 @@ function AddVideosModal({
   }
 
   async function handleAdd() {
-    const assetIds = [...checkedIds];
+    const assetIds = [...checked];
     if (!assetIds.length) return;
-    setSubmitting(true);
+    setAdding(true);
     setError(null);
     try {
-      const res  = await fetch(`/api/projects/${projectId}/delivery/${token}/assets`, {
+      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/assets`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ assetIds }),
       });
       const data = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok) { setError(data.error ?? 'Failed to add videos'); setSubmitting(false); return; }
-      onQueued();
-      onClose();
+      if (!res.ok) { setError(data.error ?? 'Failed to add videos'); return; }
+      setChecked(new Set());
+      setNotice('Videos queued — watch the upload tray. They’ll appear on the link when ready.');
+      onRefetch();
     } catch {
       setError('Network error — could not add videos');
-      setSubmitting(false);
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/refresh`, { method: 'POST' });
+      const data = await res.json() as { ok?: boolean; refreshed?: number; error?: string };
+      if (!res.ok) { setError(data.error ?? 'Refresh failed'); return; }
+      if (!data.refreshed) { setNotice('Everything is already up to date.'); return; }
+      setNotice(`Updating ${data.refreshed} video${data.refreshed !== 1 ? 's' : ''} to the latest version — watch the upload tray.`);
+      onRefetch();
+    } catch {
+      setError('Network error — could not refresh');
+    } finally {
+      setRefreshing(false);
     }
   }
 
   return (
-    <div className="sh-modal-backdrop" onClick={onClose} aria-hidden="true">
-      <div className="sh-modal dlp-create-modal" role="dialog" aria-label="Add videos to delivery link" onClick={(e) => e.stopPropagation()}>
+    <div className="sh-modal-backdrop" onClick={onClose} role="presentation">
+      <div className="sh-modal" role="dialog" aria-modal="true" aria-label="Manage videos" onClick={(e) => e.stopPropagation()}>
         <div className="sh-modal-header">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          <span>Add videos</span>
+          <span>Manage videos — {displayName}</span>
           <button type="button" className="sh-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
         </div>
+        <div className="sh-modal-body">
 
-        <p className="sh-modal-section-label">Videos to add</p>
-        <div className="dlp-asset-list">
-          {addable.map((a) => (
-            <label key={a.assetId} className="dlp-asset-row">
-              <input type="checkbox" checked={checkedIds.has(a.assetId)} onChange={() => toggle(a.assetId)} className="dlp-asset-check" />
-              <span className="dlp-asset-name" title={a.name}>{a.name}</span>
-              {a.fileSize !== null && <span className="dlp-asset-size">{formatBytes(a.fileSize)}</span>}
-            </label>
-          ))}
-          {addable.length === 0 && (
-            <p className="sh-empty" style={{ padding: '8px 0' }}>
-              No videos left to add — every deliverable asset is already on this link.
-            </p>
-          )}
+          {/* Current videos + refresh */}
+          <div className="sh-modal-field">
+            <div className="dlp-manage-head">
+              <label className="sh-modal-label" style={{ margin: 0 }}>
+                Videos in this link ({items?.length ?? link.asset_count})
+              </label>
+              <button
+                type="button"
+                className="sh-btn sh-btn--primary"
+                style={{ fontSize: '0.72rem', padding: '4px 9px' }}
+                disabled={refreshing || refreshableCount === 0}
+                title={
+                  staleCount === 0 ? 'All videos are the latest version'
+                  : refreshableCount === 0 ? 'Newer versions exist but their files are not on disk'
+                  : 'Rebuild stale videos from their latest version'
+                }
+                onClick={() => void handleRefresh()}
+              >
+                {refreshing ? 'Refreshing…' : refreshableCount > 0 ? `Refresh to latest (${refreshableCount})` : 'Refresh to latest'}
+              </button>
+            </div>
+            <div className="sh-modal-asset-list">
+              {!items && <p className="sh-empty" style={{ padding: '6px 0' }}>Loading…</p>}
+              {items && items.length === 0 && <p className="sh-empty" style={{ padding: '6px 0' }}>No videos on this link.</p>}
+              {items?.map((it) => (
+                <div key={it.id} className="dlp-item-row">
+                  <span className="dlp-item-name" title={it.filename}>{it.filename}</span>
+                  {it.isStale ? (
+                    <span className="dlp-item-badge dlp-item-badge--stale" title={it.missingLocalFile ? 'A newer version exists but its file is not on disk' : 'A newer version is available'}>
+                      v{it.deliveredVersion} → v{it.currentVersion}{it.missingLocalFile ? ' (offline)' : ''}
+                    </span>
+                  ) : it.deliveredVersion != null ? (
+                    <span className="dlp-item-badge">v{it.deliveredVersion}</span>
+                  ) : null}
+                  <span className="dlp-item-size">{formatBytes(it.fileSize)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Add videos */}
+          <div className="sh-modal-field">
+            <label className="sh-modal-label">Add videos ({checked.size} selected)</label>
+            <div className="sh-modal-asset-list">
+              {addable.map((a) => (
+                <label key={a.assetId} className="sh-modal-asset-row">
+                  <input type="checkbox" checked={checked.has(a.assetId)} onChange={() => toggle(a.assetId)} />
+                  <span>{a.name}</span>
+                  {a.fileSize !== null && <span className="deliverable-modal-asset-note">— {formatBytes(a.fileSize)}</span>}
+                </label>
+              ))}
+              {addable.length === 0 && (
+                <p className="sh-empty" style={{ padding: '6px 0' }}>Every deliverable asset is already on this link.</p>
+              )}
+            </div>
+          </div>
+
+          {error  && <p className="sh-error">{error}</p>}
+          {notice && <p className="dlp-item-notice">{notice}</p>}
         </div>
-
-        {error && <p className="sh-error" style={{ marginTop: 8 }}>{error}</p>}
-
-        <button
-          type="button"
-          className="sh-btn sh-btn--primary dlp-submit-btn"
-          disabled={checkedIds.size === 0 || submitting}
-          onClick={() => void handleAdd()}
-        >
-          {submitting ? 'Adding…' : checkedIds.size > 0 ? `Add ${checkedIds.size} video${checkedIds.size !== 1 ? 's' : ''}` : 'Add videos'}
-        </button>
+        <div className="sh-modal-footer">
+          <button type="button" className="sh-btn" onClick={onClose}>Close</button>
+          <button
+            type="button"
+            className="sh-btn sh-btn--primary"
+            onClick={() => void handleAdd()}
+            disabled={adding || checked.size === 0}
+          >
+            {adding ? 'Adding…' : checked.size > 0 ? `Add ${checked.size} video${checked.size !== 1 ? 's' : ''}` : 'Add videos'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Delivery link card ────────────────────────────────────────────────────────
+// ── Delivery link row (frame-review-link style) ─────────────────────────────────
 
-function DeliveryLinkCard({
+function DeliveryLinkRow({
   link,
   projectId,
   assets,
@@ -402,65 +477,29 @@ function DeliveryLinkCard({
   onUpdated: (token: string, patch: Partial<DeliveryLink>) => void;
   onRefetch: () => void;
 }) {
-  const [copied,      setCopied]      = useState(false);
-  const [revoking,    setRevoking]    = useState(false);
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [editing,     setEditing]     = useState(false);
-  const [editLabel,   setEditLabel]   = useState(link.label ?? '');
-  const [editSaving,  setEditSaving]  = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copied,     setCopied]     = useState(false);
+  const [deleting,   setDeleting]   = useState(false);
+  const [renaming,   setRenaming]   = useState(false);
+  const [nameDraft,  setNameDraft]  = useState(link.label ?? '');
+  const [items,      setItems]      = useState<DeliveryItem[] | null>(null);
+  const [showManage, setShowManage] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const copyTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Expandable video list + version tracking
-  const [expanded,     setExpanded]     = useState(false);
-  const [items,        setItems]        = useState<DeliveryItem[] | null>(null);
-  const [itemsLoading, setItemsLoading] = useState(false);
-  const [itemsError,   setItemsError]   = useState<string | null>(null);
-  const [refreshing,   setRefreshing]   = useState(false);
-  const [showAdd,      setShowAdd]      = useState(false);
-  const [notice,       setNotice]       = useState<string | null>(null);
+  const displayName = link.label || link.project_name;
+  const expiry = expiryMeta(link.expires_at);
+  const staleCount = items?.filter((i) => i.isStale).length ?? 0;
+  const fileCount  = items?.length ?? link.asset_count;
 
   const loadItems = useCallback(async () => {
-    setItemsLoading(true);
-    setItemsError(null);
     try {
       const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/items`);
-      const data = await res.json() as { items?: DeliveryItem[]; error?: string };
-      if (!res.ok) { setItemsError(data.error ?? 'Failed to load videos'); return; }
-      setItems(data.items ?? []);
-    } catch {
-      setItemsError('Network error — could not load videos');
-    } finally {
-      setItemsLoading(false);
-    }
+      const data = await res.json() as { items?: DeliveryItem[] };
+      if (res.ok) setItems(data.items ?? []);
+    } catch { /* badge is best-effort */ }
   }, [projectId, link.token]);
 
-  function toggleExpanded() {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && items === null) void loadItems();
-  }
-
-  async function handleRefresh() {
-    setRefreshing(true);
-    setNotice(null);
-    try {
-      const res  = await fetch(`/api/projects/${projectId}/delivery/${link.token}/refresh`, { method: 'POST' });
-      const data = await res.json() as { ok?: boolean; refreshed?: number; error?: string };
-      if (!res.ok) { setNotice(data.error ?? 'Refresh failed'); return; }
-      if (!data.refreshed) { setNotice('Everything is already up to date.'); return; }
-      setNotice(`Updating ${data.refreshed} video${data.refreshed !== 1 ? 's' : ''} to the latest version — watch the upload tray.`);
-    } catch {
-      setNotice('Network error — could not refresh');
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
-  const staleCount = items?.filter((i) => i.isStale).length ?? 0;
-  const refreshableCount = items?.filter((i) => i.canRefresh).length ?? 0;
-  const existingAssetIds = new Set((items ?? []).map((i) => i.assetId).filter((x): x is string => !!x));
-
-  const expiry = expiryMeta(link.expires_at);
+  useEffect(() => { void loadItems(); }, [loadItems]);
 
   function handleCopy() {
     void navigator.clipboard.writeText(link.url);
@@ -469,226 +508,129 @@ function DeliveryLinkCard({
     copyTimer.current = setTimeout(() => setCopied(false), 2000);
   }
 
-  async function handleRevoke() {
-    setRevoking(true);
-    try {
-      await fetch(`/api/projects/${projectId}/delivery/${link.token}`, { method: 'DELETE' });
-      onRevoked(link.token);
-    } finally {
-      setRevoking(false);
-      setConfirmRevoke(false);
-    }
+  function startRename() {
+    setNameDraft(link.label ?? '');
+    setRenaming(true);
+    setTimeout(() => nameInputRef.current?.select(), 0);
   }
-
-  async function handleSaveEdit() {
-    setEditSaving(true);
+  async function commitRename() {
+    setRenaming(false);
+    const trimmed = nameDraft.trim();
+    if (trimmed === (link.label ?? '')) return;
+    onUpdated(link.token, { label: trimmed || null });
     try {
       await fetch(`/api/projects/${projectId}/delivery/${link.token}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ label: editLabel.trim() || null }),
+        body:    JSON.stringify({ label: trimmed || null }),
       });
-      onUpdated(link.token, { label: editLabel.trim() || null });
-      setEditing(false);
+    } catch { /* optimistic — a list refetch reconciles */ }
+  }
+  function cancelRename() {
+    setRenaming(false);
+    setNameDraft(link.label ?? '');
+  }
+
+  async function handleRevoke() {
+    if (!confirm(`Revoke "${displayName}"? The delivery link will stop working immediately.`)) return;
+    setDeleting(true);
+    try {
+      await fetch(`/api/projects/${projectId}/delivery/${link.token}`, { method: 'DELETE' });
+      onRevoked(link.token);
     } finally {
-      setEditSaving(false);
+      setDeleting(false);
     }
   }
 
-  const displayName = link.label || link.project_name;
-
   return (
-    <div className="sh-card">
-      <div className="sh-card-header">
-        <div className="sh-card-info">
-          {editing ? (
-            <div className="dlp-edit-row">
-              <input
-                className="sh-card-name-input"
-                value={editLabel}
-                onChange={(e) => setEditLabel(e.target.value)}
-                placeholder="Label (optional)"
-                maxLength={120}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleSaveEdit();
-                  if (e.key === 'Escape') { setEditing(false); setEditLabel(link.label ?? ''); }
-                }}
-              />
-              <button
-                type="button"
-                className="sh-btn sh-btn--primary"
-                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
-                disabled={editSaving}
-                onClick={() => void handleSaveEdit()}
-              >
-                {editSaving ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                type="button"
-                className="sh-btn"
-                style={{ fontSize: '0.75rem', padding: '4px 10px' }}
-                onClick={() => { setEditing(false); setEditLabel(link.label ?? ''); }}
-              >
-                Cancel
-              </button>
-            </div>
+    <div className="deliverable-row">
+      <div className="deliverable-row-main">
+        <div className="deliverable-row-name-line">
+          {renaming ? (
+            <input
+              ref={nameInputRef}
+              className="deliverable-row-name-input"
+              value={nameDraft}
+              placeholder={link.project_name}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+              }}
+            />
           ) : (
-            <span
-              className="sh-card-name sh-card-name--editable"
-              title={displayName}
-              onClick={() => setEditing(true)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setEditing(true); }}
-            >
+            <button type="button" className="deliverable-row-name-btn" onClick={startRename} title="Click to rename">
               {displayName}
-              <svg className="sh-card-edit-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </span>
-          )}
-          <span className="sh-card-meta">
-            {link.client_name && `${link.client_name} · `}
-            {link.asset_count} file{link.asset_count !== 1 ? 's' : ''}{' '}
-            · {link.access_count} download{link.access_count !== 1 ? 's' : ''}
-            {' · '}
-            <span className={expiry.cls}>{expiry.label}</span>
-          </span>
-        </div>
-
-        <div className="sh-card-actions">
-          <button
-            type="button"
-            className="sh-card-action-btn"
-            title={expanded ? 'Hide videos' : 'Show videos'}
-            aria-expanded={expanded}
-            onClick={toggleExpanded}
-          >
-            {staleCount > 0 && <span className="dlp-stale-dot" title={`${staleCount} newer version${staleCount !== 1 ? 's' : ''} available`} />}
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}>
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="sh-card-action-btn sh-card-action-btn--accent"
-            title="Copy delivery link"
-            onClick={handleCopy}
-          >
-            {copied ? '✓' : (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-              </svg>
-            )}
-          </button>
-
-          {confirmRevoke ? (
-            <>
-              <button
-                type="button"
-                className="sh-card-action-btn sh-card-action-btn--danger"
-                onClick={() => void handleRevoke()}
-                disabled={revoking}
-                title="Confirm revoke"
-              >
-                {revoking ? '…' : 'Revoke'}
-              </button>
-              <button
-                type="button"
-                className="sh-card-action-btn"
-                onClick={() => setConfirmRevoke(false)}
-                title="Cancel"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="sh-card-action-btn"
-              title="Revoke link"
-              onClick={() => setConfirmRevoke(true)}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-              </svg>
             </button>
           )}
-        </div>
-      </div>
-
-      {/* URL row */}
-      <div className="sh-card-url-row">
-        <span className="sh-card-url">{link.url}</span>
-      </div>
-
-      {/* Expandable: videos + add / refresh */}
-      {expanded && (
-        <div className="dlp-items">
-          {itemsLoading && <p className="sh-empty" style={{ padding: '6px 0' }}>Loading videos…</p>}
-          {itemsError   && <p className="sh-error">{itemsError}</p>}
-
-          {!itemsLoading && !itemsError && items && (
-            <>
-              {items.length === 0 && <p className="sh-empty" style={{ padding: '6px 0' }}>No videos on this link.</p>}
-              {items.map((it) => (
-                <div key={it.id} className="dlp-item-row">
-                  <span className="dlp-item-name" title={it.filename}>{it.filename}</span>
-                  {it.isStale ? (
-                    <span className="dlp-item-badge dlp-item-badge--stale" title={it.missingLocalFile ? 'A newer version exists but its file is not on disk' : 'A newer version is available'}>
-                      v{it.deliveredVersion} → v{it.currentVersion}{it.missingLocalFile ? ' (offline)' : ''}
-                    </span>
-                  ) : it.deliveredVersion != null ? (
-                    <span className="dlp-item-badge">v{it.deliveredVersion}</span>
-                  ) : null}
-                  <span className="dlp-item-size">{formatBytes(it.fileSize)}</span>
-                </div>
-              ))}
-
-              <div className="dlp-item-actions">
-                <button
-                  type="button"
-                  className="sh-btn"
-                  style={{ fontSize: '0.75rem', padding: '5px 10px' }}
-                  onClick={() => setShowAdd(true)}
-                >
-                  + Add videos
-                </button>
-                <button
-                  type="button"
-                  className="sh-btn sh-btn--primary"
-                  style={{ fontSize: '0.75rem', padding: '5px 10px' }}
-                  disabled={refreshing || refreshableCount === 0}
-                  title={
-                    staleCount === 0 ? 'All videos are the latest version'
-                    : refreshableCount === 0 ? 'Newer versions exist but their files are not on disk'
-                    : 'Rebuild stale videos from their latest version'
-                  }
-                  onClick={() => void handleRefresh()}
-                >
-                  {refreshing ? 'Refreshing…' : refreshableCount > 0 ? `Refresh to latest (${refreshableCount})` : 'Refresh to latest'}
-                </button>
-              </div>
-
-              {notice && <p className="dlp-item-notice">{notice}</p>}
-            </>
+          {staleCount > 0 && (
+            <span
+              className="deliverable-row-new-badge"
+              title="A newer version exists for one or more videos on this link. Open the videos list to refresh to the latest."
+            >
+              {staleCount === 1 ? 'Update available' : `${staleCount} updates`}
+            </span>
           )}
         </div>
-      )}
+        <button
+          type="button"
+          className="deliverable-row-meta-btn"
+          onClick={() => setShowManage(true)}
+          title="Add videos or refresh to the latest version"
+        >
+          {fileCount} file{fileCount === 1 ? '' : 's'}
+        </button>
+        <span className="deliverable-row-meta">
+          {link.client_name && `${link.client_name} · `}
+          {link.access_count} download{link.access_count === 1 ? '' : 's'}
+          {' · '}<span className={expiry.cls}>{expiry.label}</span>
+        </span>
+        <span className="deliverable-row-url" title={link.url}>{link.url}</span>
+      </div>
+      <div className="deliverable-row-actions">
+        <a href={link.url} target="_blank" rel="noreferrer" className="sh-card-action-btn" title="Open the delivery page">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+            <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          Open
+        </a>
+        <button
+          type="button"
+          className={`sh-card-action-btn${copied ? ' sh-card-action-btn--success' : ' sh-card-action-btn--accent'}`}
+          onClick={handleCopy}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          {copied ? '✓' : 'Copy'}
+        </button>
+        <button
+          type="button"
+          className="sh-card-action-btn sh-card-action-btn--danger"
+          onClick={() => void handleRevoke()}
+          disabled={deleting}
+          title="Revoke delivery link"
+          aria-label="Revoke delivery link"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+            <path d="M10 11v6"/><path d="M14 11v6"/>
+          </svg>
+        </button>
+      </div>
 
-      {showAdd && (
-        <AddVideosModal
+      {showManage && (
+        <ManageVideosModal
           projectId={projectId}
-          token={link.token}
+          link={link}
           assets={assets}
-          existingAssetIds={existingAssetIds}
-          onClose={() => setShowAdd(false)}
-          onQueued={() => {
-            setNotice('Videos queued — watch the upload tray. They’ll appear on the link when ready.');
-            onRefetch();
-          }}
+          items={items}
+          onClose={() => setShowManage(false)}
+          onRefetch={onRefetch}
         />
       )}
     </div>
@@ -782,9 +724,9 @@ export function DeliveryPanelBody({
         )}
 
         {links.length > 0 && (
-          <div className="sh-list">
+          <div className="deliverables-list">
             {links.map((l) => (
-              <DeliveryLinkCard
+              <DeliveryLinkRow
                 key={l.token}
                 link={l}
                 projectId={projectId}

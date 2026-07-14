@@ -16977,6 +16977,13 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   font-size: 0.78rem;
   color: var(--muted);
 }
+.dlp-manage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
 
 /* Uploading state */
 .dlp-uploading {
