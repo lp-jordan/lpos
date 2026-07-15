@@ -2972,3 +2972,43 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** `npx tsc --noEmit` — 0 errors across the project.
 
 **Assumptions / follow-ups:** Not driven in a running browser (user manages the server); verified by full typecheck + logic review. Assumes the long-lived custom `server.ts` Node process (not serverless), so the un-awaited background loop runs to completion — consistent with this deployment. Per-row Approve still uses the synchronous single-key DELETE (fast, one key) and was left unchanged. Possible follow-ups: batch the version sweep for large lists, and stamp `deleted_at` even on partial-purge failure if the object is confirmed gone.
+
+## 2026-07-14T19:25:38Z — Delivery links: single checkbox "Edit videos" modal with add + remove
+
+**User prompt (verbatim):** "I'm looking for something like this. [screenshot of Frame "Edit assets" modal] When clicked, it shows a simple list of all the videos with the ones already included checked and the ability to check new ones. I'd be on board to add the ability to remove from here, as well."
+
+**Assistant response summary:** Replaced the delivery "Manage videos" modal's two-section (read-only list + separate add list) layout with a single Frame-style checkbox list of every project video — the ones already on the link start checked; check to add, uncheck to remove; "Save changes" commits the diff. Added the missing server-side remove path so unchecking actually deletes.
+
+**Files changed:**
+- `lpos-ingest/server.js` — new `DELETE /api/delivery/:token/assets/:id` (deletes the row + its R2 objects: original, proxy, thumbnail, and transcripts). Add endpoint (`POST .../assets`) now also dedups by **filename** (not just `asset_id`) so an untracked/legacy row can't be physically duplicated.
+- `lpos-dashboard/app/api/projects/[projectId]/delivery/[token]/assets/[itemId]/route.ts` (new) — `DELETE` proxy to the ingest remove endpoint.
+- `lpos-dashboard/components/projects/DeliveryPanel.tsx` — `ManageVideosModal` rewritten to one `sh-modal-asset-list` of project assets: included rows keyed `item:{id}` (start checked, carry a version badge), addable rows keyed `asset:{assetId}`, non-deliverable assets shown disabled ("no local file"), and orphan link items (on the link but no matching project asset) appended as checked/removable rows. Save diffs to add (POST) + remove (DELETE per item); "Refresh to latest (N)" kept in the list header when anything is stale. Client `sanitizeFilename` mirror added to match untracked items back to a project asset by filename.
+
+**Implementation summary:** Membership is matched by `asset_id` first, then a filename fallback (client mirror of the server `sanitize`) so legacy/untracked delivery items still show as checked. Remove is immediate (DELETE); add is the existing background upload job. Server dedups adds by asset_id AND filename as a backstop against the filename fallback mis-detecting inclusion. Refresh gating unchanged (still asset_id + on-disk only). The two ingest DELETE routes (`/:token` vs `/:token/assets/:id`) don't collide — different segment counts.
+
+**Decision rationale:** One checkbox list per the user's reference (Frame's Edit-assets modal) is the clearest add/remove affordance and reuses the exact `sh-modal-asset-*` classes. Filename dedup on the server makes the filename-fallback matching safe (worst case a rename mis-detects inclusion in the UI, but a duplicate upload is still prevented).
+
+**Alternatives considered:** (a) Keep the two-section add/read-only layout — rejected, user explicitly wants the single checkbox list with remove. (b) Match untracked items by `asset_id` only (no filename fallback) — rejected; legacy links would show all-unchecked and risk duplicate adds. (c) Hard-delete via `asset_id` instead of row `id` — rejected; row `id` is unambiguous and also covers null-`asset_id` legacy/orphan rows.
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` (0 errors); `node --check server.js` (OK). Dev server not started (user manages lifecycle); visual + end-to-end drive left to the user after ingest redeploy.
+
+**Assumptions / follow-ups:** Requires the ingest redeploy for the remove endpoint + filename dedup. Removing a video deletes its R2 objects immediately — a client mid-download of that specific file would fail (acceptable; it's an intentional removal). Filename-fallback inclusion matching can mis-detect if a file was renamed between versions; low-stakes for the management list and backstopped by server dedup.
+
+## 2026-07-15T13:51:53Z — Lighting: auto-poll now re-discovers fixtures that come online mid-session
+
+**User prompt (verbatim):** "I'm having connection issues between fixture #1 in the white void set in lighting in lpos. It seems to be connected in the amaran app but not in LPOS."
+
+**Response summary:** Diagnosed and fixed. A read-only WebSocket probe against Amaran Desktop confirmed Void fixture #1 (`400K5-F2DFEA`, "amaran 300c #1") was live in Amaran's `get_fixture_list` (19 fixtures reported), so this was not a pairing / nodeId-drift issue. Root cause was LPOS-side: `AmaranService.refreshStatus()` (the 30s auto-poll) only re-pulled state for already-known fixtures and re-ran `get_fixture_list` solely when the list was empty. Discovery otherwise ran only on connect or a manual Refresh, so any fixture that powered on / Bluetooth-reconnected after LPOS's last discovery stayed invisible in LPOS while Amaran showed it connected. Immediate operator workaround: gear → Refresh (rediscover). Durable fix: added `reconcileFixtureList()` and called it at the top of the poll's known-fixtures branch so newly-appeared fixtures self-heal within one poll cycle.
+
+**Files changed:**
+- `lib/services/amaran-service.ts` — added `reconcileFixtureList()` (additive merge of new fixtures from `get_fixture_list`, does NOT remove dropped ones); `refreshStatus()` now reconciles the list before pulling per-fixture state and logs any newly discovered nodeIds.
+
+**Implementation summary:** `reconcileFixtureList()` fetches `get_fixture_list`, diffs against `_fixtures` by nodeId, and pushes any unknown fixtures (with `detectFixtureCapabilities`). `refreshStatus()` calls it (guarded by `.catch`) when `_fixtures.length > 0`, then pulls state for all fixtures including the new ones and emits status.
+
+**Decision rationale:** Additive-only merge preserves the existing "discovered fixtures persist" behaviour — a momentary BT blip must not yank a live tile out from under an operator mid-shoot — while closing the gap that hid newly-connected lights. Reconciling inside the existing poll avoids adding a second timer and reuses the serial request queue (one extra `get_fixture_list` per 30s is negligible).
+
+**Alternatives considered:** (1) Call `discoverAndRefresh()` on every poll — rejected: it replaces `_fixtures` wholesale, so a dropped light would vanish from the UI. (2) Leave as-is and rely on manual Refresh — rejected: recurring operator confusion; the poll should self-heal.
+
+**Commands/checks run:** Read-only Amaran probe (`get_fixture_list`, confirmed #1 present). `npx tsc --noEmit` — no errors in amaran-service. Did not restart the server (user manages server lifecycle); the fix takes effect on next restart, and the manual Refresh unblocks in the meantime.
+
+**Assumptions / follow-ups:** Assumes the user's LPOS lost sight of #1 because it came online after LPOS's last discovery (consistent with the probe showing it live in Amaran). No change to nodeId-keyed group/label/order config. Open question (not addressed here): fixtures that genuinely leave never get pruned from `_fixtures` until a reconnect/rediscover — intentional for now.

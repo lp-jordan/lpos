@@ -745,6 +745,16 @@ export class AmaranService {
     this._refreshing = true;
     try {
       if (this._fixtures.length > 0) {
+        // Pick up any fixture that came online since the last discovery. The
+        // fixture LIST was previously refreshed only on connect or a manual
+        // Refresh — the 30 s poll just re-pulled state for already-known
+        // fixtures — so a light powered on (or Bluetooth-reconnected) mid-session
+        // stayed invisible in LPOS while Amaran Desktop showed it connected,
+        // until someone hit Refresh. Reconciling here makes it self-heal.
+        const added = await this.reconcileFixtureList().catch(() => [] as string[]);
+        if (added.length > 0) {
+          console.log(`[amaran] poll discovered ${added.length} new fixture(s): ${added.join(', ')}`);
+        }
         for (const f of this._fixtures) {
           await this.pullNodeState(f.nodeId).catch(() => {});
         }
@@ -755,6 +765,32 @@ export class AmaranService {
     } finally {
       this._refreshing = false;
     }
+  }
+
+  /**
+   * Re-run get_fixture_list and MERGE any newly-appeared fixtures into _fixtures
+   * without disturbing existing entries or their already-pulled states. Additive
+   * only: a fixture that has dropped off Amaran's list is intentionally NOT
+   * removed, so a momentary Bluetooth blip doesn't yank a tile out from under an
+   * operator mid-shoot (matching the pre-existing "discovered fixtures persist"
+   * behaviour). Returns the nodeIds newly added.
+   */
+  private async reconcileFixtureList(): Promise<string[]> {
+    const res = await this.sendRequest('get_fixture_list', undefined, {});
+    if (res.code !== 0 || !Array.isArray(res.data)) return [];
+    const known = new Set(this._fixtures.map(f => f.nodeId));
+    const added: string[] = [];
+    for (const f of res.data as Array<{ id: string; name: string; node_id: string }>) {
+      if (known.has(f.node_id)) continue;
+      this._fixtures.push({
+        id:           f.id,
+        name:         f.name,
+        nodeId:       f.node_id,
+        capabilities: detectFixtureCapabilities(f.name),
+      });
+      added.push(f.node_id);
+    }
+    return added;
   }
 
   /** Re-runs fixture discovery (get_fixture_list) then pulls state for all found fixtures. */
