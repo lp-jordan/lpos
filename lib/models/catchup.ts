@@ -22,7 +22,7 @@ export interface CatchupBadge {
 export interface CatchupRow {
   id: string;
   title: string;
-  project: string | null;
+  client: string | null; // the client the activity belongs to (recap groups by client, not project)
   actor: string | null; // who did it (person's display name); null for system/service activity
   badge: CatchupBadge;
   time: string; // ISO occurred/created timestamp

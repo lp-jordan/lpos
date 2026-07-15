@@ -20188,7 +20188,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 }
 .catchup-row-actor { font-size: 0.75rem; color: var(--muted-soft); font-weight: 600; flex-shrink: 0; }
 .catchup-row-dot { font-size: 0.75rem; color: var(--muted-soft); opacity: 0.6; }
-.catchup-row-project { font-size: 0.75rem; color: var(--muted-soft); overflow: hidden; text-overflow: ellipsis; }
+.catchup-row-client { font-size: 0.75rem; color: var(--muted-soft); overflow: hidden; text-overflow: ellipsis; }
 .catchup-row-meta {
   display: flex;
   align-items: center;

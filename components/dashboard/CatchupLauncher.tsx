@@ -35,8 +35,8 @@ function CatchupRowItem({ row, onNavigate }: { row: CatchupRow; onNavigate: (hre
         <span className="catchup-row-title">{row.title}</span>
         <span className="catchup-row-sub">
           {row.actor && <span className="catchup-row-actor">{row.actor}</span>}
-          {row.actor && row.project && <span className="catchup-row-dot">·</span>}
-          {row.project && <span className="catchup-row-project">{row.project}</span>}
+          {row.actor && row.client && <span className="catchup-row-dot">·</span>}
+          {row.client && <span className="catchup-row-client">{row.client}</span>}
         </span>
       </span>
       <span className="catchup-row-meta">

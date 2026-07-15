@@ -159,8 +159,8 @@ interface SectionBreakdown {
   total: number;
   badges: Array<{ label: string; count: number }>;
   people: Array<{ name: string; count: number }>; // who drove this section, most-active first
-  projects: Array<{ name: string; count: number }>; // which projects this activity landed in, busiest first
-  sample: string[]; // a few "Title — by Person (Project)" strings for the AI digest
+  clients: Array<{ name: string; count: number }>; // which clients this activity landed in, busiest first
+  sample: string[]; // a few "Title — by Person (Client)" strings for the AI digest
 }
 
 interface DeterministicRecap {
@@ -224,17 +224,18 @@ function buildDeterministic(date: string): DeterministicRecap {
       task_id: string; description: string; client_name: string;
     }>;
 
-  // Resolve project names for everything that carries a project_id.
+  // Resolve each project_id to its CLIENT name — the recap groups by client
+  // (which the team recognises) rather than by individual project.
   const projectIds = new Set<string>();
   for (const r of activityRows) if (r.project_id) projectIds.add(r.project_id);
   for (const c of mediaComments) if (c.project_id) projectIds.add(c.project_id);
-  const projectName = new Map<string, string>();
+  const clientForProject = new Map<string, string>();
   if (projectIds.size > 0) {
     const ids = [...projectIds];
     const nameRows = coreDb
-      .prepare(`SELECT project_id, name FROM projects WHERE project_id IN (${ids.map(() => '?').join(',')})`)
-      .all(...ids) as Array<{ project_id: string; name: string }>;
-    for (const row of nameRows) projectName.set(row.project_id, row.name);
+      .prepare(`SELECT project_id, client_name FROM projects WHERE project_id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as Array<{ project_id: string; client_name: string }>;
+    for (const row of nameRows) clientForProject.set(row.project_id, row.client_name);
   }
 
   // Comments store the author as an internal user id (media & task comments) —
@@ -262,7 +263,7 @@ function buildDeterministic(date: string): DeterministicRecap {
     const c = classify(r.event_type, r.lifecycle_phase);
     if (!c) continue;
 
-    const project = r.project_id ? projectName.get(r.project_id) ?? null : null;
+    const client = r.project_id ? clientForProject.get(r.project_id) ?? null : null;
     let href: string | null = null;
     if (c.section === 'tasks') {
       href = '/dashboard';
@@ -273,11 +274,11 @@ function buildDeterministic(date: string): DeterministicRecap {
     }
 
     const actor = personActor(r.actor_type, r.actor_display);
-    push(c.section, { id: r.event_id, title: r.title, project, actor, badge: c.badge, time: r.occurred_at, href });
+    push(c.section, { id: r.event_id, title: r.title, client, actor, badge: c.badge, time: r.occurred_at, href });
   }
 
   for (const c of mediaComments) {
-    const project = projectName.get(c.project_id) ?? null;
+    const client = clientForProject.get(c.project_id) ?? null;
     // Internal LPOS commenter → resolved name; external Frame.io reviewer →
     // their stored name, falling back to email. `||` (not `??`) so an empty
     // stored name/email collapses to null rather than a blank actor.
@@ -287,7 +288,7 @@ function buildDeterministic(date: string): DeterministicRecap {
     push('media', {
       id: c.comment_id,
       title: snippet(c.body),
-      project,
+      client,
       actor,
       badge: { label: 'Comment', tone: 'comment' },
       time: c.created_at,
@@ -304,7 +305,7 @@ function buildDeterministic(date: string): DeterministicRecap {
     push('tasks', {
       id: c.comment_id,
       title: c.description,
-      project: c.client_name || null,
+      client: c.client_name || null,
       actor: resolved ? firstName(resolved) : null,
       badge: { label: 'Note', tone: 'neutral' },
       time: c.created_at,
@@ -325,14 +326,14 @@ function buildDeterministic(date: string): DeterministicRecap {
 
     const hist = new Map<string, number>();
     const peopleHist = new Map<string, number>();
-    const projectHist = new Map<string, number>();
+    const clientHist = new Map<string, number>();
     for (const row of rows) {
       if (row.badge.tone === 'failed') totals.failures += 1;
       else if (row.badge.tone === 'comment') totals.comments += 1;
       else totals.updates += 1;
       hist.set(row.badge.label, (hist.get(row.badge.label) ?? 0) + 1);
       if (row.actor) peopleHist.set(row.actor, (peopleHist.get(row.actor) ?? 0) + 1);
-      if (row.project) projectHist.set(row.project, (projectHist.get(row.project) ?? 0) + 1);
+      if (row.client) clientHist.set(row.client, (clientHist.get(row.client) ?? 0) + 1);
     }
 
     rows.sort((a, b) => {
@@ -358,12 +359,12 @@ function buildDeterministic(date: string): DeterministicRecap {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4)
         .map(([name, count]) => ({ name, count })),
-      projects: [...projectHist.entries()]
+      clients: [...clientHist.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([name, count]) => ({ name, count })),
       sample: rows.slice(0, 3).map(
-        (r) => `${r.title}${r.actor ? ` — by ${r.actor}` : ''}${r.project ? ` (${r.project})` : ''}`,
+        (r) => `${r.title}${r.actor ? ` — by ${r.actor}` : ''}${r.client ? ` (${r.client})` : ''}`,
       ),
     });
   }
@@ -391,17 +392,17 @@ function buildDigest(recap: DeterministicRecap): string {
   }
   for (const b of recap.breakdown) {
     const badges = b.badges.map((x) => `${x.count} ${x.label}`).join(', ');
-    // Which project(s) this activity landed in — at least as important as the
-    // count. "N of TOTAL" keeps each project's share honest.
-    const projects = b.projects.length > 0
-      ? ` In project(s): ${b.projects.map((p) => `${p.name} (${p.count} of ${b.total})`).join(', ')}.`
+    // Which client(s) this activity landed in — at least as important as the
+    // count. "N of TOTAL" keeps each client's share honest.
+    const clients = b.clients.length > 0
+      ? ` For client(s): ${b.clients.map((c) => `${c.name} (${c.count} of ${b.total})`).join(', ')}.`
       : '';
     // "N of TOTAL" makes each person's own share explicit so the summary can't
     // credit one person with the whole category (many rows have no named actor).
     const people = b.people.length > 0
       ? ` Contributors: ${b.people.map((p) => `${p.name} (${p.count} of ${b.total})`).join(', ')}.`
       : '';
-    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${projects}${people} e.g. ${b.sample.join('; ')}`);
+    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${clients}${people} e.g. ${b.sample.join('; ')}`);
   }
   return lines.join('\n');
 }
@@ -426,8 +427,8 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
       'The word "task" refers only to the task-dashboard category; do NOT describe uploads, media, or job activity as tasks. ' +
       'Only say something was "completed" or "done" if the breakdown explicitly marks it Completed/Published; uploads and task activity are not completions. ' +
       'Be factual and specific: name the busiest category and call out any failures as needing attention. ' +
-      'Lead with WHERE the work is happening — always name the specific project(s) each category landed in, using the "In project(s)" list. Which project(s) the activity is in is as important as the counts, so make projects central to the recap, not an afterthought. ' +
-      'Each project is written "Project (N of TOTAL)": N is that project\'s share and TOTAL is the whole category — if activity spans several projects, name the top ones rather than implying it was all one project. ' +
+      'Lead with WHERE the work is happening — always name the specific CLIENT(s) each category landed in, using the "For client(s)" list. Which client the activity is for is as important as the counts, so make clients central to the recap, not an afterthought. ' +
+      'Each client is written "Client (N of TOTAL)": N is that client\'s share and TOTAL is the whole category — if activity spans several clients, name the top ones rather than implying it was all one client. ' +
       'Make it personal — credit the PEOPLE behind the work by name using the "Contributors" listed for each category (e.g. who drove uploads or left key comments). ' +
       'Each contributor is written "Name (N of TOTAL)": N is that person\'s OWN count and TOTAL is the whole category — many items have no named person, so NEVER credit a category\'s full total to one person; use their own N, and if their N is less than the total, phrase it as a contribution (e.g. "led by", "including", "N of them from"). ' +
       'Only name people the digest actually lists; never invent names, and if a category has no Contributors line, describe it without a name. ' +

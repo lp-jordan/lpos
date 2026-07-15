@@ -3085,3 +3085,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. Regenerated 2026-07-14 via `doppler run -- tsx`; confirmed project-led headline. Temp script deleted.
 
 **Assumptions / follow-ups:** Uploads/media/task activity all carry a usable project label; jobs/failures inherit whatever project the underlying event had. Not surfaced in the drawer section headers (rows already show per-item project) — could add a "projects: A, B" chip to each section header later if wanted. Yesterday's cache is now project-led; other past days update on rebuild/next warm.
+
+## 2026-07-15T17:27:16Z — Daily Catch-Up: group by client, not project
+
+**User prompt (verbatim):** "Honestly. Hm. We know the client names better than project names. I'd be ok if we used those, even if we don't specify which project WITHIN the client the activity is happening in. Make sense?"
+
+**Assistant response summary:** Switched the Daily Catch-Up's grouping dimension from project name to CLIENT name throughout — the per-row secondary label, the per-section rollup, the digest, and the AI headline. Each `project_id` now resolves to its `projects.client_name` (instead of `projects.name`); task activity already used `client_name`. Activity that spans multiple projects under one client now aggregates into that single client. Renamed the row field `project` → `client` and the section rollup `projects` → `clients` (with the "N of TOTAL" honesty guard preserved). Regenerated yesterday's cache: headline now reads in recognizable client terms — "13 media uploads landed primarily in Chick-fil-A (9 of 13)… media changes across NSA Influence 26' (15 of 30) and Fraizer & Deeter (13 of 30)…" (previously project labels like "CFA - Jeremy Pollack").
+
+**Files changed:**
+- `lib/models/catchup.ts` — `CatchupRow.project` → `client` (comment notes recap groups by client).
+- `lib/services/catchup-service.ts` — resolution map `projectName`→`clientForProject`, query `SELECT project_id, name` → `SELECT project_id, client_name`; all three push sites set `client`; `projectHist`→`clientHist`; `SectionBreakdown.projects`→`clients`; digest line "In project(s)" → "For client(s)"; sample uses `r.client`; headline prompt now instructs leading with CLIENT(s).
+- `components/dashboard/CatchupLauncher.tsx` — `row.project` → `row.client`; CSS class `catchup-row-project` → `catchup-row-client`.
+- `app/globals.css` — `.catchup-row-project` → `.catchup-row-client`.
+
+**Implementation summary:** One-line change in the SQL (resolve to `client_name`) drives the whole shift; the rest is a field rename that tsc verifies end-to-end. Because rows now carry the client name, the per-section histogram naturally aggregates multiple projects of the same client into one bucket — matching the user's "don't need which project within the client" ask. No new queries.
+
+**Decision rationale:** Renamed the field to `client` (rather than leaving it named `project` holding a client value) so the data model stays honest for the next maintainer; tsc guards the rename across model/service/component. Client-level grouping trades project granularity for names the team recognises, which the user explicitly prefers.
+
+**Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. `grep` for stale `project`/`catchup-row-project` refs — only the unrelated `/api/projects` fetch for the activity modal remains (correct). Regenerated 2026-07-14 via `doppler run -- tsx`; confirmed client-named headline + rows. Temp script deleted.
+
+**Assumptions / follow-ups:** `projects.client_name` is populated (NOT NULL in schema) so every project resolves to a client. Rows for different projects of the same client now look identical in the client column (accepted per request). Yesterday's cache is client-grouped; other past days update on rebuild/next warm.

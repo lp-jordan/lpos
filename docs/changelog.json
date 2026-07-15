@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-15T17:27:16Z",
+    "title": "Daily Catch-Up groups activity by client",
+    "summary": "The Daily Catch-Up now describes where activity is happening by CLIENT name rather than individual project name — both in the recap headline and on each item row. So instead of \"CFA - Jeremy Pollack\" you'll see \"Chick-fil-A,\" and activity spread across several projects for the same client is rolled up under that one client. It intentionally doesn't drill down to which specific project within a client, since client names are the more recognizable unit day to day."
+  },
+  {
     "timestamp": "2026-07-15T17:21:19Z",
     "title": "Daily Catch-Up highlights which projects are active",
     "summary": "The Daily Catch-Up recap now leads with WHERE the activity is happening — naming the specific project(s) behind each category and how much of it landed in each (e.g. \"13 uploads across three projects led by CFA - Jeremy Pollack (9 of 13)… media activity concentrated in July Town Hall (13 of 30)\"). Project context is now central to the morning headline rather than just raw counts, and when activity spans several projects it names the top ones instead of implying it was all one."
