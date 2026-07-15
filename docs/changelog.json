@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-15T17:21:19Z",
+    "title": "Daily Catch-Up highlights which projects are active",
+    "summary": "The Daily Catch-Up recap now leads with WHERE the activity is happening — naming the specific project(s) behind each category and how much of it landed in each (e.g. \"13 uploads across three projects led by CFA - Jeremy Pollack (9 of 13)… media activity concentrated in July Town Hall (13 of 30)\"). Project context is now central to the morning headline rather than just raw counts, and when activity spans several projects it names the top ones instead of implying it was all one."
+  },
+  {
     "timestamp": "2026-07-15T17:12:22Z",
     "title": "Daily Catch-Up uses first names",
     "summary": "The Daily Catch-Up now refers to people by first name only (e.g. \"Jordan\" instead of \"Jordan Johnson\") — in the recap headline, the per-item rows, and the contributor breakdown — for a friendlier, less formal morning update."

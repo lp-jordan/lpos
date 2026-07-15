@@ -3068,3 +3068,20 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. Regenerated 2026-07-14 via `doppler run -- tsx` and verified first-name output in headline + rows. Temp script deleted. (Note: `doppler run` and local `tsc`/`tsx` require cwd = `lpos-dashboard/`; Doppler's project scope and npx's TypeScript resolution both break from the workspace root.)
 
 **Assumptions / follow-ups:** First-name-only can be ambiguous with two same-first-name people (e.g. two "Jordan"s) — accepted per request; revisit with an initial if it becomes confusing. Yesterday's cache is now the first-name version; other past days update on rebuild/next warm.
+
+## 2026-07-15T17:21:19Z — Daily Catch-Up: surface which project(s) activity is happening in
+
+**User prompt (verbatim):** "And one final question/tweak - it is valuable to know how many of some category of action happened, but of equal or greater value is in what project(s) those activities are happening."
+
+**Assistant response summary:** Added a per-section project rollup to the Daily Catch-Up so the recap says WHERE the activity is concentrated, not just how much. Each category now tallies its rows by project (top 5, busiest first) and emits an "In project(s): Name (N of TOTAL)" line into the AI digest, mirroring the existing Contributors line. Reworked the headline prompt to lead with the project(s) each category landed in and to keep multi-project spread honest (name the top projects rather than implying one). Regenerated yesterday's cache: headline now opens "13 media assets uploaded across three projects led by CFA - Jeremy Pollack (9 of 13), HR Training 2026 (3 of 13), and July Town Hall (1 of 13)… media activity concentrated in July Town Hall (13 of 30)…".
+
+**Files changed:**
+- `lib/services/catchup-service.ts` — `SectionBreakdown` gains `projects[]`; breakdown loop builds a `projectHist` (skips null project) and takes the top 5; `buildDigest` emits an "In project(s): …" line (placed before Contributors); headline system prompt now instructs the model to lead with project(s) using the "In project(s)" list and the "N of TOTAL" share semantics, and dropped the old "the project driving it" phrasing in favour of always naming project(s) per category.
+
+**Implementation summary:** Reuses the already-resolved `row.project` (project name for activity/media, client_name for task notes), so no new queries — just a second histogram alongside people/badges. The digest gains one line per section; the deterministic recap and drawer rows are unchanged (rows already showed project).
+
+**Decision rationale:** Per-section project tallies (not one global "busiest project") preserve the existing anti-conflation discipline — the model gets project shares scoped to each category's stated meaning, so it can't read "13 uploads in Project X" as "13 tasks in Project X". "N of TOTAL" is the same guard used for people, preventing a multi-project category from being framed as single-project.
+
+**Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. Regenerated 2026-07-14 via `doppler run -- tsx`; confirmed project-led headline. Temp script deleted.
+
+**Assumptions / follow-ups:** Uploads/media/task activity all carry a usable project label; jobs/failures inherit whatever project the underlying event had. Not surfaced in the drawer section headers (rows already show per-item project) — could add a "projects: A, B" chip to each section header later if wanted. Yesterday's cache is now project-led; other past days update on rebuild/next warm.

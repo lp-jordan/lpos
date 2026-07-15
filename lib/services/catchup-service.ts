@@ -159,6 +159,7 @@ interface SectionBreakdown {
   total: number;
   badges: Array<{ label: string; count: number }>;
   people: Array<{ name: string; count: number }>; // who drove this section, most-active first
+  projects: Array<{ name: string; count: number }>; // which projects this activity landed in, busiest first
   sample: string[]; // a few "Title — by Person (Project)" strings for the AI digest
 }
 
@@ -324,12 +325,14 @@ function buildDeterministic(date: string): DeterministicRecap {
 
     const hist = new Map<string, number>();
     const peopleHist = new Map<string, number>();
+    const projectHist = new Map<string, number>();
     for (const row of rows) {
       if (row.badge.tone === 'failed') totals.failures += 1;
       else if (row.badge.tone === 'comment') totals.comments += 1;
       else totals.updates += 1;
       hist.set(row.badge.label, (hist.get(row.badge.label) ?? 0) + 1);
       if (row.actor) peopleHist.set(row.actor, (peopleHist.get(row.actor) ?? 0) + 1);
+      if (row.project) projectHist.set(row.project, (projectHist.get(row.project) ?? 0) + 1);
     }
 
     rows.sort((a, b) => {
@@ -354,6 +357,10 @@ function buildDeterministic(date: string): DeterministicRecap {
       people: [...peopleHist.entries()]
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4)
+        .map(([name, count]) => ({ name, count })),
+      projects: [...projectHist.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
         .map(([name, count]) => ({ name, count })),
       sample: rows.slice(0, 3).map(
         (r) => `${r.title}${r.actor ? ` — by ${r.actor}` : ''}${r.project ? ` (${r.project})` : ''}`,
@@ -384,12 +391,17 @@ function buildDigest(recap: DeterministicRecap): string {
   }
   for (const b of recap.breakdown) {
     const badges = b.badges.map((x) => `${x.count} ${x.label}`).join(', ');
+    // Which project(s) this activity landed in — at least as important as the
+    // count. "N of TOTAL" keeps each project's share honest.
+    const projects = b.projects.length > 0
+      ? ` In project(s): ${b.projects.map((p) => `${p.name} (${p.count} of ${b.total})`).join(', ')}.`
+      : '';
     // "N of TOTAL" makes each person's own share explicit so the summary can't
     // credit one person with the whole category (many rows have no named actor).
     const people = b.people.length > 0
       ? ` Contributors: ${b.people.map((p) => `${p.name} (${p.count} of ${b.total})`).join(', ')}.`
       : '';
-    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${people} e.g. ${b.sample.join('; ')}`);
+    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${projects}${people} e.g. ${b.sample.join('; ')}`);
   }
   return lines.join('\n');
 }
@@ -413,7 +425,9 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
       "Use each category's stated meaning exactly. In this studio, a \"comment\" means feedback left on a video asset — only call something a comment if it is under \"Comments left on video assets\". " +
       'The word "task" refers only to the task-dashboard category; do NOT describe uploads, media, or job activity as tasks. ' +
       'Only say something was "completed" or "done" if the breakdown explicitly marks it Completed/Published; uploads and task activity are not completions. ' +
-      'Be factual and specific: name the busiest category and the project driving it, and call out any failures as needing attention. ' +
+      'Be factual and specific: name the busiest category and call out any failures as needing attention. ' +
+      'Lead with WHERE the work is happening — always name the specific project(s) each category landed in, using the "In project(s)" list. Which project(s) the activity is in is as important as the counts, so make projects central to the recap, not an afterthought. ' +
+      'Each project is written "Project (N of TOTAL)": N is that project\'s share and TOTAL is the whole category — if activity spans several projects, name the top ones rather than implying it was all one project. ' +
       'Make it personal — credit the PEOPLE behind the work by name using the "Contributors" listed for each category (e.g. who drove uploads or left key comments). ' +
       'Each contributor is written "Name (N of TOTAL)": N is that person\'s OWN count and TOTAL is the whole category — many items have no named person, so NEVER credit a category\'s full total to one person; use their own N, and if their N is less than the total, phrase it as a contribution (e.g. "led by", "including", "N of them from"). ' +
       'Only name people the digest actually lists; never invent names, and if a category has no Contributors line, describe it without a name. ' +
