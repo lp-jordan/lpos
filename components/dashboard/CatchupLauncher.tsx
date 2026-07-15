@@ -33,7 +33,11 @@ function CatchupRowItem({ row, onNavigate }: { row: CatchupRow; onNavigate: (hre
     >
       <span className="catchup-row-main">
         <span className="catchup-row-title">{row.title}</span>
-        {row.project && <span className="catchup-row-project">{row.project}</span>}
+        <span className="catchup-row-sub">
+          {row.actor && <span className="catchup-row-actor">{row.actor}</span>}
+          {row.actor && row.project && <span className="catchup-row-dot">·</span>}
+          {row.project && <span className="catchup-row-project">{row.project}</span>}
+        </span>
       </span>
       <span className="catchup-row-meta">
         <span className={`catchup-badge catchup-badge--${row.badge.tone}`}>{row.badge.label}</span>

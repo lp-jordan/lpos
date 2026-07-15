@@ -3012,3 +3012,25 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands/checks run:** Read-only Amaran probe (`get_fixture_list`, confirmed #1 present). `npx tsc --noEmit` — no errors in amaran-service. Did not restart the server (user manages server lifecycle); the fix takes effect on next restart, and the manual Refresh unblocks in the meantime.
 
 **Assumptions / follow-ups:** Assumes the user's LPOS lost sight of #1 because it came online after LPOS's last discovery (consistent with the probe showing it live in Amaran). No change to nodeId-keyed group/label/order config. Open question (not addressed here): fixtures that genuinely leave never get pruned from `_fixtures` until a reconnect/rediscover — intentional for now.
+
+## 2026-07-15T16:58:40Z — Daily Catch-Up: make the recap personal (name WHO did each thing)
+
+**User prompt (verbatim):** "I would love if the daily update was a bit more personal. Throwing in not just what happened, but WHO did it. Right now it's a bit drab, just x number of x type of activity."
+
+**Assistant response summary:** Threaded the actor/author through the Daily Catch-Up so the recap credits people by name instead of only reporting per-type counts. The three source queries now pull who did each thing (`activity_events.actor_display`, `media_comments` author, `task_comments.author_id`), user IDs are resolved to display names, and each `CatchupRow` carries an `actor`. The AI-headline digest now includes a per-category "By: Name (count)" contributor tally and names people in the sample lines, and the headline system prompt was updated to credit the people behind the work (still constrained to only names the digest actually lists). Each drawer row now shows a subtle "actor · project" subline.
+
+**Files changed:**
+- `lib/models/catchup.ts` — added `actor: string | null` to `CatchupRow`.
+- `lib/services/catchup-service.ts` — added `actor_type`/`actor_display` to `ActivityRowRaw` + the activity SELECT; added author columns to the media/task-comment SELECTs; new `personActor()` helper + `PERSON_ACTOR_TYPES` gate (user/external_user/agent only); batch user-id→name resolution (mirrors project-name resolution); populate `actor` in all three `push()` calls (external commenter falls back name→email); `SectionBreakdown` gains `people[]`; breakdown loop builds a per-section actor histogram (top 4) and names actors in `sample`; `buildDigest` emits a "By: …" line; headline prompt now credits people (max_tokens 200→250).
+- `components/dashboard/CatchupLauncher.tsx` — row now renders a `catchup-row-sub` line with `catchup-row-actor` · `catchup-row-project`.
+- `app/globals.css` — styles for `.catchup-row-sub` / `.catchup-row-actor` / `.catchup-row-dot`.
+
+**Implementation summary:** Actor surfaces at three layers: per-row in the drawer, as a contributor tally in the digest, and as named samples — so both the deterministic recap and the AI one-liner can say who did what. System/service/external_system activity intentionally stays anonymous (no person to credit). Adding an optional field is backward-compatible with existing `catchup_cache` JSON (old rows just have no `actor`); new days pick it up on next build/warm.
+
+**Decision rationale:** The "drab x-number-of-x-type" surface is the AI headline, which was fed only counts + titles + project. Feeding it a named contributor tally (rather than just tacking names onto samples) lets it lead with people ("Sarah drove uploads…") while the existing anti-hallucination rules still bound it to the digest's stated facts. Gating on person actor-types avoids printing "system"/"service" as a doer.
+
+**Alternatives considered:** (a) Only add names to the AI prompt, not the UI — rejected; the per-row "by X" is where the personal touch is most visible and needs no AI. (b) Surface every actor type including system/service — rejected; machine plumbing has no person to credit and would read oddly. (c) A DB migration to denormalize author names onto comments — unnecessary; a batched `users` lookup mirrors the existing project-name resolution with no schema change.
+
+**Commands / checks run:** `npx tsc --noEmit` — 0 errors. Dev server not started (user manages lifecycle); live drive of the drawer + headline left to the user.
+
+**Assumptions / follow-ups:** Assumes `actor_display` is generally populated on real events (confirmed across the webhook/API record sites). Past days already cached before this change won't show actors until rebuilt (`?refresh=1` or a fresh warm); today/future days get it automatically. External Frame.io reviewers show their stored name or email; if neither is present the row stays anonymous.

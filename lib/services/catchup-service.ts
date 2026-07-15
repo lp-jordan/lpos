@@ -126,6 +126,19 @@ interface ActivityRowRaw {
   title: string;
   project_id: string | null;
   asset_id: string | null;
+  actor_type: string | null;
+  actor_display: string | null;
+}
+
+// Which actor kinds name a *person* worth surfacing in a human recap. System /
+// service / external_system activity is machine plumbing — there is no one to
+// credit, so we leave the actor null rather than printing "system".
+const PERSON_ACTOR_TYPES = new Set(['user', 'external_user', 'agent']);
+
+function personActor(type: string | null, display: string | null): string | null {
+  if (!type || !PERSON_ACTOR_TYPES.has(type)) return null;
+  const name = display?.trim();
+  return name ? name : null;
 }
 
 interface SectionBreakdown {
@@ -133,7 +146,8 @@ interface SectionBreakdown {
   label: string;
   total: number;
   badges: Array<{ label: string; count: number }>;
-  sample: string[]; // a few "Title (Project)" strings for the AI digest
+  people: Array<{ name: string; count: number }>; // who drove this section, most-active first
+  sample: string[]; // a few "Title — by Person (Project)" strings for the AI digest
 }
 
 interface DeterministicRecap {
@@ -159,7 +173,8 @@ function buildDeterministic(date: string): DeterministicRecap {
 
   const activityRows = activityDb
     .prepare(
-      `SELECT event_id, occurred_at, event_type, lifecycle_phase, title, project_id, asset_id
+      `SELECT event_id, occurred_at, event_type, lifecycle_phase, title, project_id, asset_id,
+              actor_type, actor_display
        FROM activity_events
        WHERE visibility = 'user_timeline'
          AND occurred_at >= ? AND occurred_at < ?
@@ -170,7 +185,8 @@ function buildDeterministic(date: string): DeterministicRecap {
 
   const mediaComments = coreDb
     .prepare(
-      `SELECT comment_id, project_id, asset_id, body, created_at
+      `SELECT comment_id, project_id, asset_id, body, created_at,
+              author_user_id, author_external_name, author_external_email
        FROM media_comments
        WHERE deleted_at IS NULL
          AND created_at >= ? AND created_at < ?
@@ -178,11 +194,12 @@ function buildDeterministic(date: string): DeterministicRecap {
     )
     .all(startIso, endIso) as Array<{
       comment_id: string; project_id: string; asset_id: string; body: string; created_at: string;
+      author_user_id: string | null; author_external_name: string | null; author_external_email: string | null;
     }>;
 
   const taskComments = coreDb
     .prepare(
-      `SELECT c.comment_id, c.created_at, c.body, c.task_id, t.description, t.client_name
+      `SELECT c.comment_id, c.created_at, c.body, c.task_id, c.author_id, t.description, t.client_name
        FROM task_comments c
        JOIN tasks t ON t.task_id = c.task_id
        WHERE c.kind = 'comment'
@@ -190,7 +207,7 @@ function buildDeterministic(date: string): DeterministicRecap {
        ORDER BY c.created_at DESC`,
     )
     .all(startIso, endIso) as Array<{
-      comment_id: string; created_at: string; body: string;
+      comment_id: string; created_at: string; body: string; author_id: string;
       task_id: string; description: string; client_name: string;
     }>;
 
@@ -205,6 +222,20 @@ function buildDeterministic(date: string): DeterministicRecap {
       .prepare(`SELECT project_id, name FROM projects WHERE project_id IN (${ids.map(() => '?').join(',')})`)
       .all(...ids) as Array<{ project_id: string; name: string }>;
     for (const row of nameRows) projectName.set(row.project_id, row.name);
+  }
+
+  // Comments store the author as an internal user id (media & task comments) —
+  // resolve those to display names so the recap can credit people by name.
+  const userIds = new Set<string>();
+  for (const c of mediaComments) if (c.author_user_id) userIds.add(c.author_user_id);
+  for (const c of taskComments) if (c.author_id) userIds.add(c.author_id);
+  const userName = new Map<string, string>();
+  if (userIds.size > 0) {
+    const ids = [...userIds];
+    const nameRows = coreDb
+      .prepare(`SELECT id, name FROM users WHERE id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as Array<{ id: string; name: string }>;
+    for (const row of nameRows) userName.set(row.id, row.name);
   }
 
   const bySection = new Map<CatchupSectionKey, CatchupRow[]>();
@@ -228,15 +259,23 @@ function buildDeterministic(date: string): DeterministicRecap {
       href = `/projects/${r.project_id}`;
     }
 
-    push(c.section, { id: r.event_id, title: r.title, project, badge: c.badge, time: r.occurred_at, href });
+    const actor = personActor(r.actor_type, r.actor_display);
+    push(c.section, { id: r.event_id, title: r.title, project, actor, badge: c.badge, time: r.occurred_at, href });
   }
 
   for (const c of mediaComments) {
     const project = projectName.get(c.project_id) ?? null;
+    // Internal LPOS commenter → resolved name; external Frame.io reviewer →
+    // their stored name, falling back to email.
+    const actor = (c.author_user_id ? userName.get(c.author_user_id) : null)
+      ?? c.author_external_name?.trim()
+      ?? c.author_external_email?.trim()
+      ?? null;
     push('media', {
       id: c.comment_id,
       title: snippet(c.body),
       project,
+      actor,
       badge: { label: 'Comment', tone: 'comment' },
       time: c.created_at,
       href: `/projects/${c.project_id}?assetId=${c.asset_id}`,
@@ -252,6 +291,7 @@ function buildDeterministic(date: string): DeterministicRecap {
       id: c.comment_id,
       title: c.description,
       project: c.client_name || null,
+      actor: (c.author_id ? userName.get(c.author_id) : null) ?? null,
       badge: { label: 'Note', tone: 'neutral' },
       time: c.created_at,
       href: `/dashboard?task=${c.task_id}`,
@@ -270,11 +310,13 @@ function buildDeterministic(date: string): DeterministicRecap {
     if (!rows || rows.length === 0) continue;
 
     const hist = new Map<string, number>();
+    const peopleHist = new Map<string, number>();
     for (const row of rows) {
       if (row.badge.tone === 'failed') totals.failures += 1;
       else if (row.badge.tone === 'comment') totals.comments += 1;
       else totals.updates += 1;
       hist.set(row.badge.label, (hist.get(row.badge.label) ?? 0) + 1);
+      if (row.actor) peopleHist.set(row.actor, (peopleHist.get(row.actor) ?? 0) + 1);
     }
 
     rows.sort((a, b) => {
@@ -296,7 +338,13 @@ function buildDeterministic(date: string): DeterministicRecap {
       label: sectionLabel,
       total: rows.length,
       badges: [...hist.entries()].map(([label, count]) => ({ label, count })),
-      sample: rows.slice(0, 3).map((r) => `${r.title}${r.project ? ` (${r.project})` : ''}`),
+      people: [...peopleHist.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([name, count]) => ({ name, count })),
+      sample: rows.slice(0, 3).map(
+        (r) => `${r.title}${r.actor ? ` — by ${r.actor}` : ''}${r.project ? ` (${r.project})` : ''}`,
+      ),
     });
   }
 
@@ -323,7 +371,10 @@ function buildDigest(recap: DeterministicRecap): string {
   }
   for (const b of recap.breakdown) {
     const badges = b.badges.map((x) => `${x.count} ${x.label}`).join(', ');
-    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}. e.g. ${b.sample.join('; ')}`);
+    const people = b.people.length > 0
+      ? ` By: ${b.people.map((p) => `${p.name} (${p.count})`).join(', ')}.`
+      : '';
+    lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${people} e.g. ${b.sample.join('; ')}`);
   }
   return lines.join('\n');
 }
@@ -340,7 +391,7 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
   const client = new Anthropic({ apiKey });
   const message = await client.messages.create({
     model,
-    max_tokens: 200,
+    max_tokens: 250,
     system:
       "You write a one or two sentence, plain-English recap of what happened across a video-production studio's operating system yesterday, for the team's morning catch-up. " +
       'Rules: Report ONLY what the digest states — never invent or add up numbers into a new total. ' +
@@ -348,6 +399,8 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
       'The word "task" refers only to the task-dashboard category; do NOT describe uploads, media, or job activity as tasks. ' +
       'Only say something was "completed" or "done" if the breakdown explicitly marks it Completed/Published; uploads and task activity are not completions. ' +
       'Be factual and specific: name the busiest category and the project driving it, and call out any failures as needing attention. ' +
+      'Make it personal — credit the PEOPLE behind the work by name using the "By:" contributors listed for each category (e.g. who drove uploads or left key comments). ' +
+      'Only name people the digest actually lists; never invent names, and if a category has no "By:" line, describe it without a name. ' +
       'No greeting, no preamble, no bullet points, no markdown — just the recap sentence(s).',
     messages: [{ role: 'user', content: `Summarize yesterday from this digest:\n${buildDigest(recap)}` }],
   });

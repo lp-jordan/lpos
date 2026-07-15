@@ -23,6 +23,7 @@ export interface CatchupRow {
   id: string;
   title: string;
   project: string | null;
+  actor: string | null; // who did it (person's display name); null for system/service activity
   badge: CatchupBadge;
   time: string; // ISO occurred/created timestamp
   href: string | null;

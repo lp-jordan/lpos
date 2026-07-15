@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-15T16:58:40Z",
+    "title": "Daily Catch-Up now names who did what",
+    "summary": "The Daily Catch-Up recap is more personal — instead of only counting activity by type, it now credits the people behind the work. Each item in the drawer shows who did it (the uploader, the person who left a comment, the note author), and the AI morning headline now names the people driving each category (e.g. who drove uploads or left key comments) rather than just reporting numbers. Automated/system activity stays anonymous since there's no person to credit. Past days already summarized before this change will start showing names once rebuilt."
+  },
+  {
     "timestamp": "2026-07-15T13:51:53Z",
     "title": "Lighting picks up lights that come online mid-session",
     "summary": "Fixed a Lighting issue where a fixture that was powered on (or Bluetooth-reconnected) after LPOS had already connected to Amaran Desktop stayed invisible in LPOS even though the Amaran app showed it connected. LPOS only re-scanned for new fixtures on connect or when you hit Refresh; its 30-second background poll just updated lights it already knew about. The poll now also re-scans the fixture list every cycle, so a light that joins mid-session shows up on its own within about 30 seconds — no more hitting Refresh to make a missing Void/Bookshelf/Mobile light appear. Lights that briefly drop off are still kept on screen so a momentary blip doesn't remove a tile mid-shoot."
