@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-15T17:07:01Z",
+    "title": "Daily Catch-Up headline: accurate credit for who did what",
+    "summary": "Follow-up to the personal Daily Catch-Up: tightened the AI morning headline so it credits each person with their own share of the work rather than the whole category. Previously it could say someone \"drove 13 uploads\" when they did only 3 of them (the rest being automated Frame.io/ingest activity with no person attached). The recap now says e.g. \"uploaded, led by KC Cohen with 3 of them\" and \"7 task updates driven primarily by Jordan Johnson with 5 of them.\" Note: task activity carries reliable names; some uploads are system/ingest with no person; and video-asset comments currently have no stored author, so \"who commented\" can't be shown until Frame.io comment sync captures the commenter."
+  },
+  {
     "timestamp": "2026-07-15T16:58:40Z",
     "title": "Daily Catch-Up now names who did what",
     "summary": "The Daily Catch-Up recap is more personal — instead of only counting activity by type, it now credits the people behind the work. Each item in the drawer shows who did it (the uploader, the person who left a comment, the note author), and the AI morning headline now names the people driving each category (e.g. who drove uploads or left key comments) rather than just reporting numbers. Automated/system activity stays anonymous since there's no person to credit. Past days already summarized before this change will start showing names once rebuilt."

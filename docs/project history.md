@@ -3034,3 +3034,20 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit` — 0 errors. Dev server not started (user manages lifecycle); live drive of the drawer + headline left to the user.
 
 **Assumptions / follow-ups:** Assumes `actor_display` is generally populated on real events (confirmed across the webhook/API record sites). Past days already cached before this change won't show actors until rebuilt (`?refresh=1` or a fresh warm); today/future days get it automatically. External Frame.io reviewers show their stored name or email; if neither is present the row stays anonymous.
+
+## 2026-07-15T17:07:01Z — Daily Catch-Up personal recap: regenerate + fix headline over-attribution
+
+**User prompt (verbatim):** "Can you re-generate today's so I can see it in action?"
+
+**Assistant response summary:** Regenerated the default (yesterday, 2026-07-14) Daily Catch-Up with `refresh: true` against the live DB via a throwaway `tsx` script (run through `doppler run` for `CLAUDE_API_KEY`), overwriting the stale 05:30 warm-cache so the drawer now shows the new actor-aware format. The first regeneration exposed a real accuracy bug: the AI headline said "KC Cohen drove 13 media uploads" when KC Cohen had only 3 of the 13 uploads (the other 10 were system/Frame.io ingests with no person) — the model attributed the whole section total to one named person. Fixed by making each contributor's own share explicit in the digest ("Name (N of TOTAL)") and tightening the headline prompt to forbid crediting a category's full total to one person. Re-ran: headline is now accurate ("uploaded, led by KC Cohen with 3 of them"; "7 updates driven primarily by Jordan Johnson with 5 of them, plus … KC Cohen and Lauren Wood").
+
+**Files changed:**
+- `lib/services/catchup-service.ts` — digest contributor line now `Name (N of TOTAL)` (was `Name (N)`); headline system prompt explains the "N of TOTAL" semantics and bans total-to-one-person attribution; media-comment actor fallback switched to `||` so an empty stored name/email collapses to `null` instead of a blank actor.
+
+**Data findings (from a read-only probe of 2026-07-14):** Task events carry real person actors (Jordan Johnson, KC Cohen, Lauren Wood) — personalization works well. Uploads are mixed: user-initiated uploads carry the uploader (KC Cohen ×3) but Frame.io/ingest uploads are `actor_type=system/service` (Ingest Queue, Transcripter) with no person — so only some uploads get a name. Media comments yesterday had NO author data at all (`author_user_id` null, `author_external_name`/email empty), so "who commented" cannot be surfaced until the Frame.io comment sync captures the commenter — a data-source gap, not a catch-up bug.
+
+**Decision rationale:** Encoding "N of TOTAL" in the digest is a stronger guardrail than prose alone — it makes the per-person share unmissable, so the model can't restate a section total as one person's work. `||` fallback avoids emitting empty-string actors.
+
+**Commands / checks run:** `npx tsc --noEmit` — 0 errors. Regenerated twice via `doppler run -- tsx` (before/after the fix) against the live DB; confirmed corrected headline. Read-only SQLite probe of actor distribution. Temp scripts deleted.
+
+**Assumptions / follow-ups:** Cache for 2026-07-14 is now the corrected version; other past days show actors only after a rebuild (`?refresh=1` / next warm). Follow-up worth considering: (1) capture the commenter in Frame.io comment sync so media comments can be personalized; (2) optionally suppress/soften the actor line for system/service-heavy sections. Not done here.

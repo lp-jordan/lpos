@@ -266,11 +266,10 @@ function buildDeterministic(date: string): DeterministicRecap {
   for (const c of mediaComments) {
     const project = projectName.get(c.project_id) ?? null;
     // Internal LPOS commenter → resolved name; external Frame.io reviewer →
-    // their stored name, falling back to email.
-    const actor = (c.author_user_id ? userName.get(c.author_user_id) : null)
-      ?? c.author_external_name?.trim()
-      ?? c.author_external_email?.trim()
-      ?? null;
+    // their stored name, falling back to email. `||` (not `??`) so an empty
+    // stored name/email collapses to null rather than a blank actor.
+    const external = c.author_external_name?.trim() || c.author_external_email?.trim() || null;
+    const actor = (c.author_user_id ? userName.get(c.author_user_id) : null) ?? external;
     push('media', {
       id: c.comment_id,
       title: snippet(c.body),
@@ -371,8 +370,10 @@ function buildDigest(recap: DeterministicRecap): string {
   }
   for (const b of recap.breakdown) {
     const badges = b.badges.map((x) => `${x.count} ${x.label}`).join(', ');
+    // "N of TOTAL" makes each person's own share explicit so the summary can't
+    // credit one person with the whole category (many rows have no named actor).
     const people = b.people.length > 0
-      ? ` By: ${b.people.map((p) => `${p.name} (${p.count})`).join(', ')}.`
+      ? ` Contributors: ${b.people.map((p) => `${p.name} (${p.count} of ${b.total})`).join(', ')}.`
       : '';
     lines.push(`  ${b.label} — ${b.total} ${SECTION_MEANING[b.key]}. Breakdown: ${badges}.${people} e.g. ${b.sample.join('; ')}`);
   }
@@ -399,8 +400,9 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
       'The word "task" refers only to the task-dashboard category; do NOT describe uploads, media, or job activity as tasks. ' +
       'Only say something was "completed" or "done" if the breakdown explicitly marks it Completed/Published; uploads and task activity are not completions. ' +
       'Be factual and specific: name the busiest category and the project driving it, and call out any failures as needing attention. ' +
-      'Make it personal — credit the PEOPLE behind the work by name using the "By:" contributors listed for each category (e.g. who drove uploads or left key comments). ' +
-      'Only name people the digest actually lists; never invent names, and if a category has no "By:" line, describe it without a name. ' +
+      'Make it personal — credit the PEOPLE behind the work by name using the "Contributors" listed for each category (e.g. who drove uploads or left key comments). ' +
+      'Each contributor is written "Name (N of TOTAL)": N is that person\'s OWN count and TOTAL is the whole category — many items have no named person, so NEVER credit a category\'s full total to one person; use their own N, and if their N is less than the total, phrase it as a contribution (e.g. "led by", "including", "N of them from"). ' +
+      'Only name people the digest actually lists; never invent names, and if a category has no Contributors line, describe it without a name. ' +
       'No greeting, no preamble, no bullet points, no markdown — just the recap sentence(s).',
     messages: [{ role: 'user', content: `Summarize yesterday from this digest:\n${buildDigest(recap)}` }],
   });
