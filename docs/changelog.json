@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-15T17:12:22Z",
+    "title": "Daily Catch-Up uses first names",
+    "summary": "The Daily Catch-Up now refers to people by first name only (e.g. \"Jordan\" instead of \"Jordan Johnson\") — in the recap headline, the per-item rows, and the contributor breakdown — for a friendlier, less formal morning update."
+  },
+  {
     "timestamp": "2026-07-15T17:07:01Z",
     "title": "Daily Catch-Up headline: accurate credit for who did what",
     "summary": "Follow-up to the personal Daily Catch-Up: tightened the AI morning headline so it credits each person with their own share of the work rather than the whole category. Previously it could say someone \"drove 13 uploads\" when they did only 3 of them (the rest being automated Frame.io/ingest activity with no person attached). The recap now says e.g. \"uploaded, led by KC Cohen with 3 of them\" and \"7 task updates driven primarily by Jordan Johnson with 5 of them.\" Note: task activity carries reliable names; some uploads are system/ingest with no person; and video-asset comments currently have no stored author, so \"who commented\" can't be shown until Frame.io comment sync captures the commenter."

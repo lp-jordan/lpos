@@ -3051,3 +3051,20 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit` — 0 errors. Regenerated twice via `doppler run -- tsx` (before/after the fix) against the live DB; confirmed corrected headline. Read-only SQLite probe of actor distribution. Temp scripts deleted.
 
 **Assumptions / follow-ups:** Cache for 2026-07-14 is now the corrected version; other past days show actors only after a rebuild (`?refresh=1` / next warm). Follow-up worth considering: (1) capture the commenter in Frame.io comment sync so media comments can be personalized; (2) optionally suppress/soften the actor line for system/service-heavy sections. Not done here.
+
+## 2026-07-15T17:12:22Z — Daily Catch-Up: first names only
+
+**User prompt (verbatim):** "Great, are we able to only use first names?"
+
+**Assistant response summary:** Made the Daily Catch-Up recap use first names only (e.g. "Jordan Johnson" → "Jordan", "KC Cohen" → "KC") everywhere a person is shown — the per-row drawer actor, the digest "Contributors" line, and the AI headline. Added a `firstName()` helper applied at each actor-assignment point so the whole payload derives from the shortened name consistently. Regenerated yesterday's cache and confirmed: headline now reads "led by KC (3 of 13)", "7 updates led by Jordan (5 of 7), with KC and Lauren each contributing 1 update"; rows read "— Jordan", "— KC".
+
+**Files changed:**
+- `lib/services/catchup-service.ts` — new `firstName()` (first whitespace-delimited token; email fallback uses the local-part before `@`); applied inside `personActor()` (activity events) and at the media-comment and task-comment actor assignments. Refactored the task-comment actor from an inline IIFE to a plain `resolved`/`firstName` pattern matching the media block.
+
+**Implementation summary:** `firstName()` trims, strips an email domain if present, and returns the first token, returning the original when there's no clear split. It runs at the three points where `actor` is set, so rows, the contributor histogram, and the AI digest all use first names without any further change downstream.
+
+**Decision rationale:** Applying the transform at actor-assignment (not at render) means every surface — UI rows, digest, headline — stays consistent from one source of truth, and the "N of TOTAL" accuracy guard from the prior commit is unaffected.
+
+**Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. Regenerated 2026-07-14 via `doppler run -- tsx` and verified first-name output in headline + rows. Temp script deleted. (Note: `doppler run` and local `tsc`/`tsx` require cwd = `lpos-dashboard/`; Doppler's project scope and npx's TypeScript resolution both break from the workspace root.)
+
+**Assumptions / follow-ups:** First-name-only can be ambiguous with two same-first-name people (e.g. two "Jordan"s) — accepted per request; revisit with an initial if it becomes confusing. Yesterday's cache is now the first-name version; other past days update on rebuild/next warm.

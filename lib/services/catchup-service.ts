@@ -135,10 +135,22 @@ interface ActivityRowRaw {
 // credit, so we leave the actor null rather than printing "system".
 const PERSON_ACTOR_TYPES = new Set(['user', 'external_user', 'agent']);
 
+/** Reduce a display name to just the first name for a friendlier, less formal
+ * recap ("Jordan Johnson" → "Jordan"). Falls back to the email local-part for
+ * external commenters stored only as an address, and returns the original for
+ * anything without a clear split. */
+function firstName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  const base = trimmed.includes('@') ? trimmed.split('@')[0] : trimmed;
+  const first = base.split(/\s+/)[0];
+  return first || trimmed;
+}
+
 function personActor(type: string | null, display: string | null): string | null {
   if (!type || !PERSON_ACTOR_TYPES.has(type)) return null;
   const name = display?.trim();
-  return name ? name : null;
+  return name ? firstName(name) : null;
 }
 
 interface SectionBreakdown {
@@ -269,7 +281,8 @@ function buildDeterministic(date: string): DeterministicRecap {
     // their stored name, falling back to email. `||` (not `??`) so an empty
     // stored name/email collapses to null rather than a blank actor.
     const external = c.author_external_name?.trim() || c.author_external_email?.trim() || null;
-    const actor = (c.author_user_id ? userName.get(c.author_user_id) : null) ?? external;
+    const resolved = (c.author_user_id ? userName.get(c.author_user_id) : null) ?? external;
+    const actor = resolved ? firstName(resolved) : null;
     push('media', {
       id: c.comment_id,
       title: snippet(c.body),
@@ -286,11 +299,12 @@ function buildDeterministic(date: string): DeterministicRecap {
     // note left on a task is task activity, not a media comment — badge it
     // "Note" (neutral) so it doesn't read as footage feedback and doesn't
     // inflate the header "comments" count, which counts media comments only.
+    const resolved = c.author_id ? userName.get(c.author_id) : null;
     push('tasks', {
       id: c.comment_id,
       title: c.description,
       project: c.client_name || null,
-      actor: (c.author_id ? userName.get(c.author_id) : null) ?? null,
+      actor: resolved ? firstName(resolved) : null,
       badge: { label: 'Note', tone: 'neutral' },
       time: c.created_at,
       href: `/dashboard?task=${c.task_id}`,
