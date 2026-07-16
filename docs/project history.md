@@ -3105,3 +3105,20 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `node_modules/.bin/tsc --noEmit` — 0 errors. `grep` for stale `project`/`catchup-row-project` refs — only the unrelated `/api/projects` fetch for the activity modal remains (correct). Regenerated 2026-07-14 via `doppler run -- tsx`; confirmed client-named headline + rows. Temp script deleted.
 
 **Assumptions / follow-ups:** `projects.client_name` is populated (NOT NULL in schema) so every project resolves to a client. Rows for different projects of the same client now look identical in the client column (accepted per request). Yesterday's cache is client-grouped; other past days update on rebuild/next warm.
+
+## 2026-07-16T17:11:30Z — Cloudflare Stream: user-readable "out of storage" errors
+
+**User prompt (verbatim):** "Can you make cloudflare errors related to insufficient storage more user readable?"
+
+**Assistant response summary:** Cloudflare Stream storage-limit rejections were passed through to users verbatim as opaque strings like "Storage capacity exceeded (code 10011)" (or a raw TUS/413/429 body on the upload legs). Added a `friendlyCloudflareStorageError()` detector in `lib/services/cloudflare-stream.ts` that recognizes the storage-limit case — Cloudflare error code 10011, storage-related message keywords ("storage capacity/quota/limit", "out of storage", "insufficient storage", "purchase more minutes"), and 413/429 responses whose body mentions storage — and rewrites it into one plain, actionable sentence directing the user to delete unused videos or purchase more storage minutes. Applied it at all three throw sites: the central JSON `parseCloudflareResponse()` parser, the TUS upload-init failure, and the TUS chunk-upload failure. The raw Cloudflare text is preserved on a second line so the media panel's existing "Show full error" toggle still exposes the original for debugging. No detection false-positive risk for file-too-large 413s (those bodies don't mention storage).
+
+**Files changed:**
+- `lib/services/cloudflare-stream.ts` — new `friendlyCloudflareStorageError(rawMessage, status?, code?)` helper above `parseCloudflareResponse`; wired into `parseCloudflareResponse` (before the generic `(code N)` pass-through), `createCloudflareTusUpload` init-failure throw, and `uploadFileToCloudflareTus` chunk-failure throw.
+
+**Implementation summary:** Single shared detector keyed on code 10011 plus message/status heuristics, returning null for non-storage errors so all other error paths (including the existing 9106 auth special-case) are untouched. Friendly message is the first line; raw Cloudflare text appended as "Cloudflare said: …" so nothing is lost.
+
+**Decision rationale:** Detected by both numeric code and message text (not code alone) because the same limit surfaces in three response shapes — JSON `errors[]` on the API, and raw body / 413 / 429 on the TUS upload legs — where a stable code isn't always present. Kept 413/429 storage classification gated on the body mentioning "storage" so a genuine oversized-file 413 is not mislabeled as an account-storage-limit error. Scoped to Stream (the video upload path where "out of storage" actually bites); Cloudflare Images has a separate quota concept and was left as-is.
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — exit 0.
+
+**Assumptions / follow-ups:** Cloudflare's storage-limit code is 10011 per current docs; the message-keyword fallback keeps detection working if the code shifts. Could extend the same friendly-mapping approach to the Cloudflare Images upload path (`app/api/projects/[projectId]/media/batch-poster/route.ts`) if Images quota errors become a real issue.

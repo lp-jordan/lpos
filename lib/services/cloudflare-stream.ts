@@ -180,6 +180,44 @@ function encodeMetadata(metadata: Record<string, string | null | undefined>): st
     .join(',');
 }
 
+/**
+ * Cloudflare Stream rejects uploads once the account's storage quota is spent.
+ * Depending on where in the flow it hits, this arrives as JSON error code 10011
+ * ("Storage capacity exceeded…") on the API, or as a raw TUS body / 413 / 429 on
+ * the upload legs. Left alone it reaches the user as an opaque
+ * "Storage capacity exceeded (code 10011)" line. Detect the storage-limit case
+ * from either the code or the message text and rewrite it into one plain,
+ * actionable sentence. Returns null when the error isn't storage-related.
+ *
+ * The raw Cloudflare text is preserved on a second line so the "Show full error"
+ * toggle in the media panel still exposes the original for debugging.
+ */
+function friendlyCloudflareStorageError(
+  rawMessage: string,
+  status?: number,
+  code?: number,
+): string | null {
+  const text = (rawMessage || '').toLowerCase();
+  const looksLikeStorageLimit =
+    code === 10011 ||
+    text.includes('storage capacity') ||
+    text.includes('storage quota') ||
+    text.includes('storage limit') ||
+    text.includes('out of storage') ||
+    text.includes('insufficient storage') ||
+    text.includes('purchase more minutes') ||
+    // 413/429 over-limit responses carry the reason in the body text.
+    ((status === 413 || status === 429) && text.includes('storage')) ||
+    (text.includes('storage') && /\b(exceed|exceeded|quota|capacity|full)\b/.test(text));
+  if (!looksLikeStorageLimit) return null;
+
+  const friendly =
+    'Cloudflare Stream is out of storage. Your Cloudflare Stream plan has used up its '
+    + 'allocated storage, so this video could not be uploaded. Free up space by deleting '
+    + 'unused videos in Cloudflare Stream, or purchase more storage minutes, then try again.';
+  return rawMessage.trim() ? `${friendly}\n\nCloudflare said: ${rawMessage.trim()}` : friendly;
+}
+
 async function parseCloudflareResponse<T>(response: Response): Promise<T> {
   const payload = await response.json() as { success?: boolean; errors?: Array<{ message?: string; code?: number }>; result?: T };
   if (!response.ok || payload.success === false || !payload.result) {
@@ -187,6 +225,8 @@ async function parseCloudflareResponse<T>(response: Response): Promise<T> {
       if (error.code === 9106) {
         return 'Cloudflare rejected the request because no supported auth header was accepted. Restart LPOS to reload .env.local, or set CLOUDFLARE_API_KEY plus CLOUDFLARE_AUTH_EMAIL as a fallback auth mode.';
       }
+      const storage = friendlyCloudflareStorageError(error.message ?? '', response.status, error.code);
+      if (storage) return storage;
       if (error.code) return `${error.message ?? 'Cloudflare error'} (code ${error.code})`;
       return error.message;
     }).filter(Boolean).join('; ') || `Cloudflare API ${response.status}`;
@@ -292,6 +332,8 @@ export async function createCloudflareTusUpload(asset: MediaAsset): Promise<Clou
         'Cloudflare rejected the upload-init request because no supported auth header was accepted. Restart LPOS to reload .env.local, or configure CLOUDFLARE_API_KEY plus CLOUDFLARE_AUTH_EMAIL as a fallback.',
       );
     }
+    const storage = friendlyCloudflareStorageError(bodyText, response.status);
+    if (storage) throw new Error(storage);
     throw new Error(bodyText || `Cloudflare upload init failed (${response.status}). Check the account ID, API token permissions, and token IP restriction.`);
   }
 
@@ -386,6 +428,8 @@ export async function uploadFileToCloudflareTus(
             );
           }
           lastErrorText = await response!.text();
+          const storage = friendlyCloudflareStorageError(lastErrorText, response!.status);
+          if (storage) throw new Error(storage);
           throw new Error(lastErrorText || `Cloudflare upload chunk failed (${response!.status}).`);
         }
 
