@@ -541,6 +541,7 @@ export function MediaTab({
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
   const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
+  const [spanishWorking,      setSpanishWorking]      = useState(false);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
   const [nasActive, setNasActive] = useState(false);
@@ -1302,6 +1303,16 @@ const { openMenu } = useContextMenu();
           void fetchAssets();
         },
       },
+      {
+        type: 'item' as const,
+        label: asset.transcriptionEs?.status === 'done' ? 'Re-transcribe (Spanish)' : 'Transcribe (Spanish)',
+        icon: <IconRefresh />,
+        disabled: !asset.filePath || asset.transcriptionEs?.status === 'queued' || asset.transcriptionEs?.status === 'processing',
+        onClick: async () => {
+          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/transcribe-es`, { method: 'POST' });
+          void fetchAssets();
+        },
+      },
       { type: 'separator' as const },
       ...(asset.storageType === 'uploaded' ? [{
         type: 'item' as const,
@@ -1460,6 +1471,26 @@ const { openMenu } = useContextMenu();
       setRetranscribeError('Network error — could not queue re-transcription');
     } finally {
       setRetranscribeWorking(false);
+    }
+  }
+
+  async function handleBulkSpanishTranscribe() {
+    if (!selectedIds.size) return;
+    setSpanishWorking(true);
+    setRetranscribeError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/transcribe-es`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assetIds: [...selectedIds] }),
+      });
+      if (!res.ok) throw new Error('request failed');
+      setSelectedIds(new Set());
+      void fetchAssets();
+    } catch {
+      setRetranscribeError('Network error — could not queue Spanish transcription');
+    } finally {
+      setSpanishWorking(false);
     }
   }
 
@@ -1714,6 +1745,18 @@ const { openMenu } = useContextMenu();
                 <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
               </svg>
               {retranscribeWorking ? 'Queueing…' : 'Re-transcribe'}
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
+              onClick={() => void handleBulkSpanishTranscribe()}
+              disabled={spanishWorking}
+              title="Transcribe the selected videos in Spanish (additive — keeps the English transcript)"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+              </svg>
+              {spanishWorking ? 'Queueing…' : 'Transcribe Spanish'}
             </button>
             <button
               type="button"

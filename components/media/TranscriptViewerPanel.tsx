@@ -24,6 +24,10 @@ interface Props {
   projectName: string;
   mode: PanelMode;
   jobId: string | null;
+  /** Spanish transcript jobId for this asset, when one exists. When set (and in
+   *  viewer mode) an ENG/SPA toggle appears; switching to SPA swaps the transcript
+   *  the panel loads. Null/undefined = no Spanish transcript → no toggle. */
+  esJobId?: string | null;
   filename: string;
   onClose: () => void;
   standalone?: boolean;
@@ -116,6 +120,7 @@ export function TranscriptViewerPanel({
   projectName,
   mode,
   jobId,
+  esJobId = null,
   filename,
   onClose,
   standalone = false,
@@ -137,6 +142,9 @@ export function TranscriptViewerPanel({
     vtt: false,
   });
   const [viewMode, setViewMode] = useState<ViewMode>('plain');
+  // Which language transcript is showing. Only meaningful in viewer mode when a
+  // Spanish transcript exists; resets to 'en' whenever a new asset is opened.
+  const [activeLang, setActiveLang] = useState<'en' | 'es'>('en');
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +162,16 @@ export function TranscriptViewerPanel({
   const shouldScrollToBottomRef = useRef(true);
 
   const isOpen = mode === 'search' || jobId !== null;
+  // The transcript actually loaded: Spanish jobId when the SPA toggle is active
+  // (and a Spanish transcript exists), otherwise the base English jobId. All the
+  // viewer's fetch/download URLs key off this so switching language just swaps it.
+  const effectiveJobId = activeLang === 'es' && esJobId ? esJobId : jobId;
   const scopeLabel = useMemo(() => buildScopeLabel(searchScopeMode, searchScope), [searchScopeMode, searchScope]);
+
+  // Reset to English whenever a different asset is opened (base jobId changes).
+  useEffect(() => {
+    setActiveLang('en');
+  }, [jobId]);
 
   useEffect(() => {
     setMounted(true);
@@ -200,7 +217,7 @@ export function TranscriptViewerPanel({
   }, [mode, projectId, searchSessionKey]);
 
   useEffect(() => {
-    if (mode !== 'viewer' || !jobId) {
+    if (mode !== 'viewer' || !effectiveJobId) {
       setAvailableFiles({ txt: false, json: false, srt: false, vtt: false });
       setContent('');
       setWordCount(0);
@@ -216,20 +233,20 @@ export function TranscriptViewerPanel({
         const data = await res.json() as {
           transcripts: Array<{ jobId: string; files: Record<FileType, boolean> }>;
         };
-        const entry = data.transcripts.find((item) => item.jobId === jobId);
+        const entry = data.transcripts.find((item) => item.jobId === effectiveJobId);
         if (entry) setAvailableFiles(entry.files);
       } catch {
         // Ignore best-effort file metadata loading.
       }
     })();
-  }, [jobId, mode, projectId]);
+  }, [effectiveJobId, mode, projectId]);
 
   useEffect(() => {
     setViewMode('plain');
-  }, [jobId]);
+  }, [effectiveJobId]);
 
   useEffect(() => {
-    if (mode !== 'viewer' || !jobId) return;
+    if (mode !== 'viewer' || !effectiveJobId) return;
 
     setLoading(true);
     setError(null);
@@ -237,7 +254,7 @@ export function TranscriptViewerPanel({
     const fetchType = viewMode === 'timecoded' ? 'timecoded-txt' : 'txt';
     void (async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/transcripts?download=${jobId}&type=${fetchType}`);
+        const res = await fetch(`/api/projects/${projectId}/transcripts?download=${effectiveJobId}&type=${fetchType}`);
         if (!res.ok) {
           setError(viewMode === 'timecoded' ? 'Could not load timecoded transcript.' : 'Could not load TXT transcript.');
           setContent('');
@@ -256,7 +273,7 @@ export function TranscriptViewerPanel({
         setLoading(false);
       }
     })();
-  }, [jobId, mode, projectId, viewMode]);
+  }, [effectiveJobId, mode, projectId, viewMode]);
 
   const standalonePanelStyle: CSSProperties | undefined = standalone ? {
     position: 'fixed',
@@ -277,7 +294,7 @@ export function TranscriptViewerPanel({
   } : undefined;
 
   function getDownloadUrl(type: FileType): string {
-    return `/api/projects/${projectId}/transcripts?download=${jobId}&type=${type}`;
+    return `/api/projects/${projectId}/transcripts?download=${effectiveJobId}&type=${type}`;
   }
 
   function appendMessage(message: TranscriptSearchMessage) {
@@ -544,6 +561,26 @@ export function TranscriptViewerPanel({
                 {wordCount > 0 && <span className="txv-wordcount">{wordCount.toLocaleString()} words</span>}
               </div>
               <div className="txv-toolbar">
+                {esJobId && (
+                  <div className="txv-view-toggle" role="group" aria-label="Transcript language">
+                    <button
+                      type="button"
+                      className={`txv-view-btn${activeLang === 'en' ? ' txv-view-btn--active' : ''}`}
+                      onClick={() => setActiveLang('en')}
+                      title="English transcript"
+                    >
+                      ENG
+                    </button>
+                    <button
+                      type="button"
+                      className={`txv-view-btn${activeLang === 'es' ? ' txv-view-btn--active' : ''}`}
+                      onClick={() => setActiveLang('es')}
+                      title="Spanish transcript"
+                    >
+                      SPA
+                    </button>
+                  </div>
+                )}
                 {availableFiles.json ? (
                   <div className="txv-view-toggle">
                     <button
@@ -610,7 +647,7 @@ export function TranscriptViewerPanel({
               ))}
               {availableFiles.json && (
                 <a
-                  href={`/api/projects/${projectId}/transcripts?download=${jobId}&type=timecoded-txt`}
+                  href={`/api/projects/${projectId}/transcripts?download=${effectiveJobId}&type=timecoded-txt`}
                   download
                   className={`txv-tab${viewMode === 'timecoded' ? ' txv-tab--active' : ''}`}
                   title="Download timecoded TXT"

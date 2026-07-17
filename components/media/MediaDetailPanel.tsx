@@ -659,6 +659,13 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     onUpdated();
   }
 
+  // ── Spanish transcribe (additive; coexists with English) ────────────────────
+  async function handleSpanishTranscribe() {
+    if (!asset) return;
+    await fetch(`/api/projects/${projectId}/media/${asset.assetId}/transcribe-es`, { method: 'POST' });
+    onUpdated();
+  }
+
   // ── Determine live frameio status (asset may be stale while polling) ───────
   const fioStatus  = asset?.frameio.status ?? 'none';
   const isUploading = fioStatus === 'uploading' || fioUploading;
@@ -1462,6 +1469,78 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         <p className="mad-hint">Completed {formatDate(asset.transcription.completedAt)}</p>
                       )}
                     </div>
+
+                    {/* Spanish transcription — additive, coexists with English.
+                         Row is always shown so the Spanish pass can be started;
+                         once done it exposes a "Go to Spanish transcript" and, on a
+                         newer asset version, a stale-version prompt to re-run. */}
+                    {(() => {
+                      const es = asset.transcriptionEs;
+                      const esStatus = es?.status ?? 'none';
+                      const esStale = Boolean(es && es.fromPriorVersion && esStatus !== 'none');
+                      return (
+                        <div className="mad-more-info-sub">
+                          <div className="mad-section-head">
+                            <span className="mad-section-title">Spanish Transcription</span>
+                            <div className="mad-tx-status-group">
+                              <span className={`mad-tx-badge mad-tx-badge--${esStatus}`}>
+                                {{
+                                  none:       'Not Transcribed',
+                                  queued:     'Queued',
+                                  processing: 'Transcribing…',
+                                  done:       'Done',
+                                  failed:     'Failed',
+                                }[esStatus]}
+                              </span>
+                              {esStale && (
+                                <span
+                                  className="mad-tx-version-pill"
+                                  title={`Spanish transcript is from version ${es?.sourceVersionNumber ?? '?'} — re-transcribe for the current version`}
+                                >
+                                  v{es?.sourceVersionNumber ?? '?'}
+                                </span>
+                              )}
+                            </div>
+                            {esStatus !== 'queued' && esStatus !== 'processing' && (
+                              <button
+                                type="button"
+                                className="mad-icon-btn"
+                                onClick={handleSpanishTranscribe}
+                                disabled={!asset.filePath}
+                                title={!asset.filePath ? 'No local file path' : esStatus === 'done' ? 'Re-transcribe (Spanish)' : 'Start Spanish transcription'}
+                                aria-label="Transcribe Spanish"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                                  <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                          {esStale && (
+                            <p className="mad-hint">A newer version was uploaded after this Spanish transcript — re-transcribe to refresh it.</p>
+                          )}
+                          {esStatus === 'done' && es?.jobId && onGoToTranscript && (
+                            <button
+                              type="button"
+                              className="mad-action-btn mad-action-btn--primary"
+                              onClick={() => onGoToTranscript(es.jobId!)}
+                              style={{ marginTop: 8 }}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                              </svg>
+                              Go to Spanish Transcript
+                            </button>
+                          )}
+                          {esStatus === 'done' && es?.completedAt && (
+                            <p className="mad-hint">Completed {formatDate(es.completedAt)}</p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <div className="mad-more-info-sub">
                       <div className="mad-section-head">

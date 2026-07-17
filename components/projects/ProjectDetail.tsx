@@ -348,6 +348,17 @@ function TranscriptsTab({
     }
   }
 
+  // The Spanish transcript paired with the currently-viewed (English) transcript,
+  // if one exists for the same asset. Drives the viewer's ENG/SPA toggle. Null when
+  // viewing a Spanish transcript directly or when no Spanish counterpart exists.
+  const esCounterpartJobId = useMemo(() => {
+    if (!viewerJobId) return null;
+    const current = transcripts.find((t) => t.jobId === viewerJobId);
+    if (!current?.assetId || current.lang === 'es') return null;
+    const es = transcripts.find((t) => t.assetId === current.assetId && t.lang === 'es' && t.jobId !== viewerJobId);
+    return es?.jobId ?? null;
+  }, [viewerJobId, transcripts]);
+
   function openViewer(entry: TranscriptEntry) {
     setViewerJobId(entry.jobId);
     setViewerFilename(formatTranscriptLabel(entry.filename));
@@ -742,6 +753,7 @@ function TranscriptsTab({
         projectName={projectName}
         mode={panelMode === 'search' ? 'search' : 'viewer'}
         jobId={panelMode === 'viewer' ? viewerJobId : null}
+        esJobId={panelMode === 'viewer' ? esCounterpartJobId : null}
         filename={viewerFilename}
         onClose={closePanel}
         standalone

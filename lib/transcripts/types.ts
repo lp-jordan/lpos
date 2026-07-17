@@ -5,6 +5,9 @@ export interface TranscriptEntry {
   txtSize: number;
   files: { txt: boolean; json: boolean; srt: boolean; vtt: boolean };
   assetId?: string;
+  /** Transcript language. Absent/'en' = English (the standard pass); 'es' = the
+   *  additive Spanish pass. Used to pair an asset's ENG/SPA transcripts. */
+  lang?: 'en' | 'es';
 }
 
 export interface TranscriptSearchSource {

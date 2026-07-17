@@ -10,6 +10,7 @@ interface TranscriptMeta {
   filename?: string;
   completedAt?: string;
   assetId?: string;
+  lang?: 'en' | 'es';
 }
 
 function getProjectRoot(projectId: string): string {
@@ -119,6 +120,7 @@ export function listProjectTranscripts(projectId: string): TranscriptEntry[] {
         vtt: fs.existsSync(vttPath),
       },
       ...(meta?.assetId ? { assetId: meta.assetId } : {}),
+      lang: (meta?.lang === 'es' ? 'es' : 'en') as 'en' | 'es',
     };
   });
 
