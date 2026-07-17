@@ -63,6 +63,9 @@ export interface CanonicalAssetPatch {
   fileSize?: number | null;
   duration?: number | null;
   transcription?: Partial<TranscriptionInfo>;
+  /** Additive Spanish transcription pointer — persisted as a separate
+   *  `transcription_jobs` row tagged with the Spanish provider marker. */
+  transcriptionEs?: Partial<TranscriptionInfo>;
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;
   leaderpass?: Partial<LeaderPassInfo>;
@@ -194,15 +197,59 @@ function pickLatestDistributionAnyVersion(
   return null;
 }
 
-function pickLatestTranscription(bundle: AssetBundle, assetVersionId: string | null): TranscriptionRow | null {
+// Provider markers distinguishing transcript language on the shared
+// `transcription_jobs` table. English (the original/standard pass) is
+// 'transcripter'; Spanish is a distinct marker so English and Spanish
+// transcripts coexist as separate rows per version.
+const TRANSCRIPT_PROVIDER_EN = 'transcripter';
+const TRANSCRIPT_PROVIDER_ES = 'transcripter:es';
+
+/** True for a Spanish-language transcription row. */
+function isSpanishTranscription(row: TranscriptionRow): boolean {
+  return row.provider === TRANSCRIPT_PROVIDER_ES;
+}
+
+function pickLatestTranscription(
+  bundle: AssetBundle,
+  assetVersionId: string | null,
+  language: 'en' | 'es' = 'en',
+): TranscriptionRow | null {
   if (!assetVersionId) return null;
+  // Filter to the requested language first so an English projection never picks a
+  // Spanish row (and vice-versa). Rows are already ordered updated_at DESC.
+  const rows = bundle.transcriptions.filter((t) =>
+    language === 'es' ? isSpanishTranscription(t) : !isSpanishTranscription(t),
+  );
   // Prefer a transcription on the current version; fall back to the most recent
   // across any version so that skipping transcription on v2 still surfaces the v1 result.
   return (
-    bundle.transcriptions.find((t) => t.asset_version_id === assetVersionId) ??
-    bundle.transcriptions[0] ??
+    rows.find((t) => t.asset_version_id === assetVersionId) ??
+    rows[0] ??
     null
   );
+}
+
+/** Project a transcription_jobs row into the runtime TranscriptionInfo shape,
+ *  computing fromPriorVersion/sourceVersionNumber against the current version. */
+function transcriptionRowToInfo(
+  bundle: AssetBundle,
+  row: TranscriptionRow,
+  currentVersionId: string | null,
+): TranscriptionInfo {
+  const fromPriorVersion = row.asset_version_id !== currentVersionId;
+  const sourceVersion = fromPriorVersion
+    ? bundle.versions.find((v) => v.asset_version_id === row.asset_version_id) ?? null
+    : null;
+  const meta = parseMetadataJson<TranscriptionInfo>(row.metadata_json);
+  return {
+    ...defaultTranscription(),
+    ...meta,
+    status: (row.status as TranscriptionInfo['status']) ?? meta.status ?? 'none',
+    jobId: row.job_id ?? meta.jobId ?? null,
+    completedAt: row.completed_at ?? meta.completedAt ?? null,
+    fromPriorVersion,
+    sourceVersionNumber: sourceVersion?.version_number ?? null,
+  };
 }
 
 /** Latest editorial link for an asset (most-recent editpanel render). Null when this
@@ -364,6 +411,14 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
   const leaderpassMeta = parseMetadataJson<LeaderPassInfo>(leaderpass?.metadata_json);
   const sardiusMeta = parseMetadataJson<SardiusInfo>(sardius?.metadata_json);
   const transcriptionMeta = parseMetadataJson<TranscriptionInfo>(transcription?.metadata_json);
+  // Additive Spanish transcript — projected only when a Spanish row exists (on any
+  // version). If it exists only on a prior version, fromPriorVersion is true, which
+  // the UI surfaces as a stale "re-transcribe Spanish" prompt. Absent Spanish → the
+  // field stays undefined and no ENG/SPA toggle is shown.
+  const transcriptionEsRow = pickLatestTranscription(bundle, currentVersionId, 'es');
+  const transcriptionEs = transcriptionEsRow
+    ? transcriptionRowToInfo(bundle, transcriptionEsRow, currentVersionId)
+    : undefined;
 
   return {
     assetId: bundle.asset.asset_id,
@@ -392,6 +447,7 @@ function bundleToProjection(bundle: AssetBundle): MediaAsset {
       fromPriorVersion: transcriptionFromPriorVersion,
       sourceVersionNumber: transcriptionSourceVersion?.version_number ?? null,
     },
+    ...(transcriptionEs ? { transcriptionEs } : {}),
     frameio: {
       ...defaultFrameIO(),
       ...frameioMeta,
@@ -892,16 +948,30 @@ function createOrUpdateDistributionRecord(
   );
 }
 
-function upsertTranscriptionRecord(assetId: string, patch: Partial<TranscriptionInfo>): void {
+function upsertTranscriptionRecord(
+  assetId: string,
+  patch: Partial<TranscriptionInfo>,
+  language: 'en' | 'es' = 'en',
+): void {
   const version = getLatestVersionForAsset(assetId);
   if (!version) return;
 
   const db = getCanonicalAssetDb();
-  const latest = db.prepare(
-    `SELECT * FROM transcription_jobs
-     WHERE asset_version_id = ?
-     ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-  ).get(version.asset_version_id) as TranscriptionRow | undefined;
+  const provider = language === 'es' ? TRANSCRIPT_PROVIDER_ES : TRANSCRIPT_PROVIDER_EN;
+  // Scope the upsert to rows of the SAME language, so an English patch never
+  // overwrites the Spanish row (and vice-versa). English matches the legacy
+  // provider ('transcripter') or any non-Spanish/null marker.
+  const latest = (language === 'es'
+    ? db.prepare(
+      `SELECT * FROM transcription_jobs
+       WHERE asset_version_id = ? AND provider = ?
+       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+    ).get(version.asset_version_id, TRANSCRIPT_PROVIDER_ES)
+    : db.prepare(
+      `SELECT * FROM transcription_jobs
+       WHERE asset_version_id = ? AND (provider IS NULL OR provider != ?)
+       ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+    ).get(version.asset_version_id, TRANSCRIPT_PROVIDER_ES)) as TranscriptionRow | undefined;
   const metadata = JSON.stringify({
     ...parseMetadataJson<Record<string, unknown>>(latest?.metadata_json),
     ...patch,
@@ -914,7 +984,7 @@ function upsertTranscriptionRecord(assetId: string, patch: Partial<Transcription
       asset_version_id: version.asset_version_id,
       status: patch.status ?? 'none',
       job_id: patch.jobId ?? null,
-      provider: 'transcripter',
+      provider,
       completed_at: patch.completedAt ?? null,
       last_error: patch.status === 'failed' ? 'Transcription failed' : null,
       metadata_json: metadata,
@@ -1105,7 +1175,11 @@ export function patchCanonicalMediaAsset(projectId: string, assetId: string, pat
   upsertMediaFileFields(assetId, patch);
 
   if (patch.transcription) {
-    upsertTranscriptionRecord(assetId, patch.transcription);
+    upsertTranscriptionRecord(assetId, patch.transcription, 'en');
+  }
+
+  if (patch.transcriptionEs) {
+    upsertTranscriptionRecord(assetId, patch.transcriptionEs, 'es');
   }
 
   if (patch.frameio) {
@@ -1182,6 +1256,7 @@ export function overwriteCanonicalProjections(projectId: string, assets: MediaAs
     if (current.filePath !== asset.filePath) patch.filePath = asset.filePath;
     if (current.fileSize !== asset.fileSize) patch.fileSize = asset.fileSize;
     if (JSON.stringify(current.transcription) !== JSON.stringify(asset.transcription)) patch.transcription = asset.transcription;
+    if (asset.transcriptionEs && JSON.stringify(current.transcriptionEs) !== JSON.stringify(asset.transcriptionEs)) patch.transcriptionEs = asset.transcriptionEs;
     if (JSON.stringify(current.frameio) !== JSON.stringify(asset.frameio)) patch.frameio = asset.frameio;
     if (JSON.stringify(current.cloudflare) !== JSON.stringify(asset.cloudflare)) patch.cloudflare = asset.cloudflare;
     if (JSON.stringify(current.leaderpass) !== JSON.stringify(asset.leaderpass)) patch.leaderpass = asset.leaderpass;

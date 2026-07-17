@@ -1,4 +1,4 @@
-export type PipelineStageType = 'ingest' | 'transcript' | 'upload:frameio' | 'upload:cloudflare' | 'upload:leaderpass' | 'upload:sardius' | 'upload:delivery' | 'promotion' | 'upload:lpai';
+export type PipelineStageType = 'ingest' | 'transcript' | 'transcript_es' | 'upload:frameio' | 'upload:cloudflare' | 'upload:leaderpass' | 'upload:sardius' | 'upload:delivery' | 'promotion' | 'upload:lpai';
 
 export interface PipelineStage {
   type: PipelineStageType;

@@ -271,6 +271,14 @@ export interface MediaAsset {
   registeredAt: string;
   updatedAt: string;
   transcription: TranscriptionInfo;
+  /**
+   * Optional additive Spanish transcription, parallel to the English `transcription`.
+   * Present only when a Spanish transcript exists for this asset (any version);
+   * `undefined` when the asset has never been Spanish-transcribed (so the UI shows
+   * no ENG/SPA toggle). Like `transcription`, `fromPriorVersion` is true when the
+   * Spanish transcript belongs to an older version than the current one (stale).
+   */
+  transcriptionEs?: TranscriptionInfo;
   frameio: FrameIOInfo;
   cloudflare: CloudflareStreamInfo;
   leaderpass: LeaderPassInfo;

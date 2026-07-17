@@ -14,6 +14,7 @@ export function stageLabel(type: PipelineStageType): string {
   switch (type) {
     case 'ingest':            return 'Ingest';
     case 'transcript':        return 'Transcript';
+    case 'transcript_es':     return 'Transcript (ES)';
     case 'upload:frameio':    return 'Frame.io';
     case 'upload:cloudflare': return 'Cloudflare';
     case 'upload:leaderpass': return 'LeaderPass';
@@ -35,6 +36,7 @@ export function phaseLabel(stage: PipelineStage): string {
       if (status === 'cancelled') return 'Cancelled';
       return status;
     case 'transcript':
+    case 'transcript_es':
       if (status === 'queued')           return 'Queued';
       if (status === 'extracting_audio') return 'Extracting audio';
       if (status === 'transcribing')     return 'Transcribing';
@@ -123,7 +125,7 @@ export function overallBadgeClass(status: PipelineEntry['overallStatus']): strin
   return 'tt-overall-badge--active';
 }
 
-export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript', 'promotion']);
+export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript', 'transcript_es', 'promotion']);
 // upload:sardius is intentionally excluded — retry via the sidebar Reset button
 
 export function isActive(entry: PipelineEntry): boolean {

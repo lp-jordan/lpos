@@ -31,8 +31,18 @@ export type TranscriptJobStatus =
  *                       NOT prune the standard transcript, and must NOT touch
  *                       `asset.transcription.*`. Its `<jobId>.words.json` / `<jobId>.json`
  *                       are read directly by the caller via the completion callback.
+ *   - `spanish`       — an ADDITIVE Spanish-language pass that coexists with the English
+ *                       `standard` transcript. It writes its own `.meta.json` (tagged
+ *                       `lang:'es'`) so the Transcripts UI can enumerate it, prunes only
+ *                       OTHER Spanish transcripts for the asset (language-scoped), and
+ *                       drives `asset.transcriptionEs.*` — never `asset.transcription.*`.
  */
-export type TranscriptJobPurpose = 'standard' | 'lpai_sidecar';
+export type TranscriptJobPurpose = 'standard' | 'lpai_sidecar' | 'spanish';
+
+/** Default whisper model for the Spanish pass. Mirrors the LP.AI sidecar's
+ *  high-quality model — base/small are notably weaker on Spanish. Overridable
+ *  per-call via opts.model; promote to an admin Setting later if needed. */
+const SPANISH_TRANSCRIPTION_MODEL = 'large-v3-turbo';
 
 export interface TranscriptJob {
   jobId: string;
@@ -53,6 +63,12 @@ export interface TranscriptJob {
    * the global default that normal ingest uses.
    */
   model?: string;
+  /**
+   * Whisper language code to force (e.g. "es"). Undefined = auto-detect (the
+   * English standard pass). Set to "es" by the Spanish pass; threaded into
+   * MediaProcessor as `-l <language>` and used to language-scope the meta/prune.
+   */
+  language?: string;
   /** Why this job exists. Defaults to 'standard'. See TranscriptJobPurpose. */
   purpose: TranscriptJobPurpose;
   queuedAt: string;
@@ -61,6 +77,14 @@ export interface TranscriptJob {
 
 /** Options for the LP.AI turbo sidecar enqueue path. */
 export interface EnqueueSidecarOptions {
+  model?: string;
+  durationSec?: number;
+  displayName?: string;
+}
+
+/** Options for the additive Spanish transcription pass. */
+export interface EnqueueSpanishOptions {
+  /** Whisper model override; defaults to SPANISH_TRANSCRIPTION_MODEL. */
   model?: string;
   durationSec?: number;
   displayName?: string;
@@ -212,6 +236,62 @@ export class TranscripterService {
     return job;
   }
 
+  /**
+   * Enqueue an ADDITIVE Spanish transcription that coexists with the English
+   * transcript. Differs from `enqueue` in that it:
+   *   1. forces `language = 'es'` (whisper `-l es`, never `-tr`), so the output
+   *      is Spanish rather than auto-detected/translated;
+   *   2. defaults to a high-quality model (`SPANISH_TRANSCRIPTION_MODEL`) since
+   *      base/small are weak on Spanish;
+   *   3. carries `purpose = 'spanish'` — processNext writes a `lang:'es'`-tagged
+   *      `.meta.json` and prunes only OTHER Spanish transcripts for the asset,
+   *      and container.ts drives `asset.transcriptionEs.*` (never the English
+   *      `asset.transcription.*`) and pushes the VTT to Cloudflare as an `es`
+   *      caption track.
+   * Its outputs land at a fresh `<jobId>.*` prefix (new UUID) so they never
+   * collide with the English transcript's files.
+   */
+  enqueueSpanish(projectId: string, filePath: string, assetId: string, opts: EnqueueSpanishOptions = {}): TranscriptJob {
+    const job: TranscriptJob = {
+      jobId:      randomUUID(),
+      assetId,
+      projectId,
+      filename:   opts.displayName ?? path.basename(filePath),
+      sourcePath: filePath,
+      status:     'queued',
+      progress:   0,
+      durationSec: (typeof opts.durationSec === 'number' && opts.durationSec > 0) ? opts.durationSec : undefined,
+      model:      opts.model ?? SPANISH_TRANSCRIPTION_MODEL,
+      language:   'es',
+      purpose:    'spanish',
+      queuedAt:   new Date().toISOString(),
+      updatedAt:  new Date().toISOString(),
+    };
+
+    this.jobs.set(job.jobId, job);
+    this.broadcast();
+    recordActivity({
+      ...serviceActor('Transcripter', 'transcripter'),
+      occurred_at: job.queuedAt,
+      event_type: 'transcription.queued',
+      lifecycle_phase: 'queued',
+      source_kind: 'background_service',
+      visibility: 'user_timeline',
+      title: `Spanish transcription queued: ${job.filename}`,
+      summary: `${job.filename} was queued for Spanish transcription`,
+      project_id: projectId,
+      asset_id: assetId,
+      job_id: job.jobId,
+      source_service: 'transcripter',
+      details_json: { filename: job.filename, sourcePath: filePath, model: job.model, language: 'es', purpose: 'spanish' },
+    });
+
+    if (this.activeProcessors.size < getTranscriptionWorkers()) setImmediate(() => this.processNext());
+
+    console.log(`[transcripter] enqueued Spanish "${job.filename}" (${job.jobId}, model=${job.model})`);
+    return job;
+  }
+
   getQueue(): TranscriptJob[] {
     return Array.from(this.jobs.values());
   }
@@ -249,6 +329,7 @@ export class TranscripterService {
     if (!next || this.activeProcessors.size >= getTranscriptionWorkers()) return;
 
     const isSidecar = next.purpose === 'lpai_sidecar';
+    const isSpanish = next.purpose === 'spanish';
     this.updateJob(next.jobId, { status: 'extracting_audio', progress: 5 });
     recordActivity({
       ...serviceActor('Transcripter', 'transcripter'),
@@ -259,8 +340,8 @@ export class TranscripterService {
       // Sidecar (LP.AI turbo) passes stay operator-only so they don't duplicate the
       // user-facing transcription timeline for the same asset.
       visibility: isSidecar ? 'operator_only' : 'user_timeline',
-      title: isSidecar ? `LP.AI turbo transcript started: ${next.filename}` : `Transcription started: ${next.filename}`,
-      summary: isSidecar ? `${next.filename} started a ${next.model ?? 'high-quality'} LP.AI transcript` : `${next.filename} started transcription`,
+      title: isSidecar ? `LP.AI turbo transcript started: ${next.filename}` : isSpanish ? `Spanish transcription started: ${next.filename}` : `Transcription started: ${next.filename}`,
+      summary: isSidecar ? `${next.filename} started a ${next.model ?? 'high-quality'} LP.AI transcript` : isSpanish ? `${next.filename} started Spanish transcription` : `${next.filename} started transcription`,
       project_id: next.projectId,
       asset_id: next.assetId,
       job_id: next.jobId,
@@ -294,9 +375,11 @@ export class TranscripterService {
           jobId:      next.jobId,
           filePath:   next.sourcePath,
           projectDir,
-          // Per-job override (LP.AI turbo sidecar). Undefined for standard jobs, in
-          // which case MediaProcessor resolves the global Settings/env/base model.
+          // Per-job override (LP.AI turbo sidecar / Spanish). Undefined for standard
+          // jobs, in which case MediaProcessor resolves the global Settings/env/base model.
           model:      next.model,
+          // Force the transcription language (Spanish pass). Undefined = auto-detect.
+          language:   next.language,
         }),
         timeoutPromise,
       ]);
@@ -309,7 +392,10 @@ export class TranscripterService {
           .filter(Boolean) as string[],
       });
 
-      if (next.purpose === 'standard') {
+      if (next.purpose === 'standard' || next.purpose === 'spanish') {
+        // Language of this transcript — tags the meta so enumeration + pruning stay
+        // language-scoped. Standard = 'en' (auto-detected English); Spanish = 'es'.
+        const lang = next.language === 'es' ? 'es' : 'en';
         // Write sidecar so the Transcripts tab can show the original filename
         try {
           const metaPath = path.join(projectDir, 'transcripts', `${next.jobId}.meta.json`);
@@ -318,15 +404,18 @@ export class TranscripterService {
             assetId:     next.assetId,
             filename:    next.filename,
             completedAt: new Date().toISOString(),
+            lang,
           };
           await fs.promises.writeFile(metaPath, JSON.stringify(meta, null, 2));
         } catch (e) {
           console.warn('[transcripter] could not write transcript meta:', e);
         }
 
-        // Remove any older transcript files for the same asset now that this job succeeded.
+        // Remove any older transcript files of the SAME language for the same asset
+        // now that this job succeeded. Language-scoped so an English pass never
+        // deletes the Spanish transcript (and vice-versa).
         // Fire-and-forget — pruning is best-effort cleanup and shouldn't block the queue.
-        void this.pruneOldTranscripts(next.projectId, next.assetId, next.jobId);
+        void this.pruneOldTranscripts(next.projectId, next.assetId, next.jobId, lang);
       } else {
         // LP.AI turbo sidecar: keep ONLY the machine-readable transcripts the LP.AI
         // push consumes (`.json` + `.words.json`). Drop the human-facing outputs so
@@ -344,8 +433,8 @@ export class TranscripterService {
         lifecycle_phase: 'completed',
         source_kind: 'background_service',
         visibility: isSidecar ? 'operator_only' : 'user_timeline',
-        title: isSidecar ? `LP.AI turbo transcript completed: ${next.filename}` : `Transcription completed: ${next.filename}`,
-        summary: isSidecar ? `${next.filename} finished its ${next.model ?? 'high-quality'} LP.AI transcript` : `${next.filename} finished transcription`,
+        title: isSidecar ? `LP.AI turbo transcript completed: ${next.filename}` : isSpanish ? `Spanish transcription completed: ${next.filename}` : `Transcription completed: ${next.filename}`,
+        summary: isSidecar ? `${next.filename} finished its ${next.model ?? 'high-quality'} LP.AI transcript` : isSpanish ? `${next.filename} finished Spanish transcription` : `${next.filename} finished transcription`,
         project_id: next.projectId,
         asset_id: next.assetId,
         job_id: next.jobId,
@@ -374,8 +463,8 @@ export class TranscripterService {
         lifecycle_phase: 'failed',
         source_kind: 'background_service',
         visibility: isSidecar ? 'operator_only' : 'user_timeline',
-        title: isSidecar ? `LP.AI turbo transcript failed: ${next.filename}` : `Transcription failed: ${next.filename}`,
-        summary: isSidecar ? `${next.filename} failed its LP.AI transcript pass` : `${next.filename} failed during transcription`,
+        title: isSidecar ? `LP.AI turbo transcript failed: ${next.filename}` : isSpanish ? `Spanish transcription failed: ${next.filename}` : `Transcription failed: ${next.filename}`,
+        summary: isSidecar ? `${next.filename} failed its LP.AI transcript pass` : isSpanish ? `${next.filename} failed during Spanish transcription` : `${next.filename} failed during transcription`,
         project_id: next.projectId,
         asset_id: next.assetId,
         job_id: next.jobId,
@@ -479,7 +568,7 @@ export class TranscripterService {
     }
   }
 
-  private async pruneOldTranscripts(projectId: string, assetId: string, keepJobId: string): Promise<void> {
+  private async pruneOldTranscripts(projectId: string, assetId: string, keepJobId: string, lang: 'en' | 'es' = 'en'): Promise<void> {
     const transcriptsDir = path.join(DATA_DIR, 'projects', projectId, 'transcripts');
     const subtitlesDir   = path.join(DATA_DIR, 'projects', projectId, 'subtitles');
 
@@ -492,8 +581,13 @@ export class TranscripterService {
 
         try {
           const raw = await fs.promises.readFile(path.join(transcriptsDir, metaFile), 'utf8');
-          const meta = JSON.parse(raw) as { assetId?: string };
+          const meta = JSON.parse(raw) as { assetId?: string; lang?: string };
           if (meta.assetId !== assetId) continue;
+          // Language-scoped: only prune transcripts of the same language. A meta
+          // without `lang` predates this field and is treated as English, so a new
+          // English pass still cleans up legacy transcripts, while a Spanish pass
+          // never touches them.
+          if ((meta.lang ?? 'en') !== lang) continue;
         } catch {
           continue;
         }

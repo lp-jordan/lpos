@@ -222,6 +222,25 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   // reads their words.json directly via its own completion waiter.
   transcripterService.onJobComplete((job) => {
     if (job.purpose === 'lpai_sidecar') return;
+    // Spanish pass: additive, coexists with the English transcript. Drives
+    // asset.transcriptionEs (NOT asset.transcription), skips the Drive push, and
+    // pushes the VTT to Cloudflare as an 'es' caption track (a no-op unless the
+    // asset already has a ready CF video — captions otherwise attach at publish).
+    if (job.purpose === 'spanish') {
+      if (job.assetId) {
+        patchAsset(job.projectId, job.assetId, {
+          transcriptionEs: {
+            status:      job.status === 'done' ? 'done' : 'failed',
+            jobId:       job.jobId,
+            completedAt: new Date().toISOString(),
+          },
+        });
+        if (job.status === 'done') {
+          void uploadCaptionsToCloudflare(job.projectId, job.assetId, job.jobId, 'es');
+        }
+      }
+      return;
+    }
     if (job.assetId) {
       patchAsset(job.projectId, job.assetId, {
         transcription: {

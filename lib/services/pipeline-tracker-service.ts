@@ -34,6 +34,7 @@ import { STAGE_TERMINAL_STATUSES } from '@/lib/types/pipeline';
 const STALL_THRESHOLDS: Record<PipelineStageType, number> = {
   'ingest':             2 * 60_000,
   'transcript':         5 * 60_000,
+  'transcript_es':     20 * 60_000, // Spanish runs on large-v3-turbo — slower, like the LP.AI turbo pass
   'upload:frameio':     2 * 60_000,
   'upload:cloudflare':  2 * 60_000,
   'upload:leaderpass':  2 * 60_000,
@@ -61,11 +62,11 @@ function computeOverall(stages: PipelineStage[]): PipelineOverallStatus {
   const active = stages.filter((s) => !isStageTerminal(s.status));
   if (active.length > 0) {
     // Return the highest-priority active stage label
-    for (const type of ['ingest', 'transcript', 'upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion', 'upload:lpai'] as PipelineStageType[]) {
+    for (const type of ['ingest', 'transcript', 'transcript_es', 'upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'upload:sardius', 'upload:delivery', 'promotion', 'upload:lpai'] as PipelineStageType[]) {
       const match = active.find((s) => s.type === type);
       if (match) {
         if (type === 'ingest') return 'ingesting';
-        if (type === 'transcript') return 'transcribing';
+        if (type === 'transcript' || type === 'transcript_es') return 'transcribing';
         if (type === 'upload:lpai') return 'processing';
         if (type === 'upload:frameio') {
           return match.status === 'processing' ? 'processing' : 'uploading_frameio';
@@ -445,7 +446,10 @@ export class PipelineTrackerService {
 
   private transcriptToStage(job: TranscriptJob): PipelineStage {
     return {
-      type: 'transcript',
+      // Spanish passes get their own stage type so the pipeline tray clearly labels
+      // them "Transcript (ES)" and they don't collide with an English transcript
+      // stage on the same asset's pipeline entry.
+      type: job.purpose === 'spanish' ? 'transcript_es' : 'transcript',
       jobId: job.jobId,
       status: job.status,
       progress: job.progress,
@@ -617,6 +621,7 @@ export class PipelineTrackerService {
               }
               break;
             case 'transcript':
+            case 'transcript_es':
               if (this.transcriptService?.isJobActive(stage.jobId)) {
                 this.transcriptService.heartbeat(stage.jobId);
                 alive = true;
@@ -648,6 +653,7 @@ export class PipelineTrackerService {
               this.uploadService?.fail(stage.jobId, reason);
               break;
             case 'transcript':
+            case 'transcript_es':
               this.transcriptService?.failJob(stage.jobId, reason);
               break;
             case 'promotion':
@@ -740,6 +746,17 @@ export class PipelineTrackerService {
             transcription: { status: 'queued', jobId: null, completedAt: null },
           });
           this.transcriptService.enqueue(entry.projectId, txJob.sourcePath, entry.assetId!, entry.filename);
+        }
+        break;
+      }
+      case 'transcript_es': {
+        const txJobs = this.transcriptService?.getQueue() ?? [];
+        const txJob = txJobs.find((j) => j.jobId === stage.jobId);
+        if (txJob && this.transcriptService) {
+          patchAsset(entry.projectId, entry.assetId!, {
+            transcriptionEs: { status: 'queued', jobId: null, completedAt: null },
+          });
+          this.transcriptService.enqueueSpanish(entry.projectId, txJob.sourcePath, entry.assetId!, { displayName: entry.filename });
         }
         break;
       }

@@ -69,6 +69,7 @@ export interface AssetPatch {
   fileSize?: number | null;
   duration?: number | null;
   transcription?: Partial<TranscriptionInfo>;
+  transcriptionEs?: Partial<TranscriptionInfo>;
   frameio?: Partial<FrameIOInfo>;
   cloudflare?: Partial<CloudflareStreamInfo>;
   leaderpass?: Partial<LeaderPassInfo>;

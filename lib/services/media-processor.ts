@@ -64,6 +64,10 @@ export class MediaProcessor extends EventEmitter {
     filePath: string;
     projectDir: string;
     model?: string;
+    /** BCP-47-ish whisper language code (e.g. "es"). When set, passed as `-l <lang>`
+     *  so whisper transcribes IN that language instead of auto-detecting. Undefined
+     *  for the standard English pass — whisper auto-detects as before. */
+    language?: string;
   }): Promise<ProcessorResult> {
     // Per-job override wins; otherwise resolve from admin Settings (falls back to
     // env var then "base"). Resolving here means every enqueue path picks up the
@@ -86,7 +90,7 @@ export class MediaProcessor extends EventEmitter {
       fs.mkdirSync(subtitlesDir,   { recursive: true });
 
       const outputPrefix = path.join(transcriptsDir, job.jobId);
-      const raw = await this.runWhisper(tmpWav, outputPrefix, model);
+      const raw = await this.runWhisper(tmpWav, outputPrefix, model, job.language);
       if (this.aborted) throw new Error('Job canceled');
 
       // ── Phase 3: Organise outputs ───────────────────────────────────
@@ -176,7 +180,7 @@ export class MediaProcessor extends EventEmitter {
     });
   }
 
-  private async runWhisper(wavPath: string, outputPrefix: string, model: string): Promise<ProcessorResult> {
+  private async runWhisper(wavPath: string, outputPrefix: string, model: string, language?: string): Promise<ProcessorResult> {
     const whisperBin = resolveWhisperBinary();
     if (!whisperBin) {
       throw new Error(
@@ -190,12 +194,19 @@ export class MediaProcessor extends EventEmitter {
       throw new Error(`Whisper model not found: ${modelPath}. Set LPOS_WHISPER_MODEL_DIR or stage files into runtime/whisper-models.`);
     }
 
+    // When a language is requested, force it with `-l <lang>` so whisper
+    // transcribes IN that language rather than auto-detecting (and never
+    // translating — we deliberately omit `-tr`). Empty for the English pass,
+    // preserving the auto-detect behavior the standard transcript relies on.
+    const langArgs = language ? ['-l', language] : [];
+
     // ── Primary run — the outputs the Transcripts UI depends on. UNCHANGED. ──
     // Segment-level JSON (`-oj`) + txt/srt/vtt at the canonical `${jobId}.*`
     // prefix. These are enumerated by lib/transcripts/store.ts.
     await this.spawnWhisper(whisperBin, [
       '-m', modelPath,
       '-f', wavPath,
+      ...langArgs,
       '-oj',   // output JSON (segment-level, ms offsets)
       '-otxt', // output plain text
       '-osrt', // output SRT subtitles
@@ -229,6 +240,7 @@ export class MediaProcessor extends EventEmitter {
       await this.spawnWhisper(whisperBin, [
         '-m', modelPath,
         '-f', wavPath,
+        ...langArgs,
         '-ml', '1',   // max segment length: 1 character → one entry per word
         '-sow',       // split on word boundaries rather than tokens
         '-oj',        // JSON output (word-granular given -ml 1 -sow)
