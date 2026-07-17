@@ -310,6 +310,23 @@ async function runLeaderPassPublish(projectId: string, assetId: string, context?
       }
     }
 
+    // Also attach the Spanish track if a completed Spanish transcript exists, so
+    // publishing an asset that was Spanish-transcribed BEFORE it reached Cloudflare
+    // still gets its 'es' captions (order-independent with the on-completion push).
+    if (asset.transcriptionEs?.status === 'done' && asset.transcriptionEs.jobId) {
+      try {
+        const { vttPath } = getTranscriptPaths(projectId, asset.transcriptionEs.jobId);
+        if (fs.existsSync(vttPath)) {
+          await uploadCaptionsVtt(ready.uid, vttPath, 'es');
+          console.log(`[leaderpass] es captions uploaded for uid=${ready.uid} (jobId=${asset.transcriptionEs.jobId})`);
+        } else {
+          console.warn(`[leaderpass] es VTT not found at ${vttPath}; skipping es captions for uid=${ready.uid}`);
+        }
+      } catch (err) {
+        console.warn(`[leaderpass] failed to upload es captions for uid=${ready.uid}:`, err);
+      }
+    }
+
     const preparedAt = new Date().toISOString();
     patchAsset(projectId, assetId, {
       cloudflare: {

@@ -259,6 +259,23 @@ export async function runCloudflareUpload(
       }
     }
 
+    // Also attach the Spanish track if a completed Spanish transcript exists, so
+    // uploading an asset that was Spanish-transcribed BEFORE it reached Cloudflare
+    // still gets its 'es' captions (order-independent with the on-completion push).
+    if (asset.transcriptionEs?.status === 'done' && asset.transcriptionEs.jobId) {
+      try {
+        const { vttPath } = getTranscriptPaths(projectId, asset.transcriptionEs.jobId);
+        if (fs.existsSync(vttPath)) {
+          await uploadCaptionsVtt(ready.uid, vttPath, 'es');
+          console.log(`[cloudflare-publish] es captions uploaded for uid=${ready.uid} (jobId=${asset.transcriptionEs.jobId})`);
+        } else {
+          console.warn(`[cloudflare-publish] es VTT not found at ${vttPath}; skipping es captions for uid=${ready.uid}`);
+        }
+      } catch (err) {
+        console.warn(`[cloudflare-publish] failed to upload es captions for uid=${ready.uid}:`, err);
+      }
+    }
+
     const readyAt = ready.readyAt ?? new Date().toISOString();
     patchAsset(projectId, assetId, {
       cloudflare: {
