@@ -148,7 +148,7 @@ function notesPath(projectId: string): string {
   return path.join(DATA_DIR, 'projects', projectId, 'slate-notes.json');
 }
 
-function readNotes(projectId: string): SlateNote[] {
+export function readNotes(projectId: string): SlateNote[] {
   const file = notesPath(projectId);
   if (!fs.existsSync(file)) return [];
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) as SlateNote[]; }
@@ -168,7 +168,7 @@ function tabsPath(projectId: string): string {
   return path.join(DATA_DIR, 'projects', projectId, 'slate-tabs.json');
 }
 
-function readTabs(projectId: string): SlateTab[] {
+export function readTabs(projectId: string): SlateTab[] {
   const file = tabsPath(projectId);
   if (!fs.existsSync(file)) return [];
   try {
