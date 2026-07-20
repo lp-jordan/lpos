@@ -24,9 +24,12 @@ interface Props {
   projectName: string;
   mode: PanelMode;
   jobId: string | null;
-  /** Spanish transcript jobId for this asset, when one exists. When set (and in
-   *  viewer mode) an ENG/SPA toggle appears; switching to SPA swaps the transcript
-   *  the panel loads. Null/undefined = no Spanish transcript → no toggle. */
+  /** English + Spanish transcript jobIds for the opened asset, when they exist.
+   *  When BOTH are set (viewer mode) an ENG/SPA toggle appears and swaps which
+   *  transcript the panel loads; the toggle starts on whichever language matches
+   *  the opened `jobId`, so it works whether you open the English or Spanish row.
+   *  Either being null = no toggle. */
+  enJobId?: string | null;
   esJobId?: string | null;
   filename: string;
   onClose: () => void;
@@ -120,6 +123,7 @@ export function TranscriptViewerPanel({
   projectName,
   mode,
   jobId,
+  enJobId = null,
   esJobId = null,
   filename,
   onClose,
@@ -162,16 +166,22 @@ export function TranscriptViewerPanel({
   const shouldScrollToBottomRef = useRef(true);
 
   const isOpen = mode === 'search' || jobId !== null;
-  // The transcript actually loaded: Spanish jobId when the SPA toggle is active
-  // (and a Spanish transcript exists), otherwise the base English jobId. All the
-  // viewer's fetch/download URLs key off this so switching language just swaps it.
-  const effectiveJobId = activeLang === 'es' && esJobId ? esJobId : jobId;
+  // The ENG/SPA toggle only makes sense when BOTH languages exist for this asset.
+  const hasLangToggle = Boolean(enJobId && esJobId);
+  // The transcript actually loaded. With the toggle, it's the jobId for the active
+  // language; otherwise it's the opened jobId as-is. All the viewer's fetch/download
+  // URLs key off this so switching language just swaps it.
+  const effectiveJobId = hasLangToggle
+    ? (activeLang === 'es' ? esJobId : enJobId)
+    : jobId;
   const scopeLabel = useMemo(() => buildScopeLabel(searchScopeMode, searchScope), [searchScopeMode, searchScope]);
 
-  // Reset to English whenever a different asset is opened (base jobId changes).
+  // When a different transcript is opened, start the toggle on the language that
+  // matches the opened jobId — so opening the Spanish row starts on SPA and the
+  // English row starts on ENG.
   useEffect(() => {
-    setActiveLang('en');
-  }, [jobId]);
+    setActiveLang(jobId && jobId === esJobId ? 'es' : 'en');
+  }, [jobId, esJobId]);
 
   useEffect(() => {
     setMounted(true);
@@ -561,7 +571,7 @@ export function TranscriptViewerPanel({
                 {wordCount > 0 && <span className="txv-wordcount">{wordCount.toLocaleString()} words</span>}
               </div>
               <div className="txv-toolbar">
-                {esJobId && (
+                {hasLangToggle && (
                   <div className="txv-view-toggle" role="group" aria-label="Transcript language">
                     <button
                       type="button"

@@ -348,15 +348,18 @@ function TranscriptsTab({
     }
   }
 
-  // The Spanish transcript paired with the currently-viewed (English) transcript,
-  // if one exists for the same asset. Drives the viewer's ENG/SPA toggle. Null when
-  // viewing a Spanish transcript directly or when no Spanish counterpart exists.
-  const esCounterpartJobId = useMemo(() => {
-    if (!viewerJobId) return null;
+  // The English + Spanish transcript jobIds for the asset whose transcript is open.
+  // Drives the viewer's ENG/SPA toggle (shown only when BOTH exist). Computed from
+  // the opened transcript's assetId, so it works whether the English or the Spanish
+  // row was opened.
+  const viewerLangPair = useMemo(() => {
+    if (!viewerJobId) return { enJobId: null as string | null, esJobId: null as string | null };
     const current = transcripts.find((t) => t.jobId === viewerJobId);
-    if (!current?.assetId || current.lang === 'es') return null;
-    const es = transcripts.find((t) => t.assetId === current.assetId && t.lang === 'es' && t.jobId !== viewerJobId);
-    return es?.jobId ?? null;
+    const assetId = current?.assetId;
+    if (!assetId) return { enJobId: viewerJobId, esJobId: null };
+    const en = transcripts.find((t) => t.assetId === assetId && t.lang !== 'es');
+    const es = transcripts.find((t) => t.assetId === assetId && t.lang === 'es');
+    return { enJobId: en?.jobId ?? null, esJobId: es?.jobId ?? null };
   }, [viewerJobId, transcripts]);
 
   function openViewer(entry: TranscriptEntry) {
@@ -773,7 +776,8 @@ function TranscriptsTab({
         projectName={projectName}
         mode={panelMode === 'search' ? 'search' : 'viewer'}
         jobId={panelMode === 'viewer' ? viewerJobId : null}
-        esJobId={panelMode === 'viewer' ? esCounterpartJobId : null}
+        enJobId={panelMode === 'viewer' ? viewerLangPair.enJobId : null}
+        esJobId={panelMode === 'viewer' ? viewerLangPair.esJobId : null}
         filename={viewerFilename}
         onClose={closePanel}
         standalone
