@@ -710,7 +710,27 @@ function TranscriptsTab({
                   <polyline points="10 9 9 9 8 9" />
                 </svg>
                 <div className="proj-file-info">
-                  <span className="proj-file-name">{formatTranscriptLabel(entry.filename)}</span>
+                  <span className="proj-file-name">
+                    {formatTranscriptLabel(entry.filename)}
+                    {entry.lang === 'es' && (
+                      <span
+                        title="Spanish transcript"
+                        style={{
+                          marginLeft: 8,
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: '0.04em',
+                          background: 'var(--accent-2, #b8860b)',
+                          color: '#fff',
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        ES
+                      </span>
+                    )}
+                  </span>
                   <span className="proj-file-date">{formatDate(entry.completedAt)}</span>
                 </div>
               </div>
