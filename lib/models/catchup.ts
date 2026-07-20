@@ -10,7 +10,7 @@
  * a fully-deterministic grouped recap.
  */
 
-export type CatchupSectionKey = 'uploads' | 'media' | 'tasks' | 'jobs';
+export type CatchupSectionKey = 'filming' | 'uploads' | 'media' | 'tasks' | 'jobs';
 
 export type CatchupBadgeTone = 'failed' | 'completed' | 'comment' | 'neutral';
 
@@ -53,6 +53,7 @@ export interface CatchupPayload {
 }
 
 export const CATCHUP_SECTION_ORDER: Array<{ key: CatchupSectionKey; label: string }> = [
+  { key: 'filming', label: 'Filming' },
   { key: 'uploads', label: 'Uploads' },
   { key: 'media', label: 'Media' },
   { key: 'tasks', label: 'Tasks' },

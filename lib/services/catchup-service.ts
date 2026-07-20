@@ -87,6 +87,10 @@ function classify(eventType: string, phase: string): Classified {
   }
 
   switch (eventType) {
+    // A studio filming session was detected that day (first slate note / ATEM
+    // record for the project). Deduped upstream to one event per project per day.
+    case 'production.session.recorded': return { section: 'filming', badge: { label: 'Filmed', tone: 'neutral' } };
+
     case 'asset.registered': return { section: 'uploads', badge: { label: 'Uploaded', tone: 'neutral' } };
     case 'script.uploaded':  return { section: 'uploads', badge: { label: 'Script', tone: 'neutral' } };
     case 'photo.uploaded':   return { section: 'uploads', badge: { label: 'Photos', tone: 'neutral' } };
@@ -173,6 +177,7 @@ interface DeterministicRecap {
 // Plain-English meaning of each section, handed to the AI so it never conflates
 // (e.g. reads 47 uploads as "47 tasks completed").
 const SECTION_MEANING: Record<CatchupSectionKey, string> = {
+  filming: 'studio filming sessions that day — each row is one project that was filmed (detected from Production Notes / ATEM recording activity), NOT uploads or edits',
   uploads: 'new media assets that were uploaded',
   media: 'changes to media and comments left on video assets',
   tasks: 'task-dashboard activity (new tasks, status changes, notes) — this is task activity, NOT video comments, and these are not "completed tasks" unless a status change says so',

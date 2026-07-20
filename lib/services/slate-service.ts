@@ -27,6 +27,7 @@ import {
 } from './atem-utils';
 import { CqMixerClient, type CqMixerState, createDefaultCqMixerState } from './cq-mixer-client';
 import type { ProjectStore } from '@/lib/store/project-store';
+import { recordActivity } from './activity-monitor-service';
 import { SlateAudioMonitorService } from './slate-audio-monitor';
 import { getArmedCameras, readStudioConfig } from '@/lib/store/studio-config-store';
 import type { CameraRollResult, CameraHealth, TimecodeJamResult } from './camera-control-service';
@@ -843,6 +844,44 @@ export class SlateService {
     this.notes.push(note);
     if (this.currentProjectId) writeNotes(this.currentProjectId, this.notes);
     this.io.of('/slate').emit('noteAdded', note);
+    this.recordFilmingSessionActivity();
+  }
+
+  /**
+   * Mark that this project was filmed today, for the Daily Catch-Up.
+   *
+   * Slate notes carry only a time-of-day timecode (no date), so there is no
+   * reliable way to ask "was this project filmed on day D?" from the notes file
+   * alone. Instead we mint a single dated activity event the first time a note
+   * lands for a project on a given (Eastern) calendar day — manual notes and
+   * automatic ATEM recording notes both funnel through addNote(). A deterministic
+   * event_id makes the underlying INSERT OR IGNORE collapse every later note that
+   * day to a no-op, so the catch-up shows one "Filming" row per project per day.
+   */
+  private recordFilmingSessionActivity() {
+    const projectId = this.currentProjectId;
+    if (!projectId) return;
+    try {
+      const now = new Date();
+      // Server-local (Eastern) calendar day, matching the catch-up day window.
+      const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const project = this.projectStore.getById(projectId);
+      recordActivity({
+        event_id: `slate-session:${projectId}:${day}`,
+        occurred_at: now.toISOString(),
+        event_type: 'production.session.recorded',
+        lifecycle_phase: 'created',
+        source_kind: 'ui',
+        visibility: 'user_timeline',
+        actor_type: 'service',
+        title: 'Filming session',
+        project_id: projectId,
+        summary: project ? `${project.clientName ? `${project.clientName} — ` : ''}${project.name}` : null,
+      });
+    } catch (err) {
+      // Never let catch-up bookkeeping interfere with note-taking.
+      this.log('Failed to record filming-session activity', err);
+    }
   }
 
   private addAutomaticAtemNote(message: string) {
