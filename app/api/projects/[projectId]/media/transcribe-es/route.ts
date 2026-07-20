@@ -36,7 +36,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         continue;
       }
       const durationSec = typeof asset.duration === 'number' && asset.duration > 0 ? asset.duration : undefined;
-      const job = transcripter.enqueueSpanish(projectId, asset.filePath, assetId, { durationSec });
+      const job = transcripter.enqueueSpanish(projectId, asset.filePath, assetId, {
+        durationSec,
+        // Friendly name for the pipeline tray + transcripts list; without it the job
+        // falls back to the UUID-style stored filename (basename of filePath).
+        displayName: asset.originalFilename ?? asset.name,
+      });
       patchAsset(projectId, assetId, {
         transcriptionEs: { status: 'queued', jobId: job.jobId, completedAt: null },
       });
