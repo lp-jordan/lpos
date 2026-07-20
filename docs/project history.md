@@ -3122,3 +3122,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — exit 0.
 
 **Assumptions / follow-ups:** Cloudflare's storage-limit code is 10011 per current docs; the message-keyword fallback keeps detection working if the code shifts. Could extend the same friendly-mapping approach to the Cloudflare Images upload path (`app/api/projects/[projectId]/media/batch-poster/route.ts`) if Images quota errors become a real issue.
+
+## 2026-07-20T18:14:42Z — LPOS: Remove the golden Review check-in banner from the task detail modal
+
+**User prompt:** "Hey in LPOS, we don't need that golden \"while this sits in review\" notification in the task dashboard. That's unnecessary."
+
+**Assistant response summary:** Removed the golden "While this edit sits in Review, LPOS re-pings every 3 days…" nudge banner (and its Acknowledge button) from the task detail modal. Confirmed scope with the user first: banner UI only — the backend ReviewStaleMonitor and its 3-day bell/Slack/push re-pings are left intact, and posting an update still resets the clock via the comments route.
+
+**Files changed:**
+- `components/tasks/TaskDetailModal.tsx`
+- `app/globals.css`
+
+**Implementation summary:** Deleted the `review-checkin-banner` JSX block and the now-orphaned client state/logic that only fed it: `reviewCheckin`/`ackingReview` state, the `loadReviewCheckin` fetch + its status `useEffect`, and the `acknowledgeReview` handler. Simplified `handleStatusChange` back to a plain `patch({ status })` (dropped the `.then()` that re-fetched the check-in on a Review transition). Removed the two now-unused imports from `@/lib/models/task-review-checkin` (`TaskReviewCheckin` type, `REVIEW_STATUS`). Deleted the `.review-checkin-*` CSS rules (the `rgba(245,158,11,…)` amber/gold styling) from `globals.css`.
+
+**Decision rationale:** User asked to remove the visible nag "in the task dashboard," not to disable the check-in mechanism, and confirmed "just the banner" when asked. Removed the full client-side dead path (state, effects, handler, imports, CSS) rather than only hiding the element, so no unused code/lint debt is left behind. The GET/POST `review-checkin` API routes and the monitor are untouched, so the feature can be re-surfaced later and the re-ping cadence continues to function.
+
+**Alternatives considered:** Disabling the whole ReviewStaleMonitor feature — explicitly declined by the user (scope = banner only).
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — no errors referencing the modified files.
+
+**Assumptions / follow-ups:** Assumed the `/api/tasks/[taskId]/review-checkin*` endpoints should stay (still called by nothing on the client now, but retained for the still-active backend flow and potential future UI). Not verified in a running browser (user manages the dev server); change is type-checked and self-contained.

@@ -16173,37 +16173,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 }
 .handoff-ack-entry .comment-time { margin-left: auto; }
 
-/* Review check-in nudge banner (task detail modal) */
-.review-checkin-banner {
-  align-items: center;
-  background: linear-gradient(180deg, rgba(245,158,11,0.10), rgba(245,158,11,0.03));
-  border: 1px solid rgba(245,158,11,0.32);
-  border-radius: 8px;
-  color: var(--text);
-  display: flex;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-}
-.review-checkin-icon {
-  align-items: center;
-  color: #f59e0b;
-  display: inline-flex;
-  flex-shrink: 0;
-  height: 20px;
-  justify-content: center;
-  width: 20px;
-}
-.review-checkin-text { flex: 1; font-size: 0.82rem; line-height: 1.4; color: var(--muted); }
-.review-checkin-ack-btn {
-  background: rgba(245,158,11,0.18);
-  border-color: rgba(245,158,11,0.50);
-  flex-shrink: 0;
-}
-.review-checkin-ack-btn:hover { background: rgba(245,158,11,0.30); border-color: rgba(245,158,11,0.70); }
-.review-checkin-ack-btn:active { background: rgba(245,158,11,0.40); }
-.review-checkin-ack-btn:disabled { opacity: 0.6; cursor: default; }
-
 /* Handoff modal */
 .handoff-overlay { z-index: 1100; }
 .handoff-box {

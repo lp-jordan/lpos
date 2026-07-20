@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-20T18:14:42Z",
+    "title": "Removed the Review check-in banner from task details",
+    "summary": "The gold \"While this edit sits in Review, LPOS re-pings every 3 days…\" banner (and its Acknowledge button) no longer appears in the task detail modal — it was redundant clutter. The behind-the-scenes 3-day check-in itself is unchanged: assignees still get the periodic bell/Slack/push nudge for edits sitting in Review, and posting an update still resets the clock."
+  },
+  {
     "timestamp": "2026-07-16T17:11:30Z",
     "title": "Clearer Cloudflare 'out of storage' upload errors",
     "summary": "When a video fails to upload because your Cloudflare Stream plan is out of storage, LPOS now shows a plain-English explanation — telling you the account has hit its storage limit and to delete unused videos or buy more storage minutes — instead of the raw Cloudflare error like \"Storage capacity exceeded (code 10011)\". This covers the storage-limit case wherever it appears during the upload, and the original Cloudflare text is still available via the \"Show full error\" toggle for debugging."

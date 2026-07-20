@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskPriority } from '@/lib/models/task';
 import type { TaskType } from '@/lib/models/task-phase';
 import { TASK_TYPE_CONFIGS, resolveTaskTypeConfig } from '@/lib/models/task-phase';
-import type { TaskReviewCheckin } from '@/lib/models/task-review-checkin';
-import { REVIEW_STATUS } from '@/lib/models/task-review-checkin';
 import type { UserSummary } from '@/lib/models/user';
 import type { TaskCategory } from '@/lib/models/task-category';
 import { CommentThread } from './CommentThread';
@@ -53,8 +51,6 @@ export function TaskDetailModal({
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
-  const [reviewCheckin, setReviewCheckin] = useState<TaskReviewCheckin | null>(null);
-  const [ackingReview, setAckingReview] = useState(false);
   // Bumped after a successful handoff so the embedded CommentThread re-fetches
   // its list and the new kind='handoff' entry shows up without a full page reload.
   const [commentReloadKey, setCommentReloadKey] = useState(0);
@@ -151,39 +147,6 @@ export function TaskDetailModal({
     return null;
   }, [task.taskId, onUpdated]);
 
-  // Review check-in state — only meaningful for an Editing task in Review.
-  const loadReviewCheckin = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/tasks/${task.taskId}/review-checkin`);
-      if (!res.ok) return;
-      const data = await res.json() as { checkin: TaskReviewCheckin | null };
-      setReviewCheckin(data.checkin);
-    } catch { /* ignore */ }
-  }, [task.taskId]);
-
-  useEffect(() => {
-    if (taskType !== 'editing' || status !== REVIEW_STATUS) {
-      setReviewCheckin(null);
-      return;
-    }
-    void loadReviewCheckin();
-  }, [taskType, status, loadReviewCheckin]);
-
-  const acknowledgeReview = useCallback(async () => {
-    if (ackingReview) return;
-    setAckingReview(true);
-    try {
-      const res = await fetch(`/api/tasks/${task.taskId}/review-checkin/acknowledge`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json() as { checkin: TaskReviewCheckin };
-        setReviewCheckin(data.checkin);
-        setCommentReloadKey((k) => k + 1); // surface the new review_ack entry
-      }
-    } finally {
-      setAckingReview(false);
-    }
-  }, [ackingReview, task.taskId]);
-
   function handleTitleBlur() {
     if (title.trim() && title.trim() !== task.description) {
       void patch({ description: title.trim() });
@@ -205,12 +168,7 @@ export function TaskDetailModal({
 
   function handleStatusChange(s: string) {
     setStatus(s);
-    // Refetch after the PATCH resolves so the check-in the server opens/closes
-    // on this transition is reflected without a race against the status effect.
-    void patch({ status: s }).then(() => {
-      if (taskType === 'editing' && s === REVIEW_STATUS) void loadReviewCheckin();
-      else setReviewCheckin(null);
-    });
+    void patch({ status: s });
   }
 
   function handlePriorityChange(p: TaskPriority) {
@@ -395,33 +353,6 @@ export function TaskDetailModal({
               </button>
             </div>
           </div>
-
-          {/* Review check-in nudge — shown while an Editing task sits in Review.
-              Acknowledging (or posting an update below) resets the 3-day clock. */}
-          {reviewCheckin && (
-            <div className="review-checkin-banner">
-              <span className="review-checkin-icon" aria-hidden="true">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M12 7v5l3 2" />
-                </svg>
-              </span>
-              <span className="review-checkin-text">
-                {reviewCheckin.alertCount > 0
-                  ? 'This edit has been sitting in Review — post an update or acknowledge to reset the 3-day check-in.'
-                  : 'While this edit sits in Review, LPOS re-pings every 3 days. Post an update or acknowledge to reset the clock.'}
-              </span>
-              <button
-                type="button"
-                className="handoff-ack-btn review-checkin-ack-btn"
-                onClick={() => void acknowledgeReview()}
-                disabled={ackingReview}
-                title="Acknowledge — resets the 3-day Review check-in without posting an update."
-              >
-                {ackingReview ? 'Saving…' : 'Acknowledge'}
-              </button>
-            </div>
-          )}
 
           {/* Updates (formerly Notes + Comments) — single chronological thread */}
           <CommentThread
