@@ -105,6 +105,12 @@ export function MediaDistributionBar({
   // CF-backed actions only make sense for the current (CF) version.
   const showCfActions = cfReady && !isViewingOldVersion;
 
+  // Quick way to check the asset in Cloudflare: its Stream watch page.
+  const cfWatchUrl = cf.uid ? `https://watch.cloudflarestream.com/${cf.uid}` : null;
+  const linkOutIcon = (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+  );
+
   return (
     <div className="mdb">
       <div className="mdb-rail">
@@ -153,16 +159,35 @@ export function MediaDistributionBar({
           </div>
         )}
 
-        {frameioLink && (
+        {frameioLink && cfWatchUrl ? (
+          // Both destinations available → a tiny menu to pick Frame.io or Cloudflare.
+          <div className="mdb-rail-item" onMouseLeave={scheduleClose}>
+            <button
+              type="button"
+              className={`mdb-rail-btn${openItem === 'linkout' ? ' is-open' : ''}`}
+              onClick={() => toggle('linkout')}
+              aria-label="Open asset externally"
+              title="Open asset — Frame.io or Cloudflare"
+            >
+              {linkOutIcon}
+            </button>
+            {openItem === 'linkout' && (
+              <div className="mdb-pop mdb-linkout-pop" role="menu" aria-label="Open asset externally" onMouseEnter={clearTimers}>
+                <a className="mdb-pop-btn" href={frameioLink} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setOpenItem(null)}>Open in Frame.io</a>
+                <a className="mdb-pop-btn" href={cfWatchUrl} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setOpenItem(null)}>Open in Cloudflare</a>
+              </div>
+            )}
+          </div>
+        ) : (frameioLink || cfWatchUrl) && (
           <a
             className="mdb-rail-btn"
-            href={frameioLink}
+            href={(frameioLink ?? cfWatchUrl)!}
             target="_blank"
             rel="noreferrer"
-            aria-label="Open in Frame.io"
-            title="Open in Frame.io"
+            aria-label={frameioLink ? 'Open in Frame.io' : 'Open in Cloudflare'}
+            title={frameioLink ? 'Open in Frame.io' : 'Open in Cloudflare'}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            {linkOutIcon}
           </a>
         )}
 

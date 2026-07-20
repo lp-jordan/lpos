@@ -5271,6 +5271,8 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px; cursor: pointer;
 }
 .mdb-pop-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.mdb-linkout-pop { width: auto; min-width: 150px; padding: 6px; gap: 5px; }
+.mdb-linkout-pop .mdb-pop-btn { text-align: center; text-decoration: none; }
 
 /* ── Roll-up health dot + per-platform breakdown popout ───────────────────── */
 .mdb-health { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
