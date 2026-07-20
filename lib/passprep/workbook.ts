@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { recordLlmUsage, type LlmUsageInput } from '@/lib/store/llm-usage-store';
 import { createWorkbookShell, type AiProvider, type CourseState, type NormalizedProject, type ProjectVideo } from './core';
 
 const ASSET_ROOT = path.join(process.cwd(), 'lib', 'passprep', 'assets');
@@ -145,7 +146,8 @@ async function requestClaude(prompt: string): Promise<string> {
     throw new WorkbookGenerationError(`Claude workbook request failed (${response.status}): ${details.slice(0, 300)}`);
   }
 
-  const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+  const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; usage?: LlmUsageInput['usage'] };
+  recordLlmUsage({ feature: 'pass_prep', model: CLAUDE_MODEL, usage: payload.usage ?? {} });
   return payload.content?.find((item) => item.type === 'text')?.text ?? '';
 }
 

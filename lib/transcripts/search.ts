@@ -1,4 +1,5 @@
 import type { TranscriptEntry, TranscriptSearchResponse, TranscriptSearchSource } from './types';
+import { recordLlmUsage, type LlmUsageInput } from '@/lib/store/llm-usage-store';
 import { listProjectTranscripts, readTranscriptText } from './store';
 
 const CLAUDE_URL = process.env.CLAUDE_BASE_URL ?? 'https://api.anthropic.com/v1/messages';
@@ -178,7 +179,8 @@ async function classifyQuery(
 
     if (!response?.ok) return { mode: 'ask' };
 
-    const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+    const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; usage?: LlmUsageInput['usage'] };
+    recordLlmUsage({ feature: 'transcript_search', model: CLAUDE_MODEL, usage: payload.usage ?? {} });
     const text = payload.content?.find((item) => item.type === 'text')?.text?.trim() ?? '';
     if (!text) return { mode: 'ask' };
 
@@ -460,7 +462,8 @@ async function requestClaudeSearch(input: {
     throw new TranscriptSearchError(`Claude transcript search failed (${response.status}): ${details.slice(0, 240)}`, 502);
   }
 
-  const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+  const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; usage?: LlmUsageInput['usage'] };
+  recordLlmUsage({ feature: 'transcript_search', model: CLAUDE_MODEL, usage: payload.usage ?? {} });
   const text = payload.content?.find((item) => item.type === 'text')?.text?.trim() ?? '';
   if (!text) throw new TranscriptSearchError('Claude transcript search returned no text.', 502);
 

@@ -23,6 +23,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { recordLlmUsage } from '@/lib/store/llm-usage-store';
 import { getActivityDb, getCatchupCache, setCatchupCache } from '@/lib/store/activity-db';
 import { getCoreDb } from '@/lib/store/core-db';
 import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
@@ -440,6 +441,7 @@ async function generateHeadline(recap: DeterministicRecap): Promise<string | nul
       'No greeting, no preamble, no bullet points, no markdown — just the recap sentence(s).',
     messages: [{ role: 'user', content: `Summarize yesterday from this digest:\n${buildDigest(recap)}` }],
   });
+  recordLlmUsage({ feature: 'daily_catchup', model, usage: message.usage });
 
   const block = message.content[0];
   if (block && block.type === 'text') {

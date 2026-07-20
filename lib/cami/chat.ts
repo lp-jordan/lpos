@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { recordLlmUsage } from '@/lib/store/llm-usage-store';
 import { listProjectTranscripts, readTranscriptText, readTranscriptDownload } from '@/lib/transcripts/store';
 import { transcriptSearchInternals } from '@/lib/transcripts/search';
 import type { TranscriptSearchSource } from '@/lib/transcripts/types';
@@ -227,6 +228,7 @@ export async function runCamiChat(
       messages,
     });
 
+    recordLlmUsage({ feature: 'cami_search', model: CLAUDE_MODEL, projectId: input.projectId, usage: response.usage });
     totalTokens += response.usage.input_tokens + response.usage.output_tokens;
     if (totalTokens > MAX_TOKENS_PER_CALL) {
       console.warn(`[cami] token limit reached: ${totalTokens.toLocaleString()} tokens (limit ${MAX_TOKENS_PER_CALL.toLocaleString()})`);

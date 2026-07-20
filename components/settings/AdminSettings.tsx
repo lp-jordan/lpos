@@ -15,6 +15,7 @@ import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
 import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConfigCard';
+import { AiUsageCard } from '@/components/settings/AiUsageCard';
 import { StorageSettingsClient } from '@/components/settings/StorageSettingsClient';
 import { ColdStorageSection } from '@/components/settings/ColdStorageSection';
 import { DriveSettingsClient } from '@/components/settings/DriveSettingsClient';
@@ -126,6 +127,7 @@ export function AdminSettings({ role }: { role: string }) {
           <LpReleasesCard />
           <EpReleasesCard />
           <GroupHeading title="Operations" />
+          <AiUsageCard />
           <ActiveClientsCard />
           <GuestPinCard />
         </>

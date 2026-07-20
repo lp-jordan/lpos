@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+import { recordLlmUsage } from '@/lib/store/llm-usage-store';
 
 const DOCS_DIR = path.join(process.cwd(), '../docs');
 const CHANGELOG_PATH = path.join(DOCS_DIR, 'changelog.json');
@@ -69,6 +70,7 @@ export async function GET() {
     system: 'You rewrite technical developer change log entries as short, friendly bullet points for end users of a production software platform. Focus on what changed for the user, not the technical implementation. Use plain, conversational language. Avoid jargon. Keep each bullet under 20 words. Return only a JSON array of strings — no markdown, no explanation.',
     messages: [{ role: 'user', content: `Rewrite these changes as user-friendly bullet points:\n${input}` }],
   });
+  recordLlmUsage({ feature: 'whats_new', model: MODEL, usage: message.usage });
 
   let bullets: string[] = [];
   const content = message.content[0];
