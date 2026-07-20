@@ -3,8 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Server as SocketIOServer } from 'socket.io';
 import { recordActivity, serviceActor } from '@/lib/services/activity-monitor-service';
+import { getAsset } from '@/lib/store/media-registry';
 import type { ServiceRegistry } from './registry';
 import { MediaProcessor, type ProcessorPhase } from './media-processor';
+import { translateTranscriptToSpanish } from './transcript-translation';
 import {
   getTranscriptionWorkers,
   getTranscriptionTimeoutMs,
@@ -31,18 +33,16 @@ export type TranscriptJobStatus =
  *                       NOT prune the standard transcript, and must NOT touch
  *                       `asset.transcription.*`. Its `<jobId>.words.json` / `<jobId>.json`
  *                       are read directly by the caller via the completion callback.
- *   - `spanish`       — an ADDITIVE Spanish-language pass that coexists with the English
- *                       `standard` transcript. It writes its own `.meta.json` (tagged
- *                       `lang:'es'`) so the Transcripts UI can enumerate it, prunes only
- *                       OTHER Spanish transcripts for the asset (language-scoped), and
- *                       drives `asset.transcriptionEs.*` — never `asset.transcription.*`.
+ *   - `spanish`       — an ADDITIVE Spanish transcript that coexists with the English
+ *                       `standard` transcript. It does NOT run whisper: whisper cannot
+ *                       translate EN→ES, so the Spanish pass TRANSLATES the finished
+ *                       English transcript (via Claude) segment-by-segment, preserving
+ *                       timestamps. It writes its own `.meta.json` (tagged `lang:'es'`)
+ *                       so the Transcripts UI can enumerate it, prunes only OTHER Spanish
+ *                       transcripts for the asset, and drives `asset.transcriptionEs.*` —
+ *                       never `asset.transcription.*`. See transcript-translation.ts.
  */
 export type TranscriptJobPurpose = 'standard' | 'lpai_sidecar' | 'spanish';
-
-/** Default whisper model for the Spanish pass. Mirrors the LP.AI sidecar's
- *  high-quality model — base/small are notably weaker on Spanish. Overridable
- *  per-call via opts.model; promote to an admin Setting later if needed. */
-const SPANISH_TRANSCRIPTION_MODEL = 'large-v3-turbo';
 
 export interface TranscriptJob {
   jobId: string;
@@ -82,10 +82,8 @@ export interface EnqueueSidecarOptions {
   displayName?: string;
 }
 
-/** Options for the additive Spanish transcription pass. */
+/** Options for the additive Spanish translation pass. */
 export interface EnqueueSpanishOptions {
-  /** Whisper model override; defaults to SPANISH_TRANSCRIPTION_MODEL. */
-  model?: string;
   durationSec?: number;
   displayName?: string;
 }
@@ -94,8 +92,11 @@ type JobCompleteCallback = (job: TranscriptJob) => void;
 
 export class TranscripterService {
   private jobs = new Map<string, TranscriptJob>();
-  // Map of jobId → active MediaProcessor (one entry per running worker)
+  // Map of jobId → active MediaProcessor (one entry per running whisper worker)
   private activeProcessors = new Map<string, MediaProcessor>();
+  // jobIds of in-flight Spanish translation jobs (no child process — API-bound).
+  // Counted alongside activeProcessors against the worker cap.
+  private activeTranslations = new Set<string>();
   private completionCallbacks: JobCompleteCallback[] = [];
   private changeListeners: Array<(jobs: TranscriptJob[]) => void> = [];
 
@@ -237,19 +238,15 @@ export class TranscripterService {
   }
 
   /**
-   * Enqueue an ADDITIVE Spanish transcription that coexists with the English
-   * transcript. Differs from `enqueue` in that it:
-   *   1. forces `language = 'es'` (whisper `-l es`, never `-tr`), so the output
-   *      is Spanish rather than auto-detected/translated;
-   *   2. defaults to a high-quality model (`SPANISH_TRANSCRIPTION_MODEL`) since
-   *      base/small are weak on Spanish;
-   *   3. carries `purpose = 'spanish'` — processNext writes a `lang:'es'`-tagged
-   *      `.meta.json` and prunes only OTHER Spanish transcripts for the asset,
-   *      and container.ts drives `asset.transcriptionEs.*` (never the English
-   *      `asset.transcription.*`) and pushes the VTT to Cloudflare as an `es`
-   *      caption track.
-   * Its outputs land at a fresh `<jobId>.*` prefix (new UUID) so they never
-   * collide with the English transcript's files.
+   * Enqueue an ADDITIVE Spanish transcript that coexists with the English one.
+   * The job does NOT run whisper — processNext detects `purpose = 'spanish'` and
+   * TRANSLATES the finished English transcript to Spanish (Claude), preserving
+   * timestamps. It writes a `lang:'es'`-tagged `.meta.json`, prunes only OTHER
+   * Spanish transcripts for the asset, and container.ts drives
+   * `asset.transcriptionEs.*` (never the English `asset.transcription.*`) and
+   * pushes the VTT to Cloudflare as an `es` caption track. Outputs land at a
+   * fresh `<jobId>.*` prefix (new UUID) so they never collide with English.
+   * The English transcript must be `done` before this runs (it is, from ingest).
    */
   enqueueSpanish(projectId: string, filePath: string, assetId: string, opts: EnqueueSpanishOptions = {}): TranscriptJob {
     const job: TranscriptJob = {
@@ -261,7 +258,6 @@ export class TranscripterService {
       status:     'queued',
       progress:   0,
       durationSec: (typeof opts.durationSec === 'number' && opts.durationSec > 0) ? opts.durationSec : undefined,
-      model:      opts.model ?? SPANISH_TRANSCRIPTION_MODEL,
       language:   'es',
       purpose:    'spanish',
       queuedAt:   new Date().toISOString(),
@@ -283,12 +279,12 @@ export class TranscripterService {
       asset_id: assetId,
       job_id: job.jobId,
       source_service: 'transcripter',
-      details_json: { filename: job.filename, sourcePath: filePath, model: job.model, language: 'es', purpose: 'spanish' },
+      details_json: { filename: job.filename, sourcePath: filePath, language: 'es', purpose: 'spanish' },
     });
 
     if (this.activeProcessors.size < getTranscriptionWorkers()) setImmediate(() => this.processNext());
 
-    console.log(`[transcripter] enqueued Spanish "${job.filename}" (${job.jobId}, model=${job.model})`);
+    console.log(`[transcripter] enqueued Spanish translation "${job.filename}" (${job.jobId})`);
     return job;
   }
 
@@ -326,7 +322,7 @@ export class TranscripterService {
 
   private async processNext(): Promise<void> {
     const next = Array.from(this.jobs.values()).find((j) => j.status === 'queued');
-    if (!next || this.activeProcessors.size >= getTranscriptionWorkers()) return;
+    if (!next || this.activeProcessors.size + this.activeTranslations.size >= getTranscriptionWorkers()) return;
 
     const isSidecar = next.purpose === 'lpai_sidecar';
     const isSpanish = next.purpose === 'spanish';
@@ -348,6 +344,96 @@ export class TranscripterService {
       source_service: 'transcripter',
       details_json: { filename: next.filename, sourcePath: next.sourcePath, purpose: next.purpose, model: next.model },
     });
+
+    // ── Spanish translation path (no whisper, no audio) ──────────────────────
+    // The Spanish pass TRANSLATES the finished English transcript rather than
+    // transcribing audio (whisper can't translate EN→ES). Timestamps are copied
+    // 1:1 so the Spanish captions stay frame-locked to the English speech.
+    if (isSpanish) {
+      const projectDir = path.join(DATA_DIR, 'projects', next.projectId);
+      this.activeTranslations.add(next.jobId);
+      try {
+        const asset = next.assetId ? getAsset(next.projectId, next.assetId) : null;
+        const en = asset?.transcription;
+        if (!en || en.status !== 'done' || !en.jobId) {
+          throw new Error('English transcript must finish before Spanish translation can run.');
+        }
+        this.updateJob(next.jobId, { status: 'transcribing', progress: 40 });
+
+        const result = await translateTranscriptToSpanish({
+          projectId: next.projectId,
+          assetId: next.assetId,
+          englishJobId: en.jobId,
+          spanishJobId: next.jobId,
+          projectDir,
+        });
+
+        this.updateJob(next.jobId, {
+          status: 'done',
+          progress: 100,
+          outputFiles: [result.txtPath, result.srtPath, result.vttPath, result.jsonPath].filter(Boolean) as string[],
+        });
+
+        // Write lang-tagged meta so it's enumerable, then prune old Spanish only.
+        try {
+          const metaPath = path.join(projectDir, 'transcripts', `${next.jobId}.meta.json`);
+          await fs.promises.writeFile(metaPath, JSON.stringify({
+            jobId: next.jobId,
+            assetId: next.assetId,
+            filename: next.filename,
+            completedAt: new Date().toISOString(),
+            lang: 'es',
+          }, null, 2));
+        } catch (e) {
+          console.warn('[transcripter] could not write Spanish transcript meta:', e);
+        }
+        void this.pruneOldTranscripts(next.projectId, next.assetId, next.jobId, 'es');
+
+        this.fireCompletion(next.jobId);
+        recordActivity({
+          ...serviceActor('Transcripter', 'transcripter'),
+          occurred_at: new Date().toISOString(),
+          event_type: 'transcription.completed',
+          lifecycle_phase: 'completed',
+          source_kind: 'background_service',
+          visibility: 'user_timeline',
+          title: `Spanish transcription completed: ${next.filename}`,
+          summary: `${next.filename} finished Spanish translation (${result.segmentCount} segments)`,
+          project_id: next.projectId,
+          asset_id: next.assetId,
+          job_id: next.jobId,
+          source_service: 'transcripter',
+          details_json: { filename: next.filename, purpose: 'spanish', segments: result.segmentCount },
+        });
+        console.log(`[transcripter] ✓ completed Spanish "${next.filename}"`);
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (this.jobs.get(next.jobId)?.status === 'canceled') return;
+        this.updateJob(next.jobId, { status: 'failed', error: msg });
+        console.error(`[transcripter] ✗ failed Spanish "${next.filename}":`, msg);
+        this.fireCompletion(next.jobId);
+        recordActivity({
+          ...serviceActor('Transcripter', 'transcripter'),
+          occurred_at: new Date().toISOString(),
+          event_type: 'transcription.failed',
+          lifecycle_phase: 'failed',
+          source_kind: 'background_service',
+          visibility: 'user_timeline',
+          title: `Spanish transcription failed: ${next.filename}`,
+          summary: `${next.filename} failed during Spanish translation`,
+          project_id: next.projectId,
+          asset_id: next.assetId,
+          job_id: next.jobId,
+          source_service: 'transcripter',
+          details_json: { filename: next.filename, error: msg, purpose: 'spanish' },
+        });
+      } finally {
+        this.activeTranslations.delete(next.jobId);
+        const hasMore = Array.from(this.jobs.values()).some((j) => j.status === 'queued');
+        if (hasMore) setImmediate(() => this.processNext());
+      }
+      return;
+    }
 
     const projectDir = path.join(DATA_DIR, 'projects', next.projectId);
     const processor  = new MediaProcessor();
