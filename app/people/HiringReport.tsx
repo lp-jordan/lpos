@@ -283,18 +283,31 @@ function QuestionBlock({ q, answer, auto, manual, score, conditions, saving, onS
   const fullyAuto = score && score.manualMax === 0;
   const autoCorrect = auto && auto.autoPoints >= auto.maxAutoPoints;
 
-  // Fully auto-scored and correct collapses to one line — eight correct
-  // multiple-choice answers in a row is noise, not information.
+  // Correct auto-scored questions collapse to one line, but the line still has
+  // to say WHAT she answered — a row of bare checkmarks tells the reader
+  // nothing and makes them open each one to find out.
   if (fullyAuto && autoCorrect && !auto?.criticalFailure) {
+    const chosenKeys: string[] = q.kind === 'mc_multi'
+      ? ((auto?.detail?.chosen as string[]) ?? [])
+      : [auto?.detail?.chosen as string].filter(Boolean);
+    const chosenText = chosenKeys
+      .map((k) => q.options?.find((o) => o.key === k)?.text ?? '')
+      .filter(Boolean)
+      .join(' / ');
+
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.35rem 0', fontSize: '0.85rem' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', padding: '0.4rem 0', fontSize: '0.85rem' }}>
         <span style={{ color: '#5ab95a' }}>✓</span>
-        <span style={{ color: 'var(--muted)' }}>Q{q.number}</span>
-        <span style={{ flex: 1, color: 'var(--muted-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {q.prompt}
+        <span style={{ color: 'var(--muted-soft)', flexShrink: 0 }}>Q{q.number}</span>
+        <strong style={{ color: 'var(--text)', flexShrink: 0 }}>{chosenKeys.join(', ')}</strong>
+        <span style={{
+          flex: 1, minWidth: 0, color: 'var(--muted)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }} title={`${q.prompt}\n\n${chosenText}`}>
+          {chosenText || q.prompt}
         </span>
-        <span style={{ color: 'var(--muted-soft)' }}>{ms(answer?.dwellMs ?? 0)}</span>
-        <span style={{ color: 'var(--muted)' }}>{score?.total}/{score?.maxPoints}</span>
+        <span style={{ color: 'var(--muted-soft)', flexShrink: 0 }}>{ms(answer?.dwellMs ?? 0)}</span>
+        <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{score?.total}/{score?.maxPoints}</span>
       </div>
     );
   }
@@ -539,7 +552,13 @@ function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
       </div>
 
       {manualConditions.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem',
+          flexWrap: 'wrap', justifyContent: 'flex-end',
+        }}>
+          <span style={{ fontSize: '0.74rem', color: 'var(--muted-soft)', marginRight: 'auto' }}>
+            {manualConditions.map((c) => c.condition).join(' · ')}
+          </span>
           <button
             type="button"
             disabled={saving}
@@ -553,9 +572,6 @@ function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
           >
             {manual?.criticalFlag ? '⚑ Flagged' : 'Flag'}
           </button>
-          <span style={{ fontSize: '0.74rem', color: 'var(--muted-soft)' }}>
-            {manualConditions.map((c) => c.condition).join(' · ')}
-          </span>
         </div>
       )}
     </div>
