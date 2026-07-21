@@ -175,20 +175,6 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
           <Stat label="Intro reading" value={ms(timing.introDwellMs)} hint="Before the clock started" />
         </div>
 
-        {/* The gap between total and active is what catches "opened it Monday,
-            finished it Thursday" — worth calling out rather than making the
-            reader subtract. */}
-        {timing.totalMs > timing.activeMs * 2 && timing.activeMs > 0 && (
-          <p style={{
-            margin: '0 0 1rem', padding: '0.6rem 0.85rem', borderRadius: 6,
-            background: 'rgba(216,178,109,0.08)', border: '1px solid rgba(216,178,109,0.3)',
-            fontSize: '0.82rem', color: 'var(--muted)',
-          }}>
-            Elapsed time is {Math.round(timing.totalMs / Math.max(timing.activeMs, 1))}× the active
-            time — this was not completed in one sitting.
-          </p>
-        )}
-
         <div style={{
           display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap',
           padding: '0.8rem 1rem', borderRadius: 8,
