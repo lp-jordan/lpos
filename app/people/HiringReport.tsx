@@ -1,6 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+
+/**
+ * Answer shapes vary per question kind and come from a snapshot taken when the
+ * invite was created, so a shape this code does not expect is a live
+ * possibility. Without a boundary, one bad question blanks the entire report
+ * and hides the other 28 — which is worse than showing one broken row.
+ */
+class QuestionErrorBoundary extends React.Component<
+  { children: React.ReactNode; questionNumber: number },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          marginBottom: '2.25rem', padding: '0.7rem 0.9rem', borderRadius: 6,
+          border: '1px solid rgba(229,85,85,0.4)', background: 'rgba(229,85,85,0.06)',
+          fontSize: '0.82rem', color: 'var(--color-error,#e55)',
+        }}>
+          Q{this.props.questionNumber} could not be rendered: {this.state.error.message}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /**
  * Candidate report — one scrollable page, all questions in section order.
@@ -195,16 +227,17 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
               Section {section.number} — {section.title} · {section.points} pts
             </p>
             {qs.map((q) => (
-              <QuestionBlock
-                key={q.id}
-                q={q}
-                answer={answers[q.id]}
-                auto={auto[q.id]}
-                manual={manual[q.id]}
-                score={scoring.perQuestion[q.id]}
-                saving={saving === q.id}
-                onSave={(patch) => void save(q.id, patch)}
-              />
+              <QuestionErrorBoundary key={q.id} questionNumber={q.number}>
+                <QuestionBlock
+                  q={q}
+                  answer={answers[q.id]}
+                  auto={auto[q.id]}
+                  manual={manual[q.id]}
+                  score={scoring.perQuestion[q.id]}
+                  saving={saving === q.id}
+                  onSave={(patch) => void save(q.id, patch)}
+                />
+              </QuestionErrorBoundary>
             ))}
           </div>
         );
@@ -353,10 +386,18 @@ function AnswerView({ q, answer, auto }: { q: Question; answer?: AnswerRow; auto
             <p style={box}>{val || <em style={{ opacity: 0.5 }}>blank</em>}</p>
           </div>
         ))}
-        {auto?.detail?.matched === false && (
+        {/* `reason: 'blank'` also carries matched:false — reporting an unfilled
+            quote as a mismatch would point at a critical failure that is not
+            there. */}
+        {auto?.detail?.matched === false && auto?.detail?.reason !== 'blank' && (
           <p style={{ fontSize: '0.8rem', color: 'var(--color-error,#e55)', margin: '0 0 0.6rem' }}>
             Quote does not match the transcript. Verify before treating this as a critical failure —
             check for a genuine edit rather than a copy artefact.
+          </p>
+        )}
+        {auto?.detail?.reason === 'blank' && (
+          <p style={{ fontSize: '0.8rem', color: 'var(--muted-soft)', margin: '0 0 0.6rem' }}>
+            No quote given — nothing to check.
           </p>
         )}
         {auto?.detail?.matched === true && (
@@ -374,32 +415,44 @@ function AnswerView({ q, answer, auto }: { q: Question; answer?: AnswerRow; auto
   }
 
   if (q.kind === 'repeat') {
-    const items = (v?.items ?? []) as Record<string, string>[];
-    const results = auto?.detail?.results as { passed: boolean; failed: string[] }[] | undefined;
+    const items = (v?.items ?? []) as (Record<string, string> | null)[];
+    // Two different auto shapes land in `results`: Q21's filename check gives
+    // { passed, failed }, Q23's status check gives { correct, accepted }.
+    // Reading one shape's fields off the other is how this blanked the page.
+    const results = auto?.detail?.results as
+      | { passed?: boolean; failed?: string[]; correct?: boolean; accepted?: string[] }[]
+      | undefined;
     const ordering = auto?.detail?.expected as string[] | undefined;
 
     return (
       <div style={{ margin: '0 0 0.6rem' }}>
         {items.map((item, i) => {
           const ctx = q.itemContext?.[i];
-          const pass = results?.[i];
+          const r = results?.[i];
+          const ok = r ? (r.passed ?? r.correct) : undefined;
           return (
             <div key={i} style={{ marginBottom: '0.55rem' }}>
               <div style={{ fontSize: '0.72rem', color: 'var(--muted-soft)', marginBottom: '0.2rem' }}>
                 {ctx?.name ?? ctx?.original ?? `${i + 1}.`}
-                {pass && (
-                  <span style={{ marginLeft: '0.5rem', color: pass.passed ? '#5ab95a' : 'var(--color-error,#e55)' }}>
-                    {pass.passed ? '✓ structure ok' : `✗ ${pass.failed.join(', ')}`}
+                {ok !== undefined && (
+                  <span style={{ marginLeft: '0.5rem', color: ok ? '#5ab95a' : 'var(--color-error,#e55)' }}>
+                    {ok
+                      ? '✓'
+                      : r?.failed?.length
+                        ? `✗ ${r.failed.join(', ')}`
+                        : r?.accepted?.length
+                          ? `✗ expected ${r.accepted.join(' or ')}`
+                          : '✗'}
                   </span>
                 )}
-                {ordering && (
+                {ordering?.[i] && (
                   <span style={{ marginLeft: '0.5rem', color: 'var(--muted-soft)' }}>
                     expected: {ordering[i]}
                   </span>
                 )}
               </div>
               <p style={box}>
-                {Object.entries(item)
+                {Object.entries(item ?? {})
                   .filter(([, val]) => String(val ?? '').trim())
                   .map(([k, val]) => `${k}: ${val}`)
                   .join('\n') || <em style={{ opacity: 0.5 }}>blank</em>}
