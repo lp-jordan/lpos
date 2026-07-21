@@ -10,7 +10,8 @@ export async function GET(req: NextRequest) {
   if (deny) return deny;
 
   try {
-    return NextResponse.json({ invites: await listInvites() });
+    const includeArchived = req.nextUrl.searchParams.get('includeArchived') === '1';
+    return NextResponse.json({ invites: await listInvites(includeArchived) });
   } catch (err) {
     const e = err as HiringError;
     return NextResponse.json({ error: e.message }, { status: e.status ?? 500 });

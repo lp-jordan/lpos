@@ -31,6 +31,8 @@ export interface HiringInvite {
   intro_dwell_ms: number;
   answered: number;
   question_count: number;
+  archived: boolean;
+  url: string | null;
 }
 
 export interface HiringQuestionnaire {
@@ -75,8 +77,27 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function listInvites(): Promise<HiringInvite[]> {
-  return call<HiringInvite[]>('/api/invites');
+export function listInvites(includeArchived = false): Promise<HiringInvite[]> {
+  return call<HiringInvite[]>(`/api/invites${includeArchived ? '?includeArchived=1' : ''}`);
+}
+
+/** Already scored server-side; the answer-key table itself is never returned. */
+export function getReport(token: string): Promise<unknown> {
+  return call(`/api/invites/${encodeURIComponent(token)}/report`);
+}
+
+export function updateInvite(token: string, patch: { revoked?: boolean; archived?: boolean }) {
+  return call(`/api/invites/${encodeURIComponent(token)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function saveScore(token: string, questionId: string, body: unknown) {
+  return call(`/api/invites/${encodeURIComponent(token)}/scores/${encodeURIComponent(questionId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
 }
 
 export function listQuestionnaires(): Promise<HiringQuestionnaire[]> {

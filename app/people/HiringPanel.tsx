@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { HiringReport } from './HiringReport';
 
 /**
  * The Hiring tab on /people.
@@ -17,7 +18,6 @@ import { useCallback, useEffect, useState } from 'react';
 interface Invite {
   token: string;
   candidate_name: string;
-  candidate_email: string | null;
   role_label: string | null;
   status: 'sent' | 'started' | 'completed' | 'expired';
   created_at: string;
@@ -28,6 +28,7 @@ interface Invite {
   intro_dwell_ms: number;
   answered: number;
   question_count: number;
+  archived: boolean;
   /** Built by lpos-apply from its own PUBLIC_BASE_URL. */
   url: string | null;
 }
@@ -72,12 +73,15 @@ export function HiringPanel() {
   const [error, setError]     = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [copied, setCopied]   = useState<string | null>(null);
+  const [openToken, setOpenToken] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const res  = await fetch('/api/hiring/invites');
+      const res  = await fetch(`/api/hiring/invites${showArchived ? '?includeArchived=1' : ''}`);
       const data = await res.json() as { invites?: Invite[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Failed to load candidates.');
       setInvites(data.invites ?? []);
@@ -86,9 +90,26 @@ export function HiringPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function setArchived(invite: Invite, archived: boolean) {
+    setBusy(invite.token);
+    try {
+      const res = await fetch(`/api/hiring/invites/${invite.token}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to update.');
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   // The candidate URL is served by lpos-apply, not LPOS, so it comes back from
   // the API rather than being reconstructed against the dashboard's own host.
@@ -106,6 +127,10 @@ export function HiringPanel() {
     }
   }
 
+  if (openToken) {
+    return <HiringReport token={openToken} onClose={() => { setOpenToken(null); void load(); }} />;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
@@ -114,9 +139,23 @@ export function HiringPanel() {
             ? `${invites.length} candidate${invites.length === 1 ? '' : 's'}`
             : ''}
         </p>
-        <button type="button" className="proj-new-btn" onClick={() => setShowNew(true)}>
-          + New invite
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            style={{
+              padding: '0.25rem 0.6rem', borderRadius: 6, fontSize: '0.78rem', cursor: 'pointer',
+              border: '1px solid var(--color-border,#444)',
+              background: showArchived ? 'var(--accent-soft)' : 'var(--color-input-bg,#1a1a1a)',
+              color: showArchived ? 'var(--accent-strong)' : 'var(--muted)',
+            }}
+          >
+            {showArchived ? 'Hiding archived' : 'Show archived'}
+          </button>
+          <button type="button" className="proj-new-btn" onClick={() => setShowNew(true)}>
+            + New invite
+          </button>
+        </div>
       </div>
 
       {loading && <p style={{ color: 'var(--muted)', fontSize: '0.875rem' }}>Loading…</p>}
@@ -161,9 +200,19 @@ export function HiringPanel() {
               }}
             >
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 500 }}>{inv.candidate_name}</div>
+                <button
+                  type="button"
+                  onClick={() => setOpenToken(inv.token)}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    font: 'inherit', fontWeight: 500, color: 'inherit', textAlign: 'left',
+                  }}
+                  title="Open the candidate report"
+                >
+                  {inv.candidate_name}
+                </button>
                 <div style={{ color: 'var(--muted-soft)', fontSize: '0.78rem' }}>
-                  {inv.candidate_email ?? '—'}
+                  {new Date(inv.created_at).toLocaleDateString()}
                   {inv.role_label && <span> · {inv.role_label}</span>}
                 </div>
               </div>
@@ -190,6 +239,22 @@ export function HiringPanel() {
               >
                 {copied === inv.token ? 'Copied' : 'Copy link'}
               </button>
+
+              <button
+                type="button"
+                disabled={busy === inv.token}
+                onClick={() => void setArchived(inv, !inv.archived)}
+                title={inv.archived ? 'Restore to the list' : 'Archive — hides the row, keeps the answers'}
+                style={{
+                  padding: '0.25rem 0.6rem', borderRadius: 6, fontSize: '0.78rem',
+                  border: '1px solid var(--color-border,#444)',
+                  background: 'var(--color-input-bg,#1a1a1a)',
+                  color: 'var(--muted-soft)', cursor: 'pointer', whiteSpace: 'nowrap',
+                  opacity: busy === inv.token ? 0.4 : 1,
+                }}
+              >
+                {inv.archived ? 'Restore' : 'Archive'}
+              </button>
             </div>
           ))}
         </div>
@@ -209,7 +274,6 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
   const [questionnaires, setQuestionnaires] = useState<Questionnaire[]>([]);
   const [questionnaireId, setQuestionnaireId] = useState('');
   const [name, setName]   = useState('');
-  const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
   const [created, setCreated] = useState<{ url: string } | null>(null);
@@ -237,7 +301,7 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
       const res  = await fetch('/api/hiring/invites', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ questionnaireId, candidateName: name, candidateEmail: email }),
+        body:    JSON.stringify({ questionnaireId, candidateName: name }),
       });
       const data = await res.json() as { url?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Failed to create the invite.');
@@ -318,20 +382,6 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
-              style={{
-                width: '100%', padding: '0.45rem 0.75rem', borderRadius: 6, marginBottom: '0.85rem',
-                border: '1px solid var(--color-border,#444)',
-                background: 'var(--color-input-bg,#1a1a1a)', color: 'inherit', fontSize: '0.875rem',
-              }}
-            />
-
-            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '0.3rem' }}>
-              Email <span style={{ opacity: 0.5 }}>(optional)</span>
-            </label>
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              type="email"
               style={{
                 width: '100%', padding: '0.45rem 0.75rem', borderRadius: 6,
                 border: '1px solid var(--color-border,#444)',
