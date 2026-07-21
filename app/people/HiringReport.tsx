@@ -60,6 +60,7 @@ interface Report {
   auto: Record<string, AutoResult>;
   scoring: Scoring;
   manual: Record<string, ManualRow>;
+  criticalConditions: Record<string, { condition: string; detection: string }[]>;
   timing: { totalMs: number; activeMs: number; blurMs: number; introDwellMs: number };
 }
 
@@ -128,6 +129,9 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
 
   useEffect(() => { void load(); }, [load]);
 
+  // Merges the server's recomputed totals in place. Reloading the whole report
+  // here would remount the page and throw the evaluator back to the top after
+  // every single click.
   async function save(questionId: string, patch: Record<string, unknown>) {
     setSaving(questionId);
     try {
@@ -136,8 +140,11 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
       });
-      if (!res.ok) throw new Error('Save failed.');
-      await load();   // totals and band are computed server-side
+      const data = await res.json() as { scoring?: Scoring; manual?: Record<string, ManualRow>; error?: string };
+      if (!res.ok) throw new Error(data.error ?? 'Save failed.');
+      setReport((prev) => (prev && data.scoring
+        ? { ...prev, scoring: data.scoring, manual: data.manual ?? prev.manual }
+        : prev));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -154,7 +161,7 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
     );
   }
 
-  const { invite, questions, sections, answers, auto, scoring, manual, timing } = report;
+  const { invite, questions, sections, answers, auto, scoring, manual, timing, criticalConditions } = report;
   const hasCritical = scoring.criticalFailures.length > 0;
 
   return (
@@ -220,6 +227,7 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
                   auto={auto[q.id]}
                   manual={manual[q.id]}
                   score={scoring.perQuestion[q.id]}
+                  conditions={criticalConditions?.[q.id]}
                   saving={saving === q.id}
                   onSave={(patch) => void save(q.id, patch)}
                 />
@@ -262,12 +270,13 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-function QuestionBlock({ q, answer, auto, manual, score, saving, onSave }: {
+function QuestionBlock({ q, answer, auto, manual, score, conditions, saving, onSave }: {
   q: Question;
   answer?: AnswerRow;
   auto?: AutoResult;
   manual?: ManualRow;
   score?: Scoring['perQuestion'][string];
+  conditions?: { condition: string; detection: string }[];
   saving: boolean;
   onSave: (patch: Record<string, unknown>) => void;
 }) {
@@ -307,7 +316,7 @@ function QuestionBlock({ q, answer, auto, manual, score, saving, onSave }: {
       <AnswerView q={q} answer={answer} auto={auto} />
 
       <ScoreControls
-        q={q} auto={auto} manual={manual} score={score} saving={saving} onSave={onSave}
+        q={q} manual={manual} score={score} conditions={conditions} saving={saving} onSave={onSave}
       />
     </div>
   );
@@ -477,11 +486,11 @@ const BTN: React.CSSProperties = {
   color: 'var(--muted)',
 };
 
-function ScoreControls({ q, auto, manual, score, saving, onSave }: {
+function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
   q: Question;
-  auto?: AutoResult;
   manual?: ManualRow;
   score?: Scoring['perQuestion'][string];
+  conditions?: { condition: string; detection: string }[];
   saving: boolean;
   onSave: (patch: Record<string, unknown>) => void;
 }) {
@@ -492,26 +501,21 @@ function ScoreControls({ q, auto, manual, score, saving, onSave }: {
   const isUnscored = score.maxPoints === 0;
   const manualMax  = score.manualMax;
 
+  // Only the questions that actually test a p.26 condition get a flag, and it
+  // names the condition. A bare icon on all 29 told the evaluator nothing.
+  const manualConditions = (conditions ?? []).filter((c) => c.detection !== 'automatic');
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
-      {isUnscored && (
-        <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
-          Recorded, not scored.
-        </span>
-      )}
-
-      {!isUnscored && auto && auto.maxAutoPoints > 0 && (
-        <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
-          auto {auto.autoPoints}/{auto.maxAutoPoints}
-        </span>
-      )}
-
-      {!isUnscored && manualMax > 0 && score.mode !== 'tally' && (
-        <>
+    <div style={{ marginTop: '0.4rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+        {isUnscored && (
           <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
-            manual {manualMax} pts:
+            Recorded, not scored.
           </span>
-          {(['strong', 'partial', 'weak'] as const).map((s) => (
+        )}
+
+        {!isUnscored && manualMax > 0 && score.mode !== 'tally' && (
+          (['strong', 'partial', 'weak'] as const).map((s) => (
             <button
               key={s}
               type="button"
@@ -526,36 +530,42 @@ function ScoreControls({ q, auto, manual, score, saving, onSave }: {
             >
               {s === 'partial' ? `Partial (${score.partialPct}%)` : s[0].toUpperCase() + s.slice(1)}
             </button>
-          ))}
-        </>
-      )}
+          ))
+        )}
 
-      {!isUnscored && manualMax > 0 && score.mode === 'tally' && (
-        <TallyControl q={q} manual={manual} manualMax={manualMax} saving={saving} onSave={onSave} />
-      )}
+        {!isUnscored && manualMax > 0 && score.mode === 'tally' && (
+          <TallyControl q={q} manual={manual} saving={saving} onSave={onSave} />
+        )}
+      </div>
 
-      <button
-        type="button"
-        disabled={saving}
-        onClick={() => onSave({ criticalFlag: !manual?.criticalFlag })}
-        title="Flag a critical-failure condition on this question"
-        style={{
-          ...BTN, marginLeft: 'auto',
-          borderColor: manual?.criticalFlag ? 'rgba(229,85,85,0.6)' : 'var(--color-border,#444)',
-          background:  manual?.criticalFlag ? 'rgba(229,85,85,0.12)' : 'var(--color-input-bg,#1a1a1a)',
-          color:       manual?.criticalFlag ? 'var(--color-error,#e55)' : 'var(--muted-soft)',
-        }}
-      >
-        {manual?.criticalFlag ? '⚑ Critical failure' : '⚑ Flag'}
-      </button>
+      {manualConditions.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onSave({ criticalFlag: !manual?.criticalFlag })}
+            style={{
+              ...BTN,
+              borderColor: manual?.criticalFlag ? 'rgba(229,85,85,0.6)' : 'var(--color-border,#444)',
+              background:  manual?.criticalFlag ? 'rgba(229,85,85,0.12)' : 'var(--color-input-bg,#1a1a1a)',
+              color:       manual?.criticalFlag ? 'var(--color-error,#e55)' : 'var(--muted-soft)',
+            }}
+          >
+            {manual?.criticalFlag ? '⚑ Flagged' : 'Flag'}
+          </button>
+          <span style={{ fontSize: '0.74rem', color: 'var(--muted-soft)' }}>
+            {manualConditions.map((c) => c.condition).join(' · ')}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
 /** Per-item strong/weak. Points scale with the count, which is more defensible
  *  than a judged fraction on a multi-item answer. */
-function TallyControl({ q, manual, manualMax, saving, onSave }: {
-  q: Question; manual?: ManualRow; manualMax: number; saving: boolean;
+function TallyControl({ q, manual, saving, onSave }: {
+  q: Question; manual?: ManualRow; saving: boolean;
   onSave: (patch: Record<string, unknown>) => void;
 }) {
   const count = q.count ?? 3;
@@ -563,9 +573,7 @@ function TallyControl({ q, manual, manualMax, saving, onSave }: {
 
   return (
     <>
-      <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
-        strong items ({manualMax} pts):
-      </span>
+      <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>strong:</span>
       {Array.from({ length: count }, (_, i) => (
         <button
           key={i}
