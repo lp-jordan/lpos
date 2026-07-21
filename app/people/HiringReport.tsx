@@ -94,6 +94,8 @@ interface Scoring {
     autoPoints: number; manualPoints: number; total: number;
     maxPoints: number; manualMax: number; judged: boolean;
     mode: string; partialPct: number;
+    manualControl: 'judgement' | 'items' | 'none';
+    manualLabel: string | null;
   }>;
 }
 
@@ -326,16 +328,31 @@ function QuestionBlock({ q, answer, auto, manual, score, conditions, saving, onS
         </span>
       </div>
 
-      <AnswerView q={q} answer={answer} auto={auto} />
+      <AnswerView
+        q={q} answer={answer} auto={auto}
+        itemMarks={score?.manualControl === 'items' ? (manual?.tally ?? []) : null}
+        onToggleItem={(i) => {
+          const n = (manual?.tally ?? []).slice();
+          while (n.length <= i) n.push(false);
+          n[i] = !n[i];
+          onSave({ tally: n });
+        }}
+        saving={saving}
+      />
 
       <ScoreControls
-        q={q} manual={manual} score={score} conditions={conditions} saving={saving} onSave={onSave}
+        manual={manual} score={score} conditions={conditions} saving={saving} onSave={onSave}
       />
     </div>
   );
 }
 
-function AnswerView({ q, answer, auto }: { q: Question; answer?: AnswerRow; auto?: AutoResult }) {
+function AnswerView({ q, answer, auto, itemMarks, onToggleItem, saving }: {
+  q: Question; answer?: AnswerRow; auto?: AutoResult;
+  itemMarks?: boolean[] | null;
+  onToggleItem?: (i: number) => void;
+  saving?: boolean;
+}) {
   const box: React.CSSProperties = {
     padding: '0.7rem 0.9rem', borderRadius: 6, background: 'rgba(255,255,255,0.03)',
     border: '1px solid var(--line)', fontSize: '0.88rem', lineHeight: 1.65,
@@ -438,8 +455,26 @@ function AnswerView({ q, answer, auto }: { q: Question; answer?: AnswerRow; auto
           const ctx = q.itemContext?.[i];
           const r = results?.[i];
           const ok = r ? (r.passed ?? r.correct) : undefined;
+          // The tick sits against the item it judges, not in a detached row of
+          // numbers the reader has to map back onto the answer.
+          const markable = itemMarks != null && onToggleItem != null;
+          const marked = Boolean(itemMarks?.[i]);
           return (
-            <div key={i} style={{ marginBottom: '0.55rem' }}>
+            <div key={i} style={{
+              display: markable ? 'flex' : 'block', gap: '0.6rem',
+              alignItems: 'flex-start', marginBottom: '0.55rem',
+            }}>
+              {markable && (
+                <input
+                  type="checkbox"
+                  checked={marked}
+                  disabled={saving}
+                  onChange={() => onToggleItem(i)}
+                  title="Mark this item as meeting the bar"
+                  style={{ marginTop: '0.55rem', accentColor: '#5ab95a', flexShrink: 0, cursor: 'pointer' }}
+                />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: '0.72rem', color: 'var(--muted-soft)', marginBottom: '0.2rem' }}>
                 {ctx?.name ?? ctx?.original ?? `${i + 1}.`}
                 {ok !== undefined && (
@@ -465,6 +500,7 @@ function AnswerView({ q, answer, auto }: { q: Question; answer?: AnswerRow; auto
                   .map(([k, val]) => `${k}: ${val}`)
                   .join('\n') || <em style={{ opacity: 0.5 }}>blank</em>}
               </p>
+              </div>
             </div>
           );
         })}
@@ -499,8 +535,7 @@ const BTN: React.CSSProperties = {
   color: 'var(--muted)',
 };
 
-function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
-  q: Question;
+function ScoreControls({ manual, score, conditions, saving, onSave }: {
   manual?: ManualRow;
   score?: Scoring['perQuestion'][string];
   conditions?: { condition: string; detection: string }[];
@@ -511,49 +546,69 @@ function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
     return <p style={{ fontSize: '0.78rem', color: 'var(--muted-soft)', margin: 0 }}>Not scored.</p>;
   }
 
-  const isUnscored = score.maxPoints === 0;
-  const manualMax  = score.manualMax;
+  const manualMax = score.manualMax;
+  const control   = score.manualControl;
 
-  // Only the questions that actually test a p.26 condition get a flag, and it
-  // names the condition. A bare icon on all 29 told the evaluator nothing.
+  // Only questions that test a p.26 condition get a flag, and it names the
+  // condition. Automatically-detected ones raise themselves.
   const manualConditions = (conditions ?? []).filter((c) => c.detection !== 'automatic');
 
-  return (
-    <div style={{ marginTop: '0.4rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-        {isUnscored && (
-          <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
-            Recorded, not scored.
-          </span>
-        )}
+  const partialPts = Math.round(manualMax * (score.partialPct / 100) * 100) / 100;
+  const STATES: { key: string; label: string; pts: number }[] = [
+    { key: 'strong',  label: 'Strong',  pts: manualMax },
+    { key: 'partial', label: 'Partial', pts: partialPts },
+    { key: 'weak',    label: 'Weak',    pts: 0 },
+  ];
 
-        {!isUnscored && manualMax > 0 && score.mode !== 'tally' && (
-          (['strong', 'partial', 'weak'] as const).map((s) => (
+  const markedCount = (manual?.tally ?? []).filter(Boolean).length;
+
+  return (
+    <div style={{ marginTop: '0.5rem' }}>
+      {control === 'none' && score.maxPoints === 0 && (
+        <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>Recorded, not scored.</span>
+      )}
+
+      {control === 'judgement' && manualMax > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          {/* On hybrid questions most points are already auto-scored, so say
+              what this judgement is actually rating. */}
+          {score.manualLabel && (
+            <span style={{ fontSize: '0.76rem', color: 'var(--muted)', marginRight: '0.15rem' }}>
+              {score.manualLabel}:
+            </span>
+          )}
+          {STATES.map((st) => (
             <button
-              key={s}
+              key={st.key}
               type="button"
               disabled={saving}
-              onClick={() => onSave({ state: s })}
+              onClick={() => onSave({ state: st.key })}
               style={{
                 ...BTN,
-                borderColor: manual?.state === s ? 'var(--accent)' : 'var(--color-border,#444)',
-                background:  manual?.state === s ? 'var(--accent-soft)' : 'var(--color-input-bg,#1a1a1a)',
-                color:       manual?.state === s ? 'var(--accent-strong)' : 'var(--muted)',
+                borderColor: manual?.state === st.key ? 'var(--accent)' : 'var(--color-border,#444)',
+                background:  manual?.state === st.key ? 'var(--accent-soft)' : 'var(--color-input-bg,#1a1a1a)',
+                color:       manual?.state === st.key ? 'var(--accent-strong)' : 'var(--muted)',
               }}
             >
-              {s === 'partial' ? `Partial (${score.partialPct}%)` : s[0].toUpperCase() + s.slice(1)}
+              {st.label} <span style={{ opacity: 0.7 }}>{st.pts}</span>
             </button>
-          ))
-        )}
+          ))}
+        </div>
+      )}
 
-        {!isUnscored && manualMax > 0 && score.mode === 'tally' && (
-          <TallyControl q={q} manual={manual} saving={saving} onSave={onSave} />
-        )}
-      </div>
+      {control === 'items' && manualMax > 0 && (
+        <div style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>
+          {score.manualLabel ? `${score.manualLabel} — ` : ''}
+          tick each item that meets the bar ·{' '}
+          <strong style={{ color: 'var(--muted)' }}>
+            {markedCount} marked · {score.manualPoints} of {manualMax} pts
+          </strong>
+        </div>
+      )}
 
       {manualConditions.length > 0 && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.4rem',
+          display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.45rem',
           flexWrap: 'wrap', justifyContent: 'flex-end',
         }}>
           <span style={{ fontSize: '0.74rem', color: 'var(--muted-soft)', marginRight: 'auto' }}>
@@ -575,42 +630,5 @@ function ScoreControls({ q, manual, score, conditions, saving, onSave }: {
         </div>
       )}
     </div>
-  );
-}
-
-/** Per-item strong/weak. Points scale with the count, which is more defensible
- *  than a judged fraction on a multi-item answer. */
-function TallyControl({ q, manual, saving, onSave }: {
-  q: Question; manual?: ManualRow; saving: boolean;
-  onSave: (patch: Record<string, unknown>) => void;
-}) {
-  const count = q.count ?? 3;
-  const marks = manual?.tally ?? Array.from({ length: count }, () => false);
-
-  return (
-    <>
-      <span style={{ fontSize: '0.76rem', color: 'var(--muted-soft)' }}>strong:</span>
-      {Array.from({ length: count }, (_, i) => (
-        <button
-          key={i}
-          type="button"
-          disabled={saving}
-          onClick={() => {
-            const next = [...marks];
-            next[i] = !next[i];
-            onSave({ tally: next });
-          }}
-          style={{
-            ...BTN,
-            minWidth: 30,
-            borderColor: marks[i] ? 'rgba(90,185,90,0.6)' : 'var(--color-border,#444)',
-            background:  marks[i] ? 'rgba(90,185,90,0.12)' : 'var(--color-input-bg,#1a1a1a)',
-            color:       marks[i] ? '#5ab95a' : 'var(--muted-soft)',
-          }}
-        >
-          {i + 1}
-        </button>
-      ))}
-    </>
   );
 }
