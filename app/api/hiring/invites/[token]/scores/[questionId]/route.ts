@@ -17,11 +17,15 @@ export async function PUT(
   const body = await req.json() as Record<string, unknown>;
 
   try {
-    await saveScore(token, questionId, {
+    // Forward the service's response verbatim: it carries the recomputed
+    // `scoring` and `manual` blocks that the report merges in place. Returning
+    // a bare { ok: true } here leaves the client with nothing to apply, so the
+    // page silently stops updating until a manual refresh.
+    const result = await saveScore(token, questionId, {
       ...body,
       scoredBy: (session ? getUserById(session.userId)?.email : null) ?? session?.userId,
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(result);
   } catch (err) {
     const e = err as HiringError;
     return NextResponse.json({ error: e.message }, { status: e.status ?? 500 });
