@@ -25,5 +25,12 @@ export function grantProspectsAccess(userId: string, grantedBy: string): void {
 }
 
 export function revokeProspectsAccess(userId: string): void {
-  getCoreDb().prepare('DELETE FROM prospect_access WHERE user_id = ?').run(userId);
+  const db = getCoreDb();
+  db.prepare('DELETE FROM prospect_access WHERE user_id = ?').run(userId);
+  // Hiring access is a strict subset of People access, so revoking the parent
+  // cascades. Without this, re-granting People access later would silently
+  // restore access to the more sensitive tier. Kept here rather than in
+  // hiring-access-store to avoid a circular import; the read-time nesting check
+  // in hasHiringAccess is the backstop if this is ever bypassed.
+  db.prepare('DELETE FROM hiring_access WHERE user_id = ?').run(userId);
 }

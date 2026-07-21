@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getUserById, toUserSummary, getAllUsers } from '@/lib/store/user-store';
 import { hasProspectsAccess, getUsersWithProspectsAccess } from '@/lib/store/prospect-access-store';
+import { hasHiringAccess } from '@/lib/store/hiring-access-store';
 import { getProspectStore, getClientStore } from '@/lib/services/container';
 import { PeoplePageClient } from './PeoplePageClient';
 import type { UserSummary } from '@/lib/models/user';
@@ -24,6 +25,10 @@ export default async function PeoplePage() {
     ? getAllUsers().map(toUserSummary).filter((u): u is UserSummary => u !== null && !u.isGuest)
     : getUsersWithProspectsAccess();
 
+  // Resolved server-side so the pill never renders for someone who cannot use
+  // it. The API routes re-check independently — this is presentation only.
+  const canSeeHiring = hasHiringAccess(session.userId, isAdmin);
+
   const parentClients = getClientStore().getAll()
     .filter((c) => c.isParent)
     .map((c) => ({ clientId: c.clientId, name: c.name }));
@@ -35,6 +40,7 @@ export default async function PeoplePage() {
       accessUsers={accessUsers}
       lastUpdateBodies={lastUpdateBodies}
       parentClients={parentClients}
+      canSeeHiring={canSeeHiring}
     />
   );
 }

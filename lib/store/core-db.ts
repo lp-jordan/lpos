@@ -238,6 +238,17 @@ function initSchema(db: DatabaseSync): void {
       granted_at TEXT NOT NULL
     );
 
+    -- Hiring access is a strict SUBSET of Prospects access, not a parallel
+    -- list: a row here only counts while the user also holds Prospects access,
+    -- and revoking Prospects deletes the row. Unlike every other gate in LPOS,
+    -- admin is not sufficient on its own — LPOS "admin" means system
+    -- administration, not HR authority.
+    CREATE TABLE IF NOT EXISTS hiring_access (
+      user_id    TEXT PRIMARY KEY,
+      granted_by TEXT NOT NULL,
+      granted_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS prospects (
       prospect_id TEXT PRIMARY KEY,
       company     TEXT NOT NULL,

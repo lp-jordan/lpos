@@ -11,6 +11,7 @@ import { EpReleasesCard } from '@/components/settings/EpReleasesCard';
 import { EditpanelAccessPanel } from '@/components/settings/EditpanelAccessPanel';
 import { ProspectsAccessPanel } from '@/components/settings/ProspectsAccessPanel';
 import { PreprodBoardAccessPanel } from '@/components/settings/PreprodBoardAccessPanel';
+import { HiringAccessPanel } from '@/components/settings/HiringAccessPanel';
 import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
@@ -101,6 +102,8 @@ export function AdminSettings({ role }: { role: string }) {
           <GroupHeading title="Feature access" subtitle="Who can see and use each feature." />
           <EditpanelAccessPanel />
           <ProspectsAccessPanel />
+          {/* Directly beneath Prospects: hiring access nests underneath it. */}
+          <HiringAccessPanel />
           <PreprodBoardAccessPanel />
           <NasIngestPanel />
         </>

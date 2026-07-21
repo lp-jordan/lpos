@@ -12,9 +12,10 @@ import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { ContextMenu } from '@/components/shared/ContextMenu';
 import type { MenuEntry } from '@/components/shared/ContextMenu';
 import { useContextMenu } from '@/hooks/useContextMenu';
+import { HiringPanel } from './HiringPanel';
 type ViewMode      = 'card' | 'list';
 type ScopeFilter   = 'all' | 'mine' | 'others';
-type TabFilter     = 'prospects' | 'active' | 'all';
+type TabFilter     = 'prospects' | 'active' | 'all' | 'hiring';
 type EntityFilter  = 'all' | 'individual' | 'organization';
 type SortMode      = 'updated' | 'name' | 'value' | 'newest' | 'billing';
 
@@ -323,9 +324,11 @@ interface Props {
   accessUsers:       UserSummary[];
   lastUpdateBodies?: Record<string, string>;
   parentClients:     { clientId: string; name: string }[];
+  /** Resolved server-side; hiring access is a strict subset of People access. */
+  canSeeHiring:      boolean;
 }
 
-export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, lastUpdateBodies, parentClients }: Props) {
+export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, lastUpdateBodies, parentClients, canSeeHiring }: Props) {
   const router = useRouter();
 
   // name → clientId map for O(1) parent lookup + navigation URL building
@@ -379,7 +382,7 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
     let lsEntity: EntityFilter | null = null;
     try {
       const x = window.localStorage.getItem('lpos:people:tab');
-      if (x && ['prospects','active','all'].includes(x))                     lsTab    = x as TabFilter;
+      if (x && ['prospects','active','all','hiring'].includes(x))            lsTab    = x as TabFilter;
       const y = window.localStorage.getItem('lpos:people:sort');
       if (y && ['updated','name','value','newest','billing'].includes(y))    lsSort   = y as SortMode;
       const z = window.localStorage.getItem('lpos:people:view');
@@ -389,8 +392,12 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
       const u = window.localStorage.getItem('lpos:people:entity');
       if (u && ['all','individual','organization'].includes(u))              lsEntity = u as EntityFilter;
     } catch { /* localStorage may be blocked */ }
-    if      (t  && ['prospects','active','all'].includes(t))                   setTab(t);
-    else if (lsTab)                                                            setTab(lsTab);
+    // 'hiring' is restorable from a URL or localStorage only while the viewer
+    // still holds access — otherwise a revoked user's persisted tab would
+    // leave them on a pill that no longer renders.
+    const tabAllowed = (x: TabFilter) => x !== 'hiring' || canSeeHiring;
+    if      (t  && ['prospects','active','all','hiring'].includes(t) && tabAllowed(t)) setTab(t);
+    else if (lsTab && tabAllowed(lsTab))                                        setTab(lsTab);
     if      (so && ['updated','name','value','newest','billing'].includes(so)) setSort(so);
     else if (lsSort)                                                           setSort(lsSort);
     if      (v  && ['card','list'].includes(v))                                setViewMode(v);
@@ -582,21 +589,46 @@ export function PeoplePageClient({ initialPeople, currentUserId, accessUsers, la
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // Extracted so the Hiring view can render the same pill row without
+  // duplicating it — everything else in the People toolbar (search, sort,
+  // view toggle, + New) is meaningless for a candidate list.
+  const tabPills = (
+    <div className="proj-filter-pills" style={{ flexShrink: 0 }}>
+      <button type="button" className={`proj-filter-pill${tab === 'prospects' ? ' active' : ''}`} onClick={() => { setTab('prospects'); setShowArchived(false); setSelected(new Set()); }}>
+        Prospects{prospectCount > 0 ? ` (${prospectCount})` : ''}
+      </button>
+      <button type="button" className={`proj-filter-pill${tab === 'active' ? ' active' : ''}`} onClick={() => { setTab('active'); setShowArchived(false); setSelected(new Set()); }}>
+        Clients{activeCount > 0 ? ` (${activeCount})` : ''}
+      </button>
+      <button type="button" className={`proj-filter-pill${tab === 'all' ? ' active' : ''}`} onClick={() => { setTab('all'); setShowArchived(false); setSelected(new Set()); }}>
+        All
+      </button>
+      {canSeeHiring && (
+        <button type="button" className={`proj-filter-pill${tab === 'hiring' ? ' active' : ''}`} onClick={() => { setTab('hiring'); setShowArchived(false); setSelected(new Set()); }}>
+          Hiring
+        </button>
+      )}
+    </div>
+  );
+
+  // Hiring is a different kind of list entirely — candidates, not people in
+  // orbit around the business — so it replaces the body rather than
+  // filtering it.
+  if (tab === 'hiring' && canSeeHiring) {
+    return (
+      <div className="page-stack">
+        <div className="proj-controls">
+          {tabPills}
+        </div>
+        <HiringPanel />
+      </div>
+    );
+  }
+
   return (
     <div className="page-stack">
       <div className="proj-controls">
-          {/* Inline type tabs */}
-          <div className="proj-filter-pills" style={{ flexShrink: 0 }}>
-            <button type="button" className={`proj-filter-pill${tab === 'prospects' ? ' active' : ''}`} onClick={() => { setTab('prospects'); setShowArchived(false); setSelected(new Set()); }}>
-              Prospects{prospectCount > 0 ? ` (${prospectCount})` : ''}
-            </button>
-            <button type="button" className={`proj-filter-pill${tab === 'active' ? ' active' : ''}`} onClick={() => { setTab('active'); setShowArchived(false); setSelected(new Set()); }}>
-              Clients{activeCount > 0 ? ` (${activeCount})` : ''}
-            </button>
-            <button type="button" className={`proj-filter-pill${tab === 'all' ? ' active' : ''}`} onClick={() => { setTab('all'); setShowArchived(false); setSelected(new Set()); }}>
-              All
-            </button>
-          </div>
+          {tabPills}
           <input
             className="proj-search"
             type="text"
