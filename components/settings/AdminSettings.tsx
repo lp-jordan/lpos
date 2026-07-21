@@ -2,6 +2,7 @@ import { AdminsPanel } from '@/components/settings/AdminsPanel';
 import { CloudflareOrphansPanel } from '@/components/settings/CloudflareOrphansPanel';
 import { CloudflareLibraryPanel } from '@/components/settings/CloudflareLibraryPanel';
 import { TaskCategoriesPanel } from '@/components/settings/TaskCategoriesPanel';
+import { SilentPagesPanel } from '@/components/settings/SilentPagesPanel';
 import { GuestPinCard } from '@/components/settings/GuestPinCard';
 import { ActiveClientsCard } from '@/components/settings/ActiveClientsCard';
 import { SlackUsersCard } from '@/components/settings/SlackUsersCard';
@@ -117,6 +118,7 @@ export function AdminSettings({ role }: { role: string }) {
           <TranscriptionConfigCard />
           <CloudflareLibraryPanel />
           <CloudflareOrphansPanel />
+          <SilentPagesPanel />
           <TaskCategoriesPanel />
         </>
       ),

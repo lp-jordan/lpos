@@ -89,8 +89,17 @@ export function AppShell({
   const isStudio = pathname.startsWith('/slate');
   const isSignIn = pathname === '/signin';
   const isInternalReview = pathname.startsWith('/internal-review');
+  const isSilent = pathname.startsWith('/silent-');
 
   const isGuest = currentUser?.isGuest ?? false;
+
+  // Silent pages are unattended display surfaces: one muted video, looping
+  // forever, nothing else. Everything the shell normally adds — nav, trays,
+  // bell, version tag, restart banner — would overlay the video on a screen
+  // nobody is watching, so this branch renders the child bare.
+  if (isSilent) {
+    return <div className="app-silent">{children}</div>;
+  }
 
   // Internal Review is a focused, full-bleed black/gold environment: no NavBar
   // or breadcrumb (the /internal-review crumb is a dead link), just a small

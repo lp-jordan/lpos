@@ -20201,3 +20201,47 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   cursor: pointer;
 }
 .catchup-viewall:hover { color: var(--accent-strong); }
+
+/* ── Silent display pages ────────────────────────────────────────────────────
+   /silent-structure, /silent-produce, /silent-place: one muted asset looping
+   full-screen on an unattended display. AppShell renders these chromeless, so
+   everything here is about getting the video edge-to-edge over pure black and
+   keeping the cursor out of the frame. */
+
+.app-silent {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  cursor: none;
+}
+
+.silent-page-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* contain, not cover: a display asset should never be cropped to fill. */
+  object-fit: contain;
+  background: #000;
+}
+
+.silent-page-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 1rem;
+  cursor: default;
+}
+
+.silent-page-message-sub {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.45);
+}
