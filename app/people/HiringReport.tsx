@@ -448,6 +448,13 @@ function AnswerView({ q, answer, auto, itemMarks, onToggleItem, saving }: {
       | { passed?: boolean; failed?: string[]; correct?: boolean; accepted?: string[] }[]
       | undefined;
     const ordering = auto?.detail?.expected as string[] | undefined;
+    const markable = itemMarks != null && onToggleItem != null;
+
+    // A single-field item is just a sentence — printing "bullet:" in front of
+    // it leaks the internal field name. Multi-field items keep a label, but the
+    // question's own wording rather than the raw key.
+    const singleField = (q.fields?.length ?? 0) <= 1;
+    const labelFor = (k: string) => q.fields?.find((f) => f.key === k)?.label ?? k;
 
     return (
       <div style={{ margin: '0 0 0.6rem' }}>
@@ -455,14 +462,18 @@ function AnswerView({ q, answer, auto, itemMarks, onToggleItem, saving }: {
           const ctx = q.itemContext?.[i];
           const r = results?.[i];
           const ok = r ? (r.passed ?? r.correct) : undefined;
-          // The tick sits against the item it judges, not in a detached row of
-          // numbers the reader has to map back onto the answer.
-          const markable = itemMarks != null && onToggleItem != null;
           const marked = Boolean(itemMarks?.[i]);
+          const filled = Object.entries(item ?? {}).filter(([, val]) => String(val ?? '').trim());
+
+          // Only worth a line of its own when it actually says something —
+          // "Asset A", a source filename, or an auto-check verdict. A bare
+          // ordinal goes inline instead of eating a row.
+          const heading = ctx?.name ?? ctx?.original ?? null;
+          const hasHeadingRow = Boolean(heading) || ok !== undefined || Boolean(ordering?.[i]);
+
           return (
             <div key={i} style={{
-              display: markable ? 'flex' : 'block', gap: '0.6rem',
-              alignItems: 'flex-start', marginBottom: '0.55rem',
+              display: 'flex', gap: '0.55rem', alignItems: 'flex-start', marginBottom: '0.5rem',
             }}>
               {markable && (
                 <input
@@ -471,35 +482,48 @@ function AnswerView({ q, answer, auto, itemMarks, onToggleItem, saving }: {
                   disabled={saving}
                   onChange={() => onToggleItem(i)}
                   title="Mark this item as meeting the bar"
-                  style={{ marginTop: '0.55rem', accentColor: '#5ab95a', flexShrink: 0, cursor: 'pointer' }}
+                  style={{ marginTop: '0.7rem', accentColor: '#5ab95a', flexShrink: 0, cursor: 'pointer' }}
                 />
               )}
+              <span style={{
+                fontSize: '0.72rem', color: 'var(--muted-soft)', marginTop: '0.72rem',
+                flexShrink: 0, minWidth: '1.1rem', fontVariantNumeric: 'tabular-nums',
+              }}>
+                {i + 1}
+              </span>
               <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '0.72rem', color: 'var(--muted-soft)', marginBottom: '0.2rem' }}>
-                {ctx?.name ?? ctx?.original ?? `${i + 1}.`}
-                {ok !== undefined && (
-                  <span style={{ marginLeft: '0.5rem', color: ok ? '#5ab95a' : 'var(--color-error,#e55)' }}>
-                    {ok
-                      ? '✓'
-                      : r?.failed?.length
-                        ? `✗ ${r.failed.join(', ')}`
-                        : r?.accepted?.length
-                          ? `✗ expected ${r.accepted.join(' or ')}`
-                          : '✗'}
-                  </span>
+                {hasHeadingRow && (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--muted-soft)', marginBottom: '0.2rem' }}>
+                    {heading}
+                    {ok !== undefined && (
+                      <span style={{ marginLeft: heading ? '0.5rem' : 0, color: ok ? '#5ab95a' : 'var(--color-error,#e55)' }}>
+                        {ok
+                          ? '✓'
+                          : r?.failed?.length
+                            ? `✗ ${r.failed.join(', ')}`
+                            : r?.accepted?.length
+                              ? `✗ expected ${r.accepted.join(' or ')}`
+                              : '✗'}
+                      </span>
+                    )}
+                    {ordering?.[i] && (
+                      <span style={{ marginLeft: '0.5rem', color: 'var(--muted-soft)' }}>
+                        expected: {ordering[i]}
+                      </span>
+                    )}
+                  </div>
                 )}
-                {ordering?.[i] && (
-                  <span style={{ marginLeft: '0.5rem', color: 'var(--muted-soft)' }}>
-                    expected: {ordering[i]}
-                  </span>
-                )}
-              </div>
-              <p style={box}>
-                {Object.entries(item ?? {})
-                  .filter(([, val]) => String(val ?? '').trim())
-                  .map(([k, val]) => `${k}: ${val}`)
-                  .join('\n') || <em style={{ opacity: 0.5 }}>blank</em>}
-              </p>
+                <div style={box}>
+                  {!filled.length && <em style={{ opacity: 0.5 }}>blank</em>}
+                  {singleField
+                    ? filled.map(([, val]) => val).join('\n')
+                    : filled.map(([k, val]) => (
+                        <div key={k} style={{ marginBottom: '0.3rem' }}>
+                          <span style={{ color: 'var(--muted-soft)' }}>{labelFor(k)}: </span>
+                          {val}
+                        </div>
+                      ))}
+                </div>
               </div>
             </div>
           );
