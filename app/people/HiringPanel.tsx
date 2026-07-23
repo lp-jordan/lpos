@@ -286,7 +286,10 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
         if (!res.ok) throw new Error(data.error ?? 'Failed to load assessments.');
         const list = data.questionnaires ?? [];
         setQuestionnaires(list);
-        const published = list.find((q) => q.published) ?? list[0];
+        // Default to the published questionnaire; never fall back to a draft,
+        // which the selector now hides — selecting a hidden id would be a dead
+        // choice the operator can't see.
+        const published = list.find((q) => q.published);
         if (published) setQuestionnaireId(String(published.id));
       } catch (err) {
         setError((err as Error).message);
@@ -312,6 +315,12 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
       setSaving(false);
     }
   }
+
+  // Only published questionnaires are selectable. The seed keeps exactly one
+  // published (it demotes superseded rows to drafts rather than deleting them,
+  // so they survive to score old invites), so this shows just the live one
+  // instead of listing renamed-away drafts the operator should never pick.
+  const selectable = questionnaires.filter((q) => q.published);
 
   return (
     <div
@@ -367,10 +376,10 @@ function NewInviteModal({ onClose, onCreated }: { onClose: () => void; onCreated
                 background: 'var(--color-input-bg,#1a1a1a)', color: 'inherit', fontSize: '0.875rem',
               }}
             >
-              {questionnaires.length === 0 && <option value="">No assessments seeded</option>}
-              {questionnaires.map((q) => (
+              {selectable.length === 0 && <option value="">No assessments seeded</option>}
+              {selectable.map((q) => (
                 <option key={q.id} value={q.id}>
-                  {q.name} (v{q.version}, {q.question_count} questions){q.published ? '' : ' — draft'}
+                  {q.name} (v{q.version}, {q.question_count} questions)
                 </option>
               ))}
             </select>
