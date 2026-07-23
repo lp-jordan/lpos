@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-23T16:43:08Z",
+    "title": "Cloudflare storage budget cap corrected to 4000 minutes",
+    "summary": "The Cloudflare library panel in admin showed usage against a 3000-minute cap, but that number was a hardcoded UI constant that didn't match the actual Stream plan of 4000 minutes. Bumped the constant to 4000 so the \"X / 4000 min used\" counter and its progress bar reflect the real plan size. The used-minutes figure was already accurate (summed from live Cloudflare video durations); only the total/cap was wrong. Note this cap is still a static constant, not read live from Cloudflare, so it needs a manual edit if the plan changes again."
+  },
+  {
     "timestamp": "2026-07-20T18:14:42Z",
     "title": "Removed the Review check-in banner from task details",
     "summary": "The gold \"While this edit sits in Review, LPOS re-pings every 3 days…\" banner (and its Acknowledge button) no longer appears in the task detail modal — it was redundant clutter. The behind-the-scenes 3-day check-in itself is unchanged: assignees still get the periodic bell/Slack/push nudge for edits sitting in Review, and posting an update still resets the clock."

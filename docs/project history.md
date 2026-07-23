@@ -3142,3 +3142,22 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — no errors referencing the modified files.
 
 **Assumptions / follow-ups:** Assumed the `/api/tasks/[taskId]/review-checkin*` endpoints should stay (still called by nothing on the client now, but retained for the still-active backend flow and potential future UI). Not verified in a running browser (user manages the dev server); change is type-checked and self-contained.
+
+## 2026-07-23T16:43:08Z — Cloudflare library: correct storage budget cap to 4000 minutes
+
+**User prompt (verbatim):** "Our cloudflare total minutes counter in admin is set to 3000 when our actual total is 4000. Is it just set to 3000 by default instead of reading the actual value?" → then: "Just set it to 4000 for now for ease and once you're done, commit and push"
+
+**Assistant response summary:** Confirmed the admin "total minutes" denominator is a hardcoded UI constant, not a live/Cloudflare-read value. The used-minutes numerator IS real (summed from live Cloudflare video durations in `app/api/admin/cloudflare-videos/route.ts`), but the budget cap is the static `BUDGET_MINUTES` constant in `CloudflareLibraryPanel.tsx`. Per user request, bumped it from 3000 to 4000 to match the actual Stream plan.
+
+**Files changed:**
+- `components/settings/CloudflareLibraryPanel.tsx` — `BUDGET_MINUTES` constant 3000 → 4000.
+
+**Implementation summary:** One-line constant change. Nothing queries Cloudflare's subscription/quota endpoint (Cloudflare's storage-usage API returns usage, not the plan cap), so the cap remains a manually-maintained constant.
+
+**Decision rationale:** User explicitly chose the quick fix ("for now for ease") over wiring an admin Setting or live quota fetch. Flagged that this will drift again on the next plan change and that a SQLite-backed admin Setting is the more durable option — deferred by user choice.
+
+**Alternatives considered:** (1) Move cap to admin Settings (SQLite) so it's editable without redeploy — the durable fix, deferred. (2) Fetch true quota live from Cloudflare — not cleanly available (storage-usage endpoint exposes usage, not plan cap).
+
+**Commands / checks run:** None beyond the edit (single constant; user manages the dev server / type-check loop).
+
+**Assumptions / follow-ups:** Actual Stream plan is 4000 minutes per user. Follow-up: promote to admin Setting or live-quota fetch if the plan changes again.

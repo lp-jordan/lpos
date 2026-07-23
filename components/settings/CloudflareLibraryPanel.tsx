@@ -30,7 +30,7 @@ type SortKey = 'length' | 'size' | 'created' | 'name' | 'status';
 type FilterKey = 'all' | 'tracked' | 'untracked';
 
 // Cloudflare Stream storage is billed per minute of video stored.
-const BUDGET_MINUTES = 3000;
+const BUDGET_MINUTES = 4000;
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return '—';
