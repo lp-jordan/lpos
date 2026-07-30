@@ -108,11 +108,97 @@ function ms(v: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+/**
+ * Flattens one answer to plain text, mirroring the per-kind logic in
+ * `AnswerView` but dropping all scoring/expected-answer signal — the export is
+ * a clean question→answer record meant to be pasted into an LLM, so it carries
+ * only what the candidate actually said.
+ */
+function answerToText(q: Question, answer?: AnswerRow): string {
+  if (!answer?.answered) return '_Not answered._';
+  const v = answer.value as Record<string, unknown>;
+
+  if (q.kind === 'mc_single' || q.kind === 'mc_multi') {
+    const chosen = q.kind === 'mc_single'
+      ? [v?.choice as string].filter(Boolean)
+      : ((v?.choices as string[]) ?? []);
+    const lines = chosen.map((k) => {
+      const opt = q.options?.find((o) => o.key === k);
+      return opt ? `${opt.key}. ${opt.text}` : k;
+    });
+    if (v?.fields != null) {
+      for (const [k, val] of Object.entries(v.fields as Record<string, string>)) {
+        if (String(val ?? '').trim()) lines.push(`${k}: ${val}`);
+      }
+    }
+    return lines.length ? lines.join('\n') : '_No selection._';
+  }
+
+  if (q.kind === 'text') {
+    const fields = (v?.fields ?? {}) as Record<string, string>;
+    const keys = Object.keys(fields);
+    if (!keys.length) return '_Blank._';
+    return keys.map((k) => {
+      const body = String(fields[k] ?? '').trim() || '(blank)';
+      const label = q.fields?.find((f) => f.key === k)?.label ?? k;
+      return keys.length > 1 ? `${label}:\n${body}` : body;
+    }).join('\n\n');
+  }
+
+  if (q.kind === 'repeat') {
+    const items = (v?.items ?? []) as (Record<string, string> | null)[];
+    if (!items.length) return '_No items._';
+    const singleField = (q.fields?.length ?? 0) <= 1;
+    const labelFor = (k: string) => q.fields?.find((f) => f.key === k)?.label ?? k;
+    return items.map((item, i) => {
+      const heading = q.itemContext?.[i]?.name ?? q.itemContext?.[i]?.original ?? null;
+      const filled = Object.entries(item ?? {}).filter(([, val]) => String(val ?? '').trim());
+      const body = !filled.length
+        ? '(blank)'
+        : singleField
+          ? filled.map(([, val]) => val).join('\n')
+          : filled.map(([k, val]) => `${labelFor(k)}: ${val}`).join('\n');
+      return `${heading ? `${i + 1}. ${heading}` : `${i + 1}.`}\n${body}`;
+    }).join('\n\n');
+  }
+
+  return JSON.stringify(answer.value);
+}
+
+/** Builds the full question→answer Markdown document for a report. */
+function buildQaMarkdown(report: Report): string {
+  const { invite, sections, questions, answers } = report;
+  const out: string[] = [];
+  out.push(`# ${invite.candidateName}${invite.roleLabel ? ` — ${invite.roleLabel}` : ''}`);
+
+  const meta = [`Status: ${invite.completedAt ? 'Submitted' : 'In progress'}`];
+  if (invite.startedAt) meta.push(`Started: ${fmtDate(invite.startedAt)}`);
+  if (invite.completedAt) meta.push(`Completed: ${fmtDate(invite.completedAt)}`);
+  out.push(meta.join('  \n'));
+
+  for (const section of sections) {
+    const qs = questions.filter((q) => q.section === section.id);
+    if (!qs.length) continue;
+    out.push(`\n## Section ${section.number} — ${section.title}`);
+    for (const q of qs) {
+      out.push(`\n### Q${q.number}. ${q.prompt}`);
+      out.push(answerToText(q, answers[q.id]));
+    }
+  }
+  return `${out.join('\n')}\n`;
+}
+
 export function HiringReport({ token, onClose }: { token: string; onClose: () => void }) {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [saving, setSaving]   = useState<string | null>(null);
+  const [copied, setCopied]   = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -166,6 +252,28 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
   const { invite, questions, sections, answers, auto, scoring, manual, timing, criticalConditions } = report;
   const hasCritical = scoring.criticalFailures.length > 0;
 
+  function downloadQa() {
+    if (!report) return;
+    const blob = new Blob([buildQaMarkdown(report)], { type: 'text/markdown;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `${(invite.candidateName || 'candidate').replace(/[^\w.-]+/g, '_')}-qa.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copyQa() {
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(buildQaMarkdown(report));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError('Could not copy to clipboard — use Download instead.');
+    }
+  }
+
   return (
     <Shell onClose={onClose}>
       {/* Summary header */}
@@ -175,6 +283,14 @@ export function HiringReport({ token, onClose }: { token: string; onClose: () =>
           <span style={{ color: 'var(--muted-soft)', fontSize: '0.85rem' }}>
             {invite.roleLabel} · {invite.completedAt ? 'Submitted' : 'In progress'}
           </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+            <button type="button" onClick={copyQa} style={BTN} title="Copy every question and answer as Markdown, ready to paste into an AI">
+              {copied ? '✓ Copied' : 'Copy Q&A'}
+            </button>
+            <button type="button" onClick={downloadQa} style={BTN} title="Download every question and answer as a Markdown file">
+              Download .md
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: '1.75rem', flexWrap: 'wrap', margin: '1rem 0' }}>

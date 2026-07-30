@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-07-30T00:00:00Z",
+    "title": "Hiring report: export candidate Q&A as Markdown",
+    "summary": "A candidate's hiring report now has \"Copy Q&A\" and \"Download .md\" buttons at the top, next to their name. Both produce a single clean Markdown document listing every question and the candidate's answer, in section order, with none of the on-screen scoring/timing clutter and no tiny text — built for pasting or uploading into an AI to ask follow-up questions about the responses. It's a client-side export (no PDF, no new dependency): multiple-choice answers show the chosen option text, written answers show the field text, and repeated-item answers list each item. Scoring is intentionally excluded."
+  },
+  {
     "timestamp": "2026-07-23T16:43:08Z",
     "title": "Cloudflare storage budget cap corrected to 4000 minutes",
     "summary": "The Cloudflare library panel in admin showed usage against a 3000-minute cap, but that number was a hardcoded UI constant that didn't match the actual Stream plan of 4000 minutes. Bumped the constant to 4000 so the \"X / 4000 min used\" counter and its progress bar reflect the real plan size. The used-minutes figure was already accurate (summed from live Cloudflare video durations); only the total/cap was wrong. Note this cap is still a static constant, not read live from Cloudflare, so it needs a manual edit if the plan changes again."

@@ -3161,3 +3161,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** None beyond the edit (single constant; user manages the dev server / type-check loop).
 
 **Assumptions / follow-ups:** Actual Stream plan is 4000 minutes per user. Follow-up: promote to admin Setting or live-quota fetch if the plan changes again.
+
+---
+
+## 2026-07-30T00:00:00Z — Hiring report: export candidate Q&A as Markdown
+
+**User prompt (verbatim):** "What would it take to export a hiring prospect's answers as a PDF? I'm thinking in the report page, a simple export somewhere near the top that would just list the question and their answer?" — followed by clarification that the true goal is a single clean doc to feed into an AI for follow-up questions (report is visually busy / small text), and a selection of "Q&A only, Markdown".
+
+**Assistant response summary:** Scoped the request, then implemented a client-side Markdown export on the hiring candidate report. Reframed away from PDF: the destination is an LLM, so plain Markdown is both the best-parsed format and the least work (all report data already lives in component state). Added two buttons top-right of the candidate-name header — "Copy Q&A" (clipboard) and "Download .md" — that emit a clean question→answer document with no scoring/expected-answer noise.
+
+**Files changed:** `app/people/HiringReport.tsx`
+
+**Implementation summary:** Added `answerToText(q, answer)` which flattens each answer kind (`mc_single`/`mc_multi` → chosen option `key. text` plus any conditional follow-up fields; `text` → field values with labels when multi-field; `repeat` → per-item context heading + filled fields; fallback → JSON) mirroring `AnswerView` but stripping all scoring/expected signal. `buildQaMarkdown(report)` walks sections in order, emitting an H1 with candidate/role, a status/started/completed meta line, H2 per section, and `### Q{n}. {prompt}` + answer per question. Header gains `copyQa()` (navigator.clipboard, 1.5s "✓ Copied" state) and `downloadQa()` (Blob + anchor click, filename `{sanitized-name}-qa.md`). Reused the existing `BTN` style.
+
+**Decision rationale:** Client-side only — the full report (questions, answers, sections) is already fetched into `report` state, so no server route or new dependency is needed. Deliberately excluded PDF (needs a new lib, parses worse for AI, and reproduces the visual clutter the user is escaping) and excluded scoring per the user's "Q&A only" choice.
+
+**Alternatives considered:** (A) `window.print()` to PDF — rejected, AI-hostile and clutter-prone; (B) real PDF via new lib (`@react-pdf/renderer`/`pdf-lib`) — deferred as the upgrade path if a branded client-facing doc is later needed; (C) reuse existing `html-to-docx` for a Word doc — rejected, `.docx` is worse than Markdown for LLM ingestion.
+
+**Commands / checks run:** `npx tsc --noEmit` scoped to HiringReport — no type errors.
+
+**Assumptions / follow-ups:** Answer value shapes match those `AnswerView` already handles; unexpected shapes fall through to the JSON fallback (same resilience posture as the on-screen renderer). Follow-up if wanted: a one-click "open in AI" or scoring-included variant.
