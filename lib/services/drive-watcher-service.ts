@@ -122,6 +122,9 @@ export class DriveWatcherService {
       void this.scanAllProjectAssets().then((n) =>
         console.log(`[drive-watcher] startup scan: ${n} assets indexed`),
       );
+      void this.scanAllProjectScripts().then((n) =>
+        console.log(`[drive-watcher] startup scan: ${n} scripts indexed`),
+      );
       void pushAllExistingTranscripts().then((n) =>
         console.log(`[drive-watcher] startup scan: ${n} transcripts pushed`),
       );
@@ -297,6 +300,48 @@ export class DriveWatcherService {
       }
 
       console.log(`[drive-watcher] scan complete — ${total} items processed`);
+      return total;
+    });
+  }
+
+  /**
+   * Walks every known project's Scripts folder in Drive and processes any files
+   * not yet in the drive_assets DB. The Assets scans above never touch Scripts,
+   * so this is the only reconciliation backstop for scripts dropped into Drive
+   * (or missed via the live change channel) while the watcher was down.
+   * processFile() dedupes by Drive fileId, so already-synced scripts are skipped.
+   */
+  scanAllProjectScripts(): Promise<number> {
+    return this.withWriteLock(async () => {
+      const projects = getProjectStore().getAll();
+      let total = 0;
+
+      for (const project of projects) {
+        const cached = getCachedProjectFolders(project.name, project.clientName);
+        if (!cached?.scripts) continue;
+
+        try {
+          const children = await listChildren(cached.scripts, this.driveId);
+          for (const child of children) {
+            if (!child.id || !child.name) continue;
+            if (child.mimeType === FOLDER_MIME) continue; // Scripts folder is flat
+            await this.processFile(
+              child.id,
+              child.name,
+              child.mimeType ?? '',
+              child.size ? Number(child.size) : null,
+              child.modifiedTime ?? null,
+              child.webViewLink ?? null,
+              [cached.scripts],
+            );
+            total++;
+          }
+        } catch (err) {
+          console.warn(`[drive-watcher] scripts scan failed for "${project.name}":`, err);
+        }
+      }
+
+      console.log(`[drive-watcher] scripts scan complete — ${total} items processed`);
       return total;
     });
   }

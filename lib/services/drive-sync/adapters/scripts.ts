@@ -10,7 +10,7 @@
 import fs   from 'node:fs';
 import path from 'node:path';
 
-import { downloadFile } from '../../drive-client';
+import { downloadFile, exportFile } from '../../drive-client';
 import { extractAndSave } from '../../script-extractor';
 import {
   registerScript,
@@ -32,6 +32,7 @@ import type {
 } from '../types';
 
 const ALLOWED_SCRIPT_EXTS = new Set(['.docx', '.pdf', '.txt', '.doc']);
+const GDOC_MIME = 'application/vnd.google-apps.document';
 
 export const scriptsAdapter: FolderSyncAdapter = {
   folderType: 'scripts',
@@ -39,22 +40,33 @@ export const scriptsAdapter: FolderSyncAdapter = {
   kind:       'local-bytes',
 
   async onDrivePull(file: DrivePulledFile, ctx: FolderContext, engine: SyncEngineContext): Promise<void> {
-    const ext = path.extname(file.name).toLowerCase();
-    if (!ALLOWED_SCRIPT_EXTS.has(ext)) return;
+    // Native Google Docs have no filename extension and can't be downloaded
+    // directly — export them to PDF (mirrors the /scripts/from-asset route).
+    // Everything else is a binary file gated by its extension.
+    const isGDoc = file.mimeType === GDOC_MIME;
+    const ext    = isGDoc ? '.pdf' : path.extname(file.name).toLowerCase();
+    if (!isGDoc && !ALLOWED_SCRIPT_EXTS.has(ext)) return;
 
     try {
       const webViewLink = file.webViewLink ?? '';
-      const buffer = await downloadFile(file.fileId);
+      const buffer = isGDoc
+        ? await exportFile(file.fileId, 'application/pdf')
+        : await downloadFile(file.fileId);
       const dir    = scriptsDir(ctx.projectId);
       fs.mkdirSync(dir, { recursive: true });
 
+      // A GDoc's Drive name carries no extension; store it under a .pdf identity.
+      const displayName      = isGDoc ? file.name.replace(/\.[^.]*$/, '') : path.basename(file.name, ext);
+      const originalFilename = isGDoc ? `${displayName}.pdf` : file.name;
+      const storedMime       = isGDoc ? 'application/pdf' : file.mimeType;
+
       const script = registerScript({
         projectId:        ctx.projectId,
-        name:             path.basename(file.name, ext),
-        originalFilename: file.name,
+        name:             displayName,
+        originalFilename,
         filePath:         '',
         fileSize:         buffer.length,
-        mimeType:         file.mimeType,
+        mimeType:         storedMime,
       });
 
       const finalPath = path.join(dir, `${script.scriptId}${ext}`);
