@@ -182,7 +182,7 @@ function grainOverlay(id: string, level: GrainLevel): string {
 export function buildTileBackgroundSVG(
   b: Brand,
   tile: TileVisual,
-  opts: { grain?: GrainLevel } = {},
+  opts: { grain?: GrainLevel; width?: number | string; height?: number | string } = {},
 ): string {
   const acc = b.accents[tile.paletteIndex % b.accents.length];
   const r = rng(tile.seed);
@@ -261,7 +261,9 @@ export function buildTileBackgroundSVG(
     grainable = true;
   }
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" style="display:block" xmlns="http://www.w3.org/2000/svg">`
+  const width = opts.width ?? '100%';
+  const height = opts.height ?? '100%';
+  return `<svg viewBox="0 0 ${W} ${H}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid slice" style="display:block" xmlns="http://www.w3.org/2000/svg">`
     + inner
     + (wantScrim ? scrim(id) : '')
     + (grainable ? grainOverlay(id, grain) : '')

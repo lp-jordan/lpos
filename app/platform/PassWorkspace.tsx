@@ -8,6 +8,7 @@ import {
   type Brand, type BrandConfig, type TileArchetype, type GrainLevel,
 } from '@/lib/platform/tile-background';
 import { MediaPicker, type MediaSelection } from './MediaPicker';
+import { exportPassTiles } from '@/lib/platform/export-tiles';
 
 const ARCHETYPES: TileArchetype[] = ['gradient', 'geometric', 'duotone', 'hero'];
 const GRAINS: GrainLevel[] = ['none', 'subtle', 'film'];
@@ -30,6 +31,7 @@ export function PassWorkspace({ passId }: { passId: string }) {
   const [saved, setSaved] = useState(false);
   const [drag, setDrag] = useState<Drag>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -55,6 +57,19 @@ export function PassWorkspace({ passId }: { passId: string }) {
     setSaved(true);
     if (savedTimer.current) clearTimeout(savedTimer.current);
     savedTimer.current = setTimeout(() => setSaved(false), 1600);
+  }
+  async function doExport() {
+    if (!tree || exporting) return;
+    setExporting(true);
+    try {
+      const { count } = await exportPassTiles(tree, resolveBrand(tree.brand, tree.brandConfig));
+      if (count > 0) patchPass({ status: 'exported' });
+      else alert('Add some tiles first — nothing to export yet.');
+    } catch (e) {
+      alert('Export failed: ' + (e as Error).message);
+    } finally {
+      setExporting(false);
+    }
   }
   function pickBrand(key: string) {
     setTree((p) => p && { ...p, brand: key, brandConfig: null });
@@ -158,7 +173,7 @@ export function PassWorkspace({ passId }: { passId: string }) {
           <div style={{ flex: 1 }} />
           {saved && <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>✓ Saved</span>}
           <button onClick={saveDraft} style={ghostBtn2}>Save draft</button>
-          <button onClick={() => alert('Export (manifest + zip of tile PNGs) — Phase 4.')} style={exportBtn}>Export ▸</button>
+          <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
         <div style={dataRow}>
           <span style={statusPill}>{tree.status}</span>
