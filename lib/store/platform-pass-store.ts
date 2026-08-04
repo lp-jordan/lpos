@@ -13,7 +13,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  deriveRecipe, resolveBrand, DEFAULT_BRAND,
+  deriveRecipe, resolveBrand, hashStr, DEFAULT_BRAND,
   type TileArchetype, type BrandConfig, type GrainLevel,
 } from '@/lib/platform/tile-background';
 
@@ -397,11 +397,14 @@ export function createTile(categoryId: string, input: { title: string; descripti
   const max = getDb().prepare('SELECT COALESCE(MAX(position), -1) AS m FROM platform_tiles WHERE category_id = ?').get(categoryId) as Row;
   const position = (max.m as number) + 1;
 
-  // Vary each new tile from the preceding one so a fresh rail isn't uniform.
+  // Vary each new tile from the preceding one AND across categories, so no two
+  // rails come out in the same order. The per-category hash offsets the rotation,
+  // palette, and seed so every category cycles differently.
+  const catHash = hashStr(categoryId);
   const isGeneric = /^new tile$/i.test(title) || title === '';
-  const archetype = isGeneric ? NEW_TILE_ROTATION[position % NEW_TILE_ROTATION.length] : recipe.archetype;
-  const paletteIndex = (recipe.paletteIndex + position) % brand.accents.length;
-  const seed = (recipe.seed ^ Math.imul(position + 1, 2654435761)) >>> 0;
+  const archetype = isGeneric ? NEW_TILE_ROTATION[(position + catHash) % NEW_TILE_ROTATION.length] : recipe.archetype;
+  const paletteIndex = (recipe.paletteIndex + position + catHash) % brand.accents.length;
+  const seed = (recipe.seed ^ Math.imul(position + 1, 2654435761) ^ Math.imul(catHash + 1, 40503)) >>> 0;
 
   getDb().prepare(
     `INSERT INTO platform_tiles
