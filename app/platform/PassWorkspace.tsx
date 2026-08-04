@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PassTree, PlatformTile } from '@/lib/store/platform-pass-store';
 import {
@@ -28,11 +28,10 @@ export function PassWorkspace({ passId }: { passId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showTitles, setShowTitles] = useState(true);
   const [brandOpen, setBrandOpen] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [drag, setDrag] = useState<Drag>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/platform/passes/${passId}`);
@@ -51,12 +50,6 @@ export function PassWorkspace({ passId }: { passId: string }) {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     if (res.ok) { const { pass } = await res.json(); setTree((p) => p && { ...p, ...pass }); }
-  }
-  function saveDraft() {
-    patchPass({ status: 'draft' });
-    setSaved(true);
-    if (savedTimer.current) clearTimeout(savedTimer.current);
-    savedTimer.current = setTimeout(() => setSaved(false), 1600);
   }
   async function doExport() {
     if (!tree || exporting) return;
@@ -171,8 +164,6 @@ export function PassWorkspace({ passId }: { passId: string }) {
             style={passNameInput} aria-label="Pass title"
           />
           <div style={{ flex: 1 }} />
-          {saved && <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>✓ Saved</span>}
-          <button onClick={saveDraft} style={ghostBtn2}>Save draft</button>
           <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
         <div style={dataRow}>
@@ -227,12 +218,20 @@ export function PassWorkspace({ passId }: { passId: string }) {
                     onDragOver={(e) => { if (drag?.type === 'tile') e.preventDefault(); }}
                     onDrop={(e) => { if (drag?.type === 'tile') { e.stopPropagation(); dropTile(cat.id, t.id); } }}
                     onClick={() => setSelected(t.id)}
+                    onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 192), y: Math.min(e.clientY, window.innerHeight - 250), id: t.id }); }}
                     style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
                   >
                     <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain }) }} />
                     {showTitles && <div style={tileTitle}>{t.title}</div>}
                     <div style={tileBadge}>{t.archetype}</div>
                   </div>
+                  <input
+                    key={`name-${t.id}-${t.title}`} defaultValue={t.title}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => { if (e.target.value !== t.title) patchTile(t.id, { title: e.target.value }); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                    style={tileNameInput} aria-label="Tile name"
+                  />
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px', overflow: 'hidden' }}>
                     {(t.mediaAssetId || t.linkUrl)
                       ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.mediaKind === 'link' ? '🔗' : '▤'} {t.mediaTitle ?? t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
@@ -258,6 +257,21 @@ export function PassWorkspace({ passId }: { passId: string }) {
 
       {/* Media picker */}
       {pickerFor && <MediaPicker onPick={(sel) => linkMedia(pickerFor, sel)} onClose={() => setPickerFor(null)} />}
+
+      {/* Tile right-click menu */}
+      {menu && (
+        <>
+          <div onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+          <div style={{ ...ctxMenu, left: menu.x, top: menu.y }}>
+            <CtxItem onClick={() => { setSelected(menu.id); setMenu(null); }}>Edit…</CtxItem>
+            <CtxItem onClick={() => { patchTile(menu.id, { regenerate: true }); setMenu(null); }}>Regenerate art</CtxItem>
+            <CtxItem onClick={() => { patchTile(menu.id, { seed: Math.floor(Math.random() * 4294967295) }); setMenu(null); }}>Shuffle seed</CtxItem>
+            <CtxItem onClick={() => { setPickerFor(menu.id); setMenu(null); }}>Link media…</CtxItem>
+            <div style={{ height: 1, background: 'var(--line)', margin: '4px 6px' }} />
+            <CtxItem danger onClick={() => { deleteTile(menu.id); setMenu(null); }}>Delete tile</CtxItem>
+          </div>
+        </>
+      )}
 
       {/* Tile inspector */}
       {selectedTile && (
@@ -428,6 +442,16 @@ function ColorSwatch({ label, value, onChange, onCommit }: { label: string; valu
   );
 }
 
+function CtxItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ ...ctxItem, background: hover ? 'var(--surface-hover)' : 'transparent', color: danger ? 'var(--warning)' : 'var(--text)' }}>
+      {children}
+    </button>
+  );
+}
+
 // ── Small helpers ──
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={fieldLabel}>{label}</label>{children}</div>;
@@ -445,7 +469,7 @@ function RecipeRow({ k, children }: { k: string; children: React.ReactNode }) {
 }
 
 // ── Styles ──
-const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 24px 12px', background: 'var(--surface)', borderBottom: '1px solid var(--line)', flexShrink: 0 };
+const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 24px 14px', background: 'transparent', borderBottom: '1px solid var(--line)', flexShrink: 0 };
 const dataRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' };
 const iconBtn: React.CSSProperties = { width: 32, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--muted)', fontSize: 15, cursor: 'pointer', flexShrink: 0 };
 const passNameInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', padding: '4px 8px', borderRadius: 8, outline: 'none', flex: '0 1 auto', minWidth: 120 };
@@ -479,3 +503,6 @@ const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'v
 const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
 const presetCard: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-inset)', cursor: 'pointer' };
 const linkedRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 8, padding: 8 };
+const tileNameInput: React.CSSProperties = { width: 152, background: 'var(--surface-inset)', border: '1px solid var(--line)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '4px 7px', borderRadius: 6, outline: 'none' };
+const ctxMenu: React.CSSProperties = { position: 'fixed', zIndex: 61, minWidth: 176, background: 'var(--surface-2)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: 5, display: 'flex', flexDirection: 'column', gap: 1, boxShadow: 'var(--shadow-lg)' };
+const ctxItem: React.CSSProperties = { textAlign: 'left', background: 'transparent', border: 0, color: 'var(--text)', fontSize: 13, fontWeight: 500, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', width: '100%' };
