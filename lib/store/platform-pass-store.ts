@@ -41,6 +41,7 @@ function initSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS platform_passes (
       id           TEXT PRIMARY KEY,
       title        TEXT NOT NULL,
+      slug         TEXT,
       source       TEXT NOT NULL DEFAULT 'local',
       lp_pass_id   TEXT,
       status       TEXT NOT NULL DEFAULT 'draft',
@@ -85,6 +86,7 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_platform_tiles_category ON platform_tiles(category_id);
   `);
   // Migrations for DBs created before these columns existed.
+  ensureColumn(db, 'platform_passes', 'slug', `slug TEXT`);
   ensureColumn(db, 'platform_passes', 'brand_config', `brand_config TEXT`);
   ensureColumn(db, 'platform_tiles', 'grain', `grain TEXT NOT NULL DEFAULT 'subtle'`);
   ensureColumn(db, 'platform_tiles', 'media_project_id', `media_project_id TEXT`);
@@ -110,6 +112,7 @@ export type TileMediaKind = 'video' | 'link' | 'pdf';
 export interface PlatformPass {
   id: string;
   title: string;
+  slug: string;
   source: PassSource;
   lpPassId: string | null;
   status: PassStatus;
@@ -161,10 +164,28 @@ function parseBrandConfig(raw: unknown): BrandConfig | null {
   try { return JSON.parse(raw) as BrandConfig; } catch { return null; }
 }
 
+function slugify(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'pass';
+}
+
+/** A slug unique among passes (appends -2, -3, … on collision). */
+function uniqueSlug(base: string, excludeId?: string): string {
+  const rows = getDb().prepare('SELECT id, slug FROM platform_passes').all() as Row[];
+  const taken = new Set(rows.filter((r) => r.id !== excludeId).map((r) => r.slug as string));
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) { const c = `${base}-${i}`; if (!taken.has(c)) return c; }
+  return `${base}-${excludeId ?? Math.floor(Math.random())}`;
+}
+
 function toPass(r: Row): PlatformPass {
   return {
     id: r.id as string,
     title: r.title as string,
+    slug: (r.slug as string) || slugify(r.title as string),
     source: r.source as PassSource,
     lpPassId: (r.lp_pass_id as string) ?? null,
     status: r.status as PassStatus,
@@ -221,15 +242,21 @@ export function createPass(input: { title: string; brand?: string; source?: Pass
   const title = input.title.trim() || 'Untitled pass';
   const brand = input.brand ?? DEFAULT_BRAND;
   const source = input.source ?? 'local';
+  const slug = uniqueSlug(slugify(title));
   getDb().prepare(
-    `INSERT INTO platform_passes (id, title, source, status, brand, brand_config, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
-  ).run(id, title, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, source, lpPassId: null, status: 'draft', brand, brandConfig: null, createdAt: now, updatedAt: now };
+    `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
+  ).run(id, title, slug, source, brand, input.createdBy ?? null, now, now);
+  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
   const row = getDb().prepare('SELECT * FROM platform_passes WHERE id = ?').get(id) as Row | undefined;
+  return row ? toPass(row) : null;
+}
+
+export function getPassBySlug(slug: string): PlatformPass | null {
+  const row = getDb().prepare('SELECT * FROM platform_passes WHERE slug = ?').get(slug) as Row | undefined;
   return row ? toPass(row) : null;
 }
 
@@ -248,11 +275,12 @@ export function updatePass(id: string, patch: PassPatch): PlatformPass | null {
   const existing = getPass(id);
   if (!existing) return null;
   const title = patch.title !== undefined ? patch.title.trim() || existing.title : existing.title;
+  const slug = title !== existing.title ? uniqueSlug(slugify(title), id) : existing.slug;
   const status = patch.status ?? existing.status;
   const brand = patch.brand ?? existing.brand;
   const brandConfig = 'brandConfig' in patch ? patch.brandConfig : existing.brandConfig;
-  getDb().prepare('UPDATE platform_passes SET title = ?, status = ?, brand = ?, brand_config = ?, updated_at = ? WHERE id = ?')
-    .run(title, status, brand, brandConfig ? JSON.stringify(brandConfig) : null, new Date().toISOString(), id);
+  getDb().prepare('UPDATE platform_passes SET title = ?, slug = ?, status = ?, brand = ?, brand_config = ?, updated_at = ? WHERE id = ?')
+    .run(title, slug, status, brand, brandConfig ? JSON.stringify(brandConfig) : null, new Date().toISOString(), id);
   return getPass(id);
 }
 
@@ -260,10 +288,10 @@ export function deletePass(id: string): void {
   getDb().prepare('DELETE FROM platform_passes WHERE id = ?').run(id);
 }
 
-export function getPassTree(id: string): PassTree | null {
-  const pass = getPass(id);
+export function getPassTree(idOrSlug: string): PassTree | null {
+  const pass = getPass(idOrSlug) ?? getPassBySlug(idOrSlug);
   if (!pass) return null;
-  const cats = getDb().prepare('SELECT * FROM platform_categories WHERE pass_id = ? ORDER BY position, created_at').all(id) as Row[];
+  const cats = getDb().prepare('SELECT * FROM platform_categories WHERE pass_id = ? ORDER BY position, created_at').all(pass.id) as Row[];
   const categories = cats.map((c) => {
     const category = toCategory(c);
     const tiles = getDb().prepare('SELECT * FROM platform_tiles WHERE category_id = ? ORDER BY position, created_at').all(category.id) as Row[];

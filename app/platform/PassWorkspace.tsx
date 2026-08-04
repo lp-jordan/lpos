@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PassTree, PlatformTile } from '@/lib/store/platform-pass-store';
 import {
@@ -20,8 +20,12 @@ function fmtDur(s: number | null): string {
 }
 
 type Drag = { type: 'tile'; id: string; from: string } | { type: 'cat'; id: string } | null;
+type Over =
+  | { kind: 'tile'; catId: string; beforeId: string | 'end' }
+  | { kind: 'cat'; beforeId: string | 'end' }
+  | null;
 
-export function PassWorkspace({ passId }: { passId: string }) {
+export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   const router = useRouter();
   const [tree, setTree] = useState<PassTree | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,15 +33,20 @@ export function PassWorkspace({ passId }: { passId: string }) {
   const [showTitles, setShowTitles] = useState(true);
   const [brandOpen, setBrandOpen] = useState(false);
   const [drag, setDrag] = useState<Drag>(null);
+  const [over, setOver] = useState<Over>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/platform/passes/${passId}`);
-    if (res.ok) setTree((await res.json()).pass);
+    const res = await fetch(`/api/platform/passes/${passIdOrSlug}`);
+    if (res.ok) {
+      const { pass } = await res.json();
+      setTree(pass);
+      if (pass?.slug && passIdOrSlug !== pass.slug) window.history.replaceState(null, '', `/platform/${pass.slug}`);
+    }
     setLoading(false);
-  }, [passId]);
+  }, [passIdOrSlug]);
   useEffect(() => { load(); }, [load]);
 
   const applyTile = (t: PlatformTile) => setTree((prev) => prev && ({
@@ -46,10 +55,16 @@ export function PassWorkspace({ passId }: { passId: string }) {
 
   // ── Pass-level ──
   async function patchPass(body: Record<string, unknown>) {
-    const res = await fetch(`/api/platform/passes/${passId}`, {
+    if (!tree) return;
+    const res = await fetch(`/api/platform/passes/${tree.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (res.ok) { const { pass } = await res.json(); setTree((p) => p && { ...p, ...pass }); }
+    if (res.ok) {
+      const { pass } = await res.json();
+      const slugChanged = !!pass.slug && pass.slug !== tree.slug;
+      setTree((p) => p && { ...p, ...pass });
+      if (slugChanged) window.history.replaceState(null, '', `/platform/${pass.slug}`);
+    }
   }
   async function doExport() {
     if (!tree || exporting) return;
@@ -74,7 +89,8 @@ export function PassWorkspace({ passId }: { passId: string }) {
 
   // ── Category-level ──
   async function addCategory() {
-    await fetch(`/api/platform/passes/${passId}/categories`, {
+    if (!tree) return;
+    await fetch(`/api/platform/passes/${tree.id}/categories`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'New category' }),
     });
     load();
@@ -111,7 +127,8 @@ export function PassWorkspace({ passId }: { passId: string }) {
     fetch(`/api/platform/categories/${categoryId}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tileIds }) });
   }
   function reorderCatsApi(categoryIds: string[]) {
-    fetch(`/api/platform/passes/${passId}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoryIds }) });
+    if (!tree) return;
+    fetch(`/api/platform/passes/${tree.id}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoryIds }) });
   }
   function dropTile(destCatId: string, beforeTileId: string | null) {
     if (!drag || drag.type !== 'tile' || !tree) { setDrag(null); return; }
@@ -155,94 +172,120 @@ export function PassWorkspace({ passId }: { passId: string }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Header: large pass name on top, lighter data row below */}
       <div style={headerWrap}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button onClick={() => router.push('/platform')} style={iconBtn} title="Back to passes">←</button>
+        <button onClick={() => router.push('/platform')} style={breadcrumb}>‹ Platform</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <input
             defaultValue={tree.title}
             onBlur={(e) => patchPass({ title: e.target.value })}
             onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
             style={passNameInput} aria-label="Pass title"
           />
-          <div style={{ flex: 1 }} />
-          <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
-        </div>
-        <div style={dataRow}>
-          <span style={statusPill}>{tree.status}</span>
           <button onClick={() => setBrandOpen(true)} style={brandBtn}>
-            <span style={{ width: 16, height: 16, borderRadius: 4, background: brand.swatch }} />
+            <span style={brandLabel}>Brand</span>
+            <span style={{ width: 15, height: 15, borderRadius: 4, background: brand.swatch }} />
             {brand.name}{tree.brandConfig ? ' *' : ''}
-            <span style={{ color: 'var(--muted-soft)', fontSize: 11 }}>Edit ▾</span>
+            <span style={{ color: 'var(--muted-soft)', fontSize: 11 }}>▾</span>
           </button>
           <button onClick={() => setShowTitles((s) => !s)} style={{ ...chip, ...(showTitles ? chipOn : {}) }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: showTitles ? 'var(--accent)' : 'var(--muted-soft)' }} /> Platform text
           </button>
+          <div style={{ flex: 1 }} />
+          <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
       </div>
 
       {/* Board */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0 60px' }}>
-        {tree.categories.map((cat) => (
-          <section key={cat.id}
-            onDragOver={(e) => { if (drag?.type === 'cat') e.preventDefault(); }}
-            onDrop={() => { if (drag?.type === 'cat') dropCat(cat.id); }}
-            style={{ padding: '16px 24px 4px' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <span draggable onDragStart={(e) => { setDrag({ type: 'cat', id: cat.id }); e.dataTransfer.setData('text/plain', cat.id); }}
-                style={dragHandle} title="Drag to reorder category">⠿</span>
-              <input
-                defaultValue={cat.title}
-                onBlur={(e) => renameCategory(cat.id, e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                style={catInput} aria-label="Category name"
-              />
-              {/* right-justified category controls */}
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ fontSize: 11, color: 'var(--muted-soft)', fontFamily: 'ui-monospace, Menlo, monospace' }}>
-                  {cat.tiles.length} {cat.tiles.length === 1 ? 'tile' : 'tiles'}
-                </span>
-                <button onClick={() => deleteCategory(cat.id)} style={faintBtn}>Delete</button>
-              </div>
-            </div>
-
-            <div
-              onDragOver={(e) => { if (drag?.type === 'tile') e.preventDefault(); }}
-              onDrop={() => { if (drag?.type === 'tile') dropTile(cat.id, null); }}
-              style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px' }}
+        <style>{`@keyframes pfGlow{0%,100%{opacity:.6}50%{opacity:1}}@media(prefers-reduced-motion:reduce){[data-pf-anim]{animation:none!important}}`}</style>
+        {tree.categories.map((cat, ci) => (
+          <div key={cat.id}>
+            {over?.kind === 'cat' && over.beforeId === cat.id && <div data-pf-anim style={dropLineH} />}
+            <section
+              onDragOver={(e) => {
+                if (drag?.type !== 'cat') return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                setOver({ kind: 'cat', beforeId: e.clientY < r.top + r.height / 2 ? cat.id : (tree.categories[ci + 1]?.id ?? 'end') });
+              }}
+              onDrop={() => { if (over?.kind === 'cat') dropCat(over.beforeId === 'end' ? null : over.beforeId); }}
+              style={{ padding: '14px 24px 4px', opacity: drag?.type === 'cat' && drag.id === cat.id ? 0.4 : 1, transition: 'opacity .12s' }}
             >
-              {cat.tiles.map((t) => (
-                <div key={t.id} style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 7 }}>
-                  <div
-                    draggable
-                    onDragStart={(e) => { setDrag({ type: 'tile', id: t.id, from: cat.id }); e.dataTransfer.setData('text/plain', t.id); }}
-                    onDragOver={(e) => { if (drag?.type === 'tile') e.preventDefault(); }}
-                    onDrop={(e) => { if (drag?.type === 'tile') { e.stopPropagation(); dropTile(cat.id, t.id); } }}
-                    onClick={() => setSelected(t.id)}
-                    onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 192), y: Math.min(e.clientY, window.innerHeight - 250), id: t.id }); }}
-                    style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
-                  >
-                    <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain }) }} />
-                    {showTitles && <div style={tileTitle}>{t.title}</div>}
-                    <div style={tileBadge}>{t.archetype}</div>
-                  </div>
-                  <input
-                    key={`name-${t.id}-${t.title}`} defaultValue={t.title}
-                    onClick={(e) => e.stopPropagation()}
-                    onBlur={(e) => { if (e.target.value !== t.title) patchTile(t.id, { title: e.target.value }); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                    style={tileNameInput} aria-label="Tile name"
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px', overflow: 'hidden' }}>
-                    {(t.mediaAssetId || t.linkUrl)
-                      ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.mediaKind === 'link' ? '🔗' : '▤'} {t.mediaTitle ?? t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
-                      : <span>○ not linked</span>}
-                  </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <span draggable
+                  onDragStart={(e) => { setDrag({ type: 'cat', id: cat.id }); e.dataTransfer.setData('text/plain', cat.id); e.dataTransfer.effectAllowed = 'move'; }}
+                  onDragEnd={() => { setDrag(null); setOver(null); }}
+                  style={dragHandle} title="Drag to reorder category">⠿</span>
+                <input
+                  defaultValue={cat.title}
+                  onBlur={(e) => renameCategory(cat.id, e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                  style={catInput} aria-label="Category name"
+                />
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ fontSize: 11, color: 'var(--muted-soft)', fontFamily: 'ui-monospace, Menlo, monospace' }}>
+                    {cat.tiles.length} {cat.tiles.length === 1 ? 'tile' : 'tiles'}
+                  </span>
+                  <button onClick={() => deleteCategory(cat.id)} style={faintBtn}>Delete</button>
                 </div>
-              ))}
-              <button onClick={() => addTile(cat.id)} style={addTileBtn}><span style={{ fontSize: 24, fontWeight: 300 }}>+</span>Add tile</button>
-            </div>
-          </section>
+              </div>
+
+              <div
+                onDragOver={(e) => { if (drag?.type === 'tile' && e.target === e.currentTarget) { e.preventDefault(); setOver({ kind: 'tile', catId: cat.id, beforeId: 'end' }); } }}
+                onDrop={() => { if (over?.kind === 'tile') dropTile(over.catId, over.beforeId === 'end' ? null : over.beforeId); }}
+                style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px', minHeight: 60 }}
+              >
+                {cat.tiles.map((t, ti) => {
+                  const isDragged = drag?.type === 'tile' && drag.id === t.id;
+                  return (
+                    <Fragment key={t.id}>
+                      {over?.kind === 'tile' && over.catId === cat.id && over.beforeId === t.id && <div data-pf-anim style={dropLineV} />}
+                      <div
+                        onDragOver={(e) => {
+                          if (drag?.type !== 'tile') return;
+                          e.preventDefault(); e.stopPropagation();
+                          const r = e.currentTarget.getBoundingClientRect();
+                          setOver({ kind: 'tile', catId: cat.id, beforeId: e.clientX < r.left + r.width / 2 ? t.id : (cat.tiles[ti + 1]?.id ?? 'end') });
+                        }}
+                        style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 6, opacity: isDragged ? 0.35 : 1, transform: isDragged ? 'scale(0.95)' : 'none', transition: 'opacity .12s, transform .12s' }}
+                      >
+                        <div
+                          draggable
+                          onDragStart={(e) => { setDrag({ type: 'tile', id: t.id, from: cat.id }); e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; }}
+                          onDragEnd={() => { setDrag(null); setOver(null); }}
+                          onClick={() => setSelected(t.id)}
+                          onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 192), y: Math.min(e.clientY, window.innerHeight - 250), id: t.id }); }}
+                          style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
+                        >
+                          <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain }) }} />
+                          {showTitles && <div style={tileTitle}>{t.title}</div>}
+                          <div style={tileBadge}>{t.archetype}</div>
+                        </div>
+                        <input
+                          key={`name-${t.id}-${t.title}`} defaultValue={t.title}
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => { if (e.target.value !== t.title) patchTile(t.id, { title: e.target.value }); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                          style={tileNameInput} aria-label="Tile name"
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px', overflow: 'hidden' }}>
+                          {(t.mediaAssetId || t.linkUrl)
+                            ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.mediaKind === 'link' ? '🔗' : '▤'} {t.mediaTitle ?? t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
+                            : <span>○ not linked</span>}
+                        </div>
+                      </div>
+                    </Fragment>
+                  );
+                })}
+                {over?.kind === 'tile' && over.catId === cat.id && over.beforeId === 'end' && <div data-pf-anim style={dropLineV} />}
+                <button
+                  onClick={() => addTile(cat.id)}
+                  onDragOver={(e) => { if (drag?.type === 'tile') { e.preventDefault(); setOver({ kind: 'tile', catId: cat.id, beforeId: 'end' }); } }}
+                  style={addTileBtn}><span style={{ fontSize: 24, fontWeight: 300 }}>+</span>Add tile</button>
+              </div>
+            </section>
+          </div>
         ))}
+        {over?.kind === 'cat' && over.beforeId === 'end' && <div data-pf-anim style={dropLineH} />}
         <button onClick={addCategory} style={addCatBtn}>+  New category</button>
       </div>
 
@@ -469,16 +512,18 @@ function RecipeRow({ k, children }: { k: string; children: React.ReactNode }) {
 }
 
 // ── Styles ──
-const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 24px 14px', background: 'transparent', borderBottom: '1px solid var(--line)', flexShrink: 0 };
-const dataRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' };
+const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: '12px 24px 12px', background: 'transparent', borderBottom: '1px solid var(--line)', flexShrink: 0 };
+const breadcrumb: React.CSSProperties = { alignSelf: 'flex-start', background: 'transparent', border: 0, color: 'var(--muted-soft)', fontSize: 12, fontWeight: 600, padding: '2px 4px', cursor: 'pointer', letterSpacing: '0.01em' };
 const iconBtn: React.CSSProperties = { width: 32, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--muted)', fontSize: 15, cursor: 'pointer', flexShrink: 0 };
-const passNameInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', padding: '4px 8px', borderRadius: 8, outline: 'none', flex: '0 1 auto', minWidth: 120 };
-const statusPill: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 9px' };
+const passNameInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em', padding: '3px 8px', borderRadius: 8, outline: 'none', flex: '0 1 auto', minWidth: 120 };
+const brandLabel: React.CSSProperties = { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.09em', color: 'var(--muted-soft)', fontWeight: 700 };
 const brandBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, cursor: 'pointer' };
 const chip: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' };
 const chipOn: React.CSSProperties = { color: 'var(--text-strong)', borderColor: 'var(--accent)', background: 'var(--accent-soft)' };
 const exportBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--text)', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 8, cursor: 'pointer' };
 const dragHandle: React.CSSProperties = { cursor: 'grab', color: 'var(--muted-soft)', fontSize: 15, userSelect: 'none', padding: '0 2px' };
+const dropLineV: React.CSSProperties = { flex: '0 0 auto', width: 4, alignSelf: 'stretch', borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', animation: 'pfGlow 1s ease-in-out infinite' };
+const dropLineH: React.CSSProperties = { height: 4, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', margin: '2px 24px', animation: 'pfGlow 1s ease-in-out infinite' };
 const catInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 17, fontWeight: 700, letterSpacing: '-0.015em', padding: '3px 8px', borderRadius: 7, outline: 'none', minWidth: 40 };
 const faintBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12, padding: '5px 8px', borderRadius: 6, fontWeight: 600, cursor: 'pointer' };
 const tileCard: React.CSSProperties = { position: 'relative', width: 152, height: 213, borderRadius: 14, overflow: 'hidden', cursor: 'pointer', background: '#222', isolation: 'isolate' };

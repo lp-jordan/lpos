@@ -21,10 +21,11 @@ function statusColor(s: PassStatus): string {
 
 export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[] }) {
   const router = useRouter();
-  const [passes] = useState<PlatformPass[]>(initialPasses);
+  const [passes, setPasses] = useState<PlatformPass[]>(initialPasses);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   async function createPass() {
     if (!title.trim() || busy) return;
@@ -33,7 +34,12 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
     });
     setBusy(false);
-    if (res.ok) { const { pass } = await res.json(); router.push(`/platform/${pass.id}`); }
+    if (res.ok) { const { pass } = await res.json(); router.push(`/platform/${pass.slug}`); }
+  }
+
+  async function deletePass(id: string) {
+    await fetch(`/api/platform/passes/${id}`, { method: 'DELETE' });
+    setPasses((ps) => ps.filter((p) => p.id !== id));
   }
 
   return (
@@ -41,7 +47,7 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
       <style>{`@keyframes pfFadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }`}</style>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, animation: 'pfFadeIn .6s ease both' }}>
-        <h1 style={{ margin: 0, fontSize: 52, fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-strong)', lineHeight: 1 }}>PLATFORM</h1>
+        <h1 style={{ margin: 0, fontSize: 48, fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-strong)', lineHeight: 1 }}>Platform</h1>
         {!creating
           ? <button onClick={() => setCreating(true)} style={primaryBtn}>+ Design New Pass</button>
           : (
@@ -62,7 +68,10 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
         {passes.map((p) => {
           const brand = resolveBrand(p.brand, p.brandConfig);
           return (
-            <button key={p.id} onClick={() => router.push(`/platform/${p.id}`)} style={passCard}>
+            <button key={p.id}
+              onClick={() => router.push(`/platform/${p.slug}`)}
+              onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 184), y: Math.min(e.clientY, window.innerHeight - 120), id: p.id }); }}
+              style={passCard}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: brand.swatch }} />
                 <span style={{ fontSize: 11, color: 'var(--muted-soft)' }}>{brand.name}</span>
@@ -82,7 +91,31 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
           No passes yet. Click <b style={{ color: 'var(--muted)' }}>Design New Pass</b> to start composing one.
         </div>
       )}
+
+      {menu && (() => {
+        const mp = passes.find((p) => p.id === menu.id);
+        return (
+          <>
+            <div onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+            <div style={{ ...ctxMenu, left: menu.x, top: menu.y }}>
+              <CtxItem onClick={() => { if (mp) router.push(`/platform/${mp.slug}`); setMenu(null); }}>Open</CtxItem>
+              <div style={{ height: 1, background: 'var(--line)', margin: '4px 6px' }} />
+              <CtxItem danger onClick={() => { deletePass(menu.id); setMenu(null); }}>Delete pass</CtxItem>
+            </div>
+          </>
+        );
+      })()}
     </div>
+  );
+}
+
+function CtxItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ ...ctxItem, background: hover ? 'var(--surface-hover)' : 'transparent', color: danger ? 'var(--warning)' : 'var(--text)' }}>
+      {children}
+    </button>
   );
 }
 
@@ -102,4 +135,13 @@ const passCard: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'left',
   background: 'var(--surface-raised)', border: '1px solid var(--line)', borderRadius: 14,
   padding: 16, cursor: 'pointer', color: 'var(--text)', minHeight: 104,
+};
+const ctxMenu: React.CSSProperties = {
+  position: 'fixed', zIndex: 61, minWidth: 168, background: 'var(--surface-2)',
+  border: '1px solid var(--line-strong)', borderRadius: 10, padding: 5,
+  display: 'flex', flexDirection: 'column', gap: 1, boxShadow: 'var(--shadow-lg)',
+};
+const ctxItem: React.CSSProperties = {
+  textAlign: 'left', background: 'transparent', border: 0, color: 'var(--text)',
+  fontSize: 13, fontWeight: 500, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', width: '100%',
 };

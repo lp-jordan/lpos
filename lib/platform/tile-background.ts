@@ -23,9 +23,10 @@ export interface Brand {
 
 export const BRANDS: Record<string, Brand> = {
   leaderpass: {
-    key: 'leaderpass', name: 'LeaderPass', swatch: '#E8590C',
-    accents: ['#E8590C', '#0FA355', '#A02CC9', '#EF5340', '#2F6FB0'],
-    duoDark: '#0C1826', duoLight: '#4E7BA6', gold: '#E4B84A',
+    // LPOS house palette — gold, steel/navy blues, slate. Cohesive, not rainbow.
+    key: 'leaderpass', name: 'LeaderPass', swatch: '#DBAF5F',
+    accents: ['#DBAF5F', '#2F6FB0', '#1E3A5F', '#67819A', '#C8933A'],
+    duoDark: '#0B1219', duoLight: '#4E7BA6', gold: '#E4B84A',
   },
   aurora: {
     key: 'aurora', name: 'Aurora', swatch: '#14B8A6',
