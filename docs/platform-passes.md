@@ -1,6 +1,6 @@
 # Platform tab — Pass composition & tile-background studio
 
-Living spec for the `/platform` section. Status: **Phase 1 (staging model + board + tile backgrounds) building.**
+Living spec for the `/platform` section. Status: **Phases 1–2 shipped** — staging model, dedicated per-pass routes, composition board, deterministic tile backgrounds, multi-brand (5 presets + per-pass custom colours), per-tile grain, drag reorder, and media linking. Phase 3+ next.
 
 ## Purpose
 
@@ -46,11 +46,11 @@ Pass ── Category[] ── Tile[]
 
 Isolated in its own SQLite file + store module (`lib/store/platform-pass-store.ts`) so the whole section can later be lifted OFF LPOS (security) and the tab becomes a link-out. Reserved `lp_*_id` columns bind a staging row to a real LP entity on reflect.
 
-- `platform_passes` (id, title, source `local|leaderpass`, lp_pass_id?, status, brand, created_at, updated_at)
+- `platform_passes` (id, title, source `local|leaderpass`, lp_pass_id?, status, brand, brand_config?, created_at, updated_at)
 - `platform_categories` (id, pass_id→passes, title, position, created_at) — `ON DELETE CASCADE`
-- `platform_tiles` (id, category_id→categories, title, description, position, lp_tile_id?, media_asset_id?, media_kind `video|link|pdf`?, link_url?, archetype, palette_index, seed, background_ref?, duration_sec?, created_at, updated_at) — `ON DELETE CASCADE`
+- `platform_tiles` (id, category_id→categories, title, description, position, lp_tile_id?, media_asset_id?, media_project_id?, media_kind `video|link|pdf`?, media_title?, media_thumb_url?, link_url?, archetype, palette_index, seed, grain, background_ref?, duration_sec?, created_at, updated_at) — `ON DELETE CASCADE`
 
-`media_asset_id` **references** a project-owned asset — never a copy. `background_ref` will hold the Cloudflare Images URL once art is persisted (Phase 3); until then backgrounds render client-side from `(archetype, palette_index, seed, brand)`.
+`brand_config` is a per-pass JSON of `BrandConfig` overrides (custom accents/duotone/line) merged over the named brand. `media_asset_id`/`media_project_id` **reference** a project-owned asset — never a copy; `media_title`/`media_thumb_url`/`duration_sec` are cached at link time for display. `background_ref` will hold the Cloudflare Images URL once art is persisted (Phase 3); until then backgrounds render client-side from `(archetype, palette_index, seed, grain, brand)`. New columns are added to existing DBs via `ensureColumn` migrations.
 
 ## Tile background engine
 
@@ -58,9 +58,10 @@ Isolated in its own SQLite file + store module (`lib/store/platform-pass-store.t
 
 ## Phased plan
 
-- **Phase 1 (now):** staging model + store + API; Passes list + Pass workspace board (create/edit/delete categories & tiles); client-side tile backgrounds + inspector (generate-from-description, archetype/palette/grain/shuffle).
-- **Phase 2:** link media — attach a project asset (video/link/PDF) to a tile; derive duration; show linked thumbnail.
-- **Phase 3:** persist background art — render tile background → Cloudflare Images → `background_ref`, reusing the `batch-poster` seam so it can flow into the LeaderPass push as the tile thumbnail.
+- **Phase 1 (done):** staging model + store + API; Passes list + Pass workspace board (create/edit/delete categories & tiles); client-side tile backgrounds + inspector (generate-from-description, archetype/palette/grain/shuffle).
+- **Phase 1.1 (done):** dedicated per-pass routes (`/platform/[passId]`); large-name + data-row header; Brand modal (5 presets + per-pass custom colours via `brand_config`); grain moved per-tile (default subtle); drag reorder of tiles (within/across categories) and categories; new tiles auto-varied; right-justified category controls; Save-draft near Export; no auto-open of the inspector on tile create.
+- **Phase 2 (done):** link media — attach a project asset (video) or an external URL to a tile via a media picker (`/api/platform/media/*`, `/api/platform/tiles/:id/media`); caches title/duration/thumbnail; shown in the board footer + inspector. Tiles reference the asset; media is never copied.
+- **Phase 3 (next):** persist background art — render tile background → Cloudflare Images → `background_ref`, reusing the `batch-poster` seam so it can flow into the LeaderPass push as the tile thumbnail.
 - **Phase 4:** Export package — structure manifest + zip of background PNGs.
 - **Phase 5:** move Pass Prep here — run over the transcripts of linked tiles instead of the project-side manual picker.
 - **Phase 6:** per-pass Cloudflare analytics.
