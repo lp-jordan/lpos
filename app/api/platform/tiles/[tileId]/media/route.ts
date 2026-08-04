@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { setTileMedia } from '@/lib/store/platform-pass-store';
+import { setTileMedia, rememberProjectForTile } from '@/lib/store/platform-pass-store';
 import { getAsset } from '@/lib/store/media-registry';
 import { cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
 
@@ -31,8 +31,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ til
       title: asset.name || asset.originalFilename,
       durationSec: asset.duration != null ? Math.round(asset.duration) : null,
       thumbUrl: cloudflarePosterPreviewUrl(asset.cloudflare),
+      version: asset.frameio.version ?? null,
     });
     if (!tile) return NextResponse.json({ error: 'Tile not found' }, { status: 404 });
+    rememberProjectForTile(tileId, body.projectId);
     return NextResponse.json({ tile });
   }
 

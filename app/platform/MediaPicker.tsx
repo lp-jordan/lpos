@@ -15,7 +15,7 @@ function fmtDur(s: number | null): string {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
-export function MediaPicker({ onPick, onClose }: { onPick: (sel: MediaSelection) => void; onClose: () => void }) {
+export function MediaPicker({ onPick, onClose, defaultProjectId }: { onPick: (sel: MediaSelection) => void; onClose: () => void; defaultProjectId?: string | null }) {
   const [tab, setTab] = useState<'project' | 'link'>('project');
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [query, setQuery] = useState('');
@@ -27,6 +27,8 @@ export function MediaPicker({ onPick, onClose }: { onPick: (sel: MediaSelection)
 
   useEffect(() => {
     fetch('/api/platform/media/projects').then((r) => r.ok ? r.json() : { projects: [] }).then((d) => setProjects(d.projects ?? []));
+    if (defaultProjectId) openProject(defaultProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function openProject(projectId: string) {

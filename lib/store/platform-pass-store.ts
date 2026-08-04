@@ -47,6 +47,7 @@ function initSchema(db: DatabaseSync): void {
       status       TEXT NOT NULL DEFAULT 'draft',
       brand        TEXT NOT NULL DEFAULT 'leaderpass',
       brand_config TEXT,
+      default_project_id TEXT,
       created_by   TEXT,
       created_at   TEXT NOT NULL,
       updated_at   TEXT NOT NULL
@@ -73,6 +74,7 @@ function initSchema(db: DatabaseSync): void {
       media_kind     TEXT,
       media_title    TEXT,
       media_thumb_url TEXT,
+      media_version  INTEGER,
       link_url       TEXT,
       archetype      TEXT NOT NULL DEFAULT 'gradient',
       palette_index  INTEGER NOT NULL DEFAULT 0,
@@ -89,11 +91,13 @@ function initSchema(db: DatabaseSync): void {
   // Migrations for DBs created before these columns existed.
   ensureColumn(db, 'platform_passes', 'slug', `slug TEXT`);
   ensureColumn(db, 'platform_passes', 'brand_config', `brand_config TEXT`);
+  ensureColumn(db, 'platform_passes', 'default_project_id', `default_project_id TEXT`);
   ensureColumn(db, 'platform_tiles', 'grain', `grain TEXT NOT NULL DEFAULT 'subtle'`);
   ensureColumn(db, 'platform_tiles', 'media_project_id', `media_project_id TEXT`);
   ensureColumn(db, 'platform_tiles', 'media_title', `media_title TEXT`);
   ensureColumn(db, 'platform_tiles', 'media_thumb_url', `media_thumb_url TEXT`);
   ensureColumn(db, 'platform_tiles', 'image_mime', `image_mime TEXT`);
+  ensureColumn(db, 'platform_tiles', 'media_version', `media_version INTEGER`);
 }
 
 function getDb(): DatabaseSync {
@@ -120,6 +124,7 @@ export interface PlatformPass {
   status: PassStatus;
   brand: string;
   brandConfig: BrandConfig | null;
+  defaultProjectId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -136,6 +141,7 @@ export interface PlatformTile {
   mediaKind: TileMediaKind | null;
   mediaTitle: string | null;
   mediaThumbUrl: string | null;
+  mediaVersion: number | null;
   linkUrl: string | null;
   archetype: TileArchetype;
   paletteIndex: number;
@@ -194,6 +200,7 @@ function toPass(r: Row): PlatformPass {
     status: r.status as PassStatus,
     brand: r.brand as string,
     brandConfig: parseBrandConfig(r.brand_config),
+    defaultProjectId: (r.default_project_id as string) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -220,6 +227,7 @@ function toTile(r: Row): PlatformTile {
     mediaKind: (r.media_kind as TileMediaKind) ?? null,
     mediaTitle: (r.media_title as string) ?? null,
     mediaThumbUrl: (r.media_thumb_url as string) ?? null,
+    mediaVersion: (r.media_version as number) ?? null,
     linkUrl: (r.link_url as string) ?? null,
     archetype: r.archetype as TileArchetype,
     paletteIndex: r.palette_index as number,
@@ -251,7 +259,7 @@ export function createPass(input: { title: string; brand?: string; source?: Pass
     `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
   ).run(id, title, slug, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, createdAt: now, updatedAt: now };
+  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
@@ -468,6 +476,14 @@ export interface TileMediaInput {
   title?: string | null;
   durationSec?: number | null;
   thumbUrl?: string | null;
+  version?: number | null;
+}
+
+/** Remember the project a tile's media came from as the pass's default, so the
+ *  media picker opens there next time (most tiles use the same project). */
+export function rememberProjectForTile(tileId: string, projectId: string): void {
+  const passId = passIdForTile(tileId);
+  if (passId) getDb().prepare('UPDATE platform_passes SET default_project_id = ? WHERE id = ?').run(projectId, passId);
 }
 
 /** Set (or clear) the duotone source-image mime on a tile. The image bytes are
@@ -490,7 +506,7 @@ export function setTileMedia(id: string, media: TileMediaInput | null): Platform
   getDb().prepare(
     `UPDATE platform_tiles
         SET media_kind = ?, media_asset_id = ?, media_project_id = ?, media_title = ?,
-            media_thumb_url = ?, link_url = ?, duration_sec = ?, updated_at = ?
+            media_thumb_url = ?, media_version = ?, link_url = ?, duration_sec = ?, updated_at = ?
       WHERE id = ?`,
   ).run(
     media ? media.kind : null,
@@ -498,6 +514,7 @@ export function setTileMedia(id: string, media: TileMediaInput | null): Platform
     media?.mediaProjectId ?? null,
     media?.title ?? null,
     media?.thumbUrl ?? null,
+    media?.version ?? null,
     media?.linkUrl ?? null,
     media?.durationSec ?? null,
     new Date().toISOString(),

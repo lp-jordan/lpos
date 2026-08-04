@@ -316,7 +316,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
       )}
 
       {/* Media picker */}
-      {pickerFor && <MediaPicker onPick={(sel) => linkMedia(pickerFor, sel)} onClose={() => setPickerFor(null)} />}
+      {pickerFor && <MediaPicker onPick={(sel) => linkMedia(pickerFor, sel)} onClose={() => setPickerFor(null)} defaultProjectId={tree.defaultProjectId} />}
 
       {/* Tile right-click menu */}
       {menu && (
@@ -366,7 +366,10 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                       ? <img src={selectedTile.mediaThumbUrl} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
                       : <span style={{ width: 52, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-3)', borderRadius: 4, color: 'var(--muted-soft)', flexShrink: 0 }}>{selectedTile.mediaKind === 'link' ? '🔗' : '▤'}</span>}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedTile.mediaTitle ?? selectedTile.linkUrl}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 12.5, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedTile.mediaTitle ?? selectedTile.linkUrl}</span>
+                        {selectedTile.mediaVersion != null && <span style={versionPill} title="Linked media version">v{selectedTile.mediaVersion}</span>}
+                      </div>
                       <div style={{ fontSize: 10.5, color: 'var(--muted-soft)' }}>{selectedTile.mediaKind}{selectedTile.durationSec != null ? ` · ${fmtDur(selectedTile.durationSec)}` : ''}</div>
                     </div>
                     <button onClick={() => setPickerFor(selectedTile.id)} style={faintBtn}>Change</button>
@@ -591,6 +594,7 @@ const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'v
 const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
 const presetCard: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-inset)', cursor: 'pointer' };
 const linkedRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 8, padding: 8 };
+const versionPill: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, fontFamily: 'ui-monospace, Menlo, monospace', color: 'var(--accent-strong)', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft)', padding: '1px 6px', borderRadius: 5 };
 const tileNameInput: React.CSSProperties = { width: 152, background: 'var(--surface-inset)', border: '1px solid var(--line)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '4px 7px', borderRadius: 6, outline: 'none' };
 const ctxMenu: React.CSSProperties = { position: 'fixed', zIndex: 61, minWidth: 176, background: 'var(--surface-2)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: 5, display: 'flex', flexDirection: 'column', gap: 1, boxShadow: 'var(--shadow-lg)' };
 const ctxItem: React.CSSProperties = { textAlign: 'left', background: 'transparent', border: 0, color: 'var(--text)', fontSize: 13, fontWeight: 500, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', width: '100%' };
