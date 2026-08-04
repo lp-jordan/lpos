@@ -67,8 +67,11 @@ function initSchema(db: DatabaseSync): void {
       description    TEXT NOT NULL DEFAULT '',
       position       INTEGER NOT NULL DEFAULT 0,
       lp_tile_id     TEXT,
-      media_asset_id TEXT,
+      media_asset_id   TEXT,
+      media_project_id TEXT,
       media_kind     TEXT,
+      media_title    TEXT,
+      media_thumb_url TEXT,
       link_url       TEXT,
       archetype      TEXT NOT NULL DEFAULT 'gradient',
       palette_index  INTEGER NOT NULL DEFAULT 0,
@@ -84,6 +87,9 @@ function initSchema(db: DatabaseSync): void {
   // Migrations for DBs created before these columns existed.
   ensureColumn(db, 'platform_passes', 'brand_config', `brand_config TEXT`);
   ensureColumn(db, 'platform_tiles', 'grain', `grain TEXT NOT NULL DEFAULT 'subtle'`);
+  ensureColumn(db, 'platform_tiles', 'media_project_id', `media_project_id TEXT`);
+  ensureColumn(db, 'platform_tiles', 'media_title', `media_title TEXT`);
+  ensureColumn(db, 'platform_tiles', 'media_thumb_url', `media_thumb_url TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -121,7 +127,10 @@ export interface PlatformTile {
   position: number;
   lpTileId: string | null;
   mediaAssetId: string | null;
+  mediaProjectId: string | null;
   mediaKind: TileMediaKind | null;
+  mediaTitle: string | null;
+  mediaThumbUrl: string | null;
   linkUrl: string | null;
   archetype: TileArchetype;
   paletteIndex: number;
@@ -183,7 +192,10 @@ function toTile(r: Row): PlatformTile {
     position: r.position as number,
     lpTileId: (r.lp_tile_id as string) ?? null,
     mediaAssetId: (r.media_asset_id as string) ?? null,
+    mediaProjectId: (r.media_project_id as string) ?? null,
     mediaKind: (r.media_kind as TileMediaKind) ?? null,
+    mediaTitle: (r.media_title as string) ?? null,
+    mediaThumbUrl: (r.media_thumb_url as string) ?? null,
     linkUrl: (r.link_url as string) ?? null,
     archetype: r.archetype as TileArchetype,
     paletteIndex: r.palette_index as number,
@@ -412,4 +424,42 @@ export function deleteTile(id: string): void {
   const passId = passIdForTile(id);
   getDb().prepare('DELETE FROM platform_tiles WHERE id = ?').run(id);
   if (passId) touchPass(passId);
+}
+
+// ── Media linking (Phase 2) ──────────────────────────────────────────────────
+
+export interface TileMediaInput {
+  kind: TileMediaKind;
+  mediaAssetId?: string | null;
+  mediaProjectId?: string | null;
+  linkUrl?: string | null;
+  title?: string | null;
+  durationSec?: number | null;
+  thumbUrl?: string | null;
+}
+
+/** Attach (or, with `null`, detach) media on a tile. Media is a *reference* to a
+ *  project-owned asset — LPOS never copies the media itself. */
+export function setTileMedia(id: string, media: TileMediaInput | null): PlatformTile | null {
+  const existing = getTile(id);
+  if (!existing) return null;
+  getDb().prepare(
+    `UPDATE platform_tiles
+        SET media_kind = ?, media_asset_id = ?, media_project_id = ?, media_title = ?,
+            media_thumb_url = ?, link_url = ?, duration_sec = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    media ? media.kind : null,
+    media?.mediaAssetId ?? null,
+    media?.mediaProjectId ?? null,
+    media?.title ?? null,
+    media?.thumbUrl ?? null,
+    media?.linkUrl ?? null,
+    media?.durationSec ?? null,
+    new Date().toISOString(),
+    id,
+  );
+  const passId = passIdForTile(id);
+  if (passId) touchPass(passId);
+  return getTile(id);
 }

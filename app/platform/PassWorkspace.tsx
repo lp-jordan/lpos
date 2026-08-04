@@ -7,6 +7,7 @@ import {
   BRANDS, resolveBrand, buildTileBackgroundSVG, deriveRecipe,
   type Brand, type BrandConfig, type TileArchetype, type GrainLevel,
 } from '@/lib/platform/tile-background';
+import { MediaPicker, type MediaSelection } from './MediaPicker';
 
 const ARCHETYPES: TileArchetype[] = ['gradient', 'geometric', 'duotone', 'hero'];
 const GRAINS: GrainLevel[] = ['none', 'subtle', 'film'];
@@ -28,6 +29,7 @@ export function PassWorkspace({ passId }: { passId: string }) {
   const [brandOpen, setBrandOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const [drag, setDrag] = useState<Drag>(null);
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -86,6 +88,15 @@ export function PassWorkspace({ passId }: { passId: string }) {
     if (res.ok) applyTile((await res.json()).tile);
   }
   async function deleteTile(id: string) { await fetch(`/api/platform/tiles/${id}`, { method: 'DELETE' }); setSelected(null); load(); }
+  async function linkMedia(tileId: string, sel: MediaSelection) {
+    const res = await fetch(`/api/platform/tiles/${tileId}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sel) });
+    if (res.ok) applyTile((await res.json()).tile);
+    setPickerFor(null);
+  }
+  async function unlinkMedia(tileId: string) {
+    const res = await fetch(`/api/platform/tiles/${tileId}/media`, { method: 'DELETE' });
+    if (res.ok) applyTile((await res.json()).tile);
+  }
 
   // ── Drag & drop reorg ──
   function reorderTilesApi(categoryId: string, tileIds: string[]) {
@@ -207,8 +218,10 @@ export function PassWorkspace({ passId }: { passId: string }) {
                     {showTitles && <div style={tileTitle}>{t.title}</div>}
                     <div style={tileBadge}>{t.archetype}</div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px' }}>
-                    {t.mediaAssetId ? <span>▤ {t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span> : <span>○ not linked</span>}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px', overflow: 'hidden' }}>
+                    {(t.mediaAssetId || t.linkUrl)
+                      ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.mediaKind === 'link' ? '🔗' : '▤'} {t.mediaTitle ?? t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
+                      : <span>○ not linked</span>}
                   </div>
                 </div>
               ))}
@@ -227,6 +240,9 @@ export function PassWorkspace({ passId }: { passId: string }) {
           onClose={() => setBrandOpen(false)}
         />
       )}
+
+      {/* Media picker */}
+      {pickerFor && <MediaPicker onPick={(sel) => linkMedia(pickerFor, sel)} onClose={() => setPickerFor(null)} />}
 
       {/* Tile inspector */}
       {selectedTile && (
@@ -252,6 +268,25 @@ export function PassWorkspace({ passId }: { passId: string }) {
                   onBlur={(e) => patchTile(selectedTile.id, { description: e.target.value })}
                   placeholder="What is this video about?" style={{ ...fieldInput, minHeight: 62, resize: 'vertical' }} />
               </Field>
+
+              <Control label="Linked media">
+                {(selectedTile.mediaAssetId || selectedTile.linkUrl) ? (
+                  <div style={linkedRow}>
+                    {selectedTile.mediaThumbUrl
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={selectedTile.mediaThumbUrl} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                      : <span style={{ width: 52, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-3)', borderRadius: 4, color: 'var(--muted-soft)', flexShrink: 0 }}>{selectedTile.mediaKind === 'link' ? '🔗' : '▤'}</span>}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedTile.mediaTitle ?? selectedTile.linkUrl}</div>
+                      <div style={{ fontSize: 10.5, color: 'var(--muted-soft)' }}>{selectedTile.mediaKind}{selectedTile.durationSec != null ? ` · ${fmtDur(selectedTile.durationSec)}` : ''}</div>
+                    </div>
+                    <button onClick={() => setPickerFor(selectedTile.id)} style={faintBtn}>Change</button>
+                    <button onClick={() => unlinkMedia(selectedTile.id)} style={faintBtn}>Unlink</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setPickerFor(selectedTile.id)} style={ghostBtn2}>+ Link media</button>
+                )}
+              </Control>
 
               <button onClick={() => patchTile(selectedTile.id, { regenerate: true })} style={generateBtn}>✦ Generate from description</button>
 
@@ -428,3 +463,4 @@ const miniBtn: React.CSSProperties = { border: '1px solid var(--line)', backgrou
 const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'var(--text-strong)', background: 'var(--accent-soft)' };
 const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
 const presetCard: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-inset)', cursor: 'pointer' };
+const linkedRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 8, padding: 8 };
