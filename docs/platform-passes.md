@@ -1,6 +1,8 @@
 # Platform tab — Pass composition & tile-background studio
 
-Living spec for the `/platform` section. Status: **Phases 1–2 shipped** — staging model, dedicated per-pass routes, composition board, deterministic tile backgrounds, multi-brand (5 presets + per-pass custom colours), per-tile grain, drag reorder, and media linking. Phase 3+ next.
+Living spec for the `/platform` section. Status: **Shipped** — staging model, dedicated per-pass routes, composition board, deterministic tile backgrounds, multi-brand (5 presets + per-pass custom colours), per-tile grain, drag reorder, media linking, and **Export** (zip of labelled tile PNGs). Pass Prep move, per-pass analytics, and the LeaderPass connection remain.
+
+> **Design art never touches the Cloudflare video poster.** The poster stays a manual, separate concern. The designed portrait tile is the LeaderPass *tile* image, not the 16:9 player poster, and the LeaderPass handoff sends the Cloudflare Stream auto-frame — not `posterUrl`. Designed art reaches LeaderPass **only** via Export (manual now) and the eventual LP connection.
 
 ## Purpose
 
@@ -34,7 +36,7 @@ Pass ── Category[] ── Tile[]
 | Link | Tile ← LPOS media | Reference a project asset (video / link-out / PDF) | Same |
 | Design | Tile background art | Generate + tweak (Tile Studio engine) | Same |
 | Enrich | Titles/descriptions | **Pass Prep** run over linked-tile transcripts | Same, auto |
-| Export | Hand-off package | Manifest + zip of background PNGs → paste into LP admin | Becomes a push |
+| Export | Hand-off package | Zip of labelled tile PNGs (`C{c}T{t}_name.png`) → place in LP admin | Becomes a push |
 
 ## Section structure (routes & views)
 
@@ -61,9 +63,9 @@ Isolated in its own SQLite file + store module (`lib/store/platform-pass-store.t
 - **Phase 1 (done):** staging model + store + API; Passes list + Pass workspace board (create/edit/delete categories & tiles); client-side tile backgrounds + inspector (generate-from-description, archetype/palette/grain/shuffle).
 - **Phase 1.1 (done):** dedicated per-pass routes (`/platform/[passId]`); large-name + data-row header; Brand modal (5 presets + per-pass custom colours via `brand_config`); grain moved per-tile (default subtle); drag reorder of tiles (within/across categories) and categories; new tiles auto-varied; right-justified category controls; Save-draft near Export; no auto-open of the inspector on tile create.
 - **Phase 2 (done):** link media — attach a project asset (video) or an external URL to a tile via a media picker (`/api/platform/media/*`, `/api/platform/tiles/:id/media`); caches title/duration/thumbnail; shown in the board footer + inspector. Tiles reference the asset; media is never copied.
-- **Phase 3 (next):** persist background art — render tile background → Cloudflare Images → `background_ref`, reusing the `batch-poster` seam so it can flow into the LeaderPass push as the tile thumbnail.
-- **Phase 4:** Export package — structure manifest + zip of background PNGs.
-- **Phase 5:** move Pass Prep here — run over the transcripts of linked tiles instead of the project-side manual picker.
+- **Export (done):** the Export button rasterises every tile **client-side** (`lib/platform/export-tiles.ts` — the browser renders the SVG grain/duotone/blur faithfully; server rasterisers don't) into a **zip of labelled PNGs** named `C{cat}T{tile}_{name}.png` under a pass-named folder, for manual placement in LeaderPass admin. Dependency-free zip writer (`lib/platform/zip.ts`, STORE method); export bumps status to `exported`. No server route; never touches the Cloudflare poster.
+- **~~Phase 3 (Cloudflare art persistence) — DROPPED~~:** persisting designed art onto the Cloudflare video poster is explicitly out of scope (see the note at the top). `platform_tiles.background_ref` stays a reserved/unused column. Export is the delivery path instead.
+- **Phase 5 (next):** move Pass Prep here — run over the transcripts of linked tiles instead of the project-side manual picker.
 - **Phase 6:** per-pass Cloudflare analytics.
 - **Phase 7:** LeaderPass connection — `source='leaderpass'`, enumerate/reflect passes, bind `lp_*_id`, Export → Push.
 
