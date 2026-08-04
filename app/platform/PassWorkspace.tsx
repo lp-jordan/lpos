@@ -121,6 +121,23 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
     const res = await fetch(`/api/platform/tiles/${tileId}/media`, { method: 'DELETE' });
     if (res.ok) applyTile((await res.json()).tile);
   }
+  async function uploadTileImage(tileId: string, file: File) {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await fetch(`/api/platform/tiles/${tileId}/image`, { method: 'POST', body: fd });
+    if (res.ok) applyTile((await res.json()).tile);
+    else alert((await res.json().catch(() => ({}))).error || 'Upload failed.');
+  }
+  async function useVideoFrame(tileId: string) {
+    const res = await fetch(`/api/platform/tiles/${tileId}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: 'video' }) });
+    if (res.ok) applyTile((await res.json()).tile);
+    else alert((await res.json().catch(() => ({}))).error || 'Could not use the video frame.');
+  }
+  async function removeTileImage(tileId: string) {
+    const res = await fetch(`/api/platform/tiles/${tileId}/image`, { method: 'DELETE' });
+    if (res.ok) applyTile((await res.json()).tile);
+  }
+  const tileImageHref = (t: PlatformTile): string | undefined =>
+    t.archetype === 'duotone' && t.imageMime ? `/api/platform/tiles/${t.id}/image?v=${encodeURIComponent(t.updatedAt)}` : undefined;
 
   // ── Drag & drop reorg ──
   function reorderTilesApi(categoryId: string, tileIds: string[]) {
@@ -256,7 +273,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                           onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 192), y: Math.min(e.clientY, window.innerHeight - 250), id: t.id }); }}
                           style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
                         >
-                          <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain }) }} />
+                          <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain, imageHref: tileImageHref(t) }) }} />
                           {showTitles && <div style={tileTitle}>{t.title}</div>}
                           <div style={tileBadge}>{t.archetype}</div>
                         </div>
@@ -327,7 +344,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
             </div>
             <div style={inspBody}>
               <div style={previewFrame}>
-                <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, selectedTile, { grain: selectedTile.grain }) }} />
+                <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, selectedTile, { grain: selectedTile.grain, imageHref: tileImageHref(selectedTile) }) }} />
                 {showTitles && <div style={pvTitle}>{selectedTile.title}</div>}
               </div>
 
@@ -376,6 +393,32 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                   <RecipeRow k="Stock"><span style={{ color: 'var(--muted)', fontSize: 12 }}>“{deriveRecipe(selectedTile.title, selectedTile.description, brand).stockQuery}”</span></RecipeRow>
                 )}
               </div>
+
+              {selectedTile.archetype === 'duotone' && (
+                <Control label="Source image">
+                  {selectedTile.imageMime ? (
+                    <div style={linkedRow}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={tileImageHref(selectedTile)} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>Real image · duotoned on brand</div>
+                      <label style={{ ...faintBtn, cursor: 'pointer' }}>Replace
+                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
+                      </label>
+                      <button onClick={() => removeTileImage(selectedTile.id)} style={faintBtn}>Remove</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <label style={{ ...ghostBtn2, flex: 1, textAlign: 'center', cursor: 'pointer' }}>Upload image
+                          <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
+                        </label>
+                        {selectedTile.mediaAssetId && <button onClick={() => useVideoFrame(selectedTile.id)} style={{ ...ghostBtn2, flex: 1 }}>Use video frame</button>}
+                      </div>
+                      <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>No image → procedural stand-in. Add one and it’s auto-duotoned on brand.</span>
+                    </div>
+                  )}
+                </Control>
+              )}
 
               <Control label="Override style">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6 }}>

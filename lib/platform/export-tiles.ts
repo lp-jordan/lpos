@@ -25,6 +25,22 @@ function safeName(s: string): string {
     .slice(0, 60) || 'tile';
 }
 
+/** Same-origin fetch of a tile's source image → base64 data URI (so the export
+ *  SVG is self-contained; SVG-as-image blocks external references). */
+async function imageDataUri(tileId: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`/api/platform/tiles/${tileId}/image`);
+    if (!res.ok) return undefined;
+    const blob = await res.blob();
+    return await new Promise<string | undefined>((resolve) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result as string);
+      fr.onerror = () => resolve(undefined);
+      fr.readAsDataURL(blob);
+    });
+  } catch { return undefined; }
+}
+
 function svgToPng(svg: string, w: number, h: number): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
@@ -57,7 +73,8 @@ export async function exportPassTiles(pass: PassTree, brand: Brand): Promise<{ c
     const cat = pass.categories[c];
     for (let t = 0; t < cat.tiles.length; t++) {
       const tile = cat.tiles[t];
-      const svg = buildTileBackgroundSVG(brand, tile, { grain: tile.grain, width: EXPORT_W, height: EXPORT_H });
+      const imageHref = tile.archetype === 'duotone' && tile.imageMime ? await imageDataUri(tile.id) : undefined;
+      const svg = buildTileBackgroundSVG(brand, tile, { grain: tile.grain, width: EXPORT_W, height: EXPORT_H, imageHref });
       const png = await svgToPng(svg, EXPORT_W, EXPORT_H);
       entries.push({ name: `${folder}/C${c + 1}T${t + 1}_${safeName(tile.title)}.png`, data: png });
     }

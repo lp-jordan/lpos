@@ -78,6 +78,7 @@ function initSchema(db: DatabaseSync): void {
       palette_index  INTEGER NOT NULL DEFAULT 0,
       seed           INTEGER NOT NULL DEFAULT 0,
       grain          TEXT NOT NULL DEFAULT 'subtle',
+      image_mime     TEXT,
       background_ref TEXT,
       duration_sec   INTEGER,
       created_at     TEXT NOT NULL,
@@ -92,6 +93,7 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_tiles', 'media_project_id', `media_project_id TEXT`);
   ensureColumn(db, 'platform_tiles', 'media_title', `media_title TEXT`);
   ensureColumn(db, 'platform_tiles', 'media_thumb_url', `media_thumb_url TEXT`);
+  ensureColumn(db, 'platform_tiles', 'image_mime', `image_mime TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -139,6 +141,7 @@ export interface PlatformTile {
   paletteIndex: number;
   seed: number;
   grain: GrainLevel;
+  imageMime: string | null;
   backgroundRef: string | null;
   durationSec: number | null;
   createdAt: string;
@@ -222,6 +225,7 @@ function toTile(r: Row): PlatformTile {
     paletteIndex: r.palette_index as number,
     seed: r.seed as number,
     grain: (r.grain as GrainLevel) ?? 'subtle',
+    imageMime: (r.image_mime as string) ?? null,
     backgroundRef: (r.background_ref as string) ?? null,
     durationSec: (r.duration_sec as number) ?? null,
     createdAt: r.created_at as string,
@@ -464,6 +468,18 @@ export interface TileMediaInput {
   title?: string | null;
   durationSec?: number | null;
   thumbUrl?: string | null;
+}
+
+/** Set (or clear) the duotone source-image mime on a tile. The image bytes are
+ *  stored on local disk by the image route; here we only track presence + mime. */
+export function setTileImageMime(id: string, mime: string | null): PlatformTile | null {
+  const existing = getTile(id);
+  if (!existing) return null;
+  getDb().prepare('UPDATE platform_tiles SET image_mime = ?, updated_at = ? WHERE id = ?')
+    .run(mime, new Date().toISOString(), id);
+  const passId = passIdForTile(id);
+  if (passId) touchPass(passId);
+  return getTile(id);
 }
 
 /** Attach (or, with `null`, detach) media on a tile. Media is a *reference* to a

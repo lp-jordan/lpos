@@ -183,7 +183,7 @@ function grainOverlay(id: string, level: GrainLevel): string {
 export function buildTileBackgroundSVG(
   b: Brand,
   tile: TileVisual,
-  opts: { grain?: GrainLevel; width?: number | string; height?: number | string } = {},
+  opts: { grain?: GrainLevel; width?: number | string; height?: number | string; imageHref?: string } = {},
 ): string {
   const acc = b.accents[tile.paletteIndex % b.accents.length];
   const r = rng(tile.seed);
@@ -235,6 +235,21 @@ export function buildTileBackgroundSVG(
       + `<rect width="${W}" height="${H}" fill="${base}"/>`
       + `<g${flip}>${shapes}</g>`
       + `<rect x="${dotLeft ? 0 : 150}" y="0" width="150" height="150" fill="url(#dot_${id})" opacity="0.7"/>`;
+  } else if (opts.imageHref) {
+    // duotone over a REAL image — same-origin URL for preview, data-URI for export.
+    const dark = b.duoDark, light = acc;
+    const du = unit(dark), lu = unit(light);
+    const href = opts.imageHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    inner = `<defs>`
+      + `<filter id="duoimg_${id}" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">`
+      + `<feColorMatrix type="saturate" values="0" result="g"/>`
+      + `<feComponentTransfer in="g"><feFuncR type="table" tableValues="${du[0]} ${lu[0]}"/>`
+      + `<feFuncG type="table" tableValues="${du[1]} ${lu[1]}"/><feFuncB type="table" tableValues="${du[2]} ${lu[2]}"/></feComponentTransfer></filter>`
+      + `<radialGradient id="vig_${id}" cx="0.5" cy="0.4" r="0.85">`
+      + `<stop offset="55%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.5"/></radialGradient></defs>`
+      + `<image href="${href}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" filter="url(#duoimg_${id})"/>`
+      + `<rect width="${W}" height="${H}" fill="url(#vig_${id})"/>`;
+    grainable = true;
   } else {
     // duotone: atmospheric tinted "image" stand-in (real path composites a photo).
     const dark = b.duoDark, light = r() < 0.5 ? acc : b.duoLight;
