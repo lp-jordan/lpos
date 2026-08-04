@@ -81,12 +81,21 @@ function initSchema(db: DatabaseSync): void {
       seed           INTEGER NOT NULL DEFAULT 0,
       grain          TEXT NOT NULL DEFAULT 'subtle',
       image_mime     TEXT,
+      duo_shadow     TEXT,
+      duo_light      TEXT,
       background_ref TEXT,
       duration_sec   INTEGER,
       created_at     TEXT NOT NULL,
       updated_at     TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_platform_tiles_category ON platform_tiles(category_id);
+
+    CREATE TABLE IF NOT EXISTS platform_brand_presets (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      created_at  TEXT NOT NULL
+    );
   `);
   // Migrations for DBs created before these columns existed.
   ensureColumn(db, 'platform_passes', 'slug', `slug TEXT`);
@@ -98,6 +107,8 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_tiles', 'media_thumb_url', `media_thumb_url TEXT`);
   ensureColumn(db, 'platform_tiles', 'image_mime', `image_mime TEXT`);
   ensureColumn(db, 'platform_tiles', 'media_version', `media_version INTEGER`);
+  ensureColumn(db, 'platform_tiles', 'duo_shadow', `duo_shadow TEXT`);
+  ensureColumn(db, 'platform_tiles', 'duo_light', `duo_light TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -148,6 +159,8 @@ export interface PlatformTile {
   seed: number;
   grain: GrainLevel;
   imageMime: string | null;
+  duoShadow: string | null;
+  duoLight: string | null;
   backgroundRef: string | null;
   durationSec: number | null;
   createdAt: string;
@@ -234,6 +247,8 @@ function toTile(r: Row): PlatformTile {
     seed: r.seed as number,
     grain: (r.grain as GrainLevel) ?? 'subtle',
     imageMime: (r.image_mime as string) ?? null,
+    duoShadow: (r.duo_shadow as string) ?? null,
+    duoLight: (r.duo_light as string) ?? null,
     backgroundRef: (r.background_ref as string) ?? null,
     durationSec: (r.duration_sec as number) ?? null,
     createdAt: r.created_at as string,
@@ -416,6 +431,8 @@ export interface TilePatch {
   paletteIndex?: number;
   seed?: number;
   grain?: GrainLevel;
+  duoShadow?: string | null;
+  duoLight?: string | null;
   position?: number;
   categoryId?: string;
 }
@@ -430,12 +447,14 @@ export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
     paletteIndex: patch.paletteIndex ?? existing.paletteIndex,
     seed: patch.seed ?? existing.seed,
     grain: patch.grain ?? existing.grain,
+    duoShadow: 'duoShadow' in patch ? patch.duoShadow ?? null : existing.duoShadow,
+    duoLight: 'duoLight' in patch ? patch.duoLight ?? null : existing.duoLight,
     position: patch.position ?? existing.position,
     categoryId: patch.categoryId ?? existing.categoryId,
   };
   getDb().prepare(
-    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, position = ?, category_id = ?, updated_at = ? WHERE id = ?`,
-  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.position, m.categoryId, new Date().toISOString(), id);
+    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, duo_shadow = ?, duo_light = ?, position = ?, category_id = ?, updated_at = ? WHERE id = ?`,
+  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.duoShadow, m.duoLight, m.position, m.categoryId, new Date().toISOString(), id);
   const passId = passIdForTile(id);
   if (passId) touchPass(passId);
   return getTile(id);
@@ -464,6 +483,31 @@ export function deleteTile(id: string): void {
   const passId = passIdForTile(id);
   getDb().prepare('DELETE FROM platform_tiles WHERE id = ?').run(id);
   if (passId) touchPass(passId);
+}
+
+// ── User-defined brand presets ───────────────────────────────────────────────
+
+export interface BrandPreset { id: string; name: string; config: BrandConfig }
+
+export function listBrandPresets(): BrandPreset[] {
+  const rows = getDb().prepare('SELECT * FROM platform_brand_presets ORDER BY created_at').all() as Row[];
+  return rows.map((r) => {
+    let config: BrandConfig = {};
+    try { config = JSON.parse(r.config_json as string) as BrandConfig; } catch { /* ignore */ }
+    return { id: r.id as string, name: r.name as string, config };
+  });
+}
+
+export function createBrandPreset(name: string, config: BrandConfig): BrandPreset {
+  const id = randomUUID();
+  const clean = name.trim() || 'Preset';
+  getDb().prepare('INSERT INTO platform_brand_presets (id, name, config_json, created_at) VALUES (?, ?, ?, ?)')
+    .run(id, clean, JSON.stringify(config), new Date().toISOString());
+  return { id, name: clean, config };
+}
+
+export function deleteBrandPreset(id: string): void {
+  getDb().prepare('DELETE FROM platform_brand_presets WHERE id = ?').run(id);
 }
 
 // ── Media linking (Phase 2) ──────────────────────────────────────────────────

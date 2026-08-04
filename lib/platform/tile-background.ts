@@ -183,7 +183,7 @@ function grainOverlay(id: string, level: GrainLevel): string {
 export function buildTileBackgroundSVG(
   b: Brand,
   tile: TileVisual,
-  opts: { grain?: GrainLevel; width?: number | string; height?: number | string; imageHref?: string } = {},
+  opts: { grain?: GrainLevel; width?: number | string; height?: number | string; imageHref?: string; duoShadow?: string | null; duoLight?: string | null } = {},
 ): string {
   const acc = b.accents[tile.paletteIndex % b.accents.length];
   const r = rng(tile.seed);
@@ -230,14 +230,30 @@ export function buildTileBackgroundSVG(
         + `<path d="M0,${330 + Math.floor(r() * 30)} C 110,290 210,390 300,300 L300,420 L0,420 Z" fill="${c2}" opacity="0.96"/>`;
     }
     const dotLeft = r() < 0.5;
-    inner = `<defs><pattern id="dot_${id}" width="15" height="15" patternUnits="userSpaceOnUse">`
-      + `<circle cx="3" cy="3" r="2" fill="${mix(c2, '#ffffff', 0.25)}" opacity="0.55"/></pattern></defs>`
-      + `<rect width="${W}" height="${H}" fill="${base}"/>`
-      + `<g${flip}>${shapes}</g>`
-      + `<rect x="${dotLeft ? 0 : 150}" y="0" width="150" height="150" fill="url(#dot_${id})" opacity="0.7"/>`;
+    const dotDef = `<pattern id="dot_${id}" width="15" height="15" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="2" fill="${mix(c2, '#ffffff', 0.25)}" opacity="0.55"/></pattern>`;
+    const dotsRect = `<rect x="${dotLeft ? 0 : 150}" y="0" width="150" height="150" fill="url(#dot_${id})" opacity="0.7"/>`;
+    if (opts.imageHref) {
+      // optional real image as the BACK layer (brand-duotoned), shapes on top.
+      const dark = opts.duoShadow ?? b.duoDark, light = opts.duoLight ?? acc;
+      const du = unit(dark), lu = unit(light);
+      const href = opts.imageHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      inner = `<defs>${dotDef}`
+        + `<filter id="gimg_${id}" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">`
+        + `<feColorMatrix type="saturate" values="0" result="g"/><feComponentTransfer in="g">`
+        + `<feFuncR type="table" tableValues="${du[0]} ${lu[0]}"/><feFuncG type="table" tableValues="${du[1]} ${lu[1]}"/>`
+        + `<feFuncB type="table" tableValues="${du[2]} ${lu[2]}"/></feComponentTransfer></filter></defs>`
+        + `<image href="${href}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" filter="url(#gimg_${id})"/>`
+        + `<rect width="${W}" height="${H}" fill="#000" opacity="0.28"/>`
+        + `<g${flip} opacity="0.82">${shapes}</g>${dotsRect}`;
+      grainable = true;
+    } else {
+      inner = `<defs>${dotDef}</defs>`
+        + `<rect width="${W}" height="${H}" fill="${base}"/>`
+        + `<g${flip}>${shapes}</g>${dotsRect}`;
+    }
   } else if (opts.imageHref) {
     // duotone over a REAL image — same-origin URL for preview, data-URI for export.
-    const dark = b.duoDark, light = acc;
+    const dark = opts.duoShadow ?? b.duoDark, light = opts.duoLight ?? acc;
     const du = unit(dark), lu = unit(light);
     const href = opts.imageHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
     inner = `<defs>`
@@ -252,7 +268,7 @@ export function buildTileBackgroundSVG(
     grainable = true;
   } else {
     // duotone: atmospheric tinted "image" stand-in (real path composites a photo).
-    const dark = b.duoDark, light = r() < 0.5 ? acc : b.duoLight;
+    const dark = opts.duoShadow ?? b.duoDark, light = opts.duoLight ?? (r() < 0.5 ? acc : b.duoLight);
     const du = unit(dark), lu = unit(light);
     const bf = (0.008 + r() * 0.014).toFixed(4);
     const seedInt = tile.seed % 100;

@@ -1,10 +1,10 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { PassTree, PlatformTile } from '@/lib/store/platform-pass-store';
+import type { PassTree, PlatformTile, BrandPreset } from '@/lib/store/platform-pass-store';
 import {
-  BRANDS, resolveBrand, buildTileBackgroundSVG, deriveRecipe,
+  BRANDS, resolveBrand, buildTileBackgroundSVG,
   type Brand, type BrandConfig, type TileArchetype, type GrainLevel,
 } from '@/lib/platform/tile-background';
 import { MediaPicker, type MediaSelection } from './MediaPicker';
@@ -21,7 +21,7 @@ function fmtDur(s: number | null): string {
 
 type Drag = { type: 'tile'; id: string; from: string } | { type: 'cat'; id: string } | null;
 type Over =
-  | { kind: 'tile'; catId: string; beforeId: string | 'end' }
+  | { kind: 'tile'; catId: string; beforeId: string | 'end'; x: number }
   | { kind: 'cat'; beforeId: string | 'end' }
   | null;
 
@@ -52,6 +52,9 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
 
   const applyTile = (t: PlatformTile) => setTree((prev) => prev && ({
     ...prev, categories: prev.categories.map((c) => ({ ...c, tiles: c.tiles.map((x) => (x.id === t.id ? t : x)) })),
+  }));
+  const updateLocalTile = (id: string, patch: Partial<PlatformTile>) => setTree((prev) => prev && ({
+    ...prev, categories: prev.categories.map((c) => ({ ...c, tiles: c.tiles.map((x) => (x.id === id ? { ...x, ...patch } : x)) })),
   }));
 
   // ── Pass-level ──
@@ -116,6 +119,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   async function linkMedia(tileId: string, sel: MediaSelection) {
     const res = await fetch(`/api/platform/tiles/${tileId}/media`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sel) });
     if (res.ok) applyTile((await res.json()).tile);
+    if (sel.kind === 'video') setTree((p) => p && { ...p, defaultProjectId: sel.projectId }); // remember for the next tile this session
     setPickerFor(null);
   }
   async function unlinkMedia(tileId: string) {
@@ -137,8 +141,10 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
     const res = await fetch(`/api/platform/tiles/${tileId}/image`, { method: 'DELETE' });
     if (res.ok) applyTile((await res.json()).tile);
   }
+  const canHaveImage = (t: PlatformTile) => t.archetype === 'duotone' || t.archetype === 'geometric';
   const tileImageHref = (t: PlatformTile): string | undefined =>
-    t.archetype === 'duotone' && t.imageMime ? `/api/platform/tiles/${t.id}/image?v=${encodeURIComponent(t.updatedAt)}` : undefined;
+    canHaveImage(t) && t.imageMime ? `/api/platform/tiles/${t.id}/image?v=${encodeURIComponent(t.updatedAt)}` : undefined;
+  const tileSvg = (t: PlatformTile) => buildTileBackgroundSVG(brand, t, { grain: t.grain, imageHref: tileImageHref(t), duoShadow: t.duoShadow, duoLight: t.duoLight });
 
   // ── Drag & drop reorg ──
   function reorderTilesApi(categoryId: string, tileIds: string[]) {
@@ -147,6 +153,13 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   function reorderCatsApi(categoryIds: string[]) {
     if (!tree) return;
     fetch(`/api/platform/passes/${tree.id}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoryIds }) });
+  }
+  // Guarded setters — only re-render when the drop target actually changes (kills indicator jitter).
+  function setOverTile(catId: string, beforeId: string | 'end', x: number) {
+    setOver((prev) => (prev && prev.kind === 'tile' && prev.catId === catId && prev.beforeId === beforeId && prev.x === x) ? prev : { kind: 'tile', catId, beforeId, x });
+  }
+  function setOverCat(beforeId: string | 'end') {
+    setOver((prev) => (prev && prev.kind === 'cat' && prev.beforeId === beforeId) ? prev : { kind: 'cat', beforeId });
   }
   function dropTile(destCatId: string, beforeTileId: string | null) {
     if (!drag || drag.type !== 'tile' || !tree) { setDrag(null); return; }
@@ -223,7 +236,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                 if (drag?.type !== 'cat') return;
                 e.preventDefault();
                 const r = e.currentTarget.getBoundingClientRect();
-                setOver({ kind: 'cat', beforeId: e.clientY < r.top + r.height / 2 ? cat.id : (tree.categories[ci + 1]?.id ?? 'end') });
+                setOverCat(e.clientY < r.top + r.height / 2 ? cat.id : (tree.categories[ci + 1]?.id ?? 'end'));
               }}
               onDrop={() => { if (over?.kind === 'cat') dropCat(over.beforeId === 'end' ? null : over.beforeId); }}
               style={{ padding: '14px 24px 4px', opacity: drag?.type === 'cat' && drag.id === cat.id ? 0.4 : 1, transition: 'opacity .12s' }}
@@ -248,23 +261,25 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
               </div>
 
               <div
-                onDragOver={(e) => { if (drag?.type === 'tile' && e.target === e.currentTarget) { e.preventDefault(); setOver({ kind: 'tile', catId: cat.id, beforeId: 'end' }); } }}
+                onDragOver={(e) => { if (drag?.type === 'tile' && e.target === e.currentTarget) { e.preventDefault(); const btn = e.currentTarget.lastElementChild as HTMLElement | null; setOverTile(cat.id, 'end', btn ? btn.offsetLeft - 7 : 4); } }}
                 onDrop={() => { if (over?.kind === 'tile') dropTile(over.catId, over.beforeId === 'end' ? null : over.beforeId); }}
-                style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px', minHeight: 60 }}
+                style={{ position: 'relative', display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px', minHeight: 60 }}
               >
+                {over?.kind === 'tile' && over.catId === cat.id && <div data-pf-anim style={{ ...dropLineAbs, left: over.x }} />}
                 {cat.tiles.map((t, ti) => {
                   const isDragged = drag?.type === 'tile' && drag.id === t.id;
                   return (
-                    <Fragment key={t.id}>
-                      {over?.kind === 'tile' && over.catId === cat.id && over.beforeId === t.id && <div data-pf-anim style={dropLineV} />}
                       <div
+                        key={t.id}
                         onDragOver={(e) => {
                           if (drag?.type !== 'tile') return;
                           e.preventDefault(); e.stopPropagation();
-                          const r = e.currentTarget.getBoundingClientRect();
-                          setOver({ kind: 'tile', catId: cat.id, beforeId: e.clientX < r.left + r.width / 2 ? t.id : (cat.tiles[ti + 1]?.id ?? 'end') });
+                          const el = e.currentTarget as HTMLElement;
+                          const r = el.getBoundingClientRect();
+                          const before = e.clientX < r.left + r.width / 2;
+                          setOverTile(cat.id, before ? t.id : (cat.tiles[ti + 1]?.id ?? 'end'), before ? el.offsetLeft - 7 : el.offsetLeft + el.offsetWidth + 7);
                         }}
-                        style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 6, opacity: isDragged ? 0.35 : 1, transform: isDragged ? 'scale(0.95)' : 'none', transition: 'opacity .12s, transform .12s' }}
+                        style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 6, opacity: isDragged ? 0.4 : 1, transform: isDragged ? 'scale(0.92)' : 'none', transition: 'opacity .14s ease, transform .14s ease' }}
                       >
                         <div
                           draggable={editingTile !== t.id}
@@ -274,7 +289,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                           onContextMenu={(e) => { e.preventDefault(); setMenu({ x: Math.min(e.clientX, window.innerWidth - 192), y: Math.min(e.clientY, window.innerHeight - 250), id: t.id }); }}
                           style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
                         >
-                          <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain, imageHref: tileImageHref(t) }) }} />
+                          <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: tileSvg(t) }} />
                           {showTitles && (editingTile === t.id ? (
                             <textarea
                               autoFocus defaultValue={t.title}
@@ -295,13 +310,11 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                             : <span>○ not linked</span>}
                         </div>
                       </div>
-                    </Fragment>
                   );
                 })}
-                {over?.kind === 'tile' && over.catId === cat.id && over.beforeId === 'end' && <div data-pf-anim style={dropLineV} />}
                 <button
                   onClick={() => addTile(cat.id)}
-                  onDragOver={(e) => { if (drag?.type === 'tile') { e.preventDefault(); setOver({ kind: 'tile', catId: cat.id, beforeId: 'end' }); } }}
+                  onDragOver={(e) => { if (drag?.type === 'tile') { e.preventDefault(); const el = e.currentTarget as HTMLElement; setOverTile(cat.id, 'end', el.offsetLeft - 7); } }}
                   style={addTileBtn}><span style={{ fontSize: 24, fontWeight: 300 }}>+</span>Add tile</button>
               </div>
             </section>
@@ -349,7 +362,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
             </div>
             <div style={inspBody}>
               <div style={previewFrame}>
-                <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, selectedTile, { grain: selectedTile.grain, imageHref: tileImageHref(selectedTile) }) }} />
+                <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: tileSvg(selectedTile) }} />
                 {showTitles && <div style={pvTitle}>{selectedTile.title}</div>}
               </div>
 
@@ -387,28 +400,13 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
 
               <button onClick={() => patchTile(selectedTile.id, { regenerate: true })} style={generateBtn}>✦ Generate from description</button>
 
-              <div style={recipeBox}>
-                <RecipeRow k="Style"><span style={mono}>Auto → {selectedTile.archetype}</span></RecipeRow>
-                <RecipeRow k="Palette">
-                  <div style={{ display: 'flex', gap: 5 }}>
-                    {brand.accents.map((a, i) => (
-                      <span key={i} style={{ width: 22, height: 22, borderRadius: 5, background: a, outline: i === (selectedTile.paletteIndex % brand.accents.length) ? '2px solid var(--text)' : 'none', outlineOffset: 1 }} />
-                    ))}
-                  </div>
-                </RecipeRow>
-                <RecipeRow k="Seed"><span style={mono}>{(selectedTile.seed >>> 0).toString(16).slice(0, 8)}</span></RecipeRow>
-                {selectedTile.archetype === 'duotone' && (
-                  <RecipeRow k="Stock"><span style={{ color: 'var(--muted)', fontSize: 12 }}>“{deriveRecipe(selectedTile.title, selectedTile.description, brand).stockQuery}”</span></RecipeRow>
-                )}
-              </div>
-
-              {selectedTile.archetype === 'duotone' && (
-                <Control label="Source image">
+              {canHaveImage(selectedTile) && (
+                <Control label={selectedTile.archetype === 'geometric' ? 'Background image' : 'Source image'}>
                   {selectedTile.imageMime ? (
                     <div style={linkedRow}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={tileImageHref(selectedTile)} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>Real image · duotoned on brand</div>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>{selectedTile.archetype === 'geometric' ? 'Real image · behind the shapes' : 'Real image · duotoned on brand'}</div>
                       <label style={{ ...faintBtn, cursor: 'pointer' }}>Replace
                         <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
                       </label>
@@ -422,9 +420,23 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                         </label>
                         {selectedTile.mediaAssetId && <button onClick={() => useVideoFrame(selectedTile.id)} style={{ ...ghostBtn2, flex: 1 }}>Use video frame</button>}
                       </div>
-                      <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>No image → procedural stand-in. Add one and it’s auto-duotoned on brand.</span>
+                      <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>{selectedTile.archetype === 'geometric' ? 'Optional — sits behind the shapes. None → shapes only.' : 'None → procedural stand-in. Add one and it’s auto-duotoned on brand.'}</span>
                     </div>
                   )}
+                </Control>
+              )}
+
+              {selectedTile.archetype === 'duotone' && (
+                <Control label="Duotone colours">
+                  <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end' }}>
+                    <ColorField label="Shadow" value={selectedTile.duoShadow ?? brand.duoDark}
+                      onInput={(v) => updateLocalTile(selectedTile.id, { duoShadow: v })}
+                      onCommit={() => patchTile(selectedTile.id, { duoShadow: selectedTile.duoShadow ?? brand.duoDark })} />
+                    <ColorField label="Highlight" value={selectedTile.duoLight ?? brand.accents[selectedTile.paletteIndex % brand.accents.length]}
+                      onInput={(v) => updateLocalTile(selectedTile.id, { duoLight: v })}
+                      onCommit={() => patchTile(selectedTile.id, { duoLight: selectedTile.duoLight ?? brand.accents[selectedTile.paletteIndex % brand.accents.length] })} />
+                    {(selectedTile.duoShadow || selectedTile.duoLight) && <button onClick={() => patchTile(selectedTile.id, { duoShadow: null, duoLight: null })} style={faintBtn}>Reset</button>}
+                  </div>
                 </Control>
               )}
 
@@ -474,10 +486,22 @@ function BrandModal({ brand, customised, onPick, onLive, onPersist, onReset, onC
   brand: Brand; customised: boolean;
   onPick: (key: string) => void; onLive: (cfg: BrandConfig) => void; onPersist: () => void; onReset: () => void; onClose: () => void;
 }) {
+  const [presets, setPresets] = useState<BrandPreset[]>([]);
+  const loadPresets = () => fetch('/api/platform/brands').then((r) => r.ok ? r.json() : { presets: [] }).then((d) => setPresets(d.presets ?? []));
+  useEffect(() => { loadPresets(); }, []);
+
   const snapshot = (override: Partial<BrandConfig>): BrandConfig => ({
     name: brand.name, accents: [...brand.accents], duoDark: brand.duoDark, duoLight: brand.duoLight, gold: brand.gold, ...override,
   });
   const setAccent = (i: number, val: string) => { const accents = [...brand.accents]; accents[i] = val; onLive(snapshot({ accents })); };
+
+  async function addPreset() {
+    const name = window.prompt('Save current colours as a preset. Name:', brand.name);
+    if (!name?.trim()) return;
+    const res = await fetch('/api/platform/brands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), config: snapshot({}) }) });
+    if (res.ok) loadPresets();
+  }
+  async function deletePreset(id: string) { await fetch(`/api/platform/brands/${id}`, { method: 'DELETE' }); loadPresets(); }
 
   return (
     <>
@@ -489,7 +513,10 @@ function BrandModal({ brand, customised, onPick, onLive, onPersist, onReset, onC
         </div>
         <div style={{ ...inspBody, gap: 20 }}>
           <div>
-            <div style={fieldLabel}>Presets</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={fieldLabel}>Presets</span>
+              <button onClick={addPreset} style={faintBtn}>+ Add preset</button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginTop: 8 }}>
               {Object.values(BRANDS).map((b) => (
                 <button key={b.key} onClick={() => onPick(b.key)}
@@ -497,6 +524,14 @@ function BrandModal({ brand, customised, onPick, onLive, onPersist, onReset, onC
                   <div style={{ display: 'flex', gap: 3 }}>{b.accents.map((a, i) => <span key={i} style={{ width: 16, height: 16, borderRadius: 3, background: a }} />)}</div>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{b.name}</span>
                 </button>
+              ))}
+              {presets.map((p) => (
+                <div key={p.id} onClick={() => { onLive(p.config); onPersist(); }} style={{ ...presetCard, position: 'relative' }}>
+                  <div style={{ display: 'flex', gap: 3 }}>{(p.config.accents ?? []).map((a, i) => <span key={i} style={{ width: 16, height: 16, borderRadius: 3, background: a }} />)}</div>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{p.config.name ?? p.name}</span>
+                  <button onClick={(e) => { e.stopPropagation(); deletePreset(p.id); }} title="Delete preset"
+                    style={{ position: 'absolute', top: 5, right: 6, border: 0, background: 'transparent', color: 'var(--muted-soft)', cursor: 'pointer', fontSize: 12 }}>✕</button>
+                </div>
               ))}
             </div>
           </div>
@@ -516,13 +551,20 @@ function BrandModal({ brand, customised, onPick, onLive, onPersist, onReset, onC
               <ColorSwatch label="Highlight" value={brand.duoLight} onChange={(v) => onLive(snapshot({ duoLight: v }))} onCommit={onPersist} />
               <ColorSwatch label="Line" value={brand.gold} onChange={(v) => onLive(snapshot({ gold: v }))} onCommit={onPersist} />
             </div>
-            <p style={{ fontSize: 11.5, color: 'var(--muted-soft)', marginTop: 12, lineHeight: 1.5 }}>
-              Edits apply to this pass only. Tiles recolour live; changes save when you release the picker.
-            </p>
           </div>
         </div>
       </div>
     </>
+  );
+}
+
+function ColorField({ label, value, onInput, onCommit }: { label: string; value: string; onInput: (v: string) => void; onCommit: () => void }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+      <input type="color" value={value} onChange={(e) => onInput(e.target.value)} onBlur={onCommit}
+        style={{ width: 44, height: 34, border: '1px solid var(--line)', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 2 }} />
+      <span style={{ fontSize: 9.5, color: 'var(--muted-soft)' }}>{label}</span>
+    </label>
   );
 }
 
@@ -553,14 +595,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Control({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}><span style={fieldLabel}>{label}</span>{children}</div>;
 }
-function RecipeRow({ k, children }: { k: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-      <span style={{ color: 'var(--muted-soft)', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, fontWeight: 700, width: 56, flexShrink: 0 }}>{k}</span>
-      {children}
-    </div>
-  );
-}
 
 // ── Styles ──
 const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, padding: '12px 24px 12px', background: 'transparent', borderBottom: '1px solid var(--line)', flexShrink: 0 };
@@ -573,7 +607,7 @@ const chip: React.CSSProperties = { border: '1px solid var(--line)', background:
 const chipOn: React.CSSProperties = { color: 'var(--text-strong)', borderColor: 'var(--accent)', background: 'var(--accent-soft)' };
 const exportBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--text)', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 8, cursor: 'pointer' };
 const dragHandle: React.CSSProperties = { cursor: 'grab', color: 'var(--muted-soft)', fontSize: 15, userSelect: 'none', padding: '0 2px' };
-const dropLineV: React.CSSProperties = { flex: '0 0 auto', width: 4, alignSelf: 'stretch', borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', animation: 'pfGlow 1s ease-in-out infinite' };
+const dropLineAbs: React.CSSProperties = { position: 'absolute', top: 4, width: 4, height: 213, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', animation: 'pfGlow 1s ease-in-out infinite', pointerEvents: 'none', zIndex: 5 };
 const dropLineH: React.CSSProperties = { height: 4, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', margin: '2px 24px', animation: 'pfGlow 1s ease-in-out infinite' };
 const catInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 17, fontWeight: 700, letterSpacing: '-0.015em', padding: '3px 8px', borderRadius: 7, outline: 'none', minWidth: 40 };
 const faintBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12, padding: '5px 8px', borderRadius: 6, fontWeight: 600, cursor: 'pointer' };
@@ -593,8 +627,6 @@ const pvTitle: React.CSSProperties = { position: 'absolute', top: 16, left: 17, 
 const fieldLabel: React.CSSProperties = { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-soft)', fontWeight: 700 };
 const fieldInput: React.CSSProperties = { background: 'var(--surface-inset)', border: '1px solid var(--line)', color: 'var(--text)', borderRadius: 8, padding: '9px 11px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
 const generateBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, background: 'var(--accent)', color: '#16130c', border: 0, borderRadius: 9, fontSize: 13.5, fontWeight: 700, padding: 11, cursor: 'pointer' };
-const recipeBox: React.CSSProperties = { background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 10, padding: 13, display: 'flex', flexDirection: 'column', gap: 10 };
-const mono: React.CSSProperties = { color: 'var(--text)', fontWeight: 600, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11.5 };
 const miniBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 11, fontWeight: 600, padding: '8px 4px', borderRadius: 7, cursor: 'pointer' };
 const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'var(--text-strong)', background: 'var(--accent-soft)' };
 const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
