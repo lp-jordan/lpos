@@ -3968,6 +3968,13 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   transition: color 130ms ease, background 130ms ease;
 }
 .ivp-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.ivp-quality {
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+.ivp-quality--on { color: #fff; background: rgba(255,255,255,0.12); }
 .ivp-time {
   font-size: 0.68rem;
   color: rgba(255, 255, 255, 0.45);
@@ -19115,6 +19122,14 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   transition: color 0.15s, background 0.15s;
 }
 .mp-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+.mp-quality {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  min-width: 32px;
+}
+.mp-quality--on { color: #fff; background: rgba(255,255,255,0.16); }
 
 /* ── Volume ──────────────────────────────────────────────────────────────── */
 .mp-vol-wrap {

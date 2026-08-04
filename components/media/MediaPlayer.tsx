@@ -138,7 +138,7 @@ export function MediaPlayer({
     gridTimesRef.current = [];   // new source → rebuild the thumbnail grid
   }, [src]);
 
-  useHlsPlayer(videoRef, streamUrl);
+  const quality = useHlsPlayer(videoRef, streamUrl);
 
   const thumbnailUrl = useCallback(
     (t: number) => `/api/projects/${projectId}/media/${assetId}/thumbnail?time=${Math.round(t)}`,
@@ -775,6 +775,19 @@ export function MediaPlayer({
               }
             </button>
           </div>
+
+          {/* Quality: Auto ⇄ full resolution (hls.js sources with >1 rendition) */}
+          {quality.hasLevels && (
+            <button
+              type="button"
+              className={`mp-btn mp-quality${quality.mode === 'max' ? ' mp-quality--on' : ''}`}
+              onClick={e => { e.stopPropagation(); quality.setMode(quality.mode === 'max' ? 'auto' : 'max'); }}
+              aria-label={quality.mode === 'max' ? 'Quality: full resolution — tap for auto' : 'Quality: auto — tap for full resolution'}
+              title={quality.mode === 'max' ? 'Full resolution — tap for Auto' : 'Auto quality — tap for full resolution from the start'}
+            >
+              {quality.mode === 'max' ? 'HD' : 'AUTO'}
+            </button>
+          )}
 
           {/* Fullscreen (theater) or Theater-launch (compact) */}
           {isTheater

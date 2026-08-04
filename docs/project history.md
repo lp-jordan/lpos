@@ -3181,3 +3181,27 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit` scoped to HiringReport — no type errors.
 
 **Assumptions / follow-ups:** Answer value shapes match those `AnswerView` already handles; unexpected shapes fall through to the JSON fallback (same resilience posture as the on-screen renderer). Follow-up if wanted: a one-click "open in AI" or scoring-included variant.
+
+---
+
+## 2026-08-04T19:39:38Z — Video playback: faster full-quality start + viewer quality control
+
+**User prompt (verbatim):** "Why do videos always take 4-5 seconds to play at full quality in LPOS?" → after diagnosis, chose option 1 (raise the cold-start estimate) and added: "I like option 1 but I'd also like to allow a user to back it up and play that full res from the start if possible" → clarification: "Both" (bumped-estimate default + manual HD button + auto-pin on rewind).
+
+**Assistant response summary:** Diagnosed the 4-5s climb as HLS adaptive-bitrate cold-start: the hls.js instance in `useHlsPlayer.ts` was untuned (only `enableWorker: true`), so it started at a low rendition seeded by hls.js's conservative ~0.5 Mbps default estimate and ramped up over the first few Cloudflare segments. Manifest is Cloudflare's stock `/manifest/video.m3u8`; `<video>` uses `preload="metadata"` and no poster, so the climb is visible. Implemented all three of the user's chosen fixes in the hook + both consuming players.
+
+**Files changed:**
+- `hooks/useHlsPlayer.ts` — rewrote to (a) pass `abrEwmaDefaultEstimate: 5_000_000` so ABR starts optimistic (still steps down if the connection can't sustain it); (b) return an `HlsController` (`{ hasLevels, mode, setMode }`) that pins/unpins the top rendition via `hls.currentLevel`; (c) rewind fast-path: after ABR has confirmed the top rendition is sustainable (`LEVEL_SWITCHED` reaches top level), a backward seek forces the seeked-to fragment to the top rendition one-shot (`nextLevel` set, reset to `-1` on the next `FRAG_CHANGED`) so replays are sharp from frame one. Mode preference is sticky across asset changes and re-applied on `MANIFEST_PARSED`.
+- `components/media/MediaPlayer.tsx` — captured the controller and added an Auto⇄HD toggle button in the control bar's button row, shown only when `hasLevels`.
+- `components/media/InlineVideoPlayer.tsx` — same toggle in the compact bottom row.
+- `app/globals.css` — `.mp-quality` / `.ivp-quality` text-button styles (+ `--on` active state).
+
+**Implementation summary:** Quality control only engages for hls.js-driven HLS (Chrome/Firefox); Safari native-HLS and MP4 sources report `hasLevels: false`, so the button is hidden and the hook is inert for them — no behavior change there. The bumped estimate is the always-on default that shrinks the visible ramp for everyone; the HD button and rewind fast-path are the deterministic "full-res from the start" paths. `nextLevel` + one-shot reset was used for rewind (rather than a permanent pin) so auto-mode ABR still governs after the first post-seek fragment.
+
+**Decision rationale:** `abrEwmaDefaultEstimate` (vs a hard `startLevel` pin) keeps the safe fast-start-then-adapt behavior for genuinely slow connections while killing the pessimistic cold start on fast office/tailnet connections. The rewind fast-path is gated on `bandwidthKnownRef` (ABR actually reached top once) so we never force a rendition we haven't proven sustainable. Reused existing `mp-btn`/`ivp-btn` styling for minimal CSS surface.
+
+**Alternatives considered:** (1) Hard `startLevel` pin — rejected as default (risks a stall on slow links); offered as the HD button instead. (2) `?clientBandwidthHint=` on the CF manifest — noted as the only lever that also helps Safari's native HLS (which bypasses the hook); not implemented this pass, flagged as a follow-up. (3) Adding a `poster` to hide the ramp — noted but not done (doesn't speed anything up).
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — zero errors in changed files (one pre-existing unrelated error in `lib/store/platform-pass-store.ts`, the platform stub). Not verified in a running browser (user manages the server lifecycle).
+
+**Assumptions / follow-ups:** Assumes hls.js sorts levels ascending by bitrate (top rendition = last index) — standard hls.js behavior. Follow-ups if wanted: add `?clientBandwidthHint=` at the Cloudflare manifest layer to cover Safari, and/or a `poster` frame to mask any residual ramp.

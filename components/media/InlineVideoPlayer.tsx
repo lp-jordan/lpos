@@ -51,7 +51,7 @@ export function InlineVideoPlayer({
   }, [seekTarget]);
 
   // Attach HLS stream (or plain URL) to the video element.
-  useHlsPlayer(videoRef, src);
+  const quality = useHlsPlayer(videoRef, src);
 
   // Reset state when src changes
   useEffect(() => {
@@ -199,6 +199,17 @@ export function InlineVideoPlayer({
           <div className="ivp-spacer" />
           {timedComments.length > 0 && (
             <span className="ivp-tick-count">{timedComments.length} comment{timedComments.length !== 1 ? 's' : ''}</span>
+          )}
+          {quality.hasLevels && (
+            <button
+              type="button"
+              className={`ivp-btn ivp-quality${quality.mode === 'max' ? ' ivp-quality--on' : ''}`}
+              onClick={() => quality.setMode(quality.mode === 'max' ? 'auto' : 'max')}
+              aria-label={quality.mode === 'max' ? 'Quality: full resolution — tap for auto' : 'Quality: auto — tap for full resolution'}
+              title={quality.mode === 'max' ? 'Full resolution — tap for Auto' : 'Auto quality — tap for full resolution from the start'}
+            >
+              {quality.mode === 'max' ? 'HD' : 'AUTO'}
+            </button>
           )}
           <button
             type="button"
