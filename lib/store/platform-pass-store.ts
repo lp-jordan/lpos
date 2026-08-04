@@ -12,7 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { deriveRecipe, DEFAULT_BRAND, type TileArchetype } from '@/lib/platform/tile-background';
+import {
+  deriveRecipe, resolveBrand, DEFAULT_BRAND,
+  type TileArchetype, type BrandConfig, type GrainLevel,
+} from '@/lib/platform/tile-background';
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'platform.sqlite');
@@ -22,6 +25,13 @@ declare global {
   var __lpos_platform_db: DatabaseSync | undefined;
 }
 
+type Row = Record<string, unknown>;
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+
 function initSchema(db: DatabaseSync): void {
   db.exec(`
     PRAGMA foreign_keys = ON;
@@ -29,15 +39,16 @@ function initSchema(db: DatabaseSync): void {
     PRAGMA busy_timeout = 5000;
 
     CREATE TABLE IF NOT EXISTS platform_passes (
-      id          TEXT PRIMARY KEY,
-      title       TEXT NOT NULL,
-      source      TEXT NOT NULL DEFAULT 'local',
-      lp_pass_id  TEXT,
-      status      TEXT NOT NULL DEFAULT 'draft',
-      brand       TEXT NOT NULL DEFAULT 'leaderpass',
-      created_by  TEXT,
-      created_at  TEXT NOT NULL,
-      updated_at  TEXT NOT NULL
+      id           TEXT PRIMARY KEY,
+      title        TEXT NOT NULL,
+      source       TEXT NOT NULL DEFAULT 'local',
+      lp_pass_id   TEXT,
+      status       TEXT NOT NULL DEFAULT 'draft',
+      brand        TEXT NOT NULL DEFAULT 'leaderpass',
+      brand_config TEXT,
+      created_by   TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS platform_categories (
@@ -62,6 +73,7 @@ function initSchema(db: DatabaseSync): void {
       archetype      TEXT NOT NULL DEFAULT 'gradient',
       palette_index  INTEGER NOT NULL DEFAULT 0,
       seed           INTEGER NOT NULL DEFAULT 0,
+      grain          TEXT NOT NULL DEFAULT 'subtle',
       background_ref TEXT,
       duration_sec   INTEGER,
       created_at     TEXT NOT NULL,
@@ -69,6 +81,9 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_platform_tiles_category ON platform_tiles(category_id);
   `);
+  // Migrations for DBs created before these columns existed.
+  ensureColumn(db, 'platform_passes', 'brand_config', `brand_config TEXT`);
+  ensureColumn(db, 'platform_tiles', 'grain', `grain TEXT NOT NULL DEFAULT 'subtle'`);
 }
 
 function getDb(): DatabaseSync {
@@ -93,6 +108,7 @@ export interface PlatformPass {
   lpPassId: string | null;
   status: PassStatus;
   brand: string;
+  brandConfig: BrandConfig | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +126,7 @@ export interface PlatformTile {
   archetype: TileArchetype;
   paletteIndex: number;
   seed: number;
+  grain: GrainLevel;
   backgroundRef: string | null;
   durationSec: number | null;
   createdAt: string;
@@ -130,7 +147,10 @@ export interface PassTree extends PlatformPass {
 
 // ── Row mappers ──────────────────────────────────────────────────────────────
 
-type Row = Record<string, unknown>;
+function parseBrandConfig(raw: unknown): BrandConfig | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try { return JSON.parse(raw) as BrandConfig; } catch { return null; }
+}
 
 function toPass(r: Row): PlatformPass {
   return {
@@ -140,6 +160,7 @@ function toPass(r: Row): PlatformPass {
     lpPassId: (r.lp_pass_id as string) ?? null,
     status: r.status as PassStatus,
     brand: r.brand as string,
+    brandConfig: parseBrandConfig(r.brand_config),
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -167,6 +188,7 @@ function toTile(r: Row): PlatformTile {
     archetype: r.archetype as TileArchetype,
     paletteIndex: r.palette_index as number,
     seed: r.seed as number,
+    grain: (r.grain as GrainLevel) ?? 'subtle',
     backgroundRef: (r.background_ref as string) ?? null,
     durationSec: (r.duration_sec as number) ?? null,
     createdAt: r.created_at as string,
@@ -188,10 +210,10 @@ export function createPass(input: { title: string; brand?: string; source?: Pass
   const brand = input.brand ?? DEFAULT_BRAND;
   const source = input.source ?? 'local';
   getDb().prepare(
-    `INSERT INTO platform_passes (id, title, source, status, brand, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)`,
+    `INSERT INTO platform_passes (id, title, source, status, brand, brand_config, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
   ).run(id, title, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, source, lpPassId: null, status: 'draft', brand, createdAt: now, updatedAt: now };
+  return { id, title, source, lpPassId: null, status: 'draft', brand, brandConfig: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
@@ -203,14 +225,22 @@ function touchPass(id: string): void {
   getDb().prepare('UPDATE platform_passes SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
 }
 
-export function updatePass(id: string, patch: { title?: string; status?: PassStatus; brand?: string }): PlatformPass | null {
+export interface PassPatch {
+  title?: string;
+  status?: PassStatus;
+  brand?: string;
+  brandConfig?: BrandConfig | null;
+}
+
+export function updatePass(id: string, patch: PassPatch): PlatformPass | null {
   const existing = getPass(id);
   if (!existing) return null;
   const title = patch.title !== undefined ? patch.title.trim() || existing.title : existing.title;
   const status = patch.status ?? existing.status;
   const brand = patch.brand ?? existing.brand;
-  getDb().prepare('UPDATE platform_passes SET title = ?, status = ?, brand = ?, updated_at = ? WHERE id = ?')
-    .run(title, status, brand, new Date().toISOString(), id);
+  const brandConfig = 'brandConfig' in patch ? patch.brandConfig : existing.brandConfig;
+  getDb().prepare('UPDATE platform_passes SET title = ?, status = ?, brand = ?, brand_config = ?, updated_at = ? WHERE id = ?')
+    .run(title, status, brand, brandConfig ? JSON.stringify(brandConfig) : null, new Date().toISOString(), id);
   return getPass(id);
 }
 
@@ -241,12 +271,13 @@ export function createCategory(passId: string, input: { title: string }): Platfo
   if (!getPass(passId)) return null;
   const id = randomUUID();
   const now = new Date().toISOString();
+  const title = input.title.trim() || 'New category';
   const max = getDb().prepare('SELECT COALESCE(MAX(position), -1) AS m FROM platform_categories WHERE pass_id = ?').get(passId) as Row;
   const position = (max.m as number) + 1;
   getDb().prepare('INSERT INTO platform_categories (id, pass_id, title, position, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(id, passId, input.title.trim() || 'New category', position, now);
+    .run(id, passId, title, position, now);
   touchPass(passId);
-  return { id, passId, title: input.title.trim() || 'New category', position, createdAt: now };
+  return { id, passId, title, position, createdAt: now };
 }
 
 export function updateCategory(id: string, patch: { title?: string; position?: number }): void {
@@ -261,6 +292,13 @@ export function updateCategory(id: string, patch: { title?: string; position?: n
   touchPass(passId);
 }
 
+/** Persist a full category ordering for a pass (positions by array index). */
+export function reorderCategories(passId: string, orderedIds: string[]): void {
+  const db = getDb();
+  orderedIds.forEach((cid, i) => db.prepare('UPDATE platform_categories SET position = ? WHERE id = ? AND pass_id = ?').run(i, cid, passId));
+  touchPass(passId);
+}
+
 export function deleteCategory(id: string): void {
   const passId = passIdForCategory(id);
   getDb().prepare('DELETE FROM platform_categories WHERE id = ?').run(id);
@@ -269,14 +307,16 @@ export function deleteCategory(id: string): void {
 
 // ── Tiles ────────────────────────────────────────────────────────────────────
 
-function context(categoryId: string): { passId: string; brand: string } | null {
+function context(categoryId: string): { passId: string; brand: string; brandConfig: BrandConfig | null } | null {
   const row = getDb().prepare(
-    `SELECT c.pass_id AS pass_id, p.brand AS brand
+    `SELECT c.pass_id AS pass_id, p.brand AS brand, p.brand_config AS brand_config
        FROM platform_categories c JOIN platform_passes p ON p.id = c.pass_id
       WHERE c.id = ?`,
   ).get(categoryId) as Row | undefined;
-  return row ? { passId: row.pass_id as string, brand: row.brand as string } : null;
+  return row ? { passId: row.pass_id as string, brand: row.brand as string, brandConfig: parseBrandConfig(row.brand_config) } : null;
 }
+
+const NEW_TILE_ROTATION: TileArchetype[] = ['gradient', 'geometric', 'duotone'];
 
 export function createTile(categoryId: string, input: { title: string; description?: string }): PlatformTile | null {
   const ctx = context(categoryId);
@@ -285,14 +325,22 @@ export function createTile(categoryId: string, input: { title: string; descripti
   const now = new Date().toISOString();
   const title = input.title.trim() || 'New tile';
   const description = (input.description ?? '').trim();
-  const recipe = deriveRecipe(title, description, ctx.brand);
+  const brand = resolveBrand(ctx.brand, ctx.brandConfig);
+  const recipe = deriveRecipe(title, description, brand);
   const max = getDb().prepare('SELECT COALESCE(MAX(position), -1) AS m FROM platform_tiles WHERE category_id = ?').get(categoryId) as Row;
   const position = (max.m as number) + 1;
+
+  // Vary each new tile from the preceding one so a fresh rail isn't uniform.
+  const isGeneric = /^new tile$/i.test(title) || title === '';
+  const archetype = isGeneric ? NEW_TILE_ROTATION[position % NEW_TILE_ROTATION.length] : recipe.archetype;
+  const paletteIndex = (recipe.paletteIndex + position) % brand.accents.length;
+  const seed = (recipe.seed ^ Math.imul(position + 1, 2654435761)) >>> 0;
+
   getDb().prepare(
     `INSERT INTO platform_tiles
-       (id, category_id, title, description, position, archetype, palette_index, seed, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, categoryId, title, description, position, recipe.archetype, recipe.paletteIndex, recipe.seed, now, now);
+       (id, category_id, title, description, position, archetype, palette_index, seed, grain, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'subtle', ?, ?)`,
+  ).run(id, categoryId, title, description, position, archetype, paletteIndex, seed, now, now);
   touchPass(ctx.passId);
   return getTile(id);
 }
@@ -315,26 +363,38 @@ export interface TilePatch {
   archetype?: TileArchetype;
   paletteIndex?: number;
   seed?: number;
+  grain?: GrainLevel;
   position?: number;
+  categoryId?: string;
 }
 
 export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
   const existing = getTile(id);
   if (!existing) return null;
-  const merged = {
+  const m = {
     title: patch.title !== undefined ? (patch.title.trim() || existing.title) : existing.title,
     description: patch.description !== undefined ? patch.description : existing.description,
     archetype: patch.archetype ?? existing.archetype,
     paletteIndex: patch.paletteIndex ?? existing.paletteIndex,
     seed: patch.seed ?? existing.seed,
+    grain: patch.grain ?? existing.grain,
     position: patch.position ?? existing.position,
+    categoryId: patch.categoryId ?? existing.categoryId,
   };
   getDb().prepare(
-    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, position = ?, updated_at = ? WHERE id = ?`,
-  ).run(merged.title, merged.description, merged.archetype, merged.paletteIndex, merged.seed, merged.position, new Date().toISOString(), id);
+    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, position = ?, category_id = ?, updated_at = ? WHERE id = ?`,
+  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.position, m.categoryId, new Date().toISOString(), id);
   const passId = passIdForTile(id);
   if (passId) touchPass(passId);
   return getTile(id);
+}
+
+/** Persist a full tile ordering for a category (positions by array index). */
+export function reorderTiles(categoryId: string, orderedIds: string[]): void {
+  const db = getDb();
+  orderedIds.forEach((tid, i) => db.prepare('UPDATE platform_tiles SET category_id = ?, position = ? WHERE id = ?').run(categoryId, i, tid));
+  const passId = passIdForCategory(categoryId);
+  if (passId) touchPass(passId);
 }
 
 /** Re-derive a tile's visual recipe from its (current) title + description. */
@@ -342,7 +402,8 @@ export function regenerateTile(id: string): PlatformTile | null {
   const tile = getTile(id);
   if (!tile) return null;
   const passId = passIdForTile(id);
-  const brand = passId ? (getPass(passId)?.brand ?? DEFAULT_BRAND) : DEFAULT_BRAND;
+  const pass = passId ? getPass(passId) : null;
+  const brand = resolveBrand(pass?.brand ?? DEFAULT_BRAND, pass?.brandConfig ?? null);
   const recipe = deriveRecipe(tile.title, tile.description, brand);
   return updateTile(id, { archetype: recipe.archetype, paletteIndex: recipe.paletteIndex, seed: recipe.seed });
 }

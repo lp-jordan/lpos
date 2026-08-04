@@ -37,12 +37,50 @@ export const BRANDS: Record<string, Brand> = {
     accents: ['#C2461F', '#E0952B', '#D8B24A', '#9E4E2C', '#8A7A2E'],
     duoDark: '#17110B', duoLight: '#7A5636', gold: '#E7C25A',
   },
+  harbor: {
+    key: 'harbor', name: 'Harbor', swatch: '#2E6E8E',
+    accents: ['#2E6E8E', '#3FA7A0', '#5C7CA6', '#8AA6B8', '#D8B26D'],
+    duoDark: '#0B1620', duoLight: '#5A87A0', gold: '#D8B26D',
+  },
+  orchid: {
+    key: 'orchid', name: 'Orchid', swatch: '#B0308E',
+    accents: ['#B0308E', '#7C3FD0', '#E24A8B', '#F06A4C', '#5C4BC0'],
+    duoDark: '#150A1A', duoLight: '#8A5A96', gold: '#E7B85A',
+  },
 };
 
 export const DEFAULT_BRAND = 'leaderpass';
 
+/** Partial overrides stored per-pass to customise a brand's parameters. */
+export interface BrandConfig {
+  name?: string;
+  accents?: string[];
+  duoDark?: string;
+  duoLight?: string;
+  gold?: string;
+}
+
 export function getBrand(key: string | null | undefined): Brand {
   return BRANDS[key ?? ''] ?? BRANDS[DEFAULT_BRAND];
+}
+
+/**
+ * Resolves the effective brand for a pass: the named default brand, with any
+ * per-pass `config` overrides merged on top. Swatch tracks the first accent.
+ */
+export function resolveBrand(key: string | null | undefined, config?: BrandConfig | null): Brand {
+  const base = getBrand(key);
+  if (!config) return base;
+  const accents = config.accents && config.accents.length ? config.accents : base.accents;
+  return {
+    ...base,
+    name: config.name ?? base.name,
+    accents,
+    duoDark: config.duoDark ?? base.duoDark,
+    duoLight: config.duoLight ?? base.duoLight,
+    gold: config.gold ?? base.gold,
+    swatch: accents[0] ?? base.swatch,
+  };
 }
 
 export interface TileRecipe {
@@ -106,8 +144,7 @@ const RULES: Array<{ re: RegExp; arch: TileArchetype; q: string }> = [
   { re: /intro|start|begin|welcome|overview|foundation/i, arch: 'gradient', q: '' },
 ];
 
-export function deriveRecipe(title: string, description: string, brandKey: string): TileRecipe {
-  const brand = getBrand(brandKey);
+export function deriveRecipe(title: string, description: string, brand: Brand): TileRecipe {
   const text = `${title} ${description || ''}`;
   let arch: TileArchetype = 'gradient';
   let q = '';
@@ -143,11 +180,10 @@ function grainOverlay(id: string, level: GrainLevel): string {
  * Grain is applied only to gradient & duotone (geometric stays crisp).
  */
 export function buildTileBackgroundSVG(
-  brandKey: string,
+  b: Brand,
   tile: TileVisual,
   opts: { grain?: GrainLevel } = {},
 ): string {
-  const b = getBrand(brandKey);
   const acc = b.accents[tile.paletteIndex % b.accents.length];
   const r = rng(tile.seed);
   const id = `${tile.id}_${b.key}`;

@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { PlatformPass, PassStatus } from '@/lib/store/platform-pass-store';
-import { getBrand } from '@/lib/platform/tile-background';
-import { PassWorkspace } from './PassWorkspace';
+import { resolveBrand } from '@/lib/platform/tile-background';
 
 const STATUS_LABEL: Record<PassStatus, string> = {
   draft: 'Draft', composed: 'Composed', linked: 'Linked',
@@ -20,71 +20,49 @@ function statusColor(s: PassStatus): string {
 }
 
 export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[] }) {
-  const [passes, setPasses] = useState<PlatformPass[]>(initialPasses);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const router = useRouter();
+  const [passes] = useState<PlatformPass[]>(initialPasses);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
-
-  async function refresh() {
-    const res = await fetch('/api/platform/passes');
-    if (res.ok) setPasses((await res.json()).passes);
-  }
 
   async function createPass() {
     if (!title.trim() || busy) return;
     setBusy(true);
     const res = await fetch('/api/platform/passes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
     });
     setBusy(false);
-    if (res.ok) {
-      const { pass } = await res.json();
-      setTitle(''); setCreating(false);
-      setPasses((p) => [pass, ...p]);
-      setOpenId(pass.id);
-    }
-  }
-
-  if (openId) {
-    return <PassWorkspace passId={openId} onBack={() => { setOpenId(null); refresh(); }} />;
+    if (res.ok) { const { pass } = await res.json(); router.push(`/platform/${pass.id}`); }
   }
 
   return (
-    <div style={{ maxWidth: 1120, margin: '0 auto', padding: '28px 24px 64px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, marginBottom: 6 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>Platform</h1>
-          <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 14, maxWidth: 560 }}>
-            Compose and stage LeaderPass passes — build categories &amp; tiles, generate tile art, then export for LP admin.
-            LeaderPass stays the source of truth.
-          </p>
-        </div>
-        {!creating && (
-          <button onClick={() => setCreating(true)} style={primaryBtn}>+ Design New Pass</button>
-        )}
+    <div style={{ maxWidth: 1120, margin: '0 auto', padding: '40px 24px 64px' }}>
+      <style>{`@keyframes pfFadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }`}</style>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, animation: 'pfFadeIn .6s ease both' }}>
+        <h1 style={{ margin: 0, fontSize: 52, fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-strong)', lineHeight: 1 }}>PLATFORM</h1>
+        {!creating
+          ? <button onClick={() => setCreating(true)} style={primaryBtn}>+ Design New Pass</button>
+          : (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') createPass(); if (e.key === 'Escape') { setCreating(false); setTitle(''); } }}
+                placeholder="New pass title…"
+                style={{ ...inputStyle, width: 280 }}
+              />
+              <button onClick={createPass} disabled={!title.trim() || busy} style={{ ...primaryBtn, opacity: !title.trim() || busy ? 0.5 : 1 }}>Create</button>
+              <button onClick={() => { setCreating(false); setTitle(''); }} style={ghostBtn}>Cancel</button>
+            </div>
+          )}
       </div>
 
-      {creating && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '18px 0 4px', padding: 14, background: 'var(--surface-raised)', border: '1px solid var(--line)', borderRadius: 12 }}>
-          <input
-            autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') createPass(); if (e.key === 'Escape') { setCreating(false); setTitle(''); } }}
-            placeholder="Pass title, e.g. Decision Leadership · Pass 01"
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <button onClick={createPass} disabled={!title.trim() || busy} style={{ ...primaryBtn, opacity: !title.trim() || busy ? 0.5 : 1 }}>Create</button>
-          <button onClick={() => { setCreating(false); setTitle(''); }} style={ghostBtn}>Cancel</button>
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14, marginTop: 22 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14, marginTop: 40, animation: 'pfFadeIn .6s ease both', animationDelay: '.08s' }}>
         {passes.map((p) => {
-          const brand = getBrand(p.brand);
+          const brand = resolveBrand(p.brand, p.brandConfig);
           return (
-            <button key={p.id} onClick={() => setOpenId(p.id)} style={passCard}>
+            <button key={p.id} onClick={() => router.push(`/platform/${p.id}`)} style={passCard}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: brand.swatch }} />
                 <span style={{ fontSize: 11, color: 'var(--muted-soft)' }}>{brand.name}</span>

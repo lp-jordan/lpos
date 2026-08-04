@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import type { PassTree, PlatformTile, PassStatus } from '@/lib/store/platform-pass-store';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import type { PassTree, PlatformTile } from '@/lib/store/platform-pass-store';
 import {
-  BRANDS, getBrand, buildTileBackgroundSVG, deriveRecipe,
-  type TileArchetype, type GrainLevel,
+  BRANDS, resolveBrand, buildTileBackgroundSVG, deriveRecipe,
+  type Brand, type BrandConfig, type TileArchetype, type GrainLevel,
 } from '@/lib/platform/tile-background';
 
 const ARCHETYPES: TileArchetype[] = ['gradient', 'geometric', 'duotone', 'hero'];
@@ -16,39 +17,50 @@ function fmtDur(s: number | null): string {
   return `${m}m ${r}s`;
 }
 
-export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () => void }) {
+type Drag = { type: 'tile'; id: string; from: string } | { type: 'cat'; id: string } | null;
+
+export function PassWorkspace({ passId }: { passId: string }) {
+  const router = useRouter();
   const [tree, setTree] = useState<PassTree | null>(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
-  const [grain, setGrain] = useState<GrainLevel>('subtle');
   const [showTitles, setShowTitles] = useState(true);
+  const [brandOpen, setBrandOpen] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [drag, setDrag] = useState<Drag>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/platform/passes/${passId}`);
     if (res.ok) setTree((await res.json()).pass);
     setLoading(false);
   }, [passId]);
-
   useEffect(() => { load(); }, [load]);
 
   const applyTile = (t: PlatformTile) => setTree((prev) => prev && ({
-    ...prev,
-    categories: prev.categories.map((c) => ({
-      ...c, tiles: c.tiles.map((x) => (x.id === t.id ? t : x)),
-    })),
+    ...prev, categories: prev.categories.map((c) => ({ ...c, tiles: c.tiles.map((x) => (x.id === t.id ? t : x)) })),
   }));
 
   // ── Pass-level ──
-  async function patchPass(body: { title?: string; status?: PassStatus; brand?: string }) {
+  async function patchPass(body: Record<string, unknown>) {
     const res = await fetch(`/api/platform/passes/${passId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     if (res.ok) { const { pass } = await res.json(); setTree((p) => p && { ...p, ...pass }); }
   }
-  async function changeBrand(brand: string) {
-    await patchPass({ brand });
-    await load(); // recolour every tile
+  function saveDraft() {
+    patchPass({ status: 'draft' });
+    setSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 1600);
   }
+  function pickBrand(key: string) {
+    setTree((p) => p && { ...p, brand: key, brandConfig: null });
+    patchPass({ brand: key, brandConfig: null });
+  }
+  function liveBrandConfig(cfg: BrandConfig) { setTree((p) => p && { ...p, brandConfig: cfg }); }
+  function persistBrand() { if (tree) patchPass({ brand: tree.brand, brandConfig: tree.brandConfig }); }
+  function resetBrand() { setTree((p) => p && { ...p, brandConfig: null }); patchPass({ brandConfig: null }); }
 
   // ── Category-level ──
   async function addCategory() {
@@ -57,119 +69,166 @@ export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () =
     });
     load();
   }
-  async function renameCategory(id: string, title: string) {
-    await fetch(`/api/platform/categories/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }),
-    });
+  function renameCategory(id: string, title: string) {
+    fetch(`/api/platform/categories/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
   }
-  async function deleteCategory(id: string) {
-    await fetch(`/api/platform/categories/${id}`, { method: 'DELETE' });
-    load();
-  }
+  async function deleteCategory(id: string) { await fetch(`/api/platform/categories/${id}`, { method: 'DELETE' }); load(); }
 
   // ── Tile-level ──
   async function addTile(categoryId: string) {
-    const res = await fetch(`/api/platform/categories/${categoryId}/tiles`, {
+    await fetch(`/api/platform/categories/${categoryId}/tiles`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'New tile' }),
     });
-    await load();
-    if (res.ok) { const { tile } = await res.json(); setSelected(tile.id); }
+    load(); // note: do NOT auto-open the inspector
   }
   async function patchTile(id: string, body: Record<string, unknown>) {
-    const res = await fetch(`/api/platform/tiles/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
+    const res = await fetch(`/api/platform/tiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) applyTile((await res.json()).tile);
   }
-  async function deleteTile(id: string) {
-    await fetch(`/api/platform/tiles/${id}`, { method: 'DELETE' });
-    setSelected(null);
-    load();
+  async function deleteTile(id: string) { await fetch(`/api/platform/tiles/${id}`, { method: 'DELETE' }); setSelected(null); load(); }
+
+  // ── Drag & drop reorg ──
+  function reorderTilesApi(categoryId: string, tileIds: string[]) {
+    fetch(`/api/platform/categories/${categoryId}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tileIds }) });
+  }
+  function reorderCatsApi(categoryIds: string[]) {
+    fetch(`/api/platform/passes/${passId}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoryIds }) });
+  }
+  function dropTile(destCatId: string, beforeTileId: string | null) {
+    if (!drag || drag.type !== 'tile' || !tree) { setDrag(null); return; }
+    const fromCat = drag.from, draggedId = drag.id;
+    const cats = tree.categories.map((c) => ({ ...c, tiles: [...c.tiles] }));
+    const source = cats.find((c) => c.id === fromCat); const dest = cats.find((c) => c.id === destCatId);
+    if (!source || !dest) { setDrag(null); return; }
+    const idx = source.tiles.findIndex((t) => t.id === draggedId);
+    if (idx < 0) { setDrag(null); return; }
+    const [moved] = source.tiles.splice(idx, 1);
+    let at = beforeTileId ? dest.tiles.findIndex((t) => t.id === beforeTileId) : dest.tiles.length;
+    if (at < 0) at = dest.tiles.length;
+    dest.tiles.splice(at, 0, { ...moved, categoryId: destCatId });
+    setTree({ ...tree, categories: cats });
+    setDrag(null);
+    reorderTilesApi(destCatId, dest.tiles.map((t) => t.id));
+    if (fromCat !== destCatId) reorderTilesApi(fromCat, source.tiles.map((t) => t.id));
+  }
+  function dropCat(beforeCatId: string | null) {
+    if (!drag || drag.type !== 'cat' || !tree) { setDrag(null); return; }
+    const draggedId = drag.id;
+    const cats = [...tree.categories];
+    const idx = cats.findIndex((c) => c.id === draggedId);
+    if (idx < 0) { setDrag(null); return; }
+    const [moved] = cats.splice(idx, 1);
+    let at = beforeCatId ? cats.findIndex((c) => c.id === beforeCatId) : cats.length;
+    if (at < 0) at = cats.length;
+    cats.splice(at, 0, moved);
+    setTree({ ...tree, categories: cats });
+    setDrag(null);
+    reorderCatsApi(cats.map((c) => c.id));
   }
 
-  if (loading || !tree) {
-    return <div style={{ padding: 48, color: 'var(--muted)' }}>Loading pass…</div>;
-  }
+  if (loading || !tree) return <div style={{ padding: 48, color: 'var(--muted)' }}>Loading pass…</div>;
 
-  const brand = getBrand(tree.brand);
+  const brand = resolveBrand(tree.brand, tree.brandConfig);
   const selectedTile: PlatformTile | null = selected
-    ? tree.categories.flatMap((c) => c.tiles).find((t) => t.id === selected) ?? null
-    : null;
+    ? tree.categories.flatMap((c) => c.tiles).find((t) => t.id === selected) ?? null : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 0px)' }}>
-      {/* Toolbar */}
-      <div style={toolbar}>
-        <button onClick={onBack} style={iconBtn} title="Back to passes">←</button>
-        <input
-          defaultValue={tree.title}
-          onBlur={(e) => patchPass({ title: e.target.value })}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-          style={titleInput}
-          aria-label="Pass title"
-        />
-        <span style={statusPill}>{tree.status}</span>
-        <div style={{ flex: 1 }} />
-        <Segmented label="Brand" options={Object.values(BRANDS).map((b) => ({ key: b.key, label: b.name, swatch: b.swatch }))}
-          value={tree.brand} onChange={changeBrand} />
-        <Segmented label="Grain" options={GRAINS.map((g) => ({ key: g, label: g[0].toUpperCase() + g.slice(1) }))}
-          value={grain} onChange={(v) => setGrain(v as GrainLevel)} />
-        <button onClick={() => setShowTitles((s) => !s)} style={{ ...chip, ...(showTitles ? chipOn : {}) }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: showTitles ? 'var(--accent)' : 'var(--muted-soft)' }} /> Platform text
-        </button>
-        <button onClick={() => alert('Export (manifest + zip of tile PNGs) — Phase 4.')} style={exportBtn}>Export ▸</button>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      {/* Header: large pass name on top, lighter data row below */}
+      <div style={headerWrap}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={() => router.push('/platform')} style={iconBtn} title="Back to passes">←</button>
+          <input
+            defaultValue={tree.title}
+            onBlur={(e) => patchPass({ title: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            style={passNameInput} aria-label="Pass title"
+          />
+          <div style={{ flex: 1 }} />
+          {saved && <span style={{ fontSize: 12, color: 'var(--success)', fontWeight: 600 }}>✓ Saved</span>}
+          <button onClick={saveDraft} style={ghostBtn2}>Save draft</button>
+          <button onClick={() => alert('Export (manifest + zip of tile PNGs) — Phase 4.')} style={exportBtn}>Export ▸</button>
+        </div>
+        <div style={dataRow}>
+          <span style={statusPill}>{tree.status}</span>
+          <button onClick={() => setBrandOpen(true)} style={brandBtn}>
+            <span style={{ width: 16, height: 16, borderRadius: 4, background: brand.swatch }} />
+            {brand.name}{tree.brandConfig ? ' *' : ''}
+            <span style={{ color: 'var(--muted-soft)', fontSize: 11 }}>Edit ▾</span>
+          </button>
+          <button onClick={() => setShowTitles((s) => !s)} style={{ ...chip, ...(showTitles ? chipOn : {}) }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: showTitles ? 'var(--accent)' : 'var(--muted-soft)' }} /> Platform text
+          </button>
+        </div>
       </div>
 
       {/* Board */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0 60px' }}>
         {tree.categories.map((cat) => (
-          <section key={cat.id} style={{ padding: '16px 24px 4px' }}>
+          <section key={cat.id}
+            onDragOver={(e) => { if (drag?.type === 'cat') e.preventDefault(); }}
+            onDrop={() => { if (drag?.type === 'cat') dropCat(cat.id); }}
+            style={{ padding: '16px 24px 4px' }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <span draggable onDragStart={(e) => { setDrag({ type: 'cat', id: cat.id }); e.dataTransfer.setData('text/plain', cat.id); }}
+                style={dragHandle} title="Drag to reorder category">⠿</span>
               <input
                 defaultValue={cat.title}
                 onBlur={(e) => renameCategory(cat.id, e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                style={catInput}
-                aria-label="Category name"
+                style={catInput} aria-label="Category name"
               />
-              <span style={{ fontSize: 11, color: 'var(--muted-soft)', fontFamily: 'ui-monospace, Menlo, monospace' }}>
-                {cat.tiles.length} {cat.tiles.length === 1 ? 'tile' : 'tiles'}
-              </span>
-              <button onClick={() => deleteCategory(cat.id)} style={faintBtn}>Delete</button>
+              {/* right-justified category controls */}
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 11, color: 'var(--muted-soft)', fontFamily: 'ui-monospace, Menlo, monospace' }}>
+                  {cat.tiles.length} {cat.tiles.length === 1 ? 'tile' : 'tiles'}
+                </span>
+                <button onClick={() => deleteCategory(cat.id)} style={faintBtn}>Delete</button>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px' }}>
+
+            <div
+              onDragOver={(e) => { if (drag?.type === 'tile') e.preventDefault(); }}
+              onDrop={() => { if (drag?.type === 'tile') dropTile(cat.id, null); }}
+              style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px 2px 12px' }}
+            >
               {cat.tiles.map((t) => (
                 <div key={t.id} style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 7 }}>
                   <div
+                    draggable
+                    onDragStart={(e) => { setDrag({ type: 'tile', id: t.id, from: cat.id }); e.dataTransfer.setData('text/plain', t.id); }}
+                    onDragOver={(e) => { if (drag?.type === 'tile') e.preventDefault(); }}
+                    onDrop={(e) => { if (drag?.type === 'tile') { e.stopPropagation(); dropTile(cat.id, t.id); } }}
                     onClick={() => setSelected(t.id)}
                     style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
                   >
-                    <div style={{ position: 'absolute', inset: 0 }}
-                      dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(tree.brand, t, { grain }) }} />
+                    <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain }) }} />
                     {showTitles && <div style={tileTitle}>{t.title}</div>}
                     <div style={tileBadge}>{t.archetype}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px' }}>
-                    {t.mediaAssetId ? <span>▤ {t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
-                      : <span style={{ color: 'var(--muted-soft)' }}>○ not linked</span>}
+                    {t.mediaAssetId ? <span>▤ {t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span> : <span>○ not linked</span>}
                   </div>
                 </div>
               ))}
-              <button onClick={() => addTile(cat.id)} style={addTileBtn}>
-                <span style={{ fontSize: 24, fontWeight: 300 }}>+</span>Add tile
-              </button>
+              <button onClick={() => addTile(cat.id)} style={addTileBtn}><span style={{ fontSize: 24, fontWeight: 300 }}>+</span>Add tile</button>
             </div>
           </section>
         ))}
         <button onClick={addCategory} style={addCatBtn}>+  New category</button>
-
-        <div style={prodNote}>
-          <b style={{ color: 'var(--text)' }}>Phase 1</b> — staging only. Tile backgrounds render live; linking media,
-          persisting art to Cloudflare, Pass&nbsp;Prep and Export come next. LeaderPass admin remains the source of truth.
-        </div>
       </div>
 
-      {/* Inspector */}
+      {/* Brand modal */}
+      {brandOpen && (
+        <BrandModal
+          brand={brand} customised={!!tree.brandConfig}
+          onPick={pickBrand} onLive={liveBrandConfig} onPersist={persistBrand} onReset={resetBrand}
+          onClose={() => setBrandOpen(false)}
+        />
+      )}
+
+      {/* Tile inspector */}
       {selectedTile && (
         <>
           <div onClick={() => setSelected(null)} style={scrimBg} />
@@ -180,18 +239,16 @@ export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () =
             </div>
             <div style={inspBody}>
               <div style={previewFrame}>
-                <div style={{ position: 'absolute', inset: 0 }}
-                  dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(tree.brand, selectedTile, { grain }) }} />
+                <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, selectedTile, { grain: selectedTile.grain }) }} />
                 {showTitles && <div style={pvTitle}>{selectedTile.title}</div>}
               </div>
 
               <Field label="Title">
-                <input defaultValue={selectedTile.title} key={`title-${selectedTile.id}`}
-                  onBlur={(e) => patchTile(selectedTile.id, { title: e.target.value })}
-                  style={fieldInput} />
+                <input key={`title-${selectedTile.id}`} defaultValue={selectedTile.title}
+                  onBlur={(e) => patchTile(selectedTile.id, { title: e.target.value })} style={fieldInput} />
               </Field>
               <Field label="Description">
-                <textarea defaultValue={selectedTile.description} key={`desc-${selectedTile.id}`}
+                <textarea key={`desc-${selectedTile.id}`} defaultValue={selectedTile.description}
                   onBlur={(e) => patchTile(selectedTile.id, { description: e.target.value })}
                   placeholder="What is this video about?" style={{ ...fieldInput, minHeight: 62, resize: 'vertical' }} />
               </Field>
@@ -209,15 +266,14 @@ export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () =
                 </RecipeRow>
                 <RecipeRow k="Seed"><span style={mono}>{(selectedTile.seed >>> 0).toString(16).slice(0, 8)}</span></RecipeRow>
                 {selectedTile.archetype === 'duotone' && (
-                  <RecipeRow k="Stock"><span style={{ color: 'var(--muted)', fontSize: 12 }}>“{deriveRecipe(selectedTile.title, selectedTile.description, tree.brand).stockQuery}”</span></RecipeRow>
+                  <RecipeRow k="Stock"><span style={{ color: 'var(--muted)', fontSize: 12 }}>“{deriveRecipe(selectedTile.title, selectedTile.description, brand).stockQuery}”</span></RecipeRow>
                 )}
               </div>
 
               <Control label="Override style">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6 }}>
                   {ARCHETYPES.map((a) => (
-                    <button key={a} onClick={() => patchTile(selectedTile.id, { archetype: a })}
-                      style={{ ...miniBtn, ...(selectedTile.archetype === a ? miniBtnOn : {}) }}>
+                    <button key={a} onClick={() => patchTile(selectedTile.id, { archetype: a })} style={{ ...miniBtn, ...(selectedTile.archetype === a ? miniBtnOn : {}) }}>
                       {a[0].toUpperCase() + a.slice(1)}
                     </button>
                   ))}
@@ -227,9 +283,18 @@ export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () =
               <Control label="Override palette">
                 <div style={{ display: 'flex', gap: 7 }}>
                   {brand.accents.map((a, i) => (
-                    <button key={i} onClick={() => patchTile(selectedTile.id, { paletteIndex: i })}
-                      aria-label={`Palette ${i + 1}`}
+                    <button key={i} onClick={() => patchTile(selectedTile.id, { paletteIndex: i })} aria-label={`Palette ${i + 1}`}
                       style={{ width: 30, height: 30, borderRadius: 7, background: a, border: i === (selectedTile.paletteIndex % brand.accents.length) ? '2px solid var(--text)' : '2px solid transparent', cursor: 'pointer' }} />
+                  ))}
+                </div>
+              </Control>
+
+              <Control label="Grain">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6 }}>
+                  {GRAINS.map((g) => (
+                    <button key={g} onClick={() => patchTile(selectedTile.id, { grain: g })} style={{ ...miniBtn, ...(selectedTile.grain === g ? miniBtnOn : {}) }}>
+                      {g[0].toUpperCase() + g.slice(1)}
+                    </button>
                   ))}
                 </div>
               </Control>
@@ -246,25 +311,74 @@ export function PassWorkspace({ passId, onBack }: { passId: string; onBack: () =
   );
 }
 
-// ── Small helpers ──
-function Segmented({ label, options, value, onChange }: {
-  label: string; options: Array<{ key: string; label: string; swatch?: string }>; value: string; onChange: (v: string) => void;
+// ── Brand modal ──
+function BrandModal({ brand, customised, onPick, onLive, onPersist, onReset, onClose }: {
+  brand: Brand; customised: boolean;
+  onPick: (key: string) => void; onLive: (cfg: BrandConfig) => void; onPersist: () => void; onReset: () => void; onClose: () => void;
 }) {
+  const snapshot = (override: Partial<BrandConfig>): BrandConfig => ({
+    name: brand.name, accents: [...brand.accents], duoDark: brand.duoDark, duoLight: brand.duoLight, gold: brand.gold, ...override,
+  });
+  const setAccent = (i: number, val: string) => { const accents = [...brand.accents]; accents[i] = val; onLive(snapshot({ accents })); };
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span style={tbLabel}>{label}</span>
-      <div style={segmented}>
-        {options.map((o) => (
-          <button key={o.key} onClick={() => onChange(o.key)}
-            style={{ ...segBtn, ...(value === o.key ? segBtnOn : {}) }}>
-            {o.swatch && <span style={{ width: 18, height: 10, borderRadius: 3, background: o.swatch }} />}
-            {o.label}
-          </button>
-        ))}
+    <>
+      <div onClick={onClose} style={scrimBg} />
+      <div style={brandModal}>
+        <div style={inspHead}>
+          <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--muted)' }}>Brand</span>
+          <button onClick={onClose} style={iconBtn}>✕</button>
+        </div>
+        <div style={{ ...inspBody, gap: 20 }}>
+          <div>
+            <div style={fieldLabel}>Presets</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginTop: 8 }}>
+              {Object.values(BRANDS).map((b) => (
+                <button key={b.key} onClick={() => onPick(b.key)}
+                  style={{ ...presetCard, borderColor: !customised && b.key === brand.key ? 'var(--accent)' : 'var(--line)' }}>
+                  <div style={{ display: 'flex', gap: 3 }}>{b.accents.map((a, i) => <span key={i} style={{ width: 16, height: 16, borderRadius: 3, background: a }} />)}</div>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>{b.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={fieldLabel}>Customize{customised ? ' *' : ''}</span>
+              {customised && <button onClick={onReset} style={faintBtn}>Reset to preset</button>}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              {brand.accents.map((a, i) => (
+                <ColorSwatch key={i} label={`Accent ${i + 1}`} value={a} onChange={(v) => setAccent(i, v)} onCommit={onPersist} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+              <ColorSwatch label="Shadow" value={brand.duoDark} onChange={(v) => onLive(snapshot({ duoDark: v }))} onCommit={onPersist} />
+              <ColorSwatch label="Highlight" value={brand.duoLight} onChange={(v) => onLive(snapshot({ duoLight: v }))} onCommit={onPersist} />
+              <ColorSwatch label="Line" value={brand.gold} onChange={(v) => onLive(snapshot({ gold: v }))} onCommit={onPersist} />
+            </div>
+            <p style={{ fontSize: 11.5, color: 'var(--muted-soft)', marginTop: 12, lineHeight: 1.5 }}>
+              Edits apply to this pass only. Tiles recolour live; changes save when you release the picker.
+            </p>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
+
+function ColorSwatch({ label, value, onChange, onCommit }: { label: string; value: string; onChange: (v: string) => void; onCommit: () => void }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }} title={label}>
+      <input type="color" value={value} onChange={(e) => onChange(e.target.value)} onBlur={onCommit}
+        style={{ width: 40, height: 34, border: '1px solid var(--line)', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 2 }} />
+      <span style={{ fontSize: 9.5, color: 'var(--muted-soft)' }}>{label}</span>
+    </label>
+  );
+}
+
+// ── Small helpers ──
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><label style={fieldLabel}>{label}</label>{children}</div>;
 }
@@ -281,17 +395,16 @@ function RecipeRow({ k, children }: { k: string; children: React.ReactNode }) {
 }
 
 // ── Styles ──
-const toolbar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 14, padding: '10px 18px', background: 'var(--surface)', borderBottom: '1px solid var(--line)', flexShrink: 0, flexWrap: 'wrap' };
-const iconBtn: React.CSSProperties = { width: 32, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--muted)', fontSize: 15, cursor: 'pointer' };
-const titleInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 15, fontWeight: 600, padding: '5px 9px', borderRadius: 8, maxWidth: 260, outline: 'none' };
-const statusPill: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', border: '1px solid var(--line)', borderRadius: 6, padding: '3px 8px' };
-const tbLabel: React.CSSProperties = { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.09em', color: 'var(--muted-soft)', fontWeight: 600 };
-const segmented: React.CSSProperties = { display: 'inline-flex', background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 9, padding: 3, gap: 2 };
-const segBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12.5, fontWeight: 600, padding: '5px 10px', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' };
-const segBtnOn: React.CSSProperties = { background: 'var(--surface-3)', color: 'var(--text-strong)' };
-const chip: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 12.5, fontWeight: 600, padding: '7px 11px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' };
+const headerWrap: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 24px 12px', background: 'var(--surface)', borderBottom: '1px solid var(--line)', flexShrink: 0 };
+const dataRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' };
+const iconBtn: React.CSSProperties = { width: 32, height: 32, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--muted)', fontSize: 15, cursor: 'pointer', flexShrink: 0 };
+const passNameInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', padding: '4px 8px', borderRadius: 8, outline: 'none', flex: '0 1 auto', minWidth: 120 };
+const statusPill: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', border: '1px solid var(--line)', borderRadius: 6, padding: '4px 9px' };
+const brandBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, cursor: 'pointer' };
+const chip: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' };
 const chipOn: React.CSSProperties = { color: 'var(--text-strong)', borderColor: 'var(--accent)', background: 'var(--accent-soft)' };
 const exportBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--text)', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 8, cursor: 'pointer' };
+const dragHandle: React.CSSProperties = { cursor: 'grab', color: 'var(--muted-soft)', fontSize: 15, userSelect: 'none', padding: '0 2px' };
 const catInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 17, fontWeight: 700, letterSpacing: '-0.015em', padding: '3px 8px', borderRadius: 7, outline: 'none', minWidth: 40 };
 const faintBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12, padding: '5px 8px', borderRadius: 6, fontWeight: 600, cursor: 'pointer' };
 const tileCard: React.CSSProperties = { position: 'relative', width: 152, height: 213, borderRadius: 14, overflow: 'hidden', cursor: 'pointer', background: '#222', isolation: 'isolate' };
@@ -299,9 +412,9 @@ const tileTitle: React.CSSProperties = { position: 'absolute', top: 12, left: 13
 const tileBadge: React.CSSProperties = { position: 'absolute', bottom: 10, left: 12, zIndex: 2, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,.82)', background: 'rgba(0,0,0,.32)', padding: '3px 7px', borderRadius: 5 };
 const addTileBtn: React.CSSProperties = { flex: '0 0 auto', width: 152, height: 213, border: '1.5px dashed var(--line-strong)', borderRadius: 14, background: 'transparent', color: 'var(--muted-soft)', fontSize: 13, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' };
 const addCatBtn: React.CSSProperties = { margin: '6px 24px 0', border: '1.5px dashed var(--line)', background: 'transparent', color: 'var(--muted)', fontSize: 13, fontWeight: 600, padding: 13, borderRadius: 10, width: 'calc(100% - 48px)', cursor: 'pointer' };
-const prodNote: React.CSSProperties = { margin: '18px 24px 0', padding: '14px 16px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, fontSize: 12, lineHeight: 1.55, color: 'var(--muted)', width: 'calc(100% - 48px)' };
 const scrimBg: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 30 };
 const inspector: React.CSSProperties = { position: 'fixed', top: 0, right: 0, bottom: 0, width: 372, maxWidth: '92vw', background: 'var(--surface)', borderLeft: '1px solid var(--line)', zIndex: 40, display: 'flex', flexDirection: 'column', boxShadow: 'var(--shadow-lg)' };
+const brandModal: React.CSSProperties = { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 420, maxWidth: '94vw', maxHeight: '86vh', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, zIndex: 40, display: 'flex', flexDirection: 'column', boxShadow: 'var(--shadow-lg)' };
 const inspHead: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line)' };
 const inspBody: React.CSSProperties = { padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 18 };
 const previewFrame: React.CSSProperties = { alignSelf: 'center', width: 208, height: 291, borderRadius: 16, overflow: 'hidden', position: 'relative', background: '#222', isolation: 'isolate', boxShadow: 'var(--shadow-md)' };
@@ -313,4 +426,5 @@ const recipeBox: React.CSSProperties = { background: 'var(--surface-inset)', bor
 const mono: React.CSSProperties = { color: 'var(--text)', fontWeight: 600, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11.5 };
 const miniBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 11, fontWeight: 600, padding: '8px 4px', borderRadius: 7, cursor: 'pointer' };
 const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'var(--text-strong)', background: 'var(--accent-soft)' };
-const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: 9, borderRadius: 8, cursor: 'pointer' };
+const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
+const presetCard: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-inset)', cursor: 'pointer' };
