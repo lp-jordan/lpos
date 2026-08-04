@@ -37,6 +37,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [editingTile, setEditingTile] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/platform/passes/${passIdOrSlug}`);
@@ -266,7 +267,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                         style={{ flex: '0 0 auto', width: 152, display: 'flex', flexDirection: 'column', gap: 6, opacity: isDragged ? 0.35 : 1, transform: isDragged ? 'scale(0.95)' : 'none', transition: 'opacity .12s, transform .12s' }}
                       >
                         <div
-                          draggable
+                          draggable={editingTile !== t.id}
                           onDragStart={(e) => { setDrag({ type: 'tile', id: t.id, from: cat.id }); e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; }}
                           onDragEnd={() => { setDrag(null); setOver(null); }}
                           onClick={() => setSelected(t.id)}
@@ -274,16 +275,20 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                           style={{ ...tileCard, boxShadow: selected === t.id ? '0 0 0 2.5px var(--accent)' : '0 2px 8px rgba(0,0,0,.3)' }}
                         >
                           <div style={{ position: 'absolute', inset: 0 }} dangerouslySetInnerHTML={{ __html: buildTileBackgroundSVG(brand, t, { grain: t.grain, imageHref: tileImageHref(t) }) }} />
-                          {showTitles && <div style={tileTitle}>{t.title}</div>}
+                          {showTitles && (editingTile === t.id ? (
+                            <textarea
+                              autoFocus defaultValue={t.title}
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onBlur={(e) => { if (e.target.value.trim() && e.target.value !== t.title) patchTile(t.id, { title: e.target.value }); setEditingTile(null); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } else if (e.key === 'Escape') { setEditingTile(null); } }}
+                              style={tileTitleEdit}
+                            />
+                          ) : (
+                            <div style={tileTitle} onClick={(e) => { e.stopPropagation(); setEditingTile(t.id); }} title="Click to rename">{t.title}</div>
+                          ))}
                           <div style={tileBadge}>{t.archetype}</div>
                         </div>
-                        <input
-                          key={`name-${t.id}-${t.title}`} defaultValue={t.title}
-                          onClick={(e) => e.stopPropagation()}
-                          onBlur={(e) => { if (e.target.value !== t.title) patchTile(t.id, { title: e.target.value }); }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                          style={tileNameInput} aria-label="Tile name"
-                        />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted-soft)', padding: '0 2px', overflow: 'hidden' }}>
                           {(t.mediaAssetId || t.linkUrl)
                             ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.mediaKind === 'link' ? '🔗' : '▤'} {t.mediaTitle ?? t.mediaKind ?? 'media'}{t.durationSec != null ? ` · ${fmtDur(t.durationSec)}` : ''}</span>
@@ -573,7 +578,8 @@ const dropLineH: React.CSSProperties = { height: 4, borderRadius: 3, background:
 const catInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 17, fontWeight: 700, letterSpacing: '-0.015em', padding: '3px 8px', borderRadius: 7, outline: 'none', minWidth: 40 };
 const faintBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12, padding: '5px 8px', borderRadius: 6, fontWeight: 600, cursor: 'pointer' };
 const tileCard: React.CSSProperties = { position: 'relative', width: 152, height: 213, borderRadius: 14, overflow: 'hidden', cursor: 'pointer', background: '#222', isolation: 'isolate' };
-const tileTitle: React.CSSProperties = { position: 'absolute', top: 12, left: 13, right: 13, zIndex: 2, color: '#fff', fontWeight: 800, fontSize: 14.5, lineHeight: 1.14, letterSpacing: '-0.015em', textShadow: '0 1px 8px rgba(0,0,0,.5)', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+const tileTitle: React.CSSProperties = { position: 'absolute', top: 12, left: 13, right: 13, zIndex: 2, color: '#fff', fontWeight: 800, fontSize: 14.5, lineHeight: 1.14, letterSpacing: '-0.015em', textShadow: '0 1px 8px rgba(0,0,0,.5)', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', cursor: 'text' };
+const tileTitleEdit: React.CSSProperties = { position: 'absolute', top: 9, left: 10, right: 10, zIndex: 3, height: 88, background: 'rgba(0,0,0,0.42)', border: '1px solid var(--accent)', borderRadius: 6, color: '#fff', fontWeight: 800, fontSize: 14.5, lineHeight: 1.14, letterSpacing: '-0.015em', fontFamily: 'inherit', padding: '4px 6px', outline: 'none', resize: 'none' };
 const tileBadge: React.CSSProperties = { position: 'absolute', bottom: 10, left: 12, zIndex: 2, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,.82)', background: 'rgba(0,0,0,.32)', padding: '3px 7px', borderRadius: 5 };
 const addTileBtn: React.CSSProperties = { flex: '0 0 auto', width: 152, height: 213, border: '1.5px dashed var(--line-strong)', borderRadius: 14, background: 'transparent', color: 'var(--muted-soft)', fontSize: 13, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' };
 const addCatBtn: React.CSSProperties = { margin: '6px 24px 0', border: '1.5px dashed var(--line)', background: 'transparent', color: 'var(--muted)', fontSize: 13, fontWeight: 600, padding: 13, borderRadius: 10, width: 'calc(100% - 48px)', cursor: 'pointer' };
@@ -595,6 +601,5 @@ const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', backgr
 const presetCard: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', padding: 12, borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-inset)', cursor: 'pointer' };
 const linkedRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 8, padding: 8 };
 const versionPill: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, fontFamily: 'ui-monospace, Menlo, monospace', color: 'var(--accent-strong)', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft)', padding: '1px 6px', borderRadius: 5 };
-const tileNameInput: React.CSSProperties = { width: 152, background: 'var(--surface-inset)', border: '1px solid var(--line)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '4px 7px', borderRadius: 6, outline: 'none' };
 const ctxMenu: React.CSSProperties = { position: 'fixed', zIndex: 61, minWidth: 176, background: 'var(--surface-2)', border: '1px solid var(--line-strong)', borderRadius: 10, padding: 5, display: 'flex', flexDirection: 'column', gap: 1, boxShadow: 'var(--shadow-lg)' };
 const ctxItem: React.CSSProperties = { textAlign: 'left', background: 'transparent', border: 0, color: 'var(--text)', fontSize: 13, fontWeight: 500, padding: '7px 10px', borderRadius: 6, cursor: 'pointer', width: '100%' };
