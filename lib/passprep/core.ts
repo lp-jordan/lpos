@@ -1,3 +1,5 @@
+import { parseJCode } from './jcode';
+
 export type AiProvider = 'openai' | 'claude';
 
 export type Settings = {
@@ -102,13 +104,9 @@ function toCategoryLabel(keyword: string): string {
 }
 
 function deriveSourceFromVideoName(video: ProjectVideo): string {
-  const fileNameMatch = video.fileName.match(/\b\d+[a-z]\b/i);
-  if (fileNameMatch) return fileNameMatch[0].toUpperCase();
-
-  const sourceMatch = video.title.match(/\b\d+[a-z]\b/i);
-  if (sourceMatch) return sourceMatch[0].toUpperCase();
-
-  return video.fileName || video.id;
+  // Prefer the J-Code from the filename, then the title; fall back to the raw
+  // name/id for display when no code is present (shared parser in jcode.ts).
+  return parseJCode(video.fileName) ?? parseJCode(video.title) ?? (video.fileName || video.id);
 }
 
 function takeSentencePreview(input: string, maxLength = 180): string {

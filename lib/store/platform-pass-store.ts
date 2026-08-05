@@ -111,6 +111,16 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_tiles', 'duo_light', `duo_light TEXT`);
   ensureColumn(db, 'platform_tiles', 'image_source', `image_source TEXT`);
   ensureColumn(db, 'platform_tiles', 'image_prompt', `image_prompt TEXT`);
+  // Pass Prep relocation (Phase 1): per-tile J-Code join key + title/description provenance.
+  ensureColumn(db, 'platform_tiles', 'source_code', `source_code TEXT`);
+  ensureColumn(db, 'platform_tiles', 'title_source', `title_source TEXT`);
+  ensureColumn(db, 'platform_tiles', 'description_source', `description_source TEXT`);
+  // Pass Prep relocation (Phase 1): pass-level Google Sheet ("pass map") connection.
+  ensureColumn(db, 'platform_passes', 'sheet_id', `sheet_id TEXT`);
+  ensureColumn(db, 'platform_passes', 'sheet_url', `sheet_url TEXT`);
+  ensureColumn(db, 'platform_passes', 'sheet_connected_at', `sheet_connected_at TEXT`);
+  ensureColumn(db, 'platform_passes', 'sheet_tab_count', `sheet_tab_count INTEGER`);
+  ensureColumn(db, 'platform_passes', 'sheet_row_count', `sheet_row_count INTEGER`);
 }
 
 function getDb(): DatabaseSync {
@@ -130,6 +140,11 @@ export type TileMediaKind = 'video' | 'link' | 'pdf';
 /** How a tile's source image got there: hand-uploaded, pulled from the linked
  *  video's poster frame, or produced by the image-generation seam. */
 export type TileImageSource = 'uploaded' | 'poster' | 'generated';
+/** Provenance of a tile's current title. Protects human edits ('manual') from
+ *  being clobbered when Pass Prep re-runs. */
+export type TileTitleSource = 'sheet' | 'ai' | 'manual';
+/** Provenance of a tile's current description (parity/audit with title). */
+export type TileDescriptionSource = 'ai' | 'manual';
 
 export interface PlatformPass {
   id: string;
@@ -141,6 +156,12 @@ export interface PlatformPass {
   brand: string;
   brandConfig: BrandConfig | null;
   defaultProjectId: string | null;
+  /** Connected pass-map Google Sheet (Pass Prep). Null until connected. */
+  sheetId: string | null;
+  sheetUrl: string | null;
+  sheetConnectedAt: string | null;
+  sheetTabCount: number | null;
+  sheetRowCount: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -159,6 +180,11 @@ export interface PlatformTile {
   mediaThumbUrl: string | null;
   mediaVersion: number | null;
   linkUrl: string | null;
+  /** J-Code join key ('1A', '2A', …): set at seed from the sheet, or derived
+   *  from the linked asset name. Enables code-driven linking + sheet re-matching. */
+  sourceCode: string | null;
+  titleSource: TileTitleSource | null;
+  descriptionSource: TileDescriptionSource | null;
   archetype: TileArchetype;
   paletteIndex: number;
   seed: number;
@@ -221,6 +247,11 @@ function toPass(r: Row): PlatformPass {
     brand: r.brand as string,
     brandConfig: parseBrandConfig(r.brand_config),
     defaultProjectId: (r.default_project_id as string) ?? null,
+    sheetId: (r.sheet_id as string) ?? null,
+    sheetUrl: (r.sheet_url as string) ?? null,
+    sheetConnectedAt: (r.sheet_connected_at as string) ?? null,
+    sheetTabCount: (r.sheet_tab_count as number) ?? null,
+    sheetRowCount: (r.sheet_row_count as number) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -249,6 +280,9 @@ function toTile(r: Row): PlatformTile {
     mediaThumbUrl: (r.media_thumb_url as string) ?? null,
     mediaVersion: (r.media_version as number) ?? null,
     linkUrl: (r.link_url as string) ?? null,
+    sourceCode: (r.source_code as string) ?? null,
+    titleSource: (r.title_source as TileTitleSource) ?? null,
+    descriptionSource: (r.description_source as TileDescriptionSource) ?? null,
     archetype: r.archetype as TileArchetype,
     paletteIndex: r.palette_index as number,
     seed: r.seed as number,
@@ -283,7 +317,7 @@ export function createPass(input: { title: string; brand?: string; source?: Pass
     `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
   ).run(id, title, slug, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, createdAt: now, updatedAt: now };
+  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, sheetId: null, sheetUrl: null, sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
@@ -447,6 +481,11 @@ export interface TilePatch {
   duoLight?: string | null;
   position?: number;
   categoryId?: string;
+  /** Pass Prep provenance/join fields (see PlatformTile). Pass explicitly to set;
+   *  omit to leave untouched. */
+  sourceCode?: string | null;
+  titleSource?: TileTitleSource | null;
+  descriptionSource?: TileDescriptionSource | null;
 }
 
 export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
@@ -463,10 +502,13 @@ export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
     duoLight: 'duoLight' in patch ? patch.duoLight ?? null : existing.duoLight,
     position: patch.position ?? existing.position,
     categoryId: patch.categoryId ?? existing.categoryId,
+    sourceCode: 'sourceCode' in patch ? patch.sourceCode ?? null : existing.sourceCode,
+    titleSource: 'titleSource' in patch ? patch.titleSource ?? null : existing.titleSource,
+    descriptionSource: 'descriptionSource' in patch ? patch.descriptionSource ?? null : existing.descriptionSource,
   };
   getDb().prepare(
-    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, duo_shadow = ?, duo_light = ?, position = ?, category_id = ?, updated_at = ? WHERE id = ?`,
-  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.duoShadow, m.duoLight, m.position, m.categoryId, new Date().toISOString(), id);
+    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, duo_shadow = ?, duo_light = ?, position = ?, category_id = ?, source_code = ?, title_source = ?, description_source = ?, updated_at = ? WHERE id = ?`,
+  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.duoShadow, m.duoLight, m.position, m.categoryId, m.sourceCode, m.titleSource, m.descriptionSource, new Date().toISOString(), id);
   const passId = passIdForTile(id);
   if (passId) touchPass(passId);
   return getTile(id);
