@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { PassTree, PlatformTile, BrandPreset } from '@/lib/store/platform-pass-store';
+import type { PassTree, PlatformPass, PlatformTile, BrandPreset } from '@/lib/store/platform-pass-store';
 import {
   BRANDS, resolveBrand, buildTileBackgroundSVG,
   type Brand, type BrandConfig, type TileArchetype, type GrainLevel,
@@ -32,6 +32,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showTitles, setShowTitles] = useState(true);
   const [brandOpen, setBrandOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [drag, setDrag] = useState<Drag>(null);
   const [over, setOver] = useState<Over>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
@@ -250,6 +251,11 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
           <button onClick={() => setShowTitles((s) => !s)} style={{ ...chip, ...(showTitles ? chipOn : {}) }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: showTitles ? 'var(--accent)' : 'var(--muted-soft)' }} /> Platform text
           </button>
+          <button onClick={() => setSheetOpen(true)} style={{ ...chip, ...(tree.sheetId ? chipOn : {}) }}
+            title={tree.sheetId ? `Pass map connected: ${tree.sheetTabTitle}` : 'Connect a Google Sheet pass map'}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: tree.sheetId ? 'var(--accent)' : 'var(--muted-soft)' }} />
+            {tree.sheetId ? `Pass map: ${tree.sheetTabTitle}` : 'Connect pass map'}
+          </button>
           <div style={{ flex: 1 }} />
           <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
@@ -360,6 +366,16 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
           brand={brand} customised={!!tree.brandConfig}
           onPick={pickBrand} onLive={liveBrandConfig} onPersist={persistBrand} onReset={resetBrand}
           onClose={() => setBrandOpen(false)}
+        />
+      )}
+
+      {/* Pass-map (Google Sheet) connect modal */}
+      {sheetOpen && (
+        <SheetModal
+          pass={tree}
+          onConnected={(pass) => setTree((p) => p && { ...p, ...pass })}
+          onDisconnected={() => setTree((p) => p && { ...p, sheetId: null, sheetUrl: null, sheetTabGid: null, sheetTabTitle: null, sheetTabCount: null, sheetRowCount: null, sheetConnectedAt: null })}
+          onClose={() => setSheetOpen(false)}
         />
       )}
 
@@ -650,6 +666,129 @@ function CtxItem({ onClick, danger, children }: { onClick: () => void; danger?: 
       style={{ ...ctxItem, background: hover ? 'var(--surface-hover)' : 'transparent', color: danger ? 'var(--warning)' : 'var(--text)' }}>
       {children}
     </button>
+  );
+}
+
+// ── Pass-map (Google Sheet) connect modal ──
+type SheetTab = { title: string; gid: number; rowCount: number; colCount: number };
+
+function SheetModal({ pass, onConnected, onDisconnected, onClose }: {
+  pass: PassTree;
+  onConnected: (pass: PlatformPass) => void;
+  onDisconnected: () => void;
+  onClose: () => void;
+}) {
+  const [url, setUrl] = useState(pass.sheetUrl ?? '');
+  const [tabs, setTabs] = useState<SheetTab[] | null>(null);
+  const [workbookTitle, setWorkbookTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  async function loadTabs() {
+    if (!url.trim()) return;
+    setBusy(true); setError(null); setWarning(null);
+    try {
+      const res = await fetch(`/api/platform/passes/${pass.id}/sheet`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Could not read that sheet.'); return; }
+      setWorkbookTitle(data.spreadsheetTitle ?? '');
+      setTabs(data.tabs ?? []);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  async function connectTab(tab: SheetTab) {
+    setBusy(true); setError(null); setWarning(null);
+    try {
+      const res = await fetch(`/api/platform/passes/${pass.id}/sheet`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, tabGid: tab.gid }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Could not connect that tab.'); return; }
+      setWarning(data.read?.headerWarning ?? null);
+      setTabs(null);
+      onConnected(data.pass);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  async function disconnect() {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`/api/platform/passes/${pass.id}/sheet`, { method: 'DELETE' });
+      if (res.ok) { setTabs(null); setWarning(null); onDisconnected(); }
+    } finally { setBusy(false); }
+  }
+
+  const connected = !!pass.sheetId;
+
+  return (
+    <>
+      <div onClick={onClose} style={scrimBg} />
+      <div style={brandModal}>
+        <div style={inspHead}>
+          <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--muted)' }}>Pass map</span>
+          <button onClick={onClose} style={iconBtn}>✕</button>
+        </div>
+        <div style={{ ...inspBody, gap: 16 }}>
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+            Connect the Google Sheet pass map, then pick the tab for this pass. Titles come from the sheet by J-Code; each tab is one Pass.
+          </p>
+
+          {connected && !tabs && (
+            <div style={{ ...linkedRow, flexDirection: 'column', alignItems: 'stretch', gap: 8, padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)', flexShrink: 0 }} />
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-strong)' }}>{pass.sheetTabTitle}</span>
+              </div>
+              <span style={{ fontSize: 11.5, color: 'var(--muted-soft)' }}>
+                {pass.sheetRowCount ?? 0} coded {pass.sheetRowCount === 1 ? 'video' : 'videos'} · {pass.sheetTabCount ?? 0} tabs in workbook
+              </span>
+              <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                <button onClick={loadTabs} disabled={busy} style={ghostBtn2}>{busy ? 'Working…' : 'Change tab'}</button>
+                <button onClick={disconnect} disabled={busy} style={{ ...ghostBtn2, color: 'var(--warning)' }}>Disconnect</button>
+              </div>
+            </div>
+          )}
+
+          <Field label="Google Sheet link">
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={url} onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') loadTabs(); }}
+                placeholder="https://docs.google.com/spreadsheets/d/…" style={fieldInput} />
+              <button onClick={loadTabs} disabled={busy || !url.trim()} style={{ ...generateImgBtn, whiteSpace: 'nowrap', opacity: busy || !url.trim() ? 0.6 : 1 }}>
+                {busy ? '…' : 'Load tabs'}
+              </button>
+            </div>
+          </Field>
+
+          {error && (
+            <div style={{ fontSize: 12.5, color: 'var(--warning)', background: 'var(--surface-inset)', border: '1px solid var(--warning)', borderRadius: 8, padding: 10, lineHeight: 1.45 }}>{error}</div>
+          )}
+          {warning && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--surface-inset)', border: '1px solid var(--line)', borderRadius: 8, padding: 10, lineHeight: 1.45 }}>⚠ {warning}</div>
+          )}
+
+          {tabs && (
+            <Field label={`Pick this pass's tab${workbookTitle ? ` — ${workbookTitle}` : ''}`}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {tabs.map((t) => {
+                  const isCurrent = pass.sheetTabGid === t.gid;
+                  return (
+                    <button key={t.gid} onClick={() => connectTab(t)} disabled={busy}
+                      style={{ ...presetCard, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderColor: isCurrent ? 'var(--accent)' : 'var(--line)' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{t.title}</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--muted-soft)' }}>{isCurrent ? 'connected' : 'connect ▸'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
