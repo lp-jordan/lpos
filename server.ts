@@ -18,6 +18,7 @@ import next from 'next';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Socket } from 'socket.io';
 import { initServices, stopServices, getRegistry } from './lib/services/container';
+import { closeAllDatabases } from './lib/store/db-registry';
 import { APP_SESSION_COOKIE, verifySessionToken } from './lib/services/session-auth';
 
 const dev      = process.env.NODE_ENV !== 'production';
@@ -156,6 +157,16 @@ async function main() {
       httpServer.close();
       const code = (globalThis as Record<string, unknown>).__lpos_exitCode as number | undefined;
       await stopServices();
+      // Durability: fold every DB's WAL into its main file and close cleanly, so
+      // a restart never leaves data stranded in a WAL that could be lost.
+      try {
+        const outcomes = closeAllDatabases();
+        const failed = outcomes.filter((o) => !o.ok);
+        process.stdout.write(`[lpos] checkpointed + closed ${outcomes.length - failed.length}/${outcomes.length} databases\n`);
+        if (failed.length) process.stdout.write(`[lpos] db close issues: ${failed.map((f) => `${f.name}: ${f.error}`).join('; ')}\n`);
+      } catch (err) {
+        process.stdout.write(`[lpos] db shutdown error: ${(err as Error).message}\n`);
+      }
       process.stdout.write('[lpos] goodbye\n');
       process.exit(code ?? 0);
     });

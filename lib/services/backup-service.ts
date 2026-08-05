@@ -58,7 +58,7 @@ export interface BackupResult {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const DATA_DIR = process.env.LPOS_DATA_DIR ?? path.join(process.cwd(), 'data');
-const RETAIN_DAYS = parseInt(process.env.LPOS_BACKUP_RETAIN_DAYS ?? '7', 10);
+const RETAIN_DAYS = parseInt(process.env.LPOS_BACKUP_RETAIN_DAYS ?? '30', 10);
 const INTERVAL_MS = 24 * 60 * 60 * 1_000; // 24 h
 const FIRST_RUN_DELAY_MS = 90_000;         // 90 s after start() — lets Drive scan finish first
 

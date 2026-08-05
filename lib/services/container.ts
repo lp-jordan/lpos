@@ -31,6 +31,7 @@ import {
   setActivityMonitorService,
 } from './activity-monitor-service';
 import { ProjectStore } from '@/lib/store/project-store';
+import { startCheckpointTimer, stopCheckpointTimer } from '@/lib/store/db-registry';
 import { ClientOwnerStore } from '@/lib/store/client-owner-store';
 import { TaskStore } from '@/lib/store/task-store';
 import { ProspectStore } from '@/lib/store/prospect-store';
@@ -379,9 +380,14 @@ export async function initServices(io: SocketIOServer): Promise<void> {
       console.warn('[startup] cloudflare stale-upload scan failed:', err);
     }
   });
+
+  // Durability: periodically fold each DB's WAL into its main file so a crash or
+  // lost WAL can never wipe a database (see lib/store/db-registry.ts).
+  startCheckpointTimer();
 }
 
 export async function stopServices(): Promise<void> {
+  stopCheckpointTimer();
   pipelineTracker?.stop();
   uploadQueueService?.stop();
   driveWatcherService?.stop();

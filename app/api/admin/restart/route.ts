@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
+import { checkpointAllDatabases } from '@/lib/store/db-registry';
 import {
   getIngestQueueService,
   getTranscripterService,
@@ -78,6 +79,9 @@ export async function POST(req: NextRequest) {
 
     if (secondsLeft <= 0) {
       clearInterval(tick);
+      // Belt-and-suspenders: fold every WAL into its main file right before the
+      // restart, so even if graceful shutdown is interrupted the data is durable.
+      try { checkpointAllDatabases('TRUNCATE'); } catch { /* shutdown handler will retry */ }
       (globalThis as Record<string, unknown>).__lpos_exitCode = EXIT_CODE_RESTART;
       process.kill(process.pid, 'SIGTERM');
     }
