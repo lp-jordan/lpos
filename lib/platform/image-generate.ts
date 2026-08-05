@@ -1,7 +1,7 @@
 /**
  * The single seam where a tile hero image is produced from a text prompt.
  *
- * With OPENAI_API_KEY set, this calls the image model (gpt-image-1 by default)
+ * With OPENAI_API_KEY set, this calls the image model (gpt-image-2 by default)
  * and returns real PNG bytes. WITHOUT a key it returns a tonal placeholder SVG so
  * the whole pipeline — prompt build → generate → local store → render → export —
  * still works end-to-end. Callers only ever see `{ bytes, mime, placeholder }`.
@@ -34,7 +34,9 @@ const PLACEHOLDER_SVG =
   + '<text x="150" y="372" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" letter-spacing="2" fill="#e9ecef" opacity="0.5">GENERATED · PLACEHOLDER</text>'
   + '</svg>';
 
-const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-1';
+// gpt-image-2 is the current flagship (gpt-image-1 deprecates 2026-10-23).
+// Override via OPENAI_IMAGE_MODEL (e.g. gpt-image-1.5, gpt-image-2-mini).
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-2';
 const IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE ?? '1024x1536'; // 2:3 portrait, sliced to the 3:4 tile
 const IMAGE_TIMEOUT_MS = 90_000;
 
