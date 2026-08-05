@@ -153,6 +153,36 @@ export function deleteTranscriptsByAsset(projectId: string, assetId: string): nu
   return deleted;
 }
 
+/**
+ * Resolve a transcript by the asset it was made from (the load-bearing link for
+ * Pass Prep — verified: every transcript `meta.json` carries `assetId`). Picks
+ * the most recently completed transcript when several exist for one asset.
+ * Returns null when there's no transcript or the text is empty (not ready).
+ */
+export function getTranscriptTextByAsset(projectId: string, assetId: string): { jobId: string; text: string } | null {
+  const transcriptsDir = getTranscriptsDir(projectId);
+  if (!fs.existsSync(transcriptsDir)) return null;
+
+  let best: { jobId: string; completedAt: string } | null = null;
+  for (const metaFile of fs.readdirSync(transcriptsDir).filter((f) => f.endsWith('.meta.json'))) {
+    const jobId = path.basename(metaFile, '.meta.json');
+    const meta = readTranscriptMeta(projectId, jobId);
+    if (meta?.assetId !== assetId) continue;
+    const completedAt = meta?.completedAt ?? '';
+    if (!best || completedAt > best.completedAt) best = { jobId, completedAt };
+  }
+  if (!best) return null;
+
+  const text = readTranscriptText(projectId, best.jobId);
+  if (!text.trim()) return null;
+  return { jobId: best.jobId, text };
+}
+
+/** Cheap readiness check for the Pass Prep `no_transcript` flag. */
+export function hasReadyTranscriptForAsset(projectId: string, assetId: string): boolean {
+  return getTranscriptTextByAsset(projectId, assetId) !== null;
+}
+
 export function resolveTranscriptDisplayName(projectId: string, jobId: string): string {
   const meta = readTranscriptMeta(projectId, jobId);
   let filename = meta?.filename ?? jobId;

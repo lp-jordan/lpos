@@ -257,6 +257,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
             {tree.sheetId ? `Pass map: ${tree.sheetTabTitle}` : 'Connect pass map'}
           </button>
           <div style={{ flex: 1 }} />
+          <button onClick={() => router.push(`/platform/${tree.slug}/prep`)} style={exportBtn} title="Match tiles to the pass map and generate titles + descriptions">Run prep ▸</button>
           <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
       </div>

@@ -133,7 +133,9 @@ function validateModules(parsed: unknown, project: NormalizedProject): CourseMod
   }).filter((module) => module.videos.length > 0);
 }
 
-async function requestOpenAi(prompt: string): Promise<string> {
+const JSON_SYSTEM = 'You are a JSON-only course plan generator. Never return prose.';
+
+async function requestOpenAi(prompt: string, system: string = JSON_SYSTEM): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new GeneratePlanError('OPENAI_API_KEY is not configured.');
 
@@ -151,7 +153,7 @@ async function requestOpenAi(prompt: string): Promise<string> {
       input: [
         {
           role: 'system',
-          content: [{ type: 'input_text', text: 'You are a JSON-only course plan generator. Never return prose.' }],
+          content: [{ type: 'input_text', text: system }],
         },
         {
           role: 'user',
@@ -183,7 +185,7 @@ async function requestOpenAi(prompt: string): Promise<string> {
     ?? '';
 }
 
-async function requestClaude(prompt: string): Promise<string> {
+async function requestClaude(prompt: string, system: string = JSON_SYSTEM): Promise<string> {
   const apiKey = process.env.CLAUDE_API_KEY;
   if (!apiKey) throw new GeneratePlanError('CLAUDE_API_KEY is not configured.');
 
@@ -200,7 +202,7 @@ async function requestClaude(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: 6000,
-      system: 'You are a JSON-only course plan generator. Never return prose.',
+      system,
       messages: [{ role: 'user', content: prompt }],
     }),
     signal: controller.signal,
@@ -220,6 +222,15 @@ async function requestClaude(prompt: string): Promise<string> {
   const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; usage?: LlmUsageInput['usage'] };
   recordLlmUsage({ feature: 'pass_prep', model: CLAUDE_MODEL, usage: payload.usage ?? {} });
   return payload.content?.find((item) => item.type === 'text')?.text ?? '';
+}
+
+/**
+ * Shared LLM transport (provider-routed) for single-field generation — reused by
+ * `generate-fields.ts` for per-video title/description without the course-plan
+ * JSON wrapper. `system` lets callers ask for prose instead of JSON.
+ */
+export async function callModel(prompt: string, provider: AiProvider, system: string = JSON_SYSTEM): Promise<string> {
+  return provider === 'claude' ? requestClaude(prompt, system) : requestOpenAi(prompt, system);
 }
 
 export async function generateCoursePlan(input: {
