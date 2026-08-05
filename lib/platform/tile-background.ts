@@ -158,7 +158,7 @@ export function deriveRecipe(title: string, description: string, brand: Brand): 
 
 // ── SVG builder ──────────────────────────────────────────────────────────────
 
-const W = 300, H = 420;
+const W = 300, H = 400;
 
 function scrim(id: string): string {
   return `<defs><linearGradient id="scr_${id}" x1="0" y1="0" x2="0" y2="1">`
@@ -195,7 +195,7 @@ export function buildTileBackgroundSVG(
 
   if (tile.archetype === 'hero') {
     inner = `<rect width="${W}" height="${H}" fill="${mix(b.duoDark, '#000', 0.2)}"/>`
-      + `<rect x="14" y="14" width="272" height="392" rx="10" fill="none" stroke="${mix(b.duoLight, '#fff', 0.1)}" stroke-width="1.5" stroke-dasharray="7 7" opacity="0.6"/>`
+      + `<rect x="14" y="14" width="272" height="372" rx="10" fill="none" stroke="${mix(b.duoLight, '#fff', 0.1)}" stroke-width="1.5" stroke-dasharray="7 7" opacity="0.6"/>`
       + `<g fill="none" stroke="${mix(b.duoLight, '#fff', 0.2)}" stroke-width="3" opacity="0.85" transform="translate(150 200)">`
       + `<rect x="-34" y="-30" width="68" height="50" rx="6"/><circle cx="0" cy="-5" r="12"/></g>`;
     wantScrim = false;

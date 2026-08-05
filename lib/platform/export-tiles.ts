@@ -14,7 +14,7 @@ import { makeZip, type ZipEntry } from './zip';
 import type { PassTree } from '@/lib/store/platform-pass-store';
 
 const EXPORT_W = 600;
-const EXPORT_H = 840; // 5:7 portrait, 2× the 300×420 design space
+const EXPORT_H = 800; // 3:4 portrait, 2× the 300×400 design space
 
 function safeName(s: string): string {
   return (s || 'tile')

@@ -109,6 +109,8 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_tiles', 'media_version', `media_version INTEGER`);
   ensureColumn(db, 'platform_tiles', 'duo_shadow', `duo_shadow TEXT`);
   ensureColumn(db, 'platform_tiles', 'duo_light', `duo_light TEXT`);
+  ensureColumn(db, 'platform_tiles', 'image_source', `image_source TEXT`);
+  ensureColumn(db, 'platform_tiles', 'image_prompt', `image_prompt TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -125,6 +127,9 @@ function getDb(): DatabaseSync {
 export type PassSource = 'local' | 'leaderpass';
 export type PassStatus = 'draft' | 'composed' | 'linked' | 'enriched' | 'exported' | 'synced';
 export type TileMediaKind = 'video' | 'link' | 'pdf';
+/** How a tile's source image got there: hand-uploaded, pulled from the linked
+ *  video's poster frame, or produced by the image-generation seam. */
+export type TileImageSource = 'uploaded' | 'poster' | 'generated';
 
 export interface PlatformPass {
   id: string;
@@ -159,6 +164,8 @@ export interface PlatformTile {
   seed: number;
   grain: GrainLevel;
   imageMime: string | null;
+  imageSource: TileImageSource | null;
+  imagePrompt: string | null;
   duoShadow: string | null;
   duoLight: string | null;
   backgroundRef: string | null;
@@ -247,6 +254,8 @@ function toTile(r: Row): PlatformTile {
     seed: r.seed as number,
     grain: (r.grain as GrainLevel) ?? 'subtle',
     imageMime: (r.image_mime as string) ?? null,
+    imageSource: (r.image_source as TileImageSource) ?? null,
+    imagePrompt: (r.image_prompt as string) ?? null,
     duoShadow: (r.duo_shadow as string) ?? null,
     duoLight: (r.duo_light as string) ?? null,
     backgroundRef: (r.background_ref as string) ?? null,
@@ -533,13 +542,20 @@ export function rememberProjectForTile(tileId: string, projectId: string): void 
   if (passId) getDb().prepare('UPDATE platform_passes SET default_project_id = ? WHERE id = ?').run(projectId, passId);
 }
 
-/** Set (or clear) the duotone source-image mime on a tile. The image bytes are
- *  stored on local disk by the image route; here we only track presence + mime. */
-export function setTileImageMime(id: string, mime: string | null): PlatformTile | null {
+/** Set (or clear) a tile's source-image metadata. The image bytes live on local
+ *  disk (written by the image / generate routes); here we only track presence,
+ *  mime, provenance, and the prompt used for generated images. Passing a null
+ *  mime clears the source + prompt too (image removed). */
+export function setTileImage(
+  id: string,
+  mime: string | null,
+  source: TileImageSource | null = null,
+  prompt: string | null = null,
+): PlatformTile | null {
   const existing = getTile(id);
   if (!existing) return null;
-  getDb().prepare('UPDATE platform_tiles SET image_mime = ?, updated_at = ? WHERE id = ?')
-    .run(mime, new Date().toISOString(), id);
+  getDb().prepare('UPDATE platform_tiles SET image_mime = ?, image_source = ?, image_prompt = ?, updated_at = ? WHERE id = ?')
+    .run(mime, mime ? source : null, mime ? prompt : null, new Date().toISOString(), id);
   const passId = passIdForTile(id);
   if (passId) touchPass(passId);
   return getTile(id);

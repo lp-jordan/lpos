@@ -3205,3 +3205,34 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — zero errors in changed files (one pre-existing unrelated error in `lib/store/platform-pass-store.ts`, the platform stub). Not verified in a running browser (user manages the server lifecycle).
 
 **Assumptions / follow-ups:** Assumes hls.js sorts levels ascending by bitrate (top rendition = last index) — standard hls.js behavior. Follow-ups if wanted: add `?clientBandwidthHint=` at the Cloudflare manifest layer to cover Safari, and/or a `poster` frame to mask any residual ramp.
+
+---
+
+## 2026-08-05T00:00:00Z — Platform passes: tile hero-image generation pipework (placeholder-backed) + 300×400 fix
+
+**User prompt (verbatim):** "All of this looks solid. I'm ok with faces to TRY it, if we start getting shit then we can guide it away from faces. How about this - let's do as much of the pipework as possible without hooking up an actual API key right now. We can just use a single placeholder to represent any generated imagery." (Culminating a design discussion comparing our tile generator to two heavier-designed LeaderPass passes; decisions reached over prior turns: tighter tonal cohesion, recurring/uploadable brand elements, and OpenAI `gpt-image-1` for tonally-matched hero images duotone-locked through the existing pipeline. Correction supplied: actual tile dimensions are 300×400.)
+
+**Assistant response summary:** Built the full generate-a-hero-image pipeline end-to-end with the actual model call stubbed behind a single isolated seam that returns a fixed placeholder, so nothing needs an API key yet and going live is a few-line swap. Also corrected the design space from 300×420 (5:7) to 300×400 (3:4) to match the real LeaderPass tile aspect.
+
+**Files changed:**
+- `lib/platform/tile-background.ts` — design height 420→400; hero dashed-frame inset 392→372.
+- `lib/platform/export-tiles.ts` — export raster 600×840→600×800 (3:4, still 2×).
+- `lib/platform/tile-image-store.ts` (new) — shared `TILE_IMG_DIR` + `tileImagePath()` so the image + generate routes can't drift.
+- `lib/platform/image-style.ts` (new) — `buildImagePrompt(title, description)`: subject from tile words (`SUBJECT_RULES`, mirrors the archetype rules) + house `STYLE_DIRECTIVE` read live from `docs/platform-image-style.md` (baked-in fallback if missing).
+- `lib/platform/image-generate.ts` (new) — the single generation seam `generateTileImage(prompt)`; returns a tonal placeholder SVG today, with the OpenAI `gpt-image-1` branch written out and commented for go-live.
+- `app/api/platform/tiles/[tileId]/generate-image/route.ts` (new) — session-gated POST; builds prompt (or takes an override), calls the seam, writes bytes to the local image store, records provenance + prompt.
+- `app/api/platform/tiles/[tileId]/image/route.ts` — use shared path helper; record `image_source` (`uploaded`/`poster`); renamed setter.
+- `lib/store/platform-pass-store.ts` — new `image_source` + `image_prompt` columns (`ensureColumn`); `TileImageSource` type; `PlatformTile.imageSource`/`imagePrompt`; `setTileImageMime`→`setTileImage(id, mime, source?, prompt?)` (null mime clears source+prompt).
+- `app/platform/PassWorkspace.tsx` — image control is now Generate / Upload / Use-video-frame with an "Edit prompt" override + Regenerate; spinner via `genFor`; preview refreshes via the existing `?v=updatedAt` cache-buster; tile card + preview resized to 3:4 (203 / 277 px).
+- `docs/platform-image-style.md` (new) — the guardrail/style guide; `STYLE_DIRECTIVE` block is the runtime prompt source. Faces intentionally left allowed per the user.
+- `docs/platform-passes.md` — engine dimension note + a "Generated hero images" plan bullet.
+
+**Implementation summary:** Generated images reuse the exact seam duotone source images already use (local `{DATA_DIR}/platform/tile-images/{tileId}`, served same-origin), so they flow through the existing `imageHref` duotone renderer and client-side Export with zero new rendering work. The placeholder is `image/svg+xml`; it desaturates + duotone-maps like a real photo so the wiring is visibly correct.
+
+**Decision rationale:** Isolating the real API behind one `generateTileImage` function keeps the whole pipeline testable now and makes go-live a localized change. Prompt style lives in a live-read `.md` (single source of truth, tunable without redeploy) per the user's Doppler-vs-Settings principle, with a code fallback for runtime safety. Duotone-locking downstream means we can generate at medium quality and not fight model colour drift. Provenance (`image_source`) + stored prompt enable Regenerate and future "tweak & regenerate".
+
+**Alternatives considered:** Gemini/Imagen (native 3:4, slightly cheaper) — parked; OpenAI chosen per the user. Persisting a real placeholder binary — rejected in favour of a generated SVG (no binary asset, and it duotones correctly).
+
+**Commands / checks run:** `npx tsc --noEmit` — clean (the previously-noted platform-stub error is resolved by the new columns). ESLint not run (repo has no non-interactive lint config). Not run in a live server (user manages the server lifecycle).
+
+**Assumptions / follow-ups:** Go-live TODO: implement the commented OpenAI branch + set `OPENAI_API_KEY` in Doppler (needs OpenAI org verification for `gpt-image-1`); add `platform/tile-images/` to the nightly BackupService; batch "generate all heroes" as a throttled background job; guide prompts away from tight faces only if outputs get uncanny. The recurring/uploadable brand-element system (tighter tonal cohesion + seeded variety) is the still-pending design item from this thread — not built here.

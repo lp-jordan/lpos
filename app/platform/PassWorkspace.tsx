@@ -38,6 +38,9 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   const [exporting, setExporting] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [editingTile, setEditingTile] = useState<string | null>(null);
+  const [genFor, setGenFor] = useState<string | null>(null); // tile whose image is generating
+  const [promptDraft, setPromptDraft] = useState('');
+  const [showPrompt, setShowPrompt] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/platform/passes/${passIdOrSlug}`);
@@ -49,6 +52,15 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
     setLoading(false);
   }, [passIdOrSlug]);
   useEffect(() => { load(); }, [load]);
+
+  // Reset the image-prompt editor whenever a different tile is opened, prefilling
+  // from that tile's stored prompt (if it was generated before).
+  useEffect(() => {
+    const t = selected ? tree?.categories.flatMap((c) => c.tiles).find((x) => x.id === selected) : null;
+    setPromptDraft(t?.imagePrompt ?? '');
+    setShowPrompt(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const applyTile = (t: PlatformTile) => setTree((prev) => prev && ({
     ...prev, categories: prev.categories.map((c) => ({ ...c, tiles: c.tiles.map((x) => (x.id === t.id ? t : x)) })),
@@ -140,6 +152,24 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   async function removeTileImage(tileId: string) {
     const res = await fetch(`/api/platform/tiles/${tileId}/image`, { method: 'DELETE' });
     if (res.ok) applyTile((await res.json()).tile);
+  }
+  async function generateTileImage(tileId: string, prompt?: string) {
+    if (genFor) return;
+    setGenFor(tileId);
+    try {
+      const res = await fetch(`/api/platform/tiles/${tileId}/generate-image`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prompt ? { prompt } : {}),
+      });
+      if (res.ok) {
+        const { tile, prompt: used } = await res.json();
+        applyTile(tile); // updatedAt bumps → the ?v= cache-buster refreshes the preview
+        setPromptDraft(used ?? '');
+      } else {
+        alert((await res.json().catch(() => ({}))).error || 'Generation failed.');
+      }
+    } finally {
+      setGenFor(null);
+    }
   }
   const canHaveImage = (t: PlatformTile) => t.archetype === 'duotone' || t.archetype === 'geometric';
   const tileImageHref = (t: PlatformTile): string | undefined =>
@@ -400,31 +430,66 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
 
               <button onClick={() => patchTile(selectedTile.id, { regenerate: true })} style={generateBtn}>✦ Generate from description</button>
 
-              {canHaveImage(selectedTile) && (
-                <Control label={selectedTile.archetype === 'geometric' ? 'Background image' : 'Source image'}>
-                  {selectedTile.imageMime ? (
-                    <div style={linkedRow}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={tileImageHref(selectedTile)} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
-                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>{selectedTile.archetype === 'geometric' ? 'Real image · behind the shapes' : 'Real image · duotoned on brand'}</div>
-                      <label style={{ ...faintBtn, cursor: 'pointer' }}>Replace
-                        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
-                      </label>
-                      <button onClick={() => removeTileImage(selectedTile.id)} style={faintBtn}>Remove</button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <label style={{ ...ghostBtn2, flex: 1, textAlign: 'center', cursor: 'pointer' }}>Upload image
-                          <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
-                        </label>
-                        {selectedTile.mediaAssetId && <button onClick={() => useVideoFrame(selectedTile.id)} style={{ ...ghostBtn2, flex: 1 }}>Use video frame</button>}
+              {canHaveImage(selectedTile) && (() => {
+                const generating = genFor === selectedTile.id;
+                const isGeneric = selectedTile.archetype === 'geometric';
+                const promptEditor = (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <button onClick={() => setShowPrompt((s) => !s)} style={{ ...faintBtn, alignSelf: 'flex-start', padding: '2px 2px' }}>
+                      {showPrompt ? '▾ Prompt' : '▸ Edit prompt'}
+                    </button>
+                    {showPrompt && (
+                      <textarea
+                        value={promptDraft}
+                        onChange={(e) => setPromptDraft(e.target.value)}
+                        placeholder="Auto-built from the title + description. Type here to steer the generated image."
+                        style={{ ...fieldInput, minHeight: 66, resize: 'vertical', fontSize: 12.5, lineHeight: 1.4 }}
+                      />
+                    )}
+                  </div>
+                );
+                return (
+                  <Control label={isGeneric ? 'Background image' : 'Source image'}>
+                    {selectedTile.imageMime ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={linkedRow}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={tileImageHref(selectedTile)} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>
+                            {selectedTile.imageSource === 'generated' ? (isGeneric ? 'Generated · behind the shapes' : 'Generated · duotoned on brand')
+                              : selectedTile.imageSource === 'poster' ? 'Video frame · duotoned on brand'
+                              : isGeneric ? 'Real image · behind the shapes' : 'Real image · duotoned on brand'}
+                          </div>
+                          <label style={{ ...faintBtn, cursor: 'pointer' }}>Replace
+                            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
+                          </label>
+                          <button onClick={() => removeTileImage(selectedTile.id)} style={faintBtn}>Remove</button>
+                        </div>
+                        <button onClick={() => generateTileImage(selectedTile.id, promptDraft.trim() || undefined)} disabled={generating} style={{ ...ghostBtn2, opacity: generating ? 0.6 : 1 }}>
+                          {generating ? 'Generating…' : '✦ Regenerate'}
+                        </button>
+                        {promptEditor}
                       </div>
-                      <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>{selectedTile.archetype === 'geometric' ? 'Optional — sits behind the shapes. None → shapes only.' : 'None → procedural stand-in. Add one and it’s auto-duotoned on brand.'}</span>
-                    </div>
-                  )}
-                </Control>
-              )}
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <button onClick={() => generateTileImage(selectedTile.id, promptDraft.trim() || undefined)} disabled={generating} style={{ ...generateImgBtn, opacity: generating ? 0.7 : 1 }}>
+                          {generating ? 'Generating…' : '✦ Generate image'}
+                        </button>
+                        {promptEditor}
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <label style={{ ...ghostBtn2, flex: 1, textAlign: 'center', cursor: 'pointer' }}>Upload
+                            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
+                          </label>
+                          {selectedTile.mediaAssetId && <button onClick={() => useVideoFrame(selectedTile.id)} style={{ ...ghostBtn2, flex: 1 }}>Use video frame</button>}
+                        </div>
+                        <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>
+                          {isGeneric ? 'Optional — sits behind the shapes. None → shapes only.' : 'None → procedural stand-in.'} Generated images are duotoned on brand (currently a placeholder until the image API is wired).
+                        </span>
+                      </div>
+                    )}
+                  </Control>
+                );
+              })()}
 
               {selectedTile.archetype === 'duotone' && (
                 <Control label="Duotone colours">
@@ -607,26 +672,27 @@ const chip: React.CSSProperties = { border: '1px solid var(--line)', background:
 const chipOn: React.CSSProperties = { color: 'var(--text-strong)', borderColor: 'var(--accent)', background: 'var(--accent-soft)' };
 const exportBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--text)', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 8, cursor: 'pointer' };
 const dragHandle: React.CSSProperties = { cursor: 'grab', color: 'var(--muted-soft)', fontSize: 15, userSelect: 'none', padding: '0 2px' };
-const dropLineAbs: React.CSSProperties = { position: 'absolute', top: 4, width: 4, height: 213, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', animation: 'pfGlow 1s ease-in-out infinite', pointerEvents: 'none', zIndex: 5 };
+const dropLineAbs: React.CSSProperties = { position: 'absolute', top: 4, width: 4, height: 203, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', animation: 'pfGlow 1s ease-in-out infinite', pointerEvents: 'none', zIndex: 5 };
 const dropLineH: React.CSSProperties = { height: 4, borderRadius: 3, background: 'var(--accent)', boxShadow: '0 0 10px 2px var(--accent-soft)', margin: '2px 24px', animation: 'pfGlow 1s ease-in-out infinite' };
 const catInput: React.CSSProperties = { background: 'transparent', border: '1px solid transparent', color: 'var(--text-strong)', fontSize: 17, fontWeight: 700, letterSpacing: '-0.015em', padding: '3px 8px', borderRadius: 7, outline: 'none', minWidth: 40 };
 const faintBtn: React.CSSProperties = { border: 0, background: 'transparent', color: 'var(--muted-soft)', fontSize: 12, padding: '5px 8px', borderRadius: 6, fontWeight: 600, cursor: 'pointer' };
-const tileCard: React.CSSProperties = { position: 'relative', width: 152, height: 213, borderRadius: 14, overflow: 'hidden', cursor: 'pointer', background: '#222', isolation: 'isolate' };
+const tileCard: React.CSSProperties = { position: 'relative', width: 152, height: 203, borderRadius: 14, overflow: 'hidden', cursor: 'pointer', background: '#222', isolation: 'isolate' };
 const tileTitle: React.CSSProperties = { position: 'absolute', top: 12, left: 13, right: 13, zIndex: 2, color: '#fff', fontWeight: 800, fontSize: 14.5, lineHeight: 1.14, letterSpacing: '-0.015em', textShadow: '0 1px 8px rgba(0,0,0,.5)', display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', cursor: 'text' };
 const tileTitleEdit: React.CSSProperties = { position: 'absolute', top: 9, left: 10, right: 10, zIndex: 3, height: 88, background: 'rgba(0,0,0,0.42)', border: '1px solid var(--accent)', borderRadius: 6, color: '#fff', fontWeight: 800, fontSize: 14.5, lineHeight: 1.14, letterSpacing: '-0.015em', fontFamily: 'inherit', padding: '4px 6px', outline: 'none', resize: 'none' };
 const tileBadge: React.CSSProperties = { position: 'absolute', bottom: 10, left: 12, zIndex: 2, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,.82)', background: 'rgba(0,0,0,.32)', padding: '3px 7px', borderRadius: 5 };
-const addTileBtn: React.CSSProperties = { flex: '0 0 auto', width: 152, height: 213, border: '1.5px dashed var(--line-strong)', borderRadius: 14, background: 'transparent', color: 'var(--muted-soft)', fontSize: 13, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' };
+const addTileBtn: React.CSSProperties = { flex: '0 0 auto', width: 152, height: 203, border: '1.5px dashed var(--line-strong)', borderRadius: 14, background: 'transparent', color: 'var(--muted-soft)', fontSize: 13, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' };
 const addCatBtn: React.CSSProperties = { margin: '6px 24px 0', border: '1.5px dashed var(--line)', background: 'transparent', color: 'var(--muted)', fontSize: 13, fontWeight: 600, padding: 13, borderRadius: 10, width: 'calc(100% - 48px)', cursor: 'pointer' };
 const scrimBg: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 30 };
 const inspector: React.CSSProperties = { position: 'fixed', top: 0, right: 0, bottom: 0, width: 372, maxWidth: '92vw', background: 'var(--surface)', borderLeft: '1px solid var(--line)', zIndex: 40, display: 'flex', flexDirection: 'column', boxShadow: 'var(--shadow-lg)' };
 const brandModal: React.CSSProperties = { position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 420, maxWidth: '94vw', maxHeight: '86vh', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, zIndex: 40, display: 'flex', flexDirection: 'column', boxShadow: 'var(--shadow-lg)' };
 const inspHead: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line)' };
 const inspBody: React.CSSProperties = { padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 18 };
-const previewFrame: React.CSSProperties = { alignSelf: 'center', width: 208, height: 291, borderRadius: 16, overflow: 'hidden', position: 'relative', background: '#222', isolation: 'isolate', boxShadow: 'var(--shadow-md)' };
+const previewFrame: React.CSSProperties = { alignSelf: 'center', width: 208, height: 277, borderRadius: 16, overflow: 'hidden', position: 'relative', background: '#222', isolation: 'isolate', boxShadow: 'var(--shadow-md)' };
 const pvTitle: React.CSSProperties = { position: 'absolute', top: 16, left: 17, right: 17, zIndex: 2, color: '#fff', fontWeight: 800, fontSize: 18, lineHeight: 1.13, letterSpacing: '-0.02em', textShadow: '0 1px 8px rgba(0,0,0,.5)' };
 const fieldLabel: React.CSSProperties = { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-soft)', fontWeight: 700 };
 const fieldInput: React.CSSProperties = { background: 'var(--surface-inset)', border: '1px solid var(--line)', color: 'var(--text)', borderRadius: 8, padding: '9px 11px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
 const generateBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, background: 'var(--accent)', color: '#16130c', border: 0, borderRadius: 9, fontSize: 13.5, fontWeight: 700, padding: 11, cursor: 'pointer' };
+const generateImgBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'var(--accent-soft)', color: 'var(--text-strong)', border: '1px solid var(--accent)', borderRadius: 8, fontSize: 13, fontWeight: 700, padding: 10, cursor: 'pointer' };
 const miniBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--muted-soft)', fontSize: 11, fontWeight: 600, padding: '8px 4px', borderRadius: 7, cursor: 'pointer' };
 const miniBtnOn: React.CSSProperties = { borderColor: 'var(--accent)', color: 'var(--text-strong)', background: 'var(--accent-soft)' };
 const ghostBtn2: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-inset)', color: 'var(--text)', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, cursor: 'pointer' };
