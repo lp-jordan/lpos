@@ -194,11 +194,22 @@ export function buildTileBackgroundSVG(
   let grainable = false;
 
   if (tile.archetype === 'hero') {
-    inner = `<rect width="${W}" height="${H}" fill="${mix(b.duoDark, '#000', 0.2)}"/>`
-      + `<rect x="14" y="14" width="272" height="372" rx="10" fill="none" stroke="${mix(b.duoLight, '#fff', 0.1)}" stroke-width="1.5" stroke-dasharray="7 7" opacity="0.6"/>`
-      + `<g fill="none" stroke="${mix(b.duoLight, '#fff', 0.2)}" stroke-width="3" opacity="0.85" transform="translate(150 200)">`
-      + `<rect x="-34" y="-30" width="68" height="50" rx="6"/><circle cx="0" cy="-5" r="12"/></g>`;
-    wantScrim = false;
+    if (opts.imageHref) {
+      // Hero = the AI-generated (or uploaded) image shown AS-IS: full-bleed,
+      // natural colour (no duotone). A top scrim keeps the title legible and the
+      // tile's grain control can add film grain.
+      const href = opts.imageHref.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      inner = `<image href="${href}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>`;
+      wantScrim = true;
+      grainable = true;
+    } else {
+      // No image yet — placeholder framing prompting a generate/upload.
+      inner = `<rect width="${W}" height="${H}" fill="${mix(b.duoDark, '#000', 0.2)}"/>`
+        + `<rect x="14" y="14" width="272" height="372" rx="10" fill="none" stroke="${mix(b.duoLight, '#fff', 0.1)}" stroke-width="1.5" stroke-dasharray="7 7" opacity="0.6"/>`
+        + `<g fill="none" stroke="${mix(b.duoLight, '#fff', 0.2)}" stroke-width="3" opacity="0.85" transform="translate(150 200)">`
+        + `<rect x="-34" y="-30" width="68" height="50" rx="6"/><circle cx="0" cy="-5" r="12"/></g>`;
+      wantScrim = false;
+    }
   } else if (tile.archetype === 'gradient') {
     const angle = Math.floor(r() * 360);
     const lite = mix(acc, '#ffffff', 0.14), dark = mix(acc, b.duoDark, 0.78);

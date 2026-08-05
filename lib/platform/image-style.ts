@@ -7,8 +7,10 @@
  * no code change (the file is re-read per call). A baked-in fallback keeps
  * generation working if the doc is missing at runtime.
  *
- * The final image is always duotone-mapped to the brand palette afterward, so
- * the model's job is composition, subject, and light — not final colour.
+ * On duotone/geometric tiles the image is brand duotone-mapped afterward, so the
+ * model's job is composition, subject, and light — not final colour. On hero
+ * tiles the image is shown as-is (natural colour), so the same cinematic house
+ * style reads as the final look.
  */
 import fs from 'node:fs';
 import path from 'node:path';

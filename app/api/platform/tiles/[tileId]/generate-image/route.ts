@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ til
   const { tileId } = await params;
   const tile = getTile(tileId);
   if (!tile) return NextResponse.json({ error: 'Tile not found' }, { status: 404 });
-  if (tile.archetype !== 'duotone' && tile.archetype !== 'geometric') {
+  if (tile.archetype !== 'duotone' && tile.archetype !== 'geometric' && tile.archetype !== 'hero') {
     return NextResponse.json({ error: 'This tile style has no image slot' }, { status: 400 });
   }
 

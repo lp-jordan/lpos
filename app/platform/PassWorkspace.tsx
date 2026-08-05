@@ -172,7 +172,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
       setGenFor(null);
     }
   }
-  const canHaveImage = (t: PlatformTile) => t.archetype === 'duotone' || t.archetype === 'geometric';
+  const canHaveImage = (t: PlatformTile) => t.archetype === 'duotone' || t.archetype === 'geometric' || t.archetype === 'hero';
   const tileImageHref = (t: PlatformTile): string | undefined =>
     canHaveImage(t) && t.imageMime ? `/api/platform/tiles/${t.id}/image?v=${encodeURIComponent(t.updatedAt)}` : undefined;
   const tileSvg = (t: PlatformTile) => buildTileBackgroundSVG(brand, t, { grain: t.grain, imageHref: tileImageHref(t), duoShadow: t.duoShadow, duoLight: t.duoLight });
@@ -452,6 +452,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
               {canHaveImage(selectedTile) && (() => {
                 const generating = genFor === selectedTile.id;
                 const isGeneric = selectedTile.archetype === 'geometric';
+                const isHero = selectedTile.archetype === 'hero';
                 const promptEditor = (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <button onClick={() => setShowPrompt((s) => !s)} style={{ ...faintBtn, alignSelf: 'flex-start', padding: '2px 2px' }}>
@@ -468,16 +469,16 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                   </div>
                 );
                 return (
-                  <Control label={isGeneric ? 'Background image' : 'Source image'}>
+                  <Control label={isHero ? 'Hero image' : isGeneric ? 'Background image' : 'Source image'}>
                     {selectedTile.imageMime ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={linkedRow}>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={tileImageHref(selectedTile)} alt="" style={{ width: 52, height: 30, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />
                           <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--muted)' }}>
-                            {selectedTile.imageSource === 'generated' ? (isGeneric ? 'Generated · behind the shapes' : 'Generated · duotoned on brand')
-                              : selectedTile.imageSource === 'poster' ? 'Video frame · duotoned on brand'
-                              : isGeneric ? 'Real image · behind the shapes' : 'Real image · duotoned on brand'}
+                            {selectedTile.imageSource === 'generated' ? (isHero ? 'Generated · full image' : isGeneric ? 'Generated · behind the shapes' : 'Generated · duotoned on brand')
+                              : selectedTile.imageSource === 'poster' ? (isHero ? 'Video frame · full image' : 'Video frame · duotoned on brand')
+                              : isHero ? 'Real image · shown as-is' : isGeneric ? 'Real image · behind the shapes' : 'Real image · duotoned on brand'}
                           </div>
                           <label style={{ ...faintBtn, cursor: 'pointer' }}>Replace
                             <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadTileImage(selectedTile.id, f); e.target.value = ''; }} />
@@ -502,7 +503,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
                           {selectedTile.mediaAssetId && <button onClick={() => useVideoFrame(selectedTile.id)} style={{ ...ghostBtn2, flex: 1 }}>Use video frame</button>}
                         </div>
                         <span style={{ fontSize: 11.5, color: 'var(--muted-soft)', lineHeight: 1.4 }}>
-                          {isGeneric ? 'Optional — sits behind the shapes. None → shapes only.' : 'None → procedural stand-in.'} Generated images are duotoned on brand (currently a placeholder until the image API is wired).
+                          {isHero ? 'Shown full-bleed, as-is. Use Grain below to add film grain.' : isGeneric ? 'Optional — sits behind the shapes. None → shapes only. Duotoned on brand.' : 'None → procedural stand-in. Duotoned on brand.'} {isHero ? '' : 'Generated images are duotoned on brand.'} (Generation currently returns a placeholder until the image API key is set.)
                         </span>
                       </div>
                     )}

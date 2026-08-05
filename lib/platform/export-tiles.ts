@@ -73,7 +73,7 @@ export async function exportPassTiles(pass: PassTree, brand: Brand): Promise<{ c
     const cat = pass.categories[c];
     for (let t = 0; t < cat.tiles.length; t++) {
       const tile = cat.tiles[t];
-      const canImage = tile.archetype === 'duotone' || tile.archetype === 'geometric';
+      const canImage = tile.archetype === 'duotone' || tile.archetype === 'geometric' || tile.archetype === 'hero';
       const imageHref = canImage && tile.imageMime ? await imageDataUri(tile.id) : undefined;
       const svg = buildTileBackgroundSVG(brand, tile, { grain: tile.grain, width: EXPORT_W, height: EXPORT_H, imageHref, duoShadow: tile.duoShadow, duoLight: tile.duoLight });
       const png = await svgToPng(svg, EXPORT_W, EXPORT_H);

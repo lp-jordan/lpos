@@ -1,14 +1,12 @@
 /**
  * The single seam where a tile hero image is produced from a text prompt.
  *
- * TODAY: returns a fixed placeholder so the whole pipeline — prompt build →
- * generate → local store → duotone render → export — works end-to-end with no
- * API key. The placeholder is a tonal, photographic-ish SVG that duotones on
- * brand exactly like a real hero would, so you can see the wiring.
- *
- * TO GO LIVE: implement the OpenAI branch below (kept commented) and set
- * OPENAI_API_KEY in Doppler. Nothing else in the pipeline changes — callers
- * only ever see `{ bytes, mime }`.
+ * With OPENAI_API_KEY set, this calls the image model (gpt-image-1 by default)
+ * and returns real PNG bytes. WITHOUT a key it returns a tonal placeholder SVG so
+ * the whole pipeline — prompt build → generate → local store → render → export —
+ * still works end-to-end. Callers only ever see `{ bytes, mime, placeholder }`.
+ * On a live failure (org-unverified, content-policy refusal, timeout) it throws,
+ * and the route keeps the tile's existing art rather than swapping in a placeholder.
  */
 
 export interface GeneratedImage {
@@ -36,28 +34,41 @@ const PLACEHOLDER_SVG =
   + '<text x="150" y="372" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" letter-spacing="2" fill="#e9ecef" opacity="0.5">GENERATED · PLACEHOLDER</text>'
   + '</svg>';
 
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? 'gpt-image-1';
+const IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE ?? '1024x1536'; // 2:3 portrait, sliced to the 3:4 tile
+const IMAGE_TIMEOUT_MS = 90_000;
+
 export async function generateTileImage(prompt: string): Promise<GeneratedImage> {
-  // ── LIVE SEAM (wire up when OPENAI_API_KEY is provisioned) ──────────────────
-  //
-  // import OpenAI from 'openai';
-  // const key = process.env.OPENAI_API_KEY;
-  // if (key) {
-  //   const openai = new OpenAI({ apiKey: key });
-  //   const r = await openai.images.generate({
-  //     model: 'gpt-image-1',
-  //     prompt,
-  //     size: '1024x1536',   // 2:3 portrait; sliced to the 3:4 tile on render
-  //     quality: 'medium',   // plenty — we duotone-lock the colour afterward
-  //     n: 1,
-  //   });
-  //   const b64 = r.data?.[0]?.b64_json;
-  //   if (b64) return { bytes: Buffer.from(b64, 'base64'), mime: 'image/png', placeholder: false };
-  // }
-  //
-  // Notes: gpt-image-1 requires OpenAI org verification and always returns
-  // base64 (no URL). On a content-policy refusal it throws — the route catches
-  // it and the caller falls back to the procedural duotone stand-in.
-  // ───────────────────────────────────────────────────────────────────────────
-  void prompt;
-  return { bytes: Buffer.from(PLACEHOLDER_SVG, 'utf8'), mime: 'image/svg+xml', placeholder: true };
+  const key = process.env.OPENAI_API_KEY;
+
+  // No key configured → placeholder so the whole pipeline still works end-to-end.
+  if (!key) return { bytes: Buffer.from(PLACEHOLDER_SVG, 'utf8'), mime: 'image/svg+xml', placeholder: true };
+
+  // Live generation. gpt-image-1 always returns base64 (no URL). On failure
+  // (org-unverified 403, content-policy refusal, timeout) we THROW so the route
+  // reports it and the tile keeps its existing art — we never silently swap in a
+  // placeholder when a real image was expected.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+  try {
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: IMAGE_MODEL, prompt, size: IMAGE_SIZE, quality: 'medium', n: 1 }),
+      signal: controller.signal,
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      throw new Error(`Image API ${r.status}: ${detail.slice(0, 240)}`);
+    }
+    const data = (await r.json()) as { data?: Array<{ b64_json?: string }> };
+    const b64 = data.data?.[0]?.b64_json;
+    if (!b64) throw new Error('Image API returned no image data.');
+    return { bytes: Buffer.from(b64, 'base64'), mime: 'image/png', placeholder: false };
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw new Error(`Image generation timed out after ${IMAGE_TIMEOUT_MS / 1000}s.`);
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
