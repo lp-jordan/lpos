@@ -3208,6 +3208,28 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 
 ---
 
+## 2026-08-05T14:40:38Z — Video playback: server-side bandwidth hint, remove rewind hack, add diagnostics
+
+**User prompt (redacted summary):** User reported the prior video-playback changes were not visible in the live LPOS player (tested in Edge): no HD/quality button appeared, video still autoplayed at low res, and the rewind-to-full-res only worked after fast-forwarding first — which they (rightly) called an unintuitive workflow. (Includes strong frustration; several turns spent because the assistant twice misdiagnosed a stale build — see rationale.)
+
+**Assistant response summary:** First established the changes WERE deployed (grepped `abrEwmaDefaultEstimate`/`mp-quality` directly out of the served `.next` bundle; the earlier "stale build" calls were a local-vs-UTC timestamp error — EDT machine, build stamped 16:37 local = 20:37 UTC, after the 19:39 UTC commit). Traced the players: `MediaPlayer` is the live player (via `MediaDetailPanel` + `VideoTheaterMode`); `InlineVideoPlayer` is dead code (nothing renders it). Could not self-inspect the running app (localhost:3000 is behind SSO). Pivoted to a browser-agnostic fix plus diagnostics rather than more guessing.
+
+**Files changed:**
+- `app/api/projects/[projectId]/media/[assetId]/frameio-stream/route.ts` — added `withBandwidthHint(url)` that appends `?clientBandwidthHint=5` (Mbps) to the resolved stream URL, **guarded to `.m3u8` only** so it's applied to the Cloudflare manifest but NEVER to Frame.io/S3 pre-signed URLs (a query param there breaks the signature → 403). Applied to both the `?raw` JSON response and the 302 redirect. This biases the STARTING rendition at the source, so it helps every player including Safari's native HLS, independent of hls.js.
+- `hooks/useHlsPlayer.ts` — **removed** the fast-forward-gated rewind fast-path (the `bandwidthKnownRef` gate + `seeking`/`timeupdate` listeners + one-shot `nextLevel` force) that produced the unintuitive workflow. Kept the `abrEwmaDefaultEstimate` bump and the `HlsController` (quality button). Added **temporary** `[useHlsPlayer]` console diagnostics (resolve path + isHls/nativeHls, `MANIFEST_PARSED` level count/heights/bitrates, `LEVEL_SWITCHED`, `ERROR`) to determine at runtime why the button is absent in Edge — i.e. whether hls.js is engaging and how many renditions the CF manifest actually exposes.
+
+**Implementation summary:** The button only renders when hls.js reports >1 level (`hasLevels`); its absence in a Chromium browser (Edge) means either hls.js isn't the active path or the manifest exposes ≤1 rendition — the diagnostics will disambiguate. The bandwidth hint is the real, browser-agnostic remedy for the "opens at low res" complaint and does not depend on the button or hls.js internals.
+
+**Decision rationale:** `clientBandwidthHint` at the manifest layer fixes the actual user-visible symptom for all browsers at once (the JS-only estimate bump missed Safari entirely and evidently isn't visibly helping Edge). Removed the rewind hack outright per direct user feedback that the FF-first workflow is nonsensical. Added diagnostics rather than continue speculating because the app can't be inspected without the user's session.
+
+**Alternatives considered:** (1) Keep debugging the button blind — rejected, repeatedly wrong without runtime data. (2) Drive the running app via browser tooling — blocked by SSO on localhost:3000. (3) A hard `startLevel` pin in hls.js — still Chromium-only and wouldn't help Safari; the manifest hint supersedes it.
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — no errors in changed files (only the pre-existing unrelated `lib/store/platform-pass-store.ts` error remains). Verified my code is present in the served `.next` bundle via grep.
+
+**Assumptions / follow-ups:** The console diagnostics are TEMPORARY and must be removed once the button issue is understood. Cloudflare honours `clientBandwidthHint` on the standard `/manifest/video.m3u8` (documented Stream param). Follow-up: read the user's Edge console output, then either relabel the button (if `hasLevels` is true but it reads "AUTO" and was missed) or fix the level-detection path (if hls.js reports ≤1 level / isn't engaging), then strip the diagnostics.
+
+---
+
 ## 2026-08-05T00:00:00Z — Platform passes: tile hero-image generation pipework (placeholder-backed) + 300×400 fix
 
 **User prompt (verbatim):** "All of this looks solid. I'm ok with faces to TRY it, if we start getting shit then we can guide it away from faces. How about this - let's do as much of the pipework as possible without hooking up an actual API key right now. We can just use a single placeholder to represent any generated imagery." (Culminating a design discussion comparing our tile generator to two heavier-designed LeaderPass passes; decisions reached over prior turns: tighter tonal cohesion, recurring/uploadable brand elements, and OpenAI `gpt-image-1` for tonally-matched hero images duotone-locked through the existing pipeline. Correction supplied: actual tile dimensions are 300×400.)

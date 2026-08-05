@@ -11,8 +11,8 @@ import type HlsPlayer from 'hls.js';
  * HLS manifest (`.m3u8` — the current version) or a Frame.io H.264 MP4 (older
  * versions and the fallback path). MP4 plays natively in every browser; HLS
  * plays natively ONLY in Safari. So for an HLS source in a browser without
- * native HLS (Firefox, Chrome) we attach via hls.js — lazy-loaded so it only
- * ships to clients that actually need it.
+ * native HLS (Firefox, Chrome, Edge) we attach via hls.js — lazy-loaded so it
+ * only ships to clients that actually need it.
  *
  * Usage: call this in place of setting `src` on the <video>; remove the `src`
  * prop from the element — the hook owns it. The returned controller exposes a
@@ -46,11 +46,9 @@ export function useHlsPlayer(
   const [hasLevels, setHasLevels] = useState(false);
   const [mode, setModeState] = useState<QualityMode>('auto');
 
-  // Live handles the control methods reach into without re-running the effect.
-  const hlsRef            = useRef<HlsPlayer | null>(null);
-  const topLevelRef       = useRef(-1);              // highest rendition index (-1 = unknown)
-  const modeRef           = useRef<QualityMode>('auto');
-  const bandwidthKnownRef = useRef(false);           // ABR confirmed top is sustainable
+  const hlsRef      = useRef<HlsPlayer | null>(null);
+  const topLevelRef = useRef(-1);              // highest rendition index (-1 = unknown)
+  const modeRef     = useRef<QualityMode>('auto');
 
   const setMode = useCallback((m: QualityMode) => {
     modeRef.current = m;
@@ -68,15 +66,13 @@ export function useHlsPlayer(
     const video = videoRef.current;
     if (!video || !src) return;
 
-    // New source: forget what we learned, but KEEP the user's mode preference
-    // so an "HD" choice sticks as they move between assets.
+    // New source: forget levels, but KEEP the user's mode preference so an "HD"
+    // choice sticks as they move between assets.
     setHasLevels(false);
     topLevelRef.current = -1;
-    bandwidthKnownRef.current = false;
 
     let destroyed = false;
     let hls: HlsPlayer | null = null;
-    let detach: (() => void) | null = null;
 
     void (async () => {
       // Resolve the route to its final media URL so we can tell HLS from MP4.
@@ -97,6 +93,9 @@ export function useHlsPlayer(
       const isHls     = HLS_RE.test(url);
       const nativeHls = el.canPlayType('application/vnd.apple.mpegurl') !== '';
 
+      // TEMP DIAGNOSTIC — remove once the quality-button issue is understood.
+      console.info('[useHlsPlayer] resolve', { src, url, isHls, nativeHls });
+
       if (isHls && !nativeHls) {
         const { default: Hls } = await import('hls.js');
         if (destroyed || !videoRef.current) return;
@@ -110,61 +109,43 @@ export function useHlsPlayer(
           inst.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
             topLevelRef.current = data.levels.length - 1;
             setHasLevels(data.levels.length > 1);
+            // TEMP DIAGNOSTIC
+            console.info('[useHlsPlayer] MANIFEST_PARSED', {
+              levelCount: data.levels.length,
+              levels: data.levels.map(l => ({ height: l.height, bitrate: l.bitrate })),
+              hasLevels: data.levels.length > 1,
+            });
             // Re-apply a sticky 'max' preference to the freshly loaded stream.
             if (modeRef.current === 'max' && topLevelRef.current >= 0) {
               inst.currentLevel = topLevelRef.current;
             }
           });
 
-          // Once ABR has actually reached the top rendition we KNOW full-res is
-          // sustainable on this connection — this gates the rewind fast-path.
+          // TEMP DIAGNOSTIC — what rendition ABR actually settles on, and why.
           inst.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => {
-            if (topLevelRef.current >= 0 && data.level >= topLevelRef.current) {
-              bandwidthKnownRef.current = true;
-            }
+            console.info('[useHlsPlayer] LEVEL_SWITCHED', { level: data.level, top: topLevelRef.current });
+          });
+          inst.on(Hls.Events.ERROR, (_e, data) => {
+            console.warn('[useHlsPlayer] ERROR', { type: data.type, details: data.details, fatal: data.fatal });
           });
 
           inst.loadSource(url);
           inst.attachMedia(el);
           hls = inst;
-
-          // Rewind fast-path: when the viewer scrubs BACK toward the start after
-          // we've already confirmed full-res is sustainable, force the seeked-to
-          // segment to the top rendition (one-shot) so the replay is sharp from
-          // frame one instead of re-ramping. Skipped when 'max' is already pinned.
-          let lastTime = 0;
-          const onTimeUpdate = () => { lastTime = el.currentTime; };
-          const onSeeking = () => {
-            if (modeRef.current === 'max') return;         // already pinned to top
-            if (!bandwidthKnownRef.current) return;        // never reached full-res yet
-            if (topLevelRef.current < 0) return;
-            if (el.currentTime >= lastTime - 0.5) return;  // only backward seeks
-            inst.nextLevel = topLevelRef.current;          // force next fragment high…
-            const reset = () => {
-              inst.nextLevel = -1;                         // …then hand back to ABR
-              inst.off(Hls.Events.FRAG_CHANGED, reset);
-            };
-            inst.on(Hls.Events.FRAG_CHANGED, reset);
-          };
-          el.addEventListener('timeupdate', onTimeUpdate);
-          el.addEventListener('seeking', onSeeking);
-          detach = () => {
-            el.removeEventListener('timeupdate', onTimeUpdate);
-            el.removeEventListener('seeking', onSeeking);
-          };
           return;
         }
         // hls.js unsupported (very old browser) → fall through to native, which
         // will fail gracefully into the player's "Check back shortly" state.
       }
 
+      // TEMP DIAGNOSTIC
+      console.info('[useHlsPlayer] native/mp4 path (no hls.js)', { url });
       // Native HLS (Safari) or a plain MP4 — let the element handle it.
       if (videoRef.current) videoRef.current.src = url;
     })();
 
     return () => {
       destroyed = true;
-      if (detach) { try { detach(); } catch { /* ignore */ } detach = null; }
       if (hls) { try { hls.destroy(); } catch { /* ignore */ } hls = null; }
       hlsRef.current = null;
       const v = videoRef.current;

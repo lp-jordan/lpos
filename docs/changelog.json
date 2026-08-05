@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-05T14:40:38Z",
+    "title": "Video playback: open at high quality via Cloudflare bandwidth hint",
+    "summary": "Videos that opened blurry and took a few seconds to sharpen should now open at high quality across all browsers, including Safari and Edge. The fix is applied at the source: the stream route appends Cloudflare's clientBandwidthHint to the video manifest, telling Cloudflare to start at a high rendition instead of the lowest — so it doesn't depend on any in-browser player tuning (which had missed Safari entirely and wasn't visibly helping Edge). The hint is only added to Cloudflare manifests, never to Frame.io URLs, so pre-signed links aren't broken. Also removed the unintuitive rewind behavior that only reached full resolution after fast-forwarding first, and added temporary diagnostics to pin down why the manual quality button wasn't appearing in Chromium browsers."
+  },
+  {
     "timestamp": "2026-08-05T00:00:00Z",
     "title": "Platform passes: generate tile hero images (pipework, placeholder-backed)",
     "summary": "The Platform pass studio can now generate a hero image for a tile from its title and description, not just accept an uploaded one. The tile inspector's image control is now Generate / Upload / Use video frame, with an editable prompt override and a Regenerate button; the auto-built prompt uses a house style guide (docs/platform-image-style.md) so every image aims for the same cinematic, tonally-consistent look, and the result is duotoned onto the pass's brand exactly like an uploaded photo. The whole pipeline is wired end-to-end but the actual image API is intentionally not connected yet — generation currently returns a single tonal placeholder so the flow can be seen working; going live is a small, isolated change (implement the OpenAI gpt-image-1 seam and add the key). Also corrected the tile design/export dimensions to the real 300x400 (3:4) aspect."

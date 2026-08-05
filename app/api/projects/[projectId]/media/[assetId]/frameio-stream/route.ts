@@ -36,6 +36,20 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // Sentinel stored in cache to indicate "use local /stream fallback"
 const LOCAL_STREAM_SENTINEL = '__local__';
 
+// Cloudflare Stream honours `?clientBandwidthHint=<Mbps>` on the manifest to
+// bias the STARTING rendition upward, so playback opens at high quality instead
+// of climbing from the lowest rendition over the first few seconds. This works
+// at the source, so it helps EVERY player — Safari's native HLS (which has no
+// other lever) as well as hls.js. Only valid on the Cloudflare `.m3u8` manifest:
+// never append to Frame.io/S3 pre-signed URLs, where an extra query param would
+// break the URL signature and 403 the whole stream.
+const CF_BANDWIDTH_HINT_MBPS = 5;
+function withBandwidthHint(url: string): string {
+  if (!/\.m3u8(\?|#|$)/i.test(url)) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}clientBandwidthHint=${CF_BANDWIDTH_HINT_MBPS}`;
+}
+
 type ResolvedSource =
   | { kind: 'redirect'; url: string }
   | { kind: 'local' }
@@ -159,11 +173,11 @@ export async function GET(req: NextRequest, { params }: Params) {
     // ?raw — return the CDN URL as JSON instead of redirecting.
     // Used by the hls.js client path to avoid the Firefox Origin:null CORS block
     // that occurs when hls.js follows a same-origin → cross-origin 302 redirect.
-    if (isRaw) return NextResponse.json({ url: source.url });
+    if (isRaw) return NextResponse.json({ url: withBandwidthHint(source.url) });
 
     // 302 so the browser re-checks on each new session — CDN pre-signed URLs
     // rotate and must not be cached by the browser past their expiry.
-    return NextResponse.redirect(source.url, {
+    return NextResponse.redirect(withBandwidthHint(source.url), {
       status: 302,
       headers: { 'Cache-Control': 'no-store' },
     });
