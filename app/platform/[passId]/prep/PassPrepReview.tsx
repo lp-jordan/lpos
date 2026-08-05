@@ -114,6 +114,7 @@ export function PassPrepReview({ passIdOrSlug }: { passIdOrSlug: string }) {
         <button onClick={run} disabled={running || !tree} style={{ ...runBtn, opacity: running || !tree ? 0.6 : 1 }}>
           {running ? 'Running…' : 'Run Pass Prep ▸'}
         </button>
+        <button onClick={() => router.push(`/platform/${slug}/handoff`)} style={ghostBtn} title="Copy/paste titles + descriptions into LeaderPass admin">Handoff doc ▸</button>
       </div>
 
       <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5, marginTop: 10 }}>
@@ -185,6 +186,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: 'wa
 const banner = (color: string): React.CSSProperties => ({ fontSize: 12.5, color: color === 'var(--warning)' ? 'var(--warning)' : 'var(--muted)', background: 'var(--surface-inset)', border: `1px solid ${color}`, borderRadius: 8, padding: 10, marginTop: 12, lineHeight: 1.45 });
 const breadcrumb: React.CSSProperties = { background: 'transparent', border: 0, color: 'var(--muted-soft)', fontSize: 12, fontWeight: 600, padding: '2px 4px', cursor: 'pointer' };
 const runBtn: React.CSSProperties = { background: 'var(--accent)', color: '#16130c', border: 0, borderRadius: 9, fontSize: 13.5, fontWeight: 700, padding: '10px 16px', cursor: 'pointer' };
+const ghostBtn: React.CSSProperties = { border: '1px solid var(--line)', background: 'var(--surface-raised)', color: 'var(--text)', fontSize: 13, fontWeight: 600, padding: '9px 13px', borderRadius: 8, cursor: 'pointer' };
 const rowCard: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)' };
 const codePill: React.CSSProperties = { flexShrink: 0, width: 40, textAlign: 'center', fontSize: 11.5, fontWeight: 700, fontFamily: 'ui-monospace, Menlo, monospace', color: 'var(--accent-strong)', background: 'var(--accent-soft)', border: '1px solid var(--accent-soft)', padding: '3px 4px', borderRadius: 6 };
 const badge: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 5, border: '1px solid' };
