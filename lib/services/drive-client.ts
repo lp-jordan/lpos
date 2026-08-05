@@ -59,6 +59,17 @@ export function getDriveClient(): drive_v3.Drive {
   return _drive;
 }
 
+/**
+ * The shared service-account auth (scope `.../auth/drive`, which also authorizes
+ * the Sheets API). Reused by `google-sheets-client.ts` so pass-map reads need no
+ * new credential or scope. Lazily initializes the Drive client to build it.
+ */
+export function getGoogleAuth(): InstanceType<typeof google.auth.GoogleAuth> {
+  if (!_auth) getDriveClient();
+  if (!_auth) throw new Error('[drive-client] Google auth not initialized');
+  return _auth;
+}
+
 // ── Shared constants ──────────────────────────────────────────────────────────
 
 const SHARED_DRIVE_PARAMS = {

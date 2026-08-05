@@ -121,6 +121,9 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_passes', 'sheet_connected_at', `sheet_connected_at TEXT`);
   ensureColumn(db, 'platform_passes', 'sheet_tab_count', `sheet_tab_count INTEGER`);
   ensureColumn(db, 'platform_passes', 'sheet_row_count', `sheet_row_count INTEGER`);
+  // Tabs are Passes: a platform pass maps to ONE chosen tab of the workbook.
+  ensureColumn(db, 'platform_passes', 'sheet_tab_gid', `sheet_tab_gid INTEGER`);
+  ensureColumn(db, 'platform_passes', 'sheet_tab_title', `sheet_tab_title TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -162,6 +165,9 @@ export interface PlatformPass {
   sheetConnectedAt: string | null;
   sheetTabCount: number | null;
   sheetRowCount: number | null;
+  /** The single workbook tab (Pass) mapped to this pass. */
+  sheetTabGid: number | null;
+  sheetTabTitle: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -252,6 +258,8 @@ function toPass(r: Row): PlatformPass {
     sheetConnectedAt: (r.sheet_connected_at as string) ?? null,
     sheetTabCount: (r.sheet_tab_count as number) ?? null,
     sheetRowCount: (r.sheet_row_count as number) ?? null,
+    sheetTabGid: (r.sheet_tab_gid as number) ?? null,
+    sheetTabTitle: (r.sheet_tab_title as string) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
   };
@@ -317,7 +325,7 @@ export function createPass(input: { title: string; brand?: string; source?: Pass
     `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, created_by, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
   ).run(id, title, slug, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, sheetId: null, sheetUrl: null, sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, createdAt: now, updatedAt: now };
+  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, sheetId: null, sheetUrl: null, sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, sheetTabGid: null, sheetTabTitle: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
@@ -332,6 +340,35 @@ export function getPassBySlug(slug: string): PlatformPass | null {
 
 function touchPass(id: string): void {
   getDb().prepare('UPDATE platform_passes SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+}
+
+export interface PassSheetConnection {
+  sheetId: string;
+  sheetUrl: string;
+  tabGid: number;
+  tabTitle: string;
+  tabCount: number;
+  rowCount: number;
+}
+
+/** Persist (or refresh) the connected pass-map sheet + chosen tab on a pass. */
+export function setPassSheet(passId: string, conn: PassSheetConnection): PlatformPass | null {
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `UPDATE platform_passes SET sheet_id = ?, sheet_url = ?, sheet_tab_gid = ?, sheet_tab_title = ?,
+       sheet_tab_count = ?, sheet_row_count = ?, sheet_connected_at = ?, updated_at = ? WHERE id = ?`,
+  ).run(conn.sheetId, conn.sheetUrl, conn.tabGid, conn.tabTitle, conn.tabCount, conn.rowCount, now, now, passId);
+  return getPass(passId);
+}
+
+/** Clear the sheet connection (disconnect). */
+export function clearPassSheet(passId: string): PlatformPass | null {
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `UPDATE platform_passes SET sheet_id = NULL, sheet_url = NULL, sheet_tab_gid = NULL, sheet_tab_title = NULL,
+       sheet_tab_count = NULL, sheet_row_count = NULL, sheet_connected_at = NULL, updated_at = ? WHERE id = ?`,
+  ).run(now, passId);
+  return getPass(passId);
 }
 
 export interface PassPatch {
