@@ -22,8 +22,8 @@ async function generateField(tileId: string, field: 'title' | 'description') {
   if (!tr) return NextResponse.json({ error: 'Transcript not ready for this video.' }, { status: 400 });
   try {
     const tile = field === 'title'
-      ? updateTile(tileId, { title: await generateTitleFromTranscript({ transcript: tr.text, code: existing.sourceCode }), titleSource: 'ai' })
-      : updateTile(tileId, { description: await generateDescriptionFromTranscript({ transcript: tr.text, title: existing.title }), descriptionSource: 'ai' });
+      ? updateTile(tileId, { title: await generateTitleFromTranscript({ transcript: tr.text, code: existing.sourceCode }), titleSource: 'ai', titleAssetId: existing.mediaAssetId })
+      : updateTile(tileId, { description: await generateDescriptionFromTranscript({ transcript: tr.text, title: existing.title }), descriptionSource: 'ai', descriptionAssetId: existing.mediaAssetId });
     return NextResponse.json({ tile });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

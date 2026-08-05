@@ -11,7 +11,8 @@ function tile(p: Partial<PlatformTile> & { id: string }): PlatformTile {
     position: 0, lpTileId: null, mediaAssetId: p.mediaAssetId ?? null, mediaProjectId: null,
     mediaKind: null, mediaTitle: p.mediaTitle ?? null, mediaThumbUrl: null, mediaVersion: null,
     linkUrl: null, sourceCode: p.sourceCode ?? null, titleSource: p.titleSource ?? null,
-    descriptionSource: null, archetype: 'gradient', paletteIndex: 0, seed: 0, grain: 'subtle',
+    descriptionSource: null, titleAssetId: null, descriptionAssetId: null,
+    archetype: 'gradient', paletteIndex: 0, seed: 0, grain: 'subtle',
     imageMime: null, imageSource: null, imagePrompt: null, duoShadow: null, duoLight: null,
     backgroundRef: null, durationSec: null, createdAt: '', updatedAt: '',
   };

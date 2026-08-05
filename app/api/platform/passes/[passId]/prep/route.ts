@@ -34,9 +34,8 @@ interface PrepReportRow {
   error: string | null;
 }
 
-/** A title is safe for AI to (re)write: placeholder, code-echo, or already AI. */
-function isReplaceableTitle(title: string, code: string | null, source: string | null): boolean {
-  if (source === 'ai') return true;
+/** A placeholder title AI may fill: empty, "New tile"/"Untitled", or a bare code echo. */
+function isPlaceholderTitle(title: string, code: string | null): boolean {
   const t = (title ?? '').trim().toLowerCase();
   if (!t || t === 'new tile' || t === 'untitled') return true;
   if (code && t === code.toLowerCase()) return true;
@@ -121,28 +120,37 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pas
     let error: string | null = null;
 
     if (fresh.mediaAssetId && fresh.mediaProjectId) {
-      const tr = getTranscriptTextByAsset(fresh.mediaProjectId, fresh.mediaAssetId);
+      const assetId = fresh.mediaAssetId;
+      const tr = getTranscriptTextByAsset(fresh.mediaProjectId, assetId);
       transcript = tr ? 'ready' : 'missing';
 
+      // A field is stale when it was generated from a *different* video than the one linked now.
+      const titleStale = fresh.titleAssetId != null && fresh.titleAssetId !== assetId;
+      const descStale = fresh.descriptionAssetId != null && fresh.descriptionAssetId !== assetId;
+
       if (tr && provider) {
-        // AI title fallback — only when no sheet title landed and the title is safe to replace.
-        if (generateTitles && !appliedSheet && fresh.titleSource !== 'manual' && isReplaceableTitle(fresh.title, code, fresh.titleSource)) {
+        // AI title fallback — no sheet title landed, not manual, and either a placeholder
+        // or a previously-AI title whose video was swapped (idempotent for unchanged tiles).
+        const wantAiTitle = generateTitles && !appliedSheet && fresh.titleSource !== 'manual'
+          && (isPlaceholderTitle(fresh.title, code) || (fresh.titleSource === 'ai' && titleStale));
+        if (wantAiTitle) {
           try {
             const aiTitle = await generateTitleFromTranscript({ transcript: tr.text, code });
-            updateTile(tileId, { title: aiTitle, titleSource: 'ai', sourceCode: code ?? undefined });
+            updateTile(tileId, { title: aiTitle, titleSource: 'ai', titleAssetId: assetId, sourceCode: code ?? undefined });
             titleAfter = aiTitle;
             titleOutcome = 'ai';
           } catch (e) { error = (e as Error).message; }
         }
-        // Description — always AI from transcript, unless human-authored; regenerate only on request.
+        // Description — AI from transcript, unless human-authored; regenerate when empty,
+        // when the video was swapped (stale), or on explicit request.
         if (fresh.descriptionSource === 'manual') {
           descriptionOutcome = 'manual';
-        } else if (fresh.description && !regenerateDescriptions) {
+        } else if (fresh.description && !regenerateDescriptions && !descStale) {
           descriptionOutcome = 'kept';
         } else {
           try {
             const desc = await generateDescriptionFromTranscript({ transcript: tr.text, title: titleAfter });
-            updateTile(tileId, { description: desc, descriptionSource: 'ai' });
+            updateTile(tileId, { description: desc, descriptionSource: 'ai', descriptionAssetId: assetId });
             descriptionOutcome = 'generated';
           } catch (e) { error = error ?? (e as Error).message; }
         }

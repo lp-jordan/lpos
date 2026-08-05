@@ -115,6 +115,10 @@ function initSchema(db: DatabaseSync): void {
   ensureColumn(db, 'platform_tiles', 'source_code', `source_code TEXT`);
   ensureColumn(db, 'platform_tiles', 'title_source', `title_source TEXT`);
   ensureColumn(db, 'platform_tiles', 'description_source', `description_source TEXT`);
+  // The asset each AI-generated field was derived from — lets a Pass Prep re-run
+  // detect a swapped video and refresh only the now-stale field (idempotent otherwise).
+  ensureColumn(db, 'platform_tiles', 'title_asset_id', `title_asset_id TEXT`);
+  ensureColumn(db, 'platform_tiles', 'description_asset_id', `description_asset_id TEXT`);
   // Pass Prep relocation (Phase 1): pass-level Google Sheet ("pass map") connection.
   ensureColumn(db, 'platform_passes', 'sheet_id', `sheet_id TEXT`);
   ensureColumn(db, 'platform_passes', 'sheet_url', `sheet_url TEXT`);
@@ -191,6 +195,9 @@ export interface PlatformTile {
   sourceCode: string | null;
   titleSource: TileTitleSource | null;
   descriptionSource: TileDescriptionSource | null;
+  /** Asset the current AI title/description was generated from (staleness check). */
+  titleAssetId: string | null;
+  descriptionAssetId: string | null;
   archetype: TileArchetype;
   paletteIndex: number;
   seed: number;
@@ -291,6 +298,8 @@ function toTile(r: Row): PlatformTile {
     sourceCode: (r.source_code as string) ?? null,
     titleSource: (r.title_source as TileTitleSource) ?? null,
     descriptionSource: (r.description_source as TileDescriptionSource) ?? null,
+    titleAssetId: (r.title_asset_id as string) ?? null,
+    descriptionAssetId: (r.description_asset_id as string) ?? null,
     archetype: r.archetype as TileArchetype,
     paletteIndex: r.palette_index as number,
     seed: r.seed as number,
@@ -523,6 +532,8 @@ export interface TilePatch {
   sourceCode?: string | null;
   titleSource?: TileTitleSource | null;
   descriptionSource?: TileDescriptionSource | null;
+  titleAssetId?: string | null;
+  descriptionAssetId?: string | null;
 }
 
 export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
@@ -542,10 +553,12 @@ export function updateTile(id: string, patch: TilePatch): PlatformTile | null {
     sourceCode: 'sourceCode' in patch ? patch.sourceCode ?? null : existing.sourceCode,
     titleSource: 'titleSource' in patch ? patch.titleSource ?? null : existing.titleSource,
     descriptionSource: 'descriptionSource' in patch ? patch.descriptionSource ?? null : existing.descriptionSource,
+    titleAssetId: 'titleAssetId' in patch ? patch.titleAssetId ?? null : existing.titleAssetId,
+    descriptionAssetId: 'descriptionAssetId' in patch ? patch.descriptionAssetId ?? null : existing.descriptionAssetId,
   };
   getDb().prepare(
-    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, duo_shadow = ?, duo_light = ?, position = ?, category_id = ?, source_code = ?, title_source = ?, description_source = ?, updated_at = ? WHERE id = ?`,
-  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.duoShadow, m.duoLight, m.position, m.categoryId, m.sourceCode, m.titleSource, m.descriptionSource, new Date().toISOString(), id);
+    `UPDATE platform_tiles SET title = ?, description = ?, archetype = ?, palette_index = ?, seed = ?, grain = ?, duo_shadow = ?, duo_light = ?, position = ?, category_id = ?, source_code = ?, title_source = ?, description_source = ?, title_asset_id = ?, description_asset_id = ?, updated_at = ? WHERE id = ?`,
+  ).run(m.title, m.description, m.archetype, m.paletteIndex, m.seed, m.grain, m.duoShadow, m.duoLight, m.position, m.categoryId, m.sourceCode, m.titleSource, m.descriptionSource, m.titleAssetId, m.descriptionAssetId, new Date().toISOString(), id);
   const passId = passIdForTile(id);
   if (passId) touchPass(passId);
   return getTile(id);
