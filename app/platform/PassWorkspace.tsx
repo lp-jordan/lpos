@@ -376,6 +376,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
           pass={tree}
           onConnected={(pass) => setTree((p) => p && { ...p, ...pass })}
           onDisconnected={() => setTree((p) => p && { ...p, sheetId: null, sheetUrl: null, sheetTabGid: null, sheetTabTitle: null, sheetTabCount: null, sheetRowCount: null, sheetConnectedAt: null })}
+          onSeeded={() => { setSheetOpen(false); load(); }}
           onClose={() => setSheetOpen(false)}
         />
       )}
@@ -673,10 +674,11 @@ function CtxItem({ onClick, danger, children }: { onClick: () => void; danger?: 
 // ── Pass-map (Google Sheet) connect modal ──
 type SheetTab = { title: string; gid: number; rowCount: number; colCount: number };
 
-function SheetModal({ pass, onConnected, onDisconnected, onClose }: {
+function SheetModal({ pass, onConnected, onDisconnected, onSeeded, onClose }: {
   pass: PassTree;
   onConnected: (pass: PlatformPass) => void;
   onDisconnected: () => void;
+  onSeeded: () => void;
   onClose: () => void;
 }) {
   const [url, setUrl] = useState(pass.sheetUrl ?? '');
@@ -685,6 +687,22 @@ function SheetModal({ pass, onConnected, onDisconnected, onClose }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+
+  async function seedSkeleton(force = false) {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`/api/platform/passes/${pass.id}/seed`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.needsForce) {
+        if (window.confirm('This pass already has categories. Add the sheet’s categories and tiles on top of them?')) return seedSkeleton(true);
+        return;
+      }
+      if (!res.ok) { setError(data.error ?? 'Seeding failed'); return; }
+      onSeeded();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
 
   async function loadTabs() {
     if (!url.trim()) return;
@@ -746,7 +764,9 @@ function SheetModal({ pass, onConnected, onDisconnected, onClose }: {
               <span style={{ fontSize: 11.5, color: 'var(--muted-soft)' }}>
                 {pass.sheetRowCount ?? 0} coded {pass.sheetRowCount === 1 ? 'video' : 'videos'} · {pass.sheetTabCount ?? 0} tabs in workbook
               </span>
-              <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+              <div style={{ display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
+                <button onClick={() => seedSkeleton(false)} disabled={busy} style={{ ...ghostBtn2, borderColor: 'var(--accent)', color: 'var(--text-strong)' }}
+                  title="Build categories and coded tiles from this tab (for an empty pass)">Seed skeleton</button>
                 <button onClick={loadTabs} disabled={busy} style={ghostBtn2}>{busy ? 'Working…' : 'Change tab'}</button>
                 <button onClick={disconnect} disabled={busy} style={{ ...ghostBtn2, color: 'var(--warning)' }}>Disconnect</button>
               </div>
