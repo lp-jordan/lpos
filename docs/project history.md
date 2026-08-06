@@ -3258,3 +3258,24 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit` — clean (the previously-noted platform-stub error is resolved by the new columns). ESLint not run (repo has no non-interactive lint config). Not run in a live server (user manages the server lifecycle).
 
 **Assumptions / follow-ups:** Go-live TODO: implement the commented OpenAI branch + set `OPENAI_API_KEY` in Doppler (needs OpenAI org verification for `gpt-image-1`); add `platform/tile-images/` to the nightly BackupService; batch "generate all heroes" as a throttled background job; guide prompts away from tight faces only if outputs get uncanny. The recurring/uploadable brand-element system (tighter tonal cohesion + seeded variety) is the still-pending design item from this thread — not built here.
+
+---
+
+## 2026-08-06T13:23:38Z — Video playback: fix hls.js never engaging in Chromium (root cause of missing quality button)
+
+**User prompt (verbatim):** Pasted the temporary `[useHlsPlayer]` console output from Edge: `resolve {…, isHls: true, nativeHls: true}` followed by `native/mp4 path (no hls.js)`.
+
+**Assistant response summary:** The diagnostics pinpointed the root cause. In Edge, `videoRef.current.canPlayType('application/vnd.apple.mpegurl')` returns a non-empty `"maybe"` (`nativeHls: true`), so the hook's `if (isHls && !nativeHls)` gate skipped hls.js and handed the stream to Edge's native player — meaning hls.js never ran and the quality button / estimate bump never activated. The original "Chromium has no native HLS" assumption was false: Chromium browsers report a bogus native-HLS capability. Fixed by adopting the canonical hls.js selection order — prefer hls.js whenever `Hls.isSupported()` (MSE present: Chrome, Edge, Firefox, desktop Safari), and fall back to the native element only when hls.js can't run (iOS Safari), where the server-side `clientBandwidthHint` still biases the opening quality. The console output also confirmed `?clientBandwidthHint=5` is correctly present on the resolved Cloudflare manifest URL.
+
+**Files changed:**
+- `hooks/useHlsPlayer.ts` — changed the branch condition from `if (isHls && !nativeHls)` to `if (isHls)` (with hls.js chosen inside when `Hls.isSupported()`, native as the else-fallthrough). Updated the header/inline comments to document the Chromium `nativeHls=true` gotcha. Temporary `[useHlsPlayer]` diagnostics retained for one more verification round (now also logging `isHls`/`nativeHls` on the native path).
+
+**Implementation summary:** One-condition fix. Because the existing fallthrough already does `video.src = url` for both native-HLS and MP4, dropping the `!nativeHls` guard is sufficient: `Hls.isSupported()` true → hls.js (+ button + ABR bump); otherwise native. No other logic changed.
+
+**Decision rationale:** This is the standard hls.js integration pattern (`Hls.isSupported()` first, native HLS second) and it's the minimal correct fix. Desktop Safari now also routes through hls.js, gaining the button and consistent behavior; iOS Safari (no MSE → `isSupported` false) keeps native playback + the manifest bandwidth hint.
+
+**Alternatives considered:** (1) UA-sniff to force native only on "real" Safari — rejected as brittle; `Hls.isSupported()` is the reliable capability check. (2) Leave Edge on native and rely solely on the bandwidth hint (no button) — rejected because the user explicitly wanted the manual full-res control.
+
+**Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — clean (only the unrelated platform-stub error, itself resolved elsewhere this day). Diagnostics gathered from the user's live Edge console.
+
+**Assumptions / follow-ups:** CORS caveat surfaced to the user — forcing hls.js means it makes a CORS-checked XHR for the CF manifest, so the LPOS access origin must be in each video's Cloudflare `allowedOrigins` (tailnet host was previously backfilled; localhost access could 403). The retained `ERROR` diagnostic will catch any such CORS failure. Next step: user confirms the button now appears in Edge (and no `[useHlsPlayer] ERROR` lines), then a final commit strips ALL temporary diagnostics.

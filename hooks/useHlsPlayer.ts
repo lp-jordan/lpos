@@ -9,10 +9,12 @@ import type HlsPlayer from 'hls.js';
  *
  * The stream route (`…/frameio-stream`) 302-redirects to either a Cloudflare
  * HLS manifest (`.m3u8` — the current version) or a Frame.io H.264 MP4 (older
- * versions and the fallback path). MP4 plays natively in every browser; HLS
- * plays natively ONLY in Safari. So for an HLS source in a browser without
- * native HLS (Firefox, Chrome, Edge) we attach via hls.js — lazy-loaded so it
- * only ships to clients that actually need it.
+ * versions and the fallback path). MP4 plays natively in every browser. For
+ * HLS we PREFER hls.js wherever it's supported (Chrome, Edge, Firefox, desktop
+ * Safari) — Chromium browsers report a bogus `canPlayType('…mpegurl') = "maybe"`
+ * but play multi-rendition HLS poorly through the native element and expose no
+ * rendition control. Native playback is the fallback only when hls.js can't run
+ * (iOS Safari). hls.js is lazy-loaded so it ships only to clients that need it.
  *
  * Usage: call this in place of setting `src` on the <video>; remove the `src`
  * prop from the element — the hook owns it. The returned controller exposes a
@@ -96,7 +98,12 @@ export function useHlsPlayer(
       // TEMP DIAGNOSTIC — remove once the quality-button issue is understood.
       console.info('[useHlsPlayer] resolve', { src, url, isHls, nativeHls });
 
-      if (isHls && !nativeHls) {
+      // Prefer hls.js whenever MSE is available (Chrome, Edge, Firefox, desktop
+      // Safari). Do NOT gate on `!nativeHls`: Chromium reports nativeHls=true yet
+      // gives no rendition control, so that gate wrongly excluded the browsers we
+      // want hls.js for. Native playback is the fallback for iOS Safari, where the
+      // clientBandwidthHint on the manifest still biases the opening quality.
+      if (isHls) {
         const { default: Hls } = await import('hls.js');
         if (destroyed || !videoRef.current) return;
         if (Hls.isSupported()) {
@@ -134,13 +141,12 @@ export function useHlsPlayer(
           hls = inst;
           return;
         }
-        // hls.js unsupported (very old browser) → fall through to native, which
-        // will fail gracefully into the player's "Check back shortly" state.
+        // hls.js can't run (iOS Safari / very old browser) → native element.
       }
 
       // TEMP DIAGNOSTIC
-      console.info('[useHlsPlayer] native/mp4 path (no hls.js)', { url });
-      // Native HLS (Safari) or a plain MP4 — let the element handle it.
+      console.info('[useHlsPlayer] native/mp4 path (no hls.js)', { url, isHls, nativeHls });
+      // Native HLS (iOS Safari) or a plain MP4 — let the element handle it.
       if (videoRef.current) videoRef.current.src = url;
     })();
 

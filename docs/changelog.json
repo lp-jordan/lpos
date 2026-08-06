@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-06T13:23:38Z",
+    "title": "Video playback: quality controls now activate in Chrome/Edge",
+    "summary": "Fixed the reason the new video quality controls weren't appearing in Chromium browsers. Edge (and Chrome/Firefox) falsely report that they can play HLS natively, so the player was handing video straight to the browser's built-in player and never loading the advanced player (hls.js) — which meant no quality button and no start-quality tuning. The player now uses hls.js whenever the browser supports it and only falls back to native playback on iOS Safari, so the Auto/HD quality toggle and faster high-quality start now actually take effect. The Cloudflare bandwidth hint from the previous change was confirmed working. Note: because hls.js fetches the manifest with a CORS check, the LPOS domain must be in each Cloudflare video's allowed origins (the tailnet host already is)."
+  },
+  {
     "timestamp": "2026-08-05T14:40:38Z",
     "title": "Video playback: open at high quality via Cloudflare bandwidth hint",
     "summary": "Videos that opened blurry and took a few seconds to sharpen should now open at high quality across all browsers, including Safari and Edge. The fix is applied at the source: the stream route appends Cloudflare's clientBandwidthHint to the video manifest, telling Cloudflare to start at a high rendition instead of the lowest — so it doesn't depend on any in-browser player tuning (which had missed Safari entirely and wasn't visibly helping Edge). The hint is only added to Cloudflare manifests, never to Frame.io URLs, so pre-signed links aren't broken. Also removed the unintuitive rewind behavior that only reached full resolution after fast-forwarding first, and added temporary diagnostics to pin down why the manual quality button wasn't appearing in Chromium browsers."
