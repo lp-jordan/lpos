@@ -18,7 +18,7 @@ import next from 'next';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Socket } from 'socket.io';
 import { initServices, stopServices, getRegistry } from './lib/services/container';
-import { closeAllDatabases } from './lib/store/db-registry';
+import { checkpointAllDatabases, closeAllDatabases } from './lib/store/db-registry';
 import { APP_SESSION_COOKIE, verifySessionToken } from './lib/services/session-auth';
 
 const dev      = process.env.NODE_ENV !== 'production';
@@ -156,9 +156,20 @@ async function main() {
       httpServer.closeAllConnections?.();
       httpServer.close();
       const code = (globalThis as Record<string, unknown>).__lpos_exitCode as number | undefined;
+      // Durability step 1 — checkpoint FIRST (fast, ~ms): fold every WAL into its
+      // main file before the (potentially 30s+) service cleanup below, so the data
+      // is already durable even if the supervisor force-kills at its 8s deadline.
+      try {
+        const cp = checkpointAllDatabases('TRUNCATE');
+        const bad = cp.filter((o) => !o.ok);
+        process.stdout.write(`[lpos] pre-stop checkpoint: ${cp.length - bad.length}/${cp.length} databases\n`);
+        if (bad.length) process.stdout.write(`[lpos] checkpoint issues: ${bad.map((f) => `${f.name}: ${f.error}`).join('; ')}\n`);
+      } catch (err) {
+        process.stdout.write(`[lpos] pre-stop checkpoint error: ${(err as Error).message}\n`);
+      }
       await stopServices();
-      // Durability: fold every DB's WAL into its main file and close cleanly, so
-      // a restart never leaves data stranded in a WAL that could be lost.
+      // Durability step 2 — final checkpoint + clean close: folds any writes made
+      // during service shutdown and releases the WAL cleanly.
       try {
         const outcomes = closeAllDatabases();
         const failed = outcomes.filter((o) => !o.ok);
