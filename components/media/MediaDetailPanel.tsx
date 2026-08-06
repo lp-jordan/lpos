@@ -856,50 +856,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         onTheaterOpen={t => openTheater(src, t)}
                         onCurrentTimeChange={t => { sidebarTimeRef.current = t; }}
                       />
-                      <div className="mad-video-theater-row">
-                        {/* Review links dropdown */}
-                        {existingShareLinks.length > 0 && (
-                          <div className="mad-review-links-wrap">
-                            <button
-                              type="button"
-                              className={`mad-action-btn mad-review-links-btn${reviewLinksOpen ? ' mad-review-links-btn--active' : ''}`}
-                              onClick={() => setReviewLinksOpen(o => !o)}
-                              title={`${existingShareLinks.length} review link${existingShareLinks.length !== 1 ? 's' : ''}`}
-                            >
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
-                                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
-                              </svg>
-                              {existingShareLinks.length}
-                            </button>
-                            {reviewLinksOpen && (
-                              <>
-                                <div className="mad-review-links-backdrop" onClick={() => setReviewLinksOpen(false)} />
-                                <div className="mad-review-links-menu">
-                                  {existingShareLinks.map((link) => (
-                                    <div key={link.shareId} className="mad-review-links-item">
-                                      <span className="mad-review-links-name">{link.name}</span>
-                                      <button
-                                        type="button"
-                                        className="mad-icon-btn"
-                                        onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
-                                        title="Copy link"
-                                      >
-                                        {copiedShareId === link.shareId ? '✓' : (
-                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                                          </svg>
-                                        )}
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
                       <MediaDistributionBar
                         asset={asset}
                         isViewingOldVersion={isViewingOldVersion}
@@ -908,6 +864,11 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         onReplaceThumbnail={() => setShowThumbModal(true)}
                         onSecurity={() => setShowDomainsModal(true)}
                         frameioLink={asset.frameio.playerUrl ?? asset.frameio.reviewLink ?? null}
+                        shareLinks={existingShareLinks}
+                        reviewLinksOpen={reviewLinksOpen}
+                        onToggleReviewLinks={() => setReviewLinksOpen(o => !o)}
+                        onCopyLink={handleCopyLink}
+                        copiedShareId={copiedShareId}
                       />
                     </>
                   );

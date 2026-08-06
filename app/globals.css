@@ -5254,6 +5254,9 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 .mdb-rail-btn:hover, .mdb-rail-btn.is-open { background: rgba(255, 255, 255, 0.09); color: var(--text-primary); border-color: rgba(255, 255, 255, 0.18); }
+/* Review/share-links pill — lives in the rail but needs to fit icon + count. */
+.mdb-review-links-btn { width: auto; gap: 4px; padding: 0 9px; font-size: 0.72rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mdb-review-links-btn--active { color: var(--accent); border-color: rgba(219, 175, 95, 0.5); background: rgba(219, 175, 95, 0.12); }
 
 .mdb-pop {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 42;
