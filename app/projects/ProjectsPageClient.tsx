@@ -207,7 +207,7 @@ export function ProjectsPageClient({
 }: ProjectsPageClientProps) {
   const router = useRouter();
   const { projects } = useProjects(initialProjects);
-  const { owners, users, assignOwner, removeOwner, renameClient } = useClientOwners(initialOwners, initialUsers);
+  const { owners, users, assignOwner, removeOwner } = useClientOwners(initialOwners, initialUsers);
   const currentUser = initialCurrentUser;
   const clientStats = initialStats;
 
@@ -431,15 +431,26 @@ export function ProjectsPageClient({
   async function saveRename(value: string) {
     if (!renaming) return;
     if (renaming.isClient) {
-      // Rename client: patch all projects with that clientName + re-key ownership
-      const toRename = projects.filter((p) => p.clientName === renaming.currentName);
-      await Promise.all([
-        ...toRename.map((p) => apiPatch(p.projectId, { clientName: value })),
-        renameClient(renaming.currentName, value),
-      ]);
-      if (activeClient === renaming.currentName) router.push(clientProjectsHref(value));
+      // Atomic server-side rename: converts the client across clients, projects
+      // (incl. archived), tasks, People/CRM, owners, and the Drive folder in one
+      // shot — no per-project fan-out, no forked duplicate prospect.
+      const res = await fetch(`/api/clients/${encodeURIComponent(renaming.currentName)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName: value }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(d.error ?? 'Rename failed');
+      }
+      if (activeClient === renaming.currentName) {
+        router.push(clientProjectsHref(value));
+      } else {
+        router.refresh();
+      }
     } else {
       await apiPatch(renaming.id, { name: value });
+      router.refresh();
     }
   }
 

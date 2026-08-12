@@ -84,6 +84,82 @@ export class ClientStore {
     return rows.map(rowToClient);
   }
 
+  /**
+   * The ONE true "rename a client" operation. Converts the client in place
+   * across every core-db table that stores the client NAME as a string key,
+   * instead of forking a new client (the bug in the old flow, where per-project
+   * clientName PATCHes triggered ensureProspectForClient and minted a duplicate
+   * prospect while the old client/prospect rows survived).
+   *
+   * Updated in a single transaction:
+   *   - clients.name
+   *   - projects.client_name          (ALL projects, incl. archived)
+   *   - tasks.client_name
+   *   - asset_link_groups.client_name
+   *   - delivery_notifications.client_name
+   *   - client_owners.client_name     (PK — OR REPLACE guards a stray target key)
+   *   - the linked prospect's company  (renames the People/CRM record in place)
+   *   - prospects.client_name          (denormalized link on any referencing row)
+   *
+   * Does NOT touch Google Drive: the folder cache is name-keyed and its rename
+   * is an async Drive API call, so the caller re-keys it via renameClientFolder()
+   * after this commits.
+   *
+   * @returns counts + the linked prospectId, or null if no client exists under
+   *   oldName. Throws if newName is already taken by a different client.
+   */
+  rename(oldName: string, newName: string): {
+    movedProjects: number;
+    movedTasks:    number;
+    prospectId:    string | null;
+  } | null {
+    const db       = getCoreDb();
+    const existing = this.getByName(oldName);
+    if (!existing) return null;
+
+    const collision = this.getByName(newName);
+    if (collision && collision.clientId !== existing.clientId) {
+      throw new Error(`A client named "${newName}" already exists.`);
+    }
+
+    const now        = new Date().toISOString();
+    const prospectId = existing.prospectId;
+
+    db.exec('BEGIN');
+    try {
+      db.prepare('UPDATE clients SET name = ? WHERE client_id = ?')
+        .run(newName, existing.clientId);
+
+      const proj = db.prepare('UPDATE projects SET client_name = ?, updated_at = ? WHERE client_name = ?')
+        .run(newName, now, oldName) as { changes: number };
+
+      const tsk = db.prepare('UPDATE tasks SET client_name = ? WHERE client_name = ?')
+        .run(newName, oldName) as { changes: number };
+
+      db.prepare('UPDATE asset_link_groups SET client_name = ? WHERE client_name = ?')
+        .run(newName, oldName);
+      db.prepare('UPDATE delivery_notifications SET client_name = ? WHERE client_name = ?')
+        .run(newName, oldName);
+      db.prepare('UPDATE OR REPLACE client_owners SET client_name = ? WHERE client_name = ?')
+        .run(newName, oldName);
+
+      // Rename the linked People/CRM record IN PLACE — the step the old flow
+      // skipped, which is what created the duplicate prospect.
+      if (prospectId) {
+        db.prepare('UPDATE prospects SET company = ?, updated_at = ? WHERE prospect_id = ?')
+          .run(newName, now, prospectId);
+      }
+      db.prepare('UPDATE prospects SET client_name = ? WHERE client_name = ?')
+        .run(newName, oldName);
+
+      db.exec('COMMIT');
+      return { movedProjects: proj.changes, movedTasks: tsk.changes, prospectId };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   /** Mark a client as a parent org (container). Idempotent. */
   setAsParent(clientId: string): void {
     getCoreDb()

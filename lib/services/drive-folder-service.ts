@@ -218,6 +218,63 @@ export async function renameProjectFolder(
 }
 
 /**
+ * Renames a client folder in Drive and re-keys EVERY client-name-keyed cache
+ * entry: the client folder itself plus all "{clientName}/{projectName}" project
+ * folder keys. Fire-and-forget safe — logs errors, never throws.
+ *
+ * Called after ClientStore.rename() commits, so the name-keyed folder cache and
+ * the Drive tree stay consistent with the renamed client. The cache is re-keyed
+ * BEFORE the Drive API call: folder IDs are stable and resolution is by ID, so
+ * even if the Drive-side rename fails, LPOS keeps resolving the same folders
+ * under the new name (no data loss) — only the Drive folder's display name lags.
+ */
+export async function renameClientFolder(
+  driveId: string,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  const cache          = getCache();
+  const clientFolderId = cache.clientFolders[oldName];
+
+  // Re-key project-folder entries "{oldName}/..." → "{newName}/..."
+  const prefix = `${oldName}/`;
+  for (const key of Object.keys(cache.projectFolders)) {
+    if (key.startsWith(prefix)) {
+      const newKey = `${newName}/${key.slice(prefix.length)}`;
+      cache.projectFolders[newKey] = cache.projectFolders[key];
+      delete cache.projectFolders[key];
+    }
+  }
+
+  if (clientFolderId) {
+    cache.clientFolders[newName] = clientFolderId;
+    delete cache.clientFolders[oldName];
+  }
+  writeCache(cache);
+
+  if (!clientFolderId) {
+    console.warn(`[drive-folders] no cached client folder for "${oldName}" — cache re-keyed, Drive folder not renamed`);
+    return;
+  }
+
+  // driveId is accepted for signature symmetry with renameProjectFolder; the
+  // Drive client already targets the shared drive via supportsAllDrives.
+  void driveId;
+
+  try {
+    await getDriveClient().files.update({
+      fileId:            clientFolderId,
+      supportsAllDrives: true,
+      requestBody:       { name: newName },
+      fields:            'id, name',
+    });
+    console.log(`[drive-folders] Renamed client Drive folder "${oldName}" → "${newName}"`);
+  } catch (err) {
+    console.error(`[drive-folders] Failed to rename client Drive folder for "${oldName}":`, err);
+  }
+}
+
+/**
  * Returns a map of Drive folder ID → client name for all cached client folders.
  * Used by the Drive watcher to identify whether an unknown folder's parent
  * is a known client folder (i.e. the unknown folder is a project-level orphan).
