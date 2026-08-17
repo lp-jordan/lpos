@@ -35,12 +35,5 @@ export default async function TranscriptEditorPage({ params }: Readonly<{ params
     );
   }
 
-  return (
-    <TranscriptEditor
-      projectId={projectId}
-      clientName={clientName}
-      projectName={project.name}
-      initial={payload}
-    />
-  );
+  return <TranscriptEditor projectId={projectId} initial={payload} />;
 }

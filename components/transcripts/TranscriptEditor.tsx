@@ -15,9 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
-import { useHlsPlayer } from '@/hooks/useHlsPlayer';
-import { projectHref } from '@/lib/urls/project-url';
+import { InlineVideoPlayer } from '@/components/media/InlineVideoPlayer';
 import type { TranscriptCue } from '@/lib/transcripts/edit-store';
 import type { TranscriptEditorPayload } from '@/lib/transcripts/editor-payload';
 
@@ -27,8 +25,6 @@ type LangDoc = NonNullable<TranscriptEditorPayload['en']>;
 
 interface Props {
   projectId: string;
-  clientName: string;
-  projectName: string;
   initial: TranscriptEditorPayload;
 }
 
@@ -41,12 +37,6 @@ function displayTimecode(raw: string): string {
   return raw.replace(',', '.');
 }
 
-function clockLabel(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
 function relativeTime(iso: string | null): string {
   if (!iso) return 'never';
   const delta = Date.now() - new Date(iso).getTime();
@@ -56,7 +46,7 @@ function relativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-export function TranscriptEditor({ projectId, clientName, projectName, initial }: Readonly<Props>) {
+export function TranscriptEditor({ projectId, initial }: Readonly<Props>) {
   const [docs, setDocs] = useState<{ en: LangDoc | null; es: LangDoc | null }>({ en: initial.en, es: initial.es });
   const [flags, setFlags] = useState<Set<number>>(new Set(initial.englishChangedIndices));
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -67,16 +57,13 @@ export function TranscriptEditor({ projectId, clientName, projectName, initial }
   const [conflict, setConflict] = useState(false);
 
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(initial.duration ?? 0);
-  const [playing, setPlaying] = useState(false);
+  const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const [overlayTrack, setOverlayTrack] = useState<Lang>('en');
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
 
   const streamSrc = `/api/projects/${projectId}/media/${initial.assetId}/frameio-stream`;
-  useHlsPlayer(videoRef, streamSrc);
 
   const hasEs = docs.es !== null;
   const rowCount = docs.en?.cues.length ?? docs.es?.cues.length ?? 0;
@@ -130,44 +117,16 @@ export function TranscriptEditor({ projectId, clientName, projectName, initial }
     return cues.findIndex((cue) => ms >= cue.fromMs && ms < cue.toMs);
   }, [currentTime, docs]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onTime = () => setCurrentTime(video.currentTime);
-    const onMeta = () => setDuration(video.duration || 0);
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    video.addEventListener('timeupdate', onTime);
-    video.addEventListener('loadedmetadata', onMeta);
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
-    return () => {
-      video.removeEventListener('timeupdate', onTime);
-      video.removeEventListener('loadedmetadata', onMeta);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
-    };
-  }, []);
-
   // Keep the playing cue in view, but never yank the page while someone types.
   useEffect(() => {
-    if (!playing || activeIndex < 0 || !followRef.current) return;
+    if (activeIndex < 0 || !followRef.current) return;
     rowsRef.current?.querySelector(`[data-row="${activeIndex}"]`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [activeIndex, playing]);
+  }, [activeIndex]);
 
   const seekTo = useCallback((seconds: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, seconds);
-    setCurrentTime(video.currentTime);
+    setSeekTarget(Math.max(0, seconds));
   }, []);
-
-  function togglePlay() {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) void video.play(); else video.pause();
-  }
 
   const overlayText = useMemo(() => {
     if (activeIndex < 0) return '';
@@ -339,14 +298,10 @@ export function TranscriptEditor({ projectId, clientName, projectName, initial }
 
       <header className="te-topbar">
         <div>
-          <nav className="te-crumbs" aria-label="Breadcrumb">
-            <Link href={projectHref(clientName, projectId, 'media')}>{projectName}</Link>
-            <span aria-hidden="true">/</span>
-            <span>Media</span>
-            <span aria-hidden="true">/</span>
-            <b>{initial.assetName}</b>
-          </nav>
+          {/* No breadcrumb here — AppShell already renders one from the URL
+              (Projects → Client → Project → Transcripts). */}
           <h1 className="te-title">Edit transcript</h1>
+          <p className="te-subtitle">{initial.assetName}</p>
         </div>
 
         <div className="te-status-stack">
@@ -372,66 +327,37 @@ export function TranscriptEditor({ projectId, clientName, projectName, initial }
 
       <div className="te-stage">
         <section className="te-player" aria-label="Player">
-          <div className="te-screen">
-            {/* The hook owns `src` — see useHlsPlayer. */}
-            <video ref={videoRef} playsInline preload="metadata" />
-            {overlayText && (
+          {/* The same player the rest of LPOS uses — keeps AUTO/HD, mute and the
+              scrub behaviour consistent instead of inventing a second transport. */}
+          <InlineVideoPlayer
+            src={streamSrc}
+            assetId={initial.assetId}
+            seekTarget={seekTarget}
+            onSeekHandled={() => setSeekTarget(null)}
+            onTimeUpdate={setCurrentTime}
+            autoPlayOnSeek={false}
+            overlay={overlayText ? (
               <div className="te-caption-layer"><span>{overlayText}</span></div>
-            )}
-          </div>
+            ) : null}
+          />
 
-          <div className="te-transport">
-            <div className="te-transport-head">
-              <button type="button" className="te-play" onClick={togglePlay}>
-                <span aria-hidden="true">{playing ? '❚❚' : '▶'}</span>{playing ? 'Pause' : 'Play'}
-              </button>
-              <span className="te-clock">
-                <b>{clockLabel(currentTime)}</b> / {clockLabel(duration)}
-              </span>
-            </div>
-
-            <div
-              className="te-scrub"
-              role="slider"
-              tabIndex={0}
-              aria-label="Timeline position"
-              aria-valuemin={0}
-              aria-valuemax={Math.round(duration)}
-              aria-valuenow={Math.round(currentTime)}
-              onClick={(event) => {
-                const box = event.currentTarget.getBoundingClientRect();
-                if (duration > 0) seekTo(((event.clientX - box.left) / box.width) * duration);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'ArrowRight') { event.preventDefault(); seekTo(currentTime + 1); }
-                if (event.key === 'ArrowLeft') { event.preventDefault(); seekTo(currentTime - 1); }
-              }}
-            >
-              <div className="te-scrub-fill" style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }} />
-            </div>
-
-            {hasEs && (
-              <div className="te-track-toggle">
-                <span className="te-track-label">Caption preview</span>
-                <div className="te-seg" role="group" aria-label="Caption track shown on the player">
-                  {(['en', 'es'] as Lang[]).map((lang) => (
-                    <button
-                      key={lang}
-                      type="button"
-                      aria-pressed={overlayTrack === lang}
-                      onClick={() => setOverlayTrack(lang)}
-                    >
-                      {lang === 'en' ? 'English' : 'Español'}
-                    </button>
-                  ))}
-                </div>
+          {hasEs && (
+            <div className="te-track-toggle">
+              <span className="te-track-label">Caption preview</span>
+              <div className="te-seg" role="group" aria-label="Caption track shown on the player">
+                {(['en', 'es'] as Lang[]).map((lang) => (
+                  <button
+                    key={lang}
+                    type="button"
+                    aria-pressed={overlayTrack === lang}
+                    onClick={() => setOverlayTrack(lang)}
+                  >
+                    {lang === 'en' ? 'English' : 'Español'}
+                  </button>
+                ))}
               </div>
-            )}
-
-            <p className="te-hint">
-              Click any line to jump the player there. Timings are fixed — only the text is editable.
-            </p>
-          </div>
+            </div>
+          )}
         </section>
       </div>
 

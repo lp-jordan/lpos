@@ -19,7 +19,18 @@ interface Props {
   comments?:       FrameIOComment[];
   seekTarget?:     number | null;   // seek to this timestamp (seconds) when it changes
   onSeekHandled?:  () => void;
-  onTheaterOpen:   () => void;
+  /** Omit to hide the theater button — surfaces with no theater mode (e.g. the
+   *  transcript editor, where a full-screen video would cover the cue grid). */
+  onTheaterOpen?:  () => void;
+  /** Playback position, for callers that highlight something in step with it. */
+  onTimeUpdate?:   (seconds: number) => void;
+  /** Whether an external seek also starts playback. Comment ticks want this
+   *  (you clicked to watch); the transcript editor does not (you clicked to
+   *  edit, and auto-playing on every cue focus would be unusable). */
+  autoPlayOnSeek?: boolean;
+  /** Rendered over the video, below the theater button. Pointer-events are the
+   *  caller's problem — the wrap itself toggles play on click. */
+  overlay?:        React.ReactNode;
 }
 
 function fmt(s: number): string {
@@ -29,6 +40,7 @@ function fmt(s: number): string {
 
 export function InlineVideoPlayer({
   src, assetId, comments = [], seekTarget, onSeekHandled, onTheaterOpen,
+  onTimeUpdate, autoPlayOnSeek = true, overlay,
 }: Readonly<Props>) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const scrubRef = useRef<HTMLDivElement>(null);
@@ -45,7 +57,9 @@ export function InlineVideoPlayer({
     const v = videoRef.current;
     if (!v) return;
     v.currentTime = seekTarget;
-    void v.play();
+    setCurrentTime(seekTarget);
+    onTimeUpdate?.(seekTarget);
+    if (autoPlayOnSeek) void v.play();
     onSeekHandled?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekTarget]);
@@ -98,14 +112,18 @@ export function InlineVideoPlayer({
           preload="metadata"
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
-          onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
+          onTimeUpdate={() => {
+            const t = videoRef.current?.currentTime ?? 0;
+            setCurrentTime(t);
+            onTimeUpdate?.(t);
+          }}
           onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
           onError={() => setUnavailable(true)}
         />
         {unavailable ? (
           <div className="ivp-error-overlay">
             <span>Preview unavailable — Frame.io may still be processing</span>
-            <button
+            {onTheaterOpen && <button
               type="button"
               className="ivp-theater-btn"
               onClick={e => { e.stopPropagation(); onTheaterOpen(); }}
@@ -115,7 +133,7 @@ export function InlineVideoPlayer({
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
               </svg>
-            </button>
+            </button>}
           </div>
         ) : (
           <>
@@ -126,7 +144,7 @@ export function InlineVideoPlayer({
               </div>
             )}
             {/* Theater button — top-right corner */}
-            <button
+            {onTheaterOpen && <button
               type="button"
               className="ivp-theater-btn"
               onClick={e => { e.stopPropagation(); onTheaterOpen(); }}
@@ -136,9 +154,10 @@ export function InlineVideoPlayer({
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
               </svg>
-            </button>
+            </button>}
           </>
         )}
+        {overlay}
       </div>
 
       {/* Controls */}

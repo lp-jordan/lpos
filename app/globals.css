@@ -20280,19 +20280,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   padding: var(--space-4) 0 var(--space-3);
 }
 
-.te-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.72rem;
-  color: var(--muted-soft);
-}
-.te-crumbs a { color: var(--muted-soft); text-decoration: none; }
-.te-crumbs a:hover { color: var(--accent); }
-.te-crumbs span[aria-hidden] { opacity: 0.45; }
-.te-crumbs b { color: var(--muted); font-weight: 500; }
-
 .te-title {
   margin: 6px 0 0;
   font-size: 1.3rem;
@@ -20300,6 +20287,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   letter-spacing: -0.01em;
   color: var(--text-strong);
   text-wrap: balance;
+}
+
+.te-subtitle {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted-soft);
 }
 
 .te-status-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
@@ -20332,9 +20325,10 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 }
 
 .te-player {
-  display: grid;
-  grid-template-columns: minmax(300px, 440px) 1fr;
-  gap: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 480px;
   padding: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -20342,16 +20336,8 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   box-shadow: var(--shadow-md);
 }
 
-.te-screen {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: #05080b;
-  border: 1px solid var(--line);
-}
-.te-screen video { width: 100%; height: 100%; object-fit: contain; display: block; background: #05080b; }
-
+/* Live caption preview, rendered into InlineVideoPlayer's `overlay` slot.
+   Click-through so the player's own play-on-click still works. */
 .te-caption-layer {
   position: absolute;
   left: 6%;
@@ -20359,6 +20345,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   bottom: 8%;
   text-align: center;
   pointer-events: none;
+  z-index: 2;
 }
 .te-caption-layer span {
   display: inline-block;
@@ -20370,51 +20357,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   font-size: 0.82rem;
   line-height: 1.35;
   text-wrap: balance;
-}
-
-.te-transport { display: flex; flex-direction: column; gap: var(--space-3); justify-content: center; }
-.te-transport-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
-
-.te-play {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 18px;
-  border-radius: 999px;
-  border: 1px solid rgba(219, 175, 95, 0.4);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  font-family: inherit;
-  font-size: 0.82rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease;
-}
-.te-play:hover { background: rgba(219, 175, 95, 0.26); border-color: rgba(219, 175, 95, 0.6); }
-.te-play:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-.te-clock {
-  font-family: "Cascadia Code", "Fira Code", monospace;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-.te-clock b { color: var(--text-strong); font-weight: 500; }
-
-.te-scrub {
-  position: relative;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--surface-inset);
-  border: 1px solid var(--line);
-  overflow: hidden;
-  cursor: pointer;
-}
-.te-scrub:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.te-scrub-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: linear-gradient(90deg, rgba(219, 175, 95, 0.55), var(--accent));
 }
 
 .te-track-toggle { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
@@ -20445,8 +20387,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 }
 .te-seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-strong); }
 .te-seg button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-.te-hint { margin: 0; font-size: 0.72rem; color: var(--muted-soft); }
 
 /* Cue grid */
 
@@ -20634,7 +20574,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 }
 
 @media (max-width: 1000px) {
-  .te-player { grid-template-columns: 1fr; }
+  .te-player { max-width: none; }
   .te-stage { position: static; }
   .te-grid-head, .te-row { grid-template-columns: 92px 1fr; }
   .te-grid-head .te-col-es, .te-row .te-cell:last-child { display: none; }
