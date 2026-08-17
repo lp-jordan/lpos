@@ -565,6 +565,19 @@ const { openMenu } = useContextMenu();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  /**
+   * Link to the per-asset transcript editor. Derived from the current URL rather
+   * than a prop because MediaTab isn't passed the client name; returns null on
+   * the legacy `/projects/<id>` shim (and when there's nothing transcribed yet),
+   * which disables the menu item instead of pushing a broken route.
+   */
+  function transcriptEditorHref(asset: MediaAsset): string | null {
+    const hasTranscript = asset.transcription.status === 'done' || asset.transcriptionEs?.status === 'done';
+    if (!hasTranscript) return null;
+    const base = pathname.match(/^\/projects\/clients\/[^/]+\/[^/]+/)?.[0];
+    return base ? `${base}/transcripts/${asset.assetId}` : null;
+  }
+
   // ── Remote ingest state (survives tab navigation) ──────────────────────────
 
   // Active ingest jobs for this project — used to float uploading assets to the top of the list
@@ -1293,6 +1306,17 @@ const { openMenu } = useContextMenu();
         },
       },
       { type: 'separator' as const },
+      {
+        type: 'item' as const,
+        label: 'Edit transcript',
+        icon: <IconRefresh />,
+        // Needs a finished transcript in at least one language to have cues to show.
+        disabled: !transcriptEditorHref(asset),
+        onClick: () => {
+          const href = transcriptEditorHref(asset);
+          if (href) router.push(href);
+        },
+      },
       {
         type: 'item' as const,
         label: 'Re-transcribe',

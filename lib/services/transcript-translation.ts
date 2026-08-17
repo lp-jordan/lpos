@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { getTranscriptPaths } from '@/lib/transcripts/store';
+import { hashCueText } from '@/lib/transcripts/edit-store';
+import { writeDerivedTranscriptFiles, type WhisperJson, type WhisperSegment } from '@/lib/transcripts/render';
 import { recordLlmUsage } from '@/lib/store/llm-usage-store';
 
 /**
@@ -17,22 +19,18 @@ const TRANSLATION_MODEL = process.env.LPOS_TRANSLATION_MODEL ?? 'claude-sonnet-5
 // and make the 1:1 length check reliable.
 const BATCH_SIZE = 40;
 
-interface WhisperSegment {
-  timestamps: { from: string; to: string };
-  offsets: { from: number; to: number };
-  text: string;
-}
-interface WhisperJson {
-  transcription: WhisperSegment[];
-  [key: string]: unknown;
-}
-
 export interface TranslationResult {
   txtPath: string;
   jsonPath: string;
   srtPath: string;
   vttPath: string;
   segmentCount: number;
+  /**
+   * SHA1 of each English segment as translated. Stored on the Spanish
+   * `.meta.json` so the transcript editor can tell which Spanish rows have
+   * drifted after someone edits the English side.
+   */
+  enSourceHashes: string[];
 }
 
 const SYSTEM_PROMPT =
@@ -91,24 +89,43 @@ async function translateBatch(
   throw new Error(`Translation returned a mismatched or invalid batch (expected ${texts.length} segments).`);
 }
 
-/** Build an SRT body from translated segments (comma-millisecond timestamps as whisper emits). */
-function buildSrt(segments: WhisperSegment[], texts: string[]): string {
-  return segments
-    .map((seg, i) => `${i + 1}\n${seg.timestamps.from} --> ${seg.timestamps.to}\n${texts[i].trim()}\n`)
-    .join('\n');
-}
+/**
+ * Translate an arbitrary subset of English cue texts — used by the transcript
+ * editor to refresh only the Spanish rows whose English source changed, rather
+ * than re-running a whole-file translation and clobbering hand-corrected rows.
+ * Returns Spanish strings 1:1 with the input, in order.
+ */
+export async function translateCueTexts(
+  texts: readonly string[],
+  ctx: { projectId: string; assetId?: string | null; jobId?: string | null },
+): Promise<string[]> {
+  const apiKey = process.env.CLAUDE_API_KEY?.trim();
+  if (!apiKey) throw new Error('CLAUDE_API_KEY is not configured — translation requires it.');
+  if (texts.length === 0) return [];
 
-/** Build a WEBVTT body (dot-millisecond timestamps). */
-function buildVtt(segments: WhisperSegment[], texts: string[]): string {
-  const cues = segments
-    .map((seg) => {
-      const from = seg.timestamps.from.replace(',', '.');
-      const to = seg.timestamps.to.replace(',', '.');
-      return `${from} --> ${to}`;
-    })
-    .map((cue, i) => `${cue}\n${texts[i].trim()}`)
-    .join('\n\n');
-  return `WEBVTT\n\n${cues}\n`;
+  const client = new Anthropic({ apiKey });
+  const usageAcc = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+
+  const out: string[] = [];
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    out.push(...await translateBatch(client, texts.slice(i, i + BATCH_SIZE) as string[], usageAcc));
+  }
+
+  recordLlmUsage({
+    feature: 'spanish_translation',
+    model: TRANSLATION_MODEL,
+    projectId: ctx.projectId,
+    assetId: ctx.assetId ?? null,
+    jobId: ctx.jobId ?? null,
+    usage: {
+      input_tokens: usageAcc.input,
+      output_tokens: usageAcc.output,
+      cache_read_input_tokens: usageAcc.cacheRead,
+      cache_creation_input_tokens: usageAcc.cacheCreate,
+    },
+  });
+
+  return out;
 }
 
 export async function translateTranscriptToSpanish(opts: {
@@ -175,9 +192,9 @@ export async function translateTranscriptToSpanish(opts: {
     transcription: spanishSegments,
   };
   fs.writeFileSync(spPaths.jsonPath, JSON.stringify(spanishJson, null, 2));
-  fs.writeFileSync(spPaths.txtPath, spanishSegments.map((s) => s.text.trim()).join('\n') + '\n');
-  fs.writeFileSync(spPaths.srtPath, buildSrt(segments, translated));
-  fs.writeFileSync(spPaths.vttPath, buildVtt(segments, translated));
+  // Derived trio goes through the shared renderer, so a translated transcript and
+  // a hand-edited one produce byte-identical file shapes.
+  writeDerivedTranscriptFiles(spPaths, spanishSegments);
 
   return {
     txtPath: spPaths.txtPath,
@@ -185,5 +202,6 @@ export async function translateTranscriptToSpanish(opts: {
     srtPath: spPaths.srtPath,
     vttPath: spPaths.vttPath,
     segmentCount: segments.length,
+    enSourceHashes: segments.map((seg) => hashCueText(seg.text)),
   };
 }

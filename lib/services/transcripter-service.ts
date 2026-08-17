@@ -383,6 +383,9 @@ export class TranscripterService {
             filename: next.filename,
             completedAt: new Date().toISOString(),
             lang: 'es',
+            // Baseline for the transcript editor's drift detection: which English
+            // text each Spanish row was translated from.
+            enSourceHashes: result.enSourceHashes,
           }, null, 2));
         } catch (e) {
           console.warn('[transcripter] could not write Spanish transcript meta:', e);
