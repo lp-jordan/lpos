@@ -299,6 +299,37 @@ The serve endpoint validates the key (`attachments/` prefix, no `..`), then bran
 - No per-resource ACL on downloads: any authenticated user can fetch any task-attachment key, and any Prospects-enabled user can fetch any prospect-attachment key. There is no "can this user see *this specific* task/prospect" check — this matches how uploads currently authorize. Tightening would mean moving downloads to resource-nested routes (`/api/tasks/[taskId]/…/attachment`).
 - Orphaned objects are reaped by a 60-day R2 lifecycle rule rather than synchronous deletes.
 
+## Message Reactions
+
+Emoji reactions on **task comments** and **people (prospect) updates**. Both surfaces share one emoji set, one React component, and one storage shape; only the parent table and auth check differ.
+
+### What it does
+Lets any user with access to a surface react to a message with one of a fixed set of 8 emoji (👍 🎉 ❤️ 😂 👀 🙌 🔥 ✅). Clicking an existing pill toggles that user's own reaction on or off. Pills show a count, highlight in accent when the current user is one of the reactors, and name the reactors in a `title` tooltip. Unlike edit/delete (author-only), reacting is open to everyone with access — reacting to *other* people's messages is the point.
+
+### Key files and entry points
+- `lib/models/reaction.ts` — canonical `REACTION_EMOJIS` / `REACTION_VALUES` / `MessageReaction`, plus `groupReactionRows()` (flat rows → per-entry tallies in fixed emoji order).
+- `components/shared/ReactionBar.tsx` — the shared strip: pills, add button, popover picker. Presentational; the caller owns persistence.
+- `app/api/prospects/[prospectId]/updates/[updateId]/reactions/route.ts` — **POST** toggle for people updates (`requireProspectsAccess`).
+- `app/api/tasks/[taskId]/comments/[commentId]/reactions/route.ts` — **POST** toggle for task comments (session cookie).
+- `lib/store/prospect-store.ts` — `getUpdateReactions` / `toggleUpdateReaction`; hydration inside `getUpdates`.
+- `lib/store/task-comment-store.ts` — `getReactions` / `toggleReaction`; hydration inside `getForTask`.
+- `components/prospects/UpdatesLog.tsx`, `components/tasks/CommentThread.tsx` — render the bar and hold the optimistic state.
+
+### Data flow (inputs → outputs)
+1. Click → the client flips the pill optimistically, then POSTs `{ emoji }`.
+2. The route validates the emoji against `REACTION_VALUES` and that the entry belongs to the parent in the URL.
+3. The store runs `DELETE`; if that deleted nothing, it runs `INSERT OR IGNORE`. No read-modify-write, so two people reacting at once cannot clobber each other.
+4. The route returns the entry's **full** reaction set (not a delta); the client replaces its optimistic state with it, or rolls back to the pre-click state if the request failed.
+5. Reads: one extra query per log/thread (not per entry) joins reactions in; `reactions` is always present on `ProspectUpdate` / `TaskComment`, possibly empty.
+
+### Storage
+Two parallel tables, `prospect_update_reactions` and `task_comment_reactions`, each `(entry_id, user_id, emoji, created_at)` with a composite PK on the first three and `ON DELETE CASCADE` to the parent. Created in `initSchema` and by the idempotent v25 block in `runMigrations`. A single polymorphic table was rejected precisely because it could not carry those FK cascades.
+
+### Current status / known gaps
+- No notification on reaction — deliberate: a reaction is the low-noise alternative to a reply. Wiring one would hook `notifyProspectEvent` / the task notification store.
+- Reactions do not appear in activity feeds or the catch-up digest.
+- The bar is not rendered on `handoff` / `handoff_ack` / `review_ack` system callouts (the API would accept them); they are chain-of-custody markers, not messages.
+
 ## Responsive Layout & Mobile
 
 How the app adapts between desktop and phone-sized screens.

@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-17T00:00:00Z",
+    "title": "Emoji reactions on people updates and task comments",
+    "summary": "You can now react to a message with an emoji instead of writing a reply — on the People page Updates log and on task board comments. Hover a message and click the smiley to pick from a fixed set (👍 🎉 ❤️ 😂 👀 🙌 🔥 ✅); click an existing reaction pill to add yours or take it back. Each pill shows a count and names who reacted on hover, and highlights when you are one of them. Reactions are stored per user so two people reacting at the same time can't overwrite each other, and they are removed automatically when the message is deleted. Reactions deliberately send no notification — they are the quiet alternative to a reply. Also fixed a long-standing bug where editing a People update didn't visibly update the entry until the page was reloaded."
+  },
+  {
     "timestamp": "2026-08-06T13:23:38Z",
     "title": "Video playback: quality controls now activate in Chrome/Edge",
     "summary": "Fixed the reason the new video quality controls weren't appearing in Chromium browsers. Edge (and Chrome/Firefox) falsely report that they can play HLS natively, so the player was handing video straight to the browser's built-in player and never loading the advanced player (hls.js) — which meant no quality button and no start-quality tuning. The player now uses hls.js whenever the browser supports it and only falls back to native playback on iOS Safari, so the Auto/HD quality toggle and faster high-quality start now actually take effect. The Cloudflare bandwidth hint from the previous change was confirmed working. Note: because hls.js fetches the manifest with a CORS check, the LPOS domain must be in each Cloudflare video's allowed origins (the tailnet host already is)."

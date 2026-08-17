@@ -1,3 +1,5 @@
+import type { MessageReaction } from './reaction';
+
 export type ProspectStatus = 'prospect' | 'active' | 'inactive';
 
 export const PROSPECT_STATUSES: ProspectStatus[] = ['prospect', 'active', 'inactive'];
@@ -166,6 +168,8 @@ export interface ProspectUpdate {
   createdAt:   string;
   editedAt:    string | null;
   attachments: ProspectUpdateAttachment[];
+  /** Emoji tallies; see lib/models/reaction.ts. Always present (possibly empty). */
+  reactions:   MessageReaction[];
 }
 
 export interface ProspectStatusHistory {

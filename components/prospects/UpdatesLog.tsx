@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import type { ProspectStatus, ProspectUpdate, ProspectUpdateAttachment } from '@/lib/models/prospect';
+import type { MessageReaction } from '@/lib/models/reaction';
 import type { UserSummary } from '@/lib/models/user';
 import { OwnerAvatar } from '@/components/projects/OwnerAvatar';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
+import { ReactionBar } from '@/components/shared/ReactionBar';
 import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -228,16 +230,19 @@ function PendingChip({ p, onRemove }: { p: PendingAttachment; onRemove: () => vo
 // ── Single update entry ───────────────────────────────────────────────────────
 
 interface EntryProps {
-  update:     ProspectUpdate;
-  author:     UserSummary | undefined;
-  isOwn:      boolean;
-  prospectId: string;
-  onEdited:   (update: ProspectUpdate) => void;
-  onDeleted:  (updateId: string) => void;
-  readOnly?:  boolean;
+  update:        ProspectUpdate;
+  author:        UserSummary | undefined;
+  isOwn:         boolean;
+  currentUserId: string;
+  userNames:     Map<string, string>;
+  prospectId:    string;
+  onEdited:      (update: ProspectUpdate) => void;
+  onDeleted:     (updateId: string) => void;
+  onReacted:     (updateId: string, reactions: MessageReaction[]) => void;
+  readOnly?:     boolean;
 }
 
-function UpdateEntry({ update, author, isOwn, prospectId, onEdited, onDeleted, readOnly }: EntryProps) {
+function UpdateEntry({ update, author, isOwn, currentUserId, userNames, prospectId, onEdited, onDeleted, onReacted, readOnly }: EntryProps) {
   const [editMode,   setEditMode]   = useState(false);
   const [editText,   setEditText]   = useState(update.body);
   const [saving,     setSaving]     = useState(false);
@@ -270,6 +275,37 @@ function UpdateEntry({ update, author, isOwn, prospectId, onEdited, onDeleted, r
     } finally {
       setDeleting(false);
       setConfirmDel(false);
+    }
+  }
+
+  /** Optimistic: the pill flips immediately, then the server's settled set
+   *  replaces it. On failure we roll back to the pre-click state so a dropped
+   *  request can't leave a phantom reaction on screen. */
+  async function handleToggleReaction(emoji: string) {
+    const before = update.reactions;
+    const mine   = before.find((r) => r.emoji === emoji)?.userIds.includes(currentUserId) ?? false;
+
+    const optimistic = mine
+      ? before
+          .map((r) => r.emoji === emoji ? { ...r, userIds: r.userIds.filter((id) => id !== currentUserId) } : r)
+          .filter((r) => r.userIds.length > 0)
+      : before.some((r) => r.emoji === emoji)
+        ? before.map((r) => r.emoji === emoji ? { ...r, userIds: [...r.userIds, currentUserId] } : r)
+        : [...before, { emoji, userIds: [currentUserId] }];
+
+    onReacted(update.updateId, optimistic);
+
+    try {
+      const res  = await fetch(`/api/prospects/${prospectId}/updates/${update.updateId}/reactions`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ emoji }),
+      });
+      const data = await res.json() as { reactions?: MessageReaction[] };
+      if (res.ok && data.reactions) onReacted(update.updateId, data.reactions);
+      else onReacted(update.updateId, before);
+    } catch {
+      onReacted(update.updateId, before);
     }
   }
 
@@ -401,6 +437,16 @@ function UpdateEntry({ update, author, isOwn, prospectId, onEdited, onDeleted, r
             {update.attachments.map((a) => <AttachmentChip key={a.key} a={a} />)}
           </div>
         )}
+
+        {!editMode && (
+          <ReactionBar
+            reactions={update.reactions ?? []}
+            currentUserId={currentUserId}
+            userNames={userNames}
+            onToggle={(emoji) => { void handleToggleReaction(emoji); }}
+            disabled={readOnly}
+          />
+        )}
       </div>
 
       {confirmDel && (
@@ -451,7 +497,8 @@ export function UpdatesLog({ prospectId, companyName, personStatus, initialUpdat
    *  no default for active/inactive clients (the modal renders its own picker). */
   const defaultTaskType = personStatus === 'prospect' ? 'preprod' : undefined;
 
-  const userMap = new Map(allUsers.map((u) => [u.id, u]));
+  const userMap   = new Map(allUsers.map((u) => [u.id, u]));
+  const userNames = new Map(allUsers.map((u) => [u.id, u.name]));
 
   const mentionCandidates = (mentionUsers ?? []).filter((u) =>
     mentionQuery === null
@@ -523,6 +570,10 @@ export function UpdatesLog({ prospectId, companyName, personStatus, initialUpdat
 
   function handleDeleted(updateId: string) {
     setUpdates((prev) => prev.filter((u) => u.updateId !== updateId));
+  }
+
+  function handleReacted(updateId: string, reactions: MessageReaction[]) {
+    setUpdates((prev) => prev.map((u) => u.updateId === updateId ? { ...u, reactions } : u));
   }
 
   // ── Compose input ───────────────────────────────────────────────────────────
@@ -776,9 +827,12 @@ export function UpdatesLog({ prospectId, companyName, personStatus, initialUpdat
             update={u}
             author={userMap.get(u.authorId)}
             isOwn={u.authorId === currentUserId}
+            currentUserId={currentUserId}
+            userNames={userNames}
             prospectId={prospectId}
             onEdited={handleEdited}
             onDeleted={handleDeleted}
+            onReacted={handleReacted}
             readOnly={readOnly}
           />
         ))}

@@ -1,3 +1,5 @@
+import type { MessageReaction } from './reaction';
+
 export interface TaskCommentAttachment {
   key:  string;
   name: string;
@@ -41,6 +43,8 @@ export interface TaskComment {
   createdAt:   string;
   editedAt?:   string;
   attachments: TaskCommentAttachment[];
+  /** Emoji tallies; see lib/models/reaction.ts. Always present (possibly empty). */
+  reactions:   MessageReaction[];
   kind:        TaskCommentKind;
   /** Parsed metadata payload; shape depends on `kind`. */
   metadata?:   HandoffCommentMetadata | HandoffAckCommentMetadata | Record<string, unknown>;

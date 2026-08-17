@@ -169,6 +169,17 @@ function initSchema(db: DatabaseSync): void {
       FOREIGN KEY (comment_id) REFERENCES task_comments(comment_id) ON DELETE CASCADE
     );
 
+    -- Emoji reactions on task comments. Mirrors prospect_update_reactions; the
+    -- composite PK is what makes the toggle idempotent.
+    CREATE TABLE IF NOT EXISTS task_comment_reactions (
+      comment_id TEXT NOT NULL REFERENCES task_comments(comment_id) ON DELETE CASCADE,
+      user_id    TEXT NOT NULL,
+      emoji      TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (comment_id, user_id, emoji)
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_comment_reactions_comment ON task_comment_reactions(comment_id);
+
     CREATE TABLE IF NOT EXISTS task_notifications (
       notif_id     TEXT PRIMARY KEY,
       user_id      TEXT NOT NULL,
@@ -309,6 +320,17 @@ function initSchema(db: DatabaseSync): void {
       edited_at   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_prospect_updates_prospect ON prospect_updates(prospect_id, created_at DESC);
+
+    -- One row per (update, user, emoji). The composite PK is what makes the
+    -- toggle idempotent: INSERT OR IGNORE / DELETE with no read-modify-write.
+    CREATE TABLE IF NOT EXISTS prospect_update_reactions (
+      update_id  TEXT NOT NULL REFERENCES prospect_updates(update_id) ON DELETE CASCADE,
+      user_id    TEXT NOT NULL,
+      emoji      TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (update_id, user_id, emoji)
+    );
+    CREATE INDEX IF NOT EXISTS idx_prospect_update_reactions_update ON prospect_update_reactions(update_id);
 
     CREATE TABLE IF NOT EXISTS prospect_status_history (
       history_id  TEXT PRIMARY KEY,
@@ -1124,6 +1146,34 @@ function runMigrations(db: DatabaseSync): void {
     `);
   } catch (err) {
     console.warn('[core-db v23] media_comments create skipped:', (err as Error).message);
+  }
+
+  // v25: Emoji reactions on people updates and task comments. Idempotent —
+  // CREATE TABLE/INDEX IF NOT EXISTS. Rows cascade-delete with their parent
+  // entry; reactions are never edited, only inserted/deleted, so there is no
+  // updated_at.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS prospect_update_reactions (
+        update_id  TEXT NOT NULL REFERENCES prospect_updates(update_id) ON DELETE CASCADE,
+        user_id    TEXT NOT NULL,
+        emoji      TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (update_id, user_id, emoji)
+      );
+      CREATE INDEX IF NOT EXISTS idx_prospect_update_reactions_update ON prospect_update_reactions(update_id);
+
+      CREATE TABLE IF NOT EXISTS task_comment_reactions (
+        comment_id TEXT NOT NULL REFERENCES task_comments(comment_id) ON DELETE CASCADE,
+        user_id    TEXT NOT NULL,
+        emoji      TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (comment_id, user_id, emoji)
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_comment_reactions_comment ON task_comment_reactions(comment_id);
+    `);
+  } catch (err) {
+    console.warn('[core-db v25] reaction tables create skipped:', (err as Error).message);
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

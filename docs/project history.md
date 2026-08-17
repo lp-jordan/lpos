@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-08-17 — Emoji reactions on people updates and task comments
+
+**Timestamp:** 2026-08-17T00:00:00Z
+
+**User prompt (verbatim):** "Can we add reactions to updates in comments on people updates?" followed mid-task by "I'd also like to do the same thing for task updates. So I can react to someone's message"
+
+**Response summary:** Added Slack-style emoji reactions to both message surfaces: the People detail page Updates log (`prospect_updates`) and the task board comment thread (`task_comments`). Fixed 8-emoji set (👍 🎉 ❤️ 😂 👀 🙌 🔥 ✅), one shared `ReactionBar` component, one shared reaction model, two parallel reaction tables. Clicking an existing pill toggles your own reaction; a low-opacity smiley button opens the picker. Pills show a count and a "who reacted" tooltip, and highlight in accent when you are one of the reactors.
+
+**Files changed:**
+- `lib/models/reaction.ts` — **new.** Canonical `REACTION_EMOJIS` / `REACTION_VALUES` / `MessageReaction`, plus `groupReactionRows()` which folds flat `(entry, user, emoji)` rows into per-entry tallies in fixed emoji order.
+- `lib/models/prospect.ts` — `ProspectUpdate.reactions: MessageReaction[]` (always present, possibly empty).
+- `lib/models/task-comment.ts` — same field on `TaskComment`.
+- `lib/store/core-db.ts` — `prospect_update_reactions` and `task_comment_reactions` tables in `initSchema`, plus an idempotent v25 migration block creating both for existing DBs. Composite PK `(entry_id, user_id, emoji)`; rows cascade-delete with their parent entry.
+- `lib/store/prospect-store.ts` — reactions hydrated in `getUpdates` via one JOIN query for the whole log (not per update); new `getUpdate`, `getUpdateReactions`, `toggleUpdateReaction`. Also fixed `editUpdate`, which was returning the raw snake_case row — the client merge keys on `updateId`, so an edit silently failed to render until reload.
+- `lib/store/task-comment-store.ts` — mirror: reactions hydrated in `getForTask` (one query per thread) and `getById`; new `getReactions` / `toggleReaction`.
+- `app/api/prospects/[prospectId]/updates/[updateId]/reactions/route.ts` — **new.** POST toggle, `requireProspectsAccess`, validates the emoji against the fixed set, returns the settled reaction set.
+- `app/api/tasks/[taskId]/comments/[commentId]/reactions/route.ts` — **new.** Same shape, session-cookie auth matching the sibling comment routes.
+- `components/shared/ReactionBar.tsx` — **new.** Shared presentational strip: pills + add button + popover picker, outside-click and Escape to dismiss, `disabled` mode that still renders tallies.
+- `components/prospects/UpdatesLog.tsx` — `ReactionBar` under each update; optimistic toggle with rollback; `onReacted` lifts the settled set into the log state.
+- `components/tasks/CommentThread.tsx` — same, on plain `kind='comment'` entries only.
+
+**Implementation summary:** Reactions are their own rows rather than a JSON blob on the parent, so the toggle is a single `DELETE` and — when that deletes nothing — a single `INSERT OR IGNORE`, with no read-modify-write and therefore no lost-update race between two people reacting at once. The composite primary key is what enforces one-reaction-per-user-per-emoji. Both APIs return the entry's full reaction set rather than a delta, so the client always lands on server truth. The UI flips optimistically and rolls back to the pre-click state on a failed or dropped request.
+
+**Decision rationale:** A fixed emoji set rather than a free picker — an open picker fragments the same sentiment across skin tones and near-duplicate glyphs, which makes the aggregate counts meaningless. Two parallel tables rather than one polymorphic `reactions(entity_type, entity_id, …)` table — the FK cascade is what keeps reactions from outliving deleted entries, and a polymorphic table cannot have one. The shared parts (emoji set, grouping, the React component) live in one place, so the duplication is two DDL blocks and two thin store methods. Reacting is open to anyone with access to the surface, unlike edit/delete which stay author-only: reacting to other people's messages is the entire feature.
+
+**Alternatives considered:** JSON column on the parent row — simpler read, but concurrent toggles clobber each other and per-user queries become string matching. Hover-revealed add button — rejected, both surfaces already use hover for edit/delete affordances and a second hover-revealed control in the same row reads as jumpy; the button sits at 55% opacity instead. Reaction bar on handoff/ack system callouts — skipped, they are chain-of-custody markers, not messages.
+
+**Checks run:** `npx tsc --noEmit` — clean apart from two pre-existing `transcriptEditorHref` errors in `components/projects/MediaTab.tsx` from another session's in-flight transcript work (untouched, unstaged by me). Exercised the reaction SQL on a scratch in-memory DB: add/toggle-off, per-user isolation, the `getUpdates` JOIN hydration, and FK cascade on parent delete all behave. No ESLint config in the repo, so no lint step.
+
+**Assumptions / follow-ups:** No notifications on reaction — deliberate; a reaction is meant to be the low-noise alternative to a reply. If reactions should ping the author later, that hooks into `notifyProspectEvent` / the task notification store. Reactions are not surfaced in activity feeds or the catch-up digest. Existing rows get an empty set; nothing to backfill.
+
 ## 2026-07-10 — Quiet and de-garble the camera bridge log
 
 **Timestamp:** 2026-07-10T16:00:00Z

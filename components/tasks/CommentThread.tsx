@@ -7,7 +7,9 @@ import type {
   HandoffCommentMetadata,
   HandoffAckCommentMetadata,
 } from '@/lib/models/task-comment';
+import type { MessageReaction } from '@/lib/models/reaction';
 import type { UserSummary } from '@/lib/models/user';
+import { ReactionBar } from '@/components/shared/ReactionBar';
 import { MentionTextarea } from '@/components/dashboard/MentionTextarea';
 
 function relativeTime(iso: string): string {
@@ -214,7 +216,8 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
   const bottomRef   = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const userMap = new Map(users.map((u) => [u.id, u]));
+  const userMap   = new Map(users.map((u) => [u.id, u]));
+  const userNames = new Map(users.map((u) => [u.id, u.name]));
   const hasUploading = pending.some((p) => p.uploading);
 
   // Build a set of handoff_ids that already have an acknowledgement comment in
@@ -237,6 +240,40 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
     const data = await res.json() as { comment?: TaskComment };
     if (data.comment) setComments((prev) => [...prev, data.comment!]);
   }, [taskId]);
+
+  /** Optimistic: the pill flips immediately, then the server's settled set
+   *  replaces it. On failure we roll back to the pre-click state so a dropped
+   *  request can't leave a phantom reaction on screen. */
+  const toggleReaction = useCallback(async (comment: TaskComment, emoji: string) => {
+    const before = comment.reactions ?? [];
+    const mine   = before.find((r) => r.emoji === emoji)?.userIds.includes(currentUserId) ?? false;
+
+    const optimistic: MessageReaction[] = mine
+      ? before
+          .map((r) => r.emoji === emoji ? { ...r, userIds: r.userIds.filter((id) => id !== currentUserId) } : r)
+          .filter((r) => r.userIds.length > 0)
+      : before.some((r) => r.emoji === emoji)
+        ? before.map((r) => r.emoji === emoji ? { ...r, userIds: [...r.userIds, currentUserId] } : r)
+        : [...before, { emoji, userIds: [currentUserId] }];
+
+    const apply = (reactions: MessageReaction[]) =>
+      setComments((prev) => prev.map((c) => c.commentId === comment.commentId ? { ...c, reactions } : c));
+
+    apply(optimistic);
+
+    try {
+      const res  = await fetch(`/api/tasks/${taskId}/comments/${comment.commentId}/reactions`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ emoji }),
+      });
+      const data = await res.json() as { reactions?: MessageReaction[] };
+      if (res.ok && data.reactions) apply(data.reactions);
+      else apply(before);
+    } catch {
+      apply(before);
+    }
+  }, [taskId, currentUserId]);
 
   useEffect(() => {
     setLoading(true);
@@ -525,6 +562,14 @@ export function CommentThread({ taskId, currentUserId, users }: Readonly<Props>)
                   <div className="comment-attachments">
                     {c.attachments.map((a) => <AttachmentChip key={a.key} a={a} />)}
                   </div>
+                )}
+                {editingId !== c.commentId && (
+                  <ReactionBar
+                    reactions={c.reactions ?? []}
+                    currentUserId={currentUserId}
+                    userNames={userNames}
+                    onToggle={(emoji) => { void toggleReaction(c, emoji); }}
+                  />
                 )}
               </div>
             </div>

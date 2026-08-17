@@ -10,6 +10,8 @@ import type {
   ProspectUpdate,
   ProspectUpdateAttachment,
 } from '@/lib/models/prospect';
+import type { MessageReaction } from '@/lib/models/reaction';
+import { groupReactionRows } from '@/lib/models/reaction';
 import { extractGoogleFileId } from '@/lib/utils/google-doc';
 import { getCoreDb, withTransaction } from './core-db';
 
@@ -85,6 +87,12 @@ interface UpdateRow {
   attachments: string; // JSON-encoded ProspectUpdateAttachment[]
 }
 
+interface ReactionRow {
+  update_id: string;
+  user_id:   string;
+  emoji:     string;
+}
+
 interface StatusHistoryRow {
   history_id:  string;
   prospect_id: string;
@@ -158,7 +166,7 @@ function rowToDocument(row: DocumentRow): ProspectDocument {
   };
 }
 
-function rowToUpdate(row: UpdateRow): ProspectUpdate {
+function rowToUpdate(row: UpdateRow, reactions: MessageReaction[] = []): ProspectUpdate {
   let attachments: ProspectUpdateAttachment[] = [];
   try { attachments = JSON.parse(row.attachments || '[]') as ProspectUpdateAttachment[]; } catch { /* tolerate bad JSON */ }
   return {
@@ -169,7 +177,12 @@ function rowToUpdate(row: UpdateRow): ProspectUpdate {
     createdAt:   row.created_at,
     editedAt:    row.edited_at,
     attachments,
+    reactions,
   };
+}
+
+function groupReactions(rows: ReactionRow[]): Map<string, MessageReaction[]> {
+  return groupReactionRows(rows.map((r) => ({ entry_id: r.update_id, user_id: r.user_id, emoji: r.emoji })));
 }
 
 function rowToStatusHistory(row: StatusHistoryRow): ProspectStatusHistory {
@@ -640,11 +653,30 @@ export class ProspectStore {
   // ── Updates log ────────────────────────────────────────────────────────────
 
   getUpdates(prospectId: string): ProspectUpdate[] {
-    return (
-      getCoreDb()
-        .prepare('SELECT * FROM prospect_updates WHERE prospect_id = ? ORDER BY created_at DESC')
-        .all(prospectId) as UpdateRow[]
-    ).map(rowToUpdate);
+    const db   = getCoreDb();
+    const rows = db
+      .prepare('SELECT * FROM prospect_updates WHERE prospect_id = ? ORDER BY created_at DESC')
+      .all(prospectId) as UpdateRow[];
+
+    // One extra query for the whole log rather than one per update.
+    const reactionRows = db.prepare(`
+      SELECT r.update_id, r.user_id, r.emoji
+      FROM prospect_update_reactions r
+      JOIN prospect_updates u ON u.update_id = r.update_id
+      WHERE u.prospect_id = ?
+      ORDER BY r.created_at ASC
+    `).all(prospectId) as ReactionRow[];
+
+    const byUpdate = groupReactions(reactionRows);
+    return rows.map((row) => rowToUpdate(row, byUpdate.get(row.update_id) ?? []));
+  }
+
+  getUpdate(updateId: string): ProspectUpdate | null {
+    const row = getCoreDb()
+      .prepare('SELECT * FROM prospect_updates WHERE update_id = ?')
+      .get(updateId) as UpdateRow | undefined;
+    if (!row) return null;
+    return rowToUpdate(row, this.getUpdateReactions(updateId));
   }
 
   addUpdate(
@@ -662,6 +694,7 @@ export class ProspectStore {
       createdAt:   now,
       editedAt:    null,
       attachments,
+      reactions:   [],
     };
     getCoreDb().prepare(`
       INSERT INTO prospect_updates (update_id, prospect_id, author_id, body, created_at, edited_at, attachments)
@@ -682,9 +715,9 @@ export class ProspectStore {
       .prepare('UPDATE prospect_updates SET body = ?, edited_at = ? WHERE update_id = ?')
       .run(body.trim(), now, updateId) as { changes: number };
     if (result.changes === 0) return null;
-    return getCoreDb()
-      .prepare('SELECT * FROM prospect_updates WHERE update_id = ?')
-      .get(updateId) as ProspectUpdate;
+    // Was returning the raw snake_case row, so the client's optimistic merge
+    // (keyed on updateId) silently no-opped after an edit. Map it properly.
+    return this.getUpdate(updateId);
   }
 
   deleteUpdate(updateId: string): boolean {
@@ -692,6 +725,37 @@ export class ProspectStore {
       .prepare('DELETE FROM prospect_updates WHERE update_id = ?')
       .run(updateId) as { changes: number };
     return result.changes > 0;
+  }
+
+  // ── Update reactions ───────────────────────────────────────────────────────
+
+  getUpdateReactions(updateId: string): MessageReaction[] {
+    const rows = getCoreDb().prepare(`
+      SELECT update_id, user_id, emoji
+      FROM prospect_update_reactions
+      WHERE update_id = ?
+      ORDER BY created_at ASC
+    `).all(updateId) as ReactionRow[];
+    return groupReactions(rows).get(updateId) ?? [];
+  }
+
+  /** Adds the reaction if this user hasn't used that emoji here yet, removes it
+   *  if they have. Returns the update's full reaction set afterwards so the
+   *  caller can hand the client a settled state instead of a delta. */
+  toggleUpdateReaction(updateId: string, userId: string, emoji: string): MessageReaction[] {
+    const db      = getCoreDb();
+    const deleted = db
+      .prepare('DELETE FROM prospect_update_reactions WHERE update_id = ? AND user_id = ? AND emoji = ?')
+      .run(updateId, userId, emoji) as { changes: number };
+
+    if (deleted.changes === 0) {
+      db.prepare(`
+        INSERT OR IGNORE INTO prospect_update_reactions (update_id, user_id, emoji, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(updateId, userId, emoji, new Date().toISOString());
+    }
+
+    return this.getUpdateReactions(updateId);
   }
 
   // ── Status history ─────────────────────────────────────────────────────────

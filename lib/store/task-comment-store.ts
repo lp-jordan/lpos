@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { TaskComment, TaskCommentAttachment, TaskCommentKind } from '@/lib/models/task-comment';
+import type { MessageReaction } from '@/lib/models/reaction';
+import { groupReactionRows } from '@/lib/models/reaction';
 import { getCoreDb, withTransaction } from './core-db';
 
 interface CommentRow {
@@ -14,7 +16,17 @@ interface CommentRow {
   metadata:    string | null;   // JSON or null
 }
 
-function rowToComment(row: CommentRow, mentions: string[]): TaskComment {
+interface ReactionRow {
+  comment_id: string;
+  user_id:    string;
+  emoji:      string;
+}
+
+function groupReactions(rows: ReactionRow[]): Map<string, MessageReaction[]> {
+  return groupReactionRows(rows.map((r) => ({ entry_id: r.comment_id, user_id: r.user_id, emoji: r.emoji })));
+}
+
+function rowToComment(row: CommentRow, mentions: string[], reactions: MessageReaction[] = []): TaskComment {
   let attachments: TaskCommentAttachment[] = [];
   try { attachments = JSON.parse(row.attachments || '[]') as TaskCommentAttachment[]; } catch { /* */ }
   let metadata: TaskComment['metadata'];
@@ -30,6 +42,7 @@ function rowToComment(row: CommentRow, mentions: string[]): TaskComment {
     createdAt:   row.created_at,
     editedAt:    row.edited_at ?? undefined,
     attachments,
+    reactions,
     kind:        (row.kind ?? 'comment') as TaskCommentKind,
     metadata,
   };
@@ -54,7 +67,16 @@ export class TaskCommentStore {
       arr.push(m.user_id);
       mentionMap.set(m.comment_id, arr);
     }
-    return rows.map((r) => rowToComment(r, mentionMap.get(r.comment_id) ?? []));
+    // One query for the whole thread rather than one per comment.
+    const reactionRows = db
+      .prepare(
+        `SELECT comment_id, user_id, emoji FROM task_comment_reactions
+         WHERE comment_id IN (${rows.map(() => '?').join(', ')})
+         ORDER BY created_at ASC`,
+      )
+      .all(...rows.map((r) => r.comment_id)) as ReactionRow[];
+    const reactionMap = groupReactions(reactionRows);
+    return rows.map((r) => rowToComment(r, mentionMap.get(r.comment_id) ?? [], reactionMap.get(r.comment_id) ?? []));
   }
 
   getById(commentId: string): TaskComment | null {
@@ -68,7 +90,7 @@ export class TaskCommentStore {
         .prepare('SELECT user_id FROM comment_mentions WHERE comment_id = ?')
         .all(commentId) as { user_id: string }[]
     ).map((r) => r.user_id);
-    return rowToComment(row, mentions);
+    return rowToComment(row, mentions, this.getReactions(commentId));
   }
 
   create(input: {
@@ -95,6 +117,7 @@ export class TaskCommentStore {
       mentions:    input.mentions,
       createdAt:   new Date().toISOString(),
       attachments,
+      reactions:   [],
       kind,
       metadata,
     };
@@ -159,6 +182,37 @@ export class TaskCommentStore {
       .prepare('DELETE FROM task_comments WHERE comment_id = ?')
       .run(commentId) as { changes: number };
     return result.changes > 0;
+  }
+
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  getReactions(commentId: string): MessageReaction[] {
+    const rows = getCoreDb()
+      .prepare(
+        `SELECT comment_id, user_id, emoji FROM task_comment_reactions
+         WHERE comment_id = ? ORDER BY created_at ASC`,
+      )
+      .all(commentId) as ReactionRow[];
+    return groupReactions(rows).get(commentId) ?? [];
+  }
+
+  /** Adds the reaction if this user hasn't used that emoji here yet, removes it
+   *  if they have. Returns the comment's full reaction set afterwards so the
+   *  caller can hand the client a settled state instead of a delta. */
+  toggleReaction(commentId: string, userId: string, emoji: string): MessageReaction[] {
+    const db      = getCoreDb();
+    const deleted = db
+      .prepare('DELETE FROM task_comment_reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?')
+      .run(commentId, userId, emoji) as { changes: number };
+
+    if (deleted.changes === 0) {
+      db.prepare(
+        `INSERT OR IGNORE INTO task_comment_reactions (comment_id, user_id, emoji, created_at)
+         VALUES (?, ?, ?, ?)`,
+      ).run(commentId, userId, emoji, new Date().toISOString());
+    }
+
+    return this.getReactions(commentId);
   }
 
   getCountForTask(taskId: string): number {
