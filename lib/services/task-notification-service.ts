@@ -56,6 +56,8 @@ export async function notifyTaskEvent(input: {
   taskTitle: string;
   fromUserId?: string;
   fromName?: string;
+  /** Only meaningful for type='reacted'. */
+  emoji?: string;
 }): Promise<void> {
   // Don't notify yourself
   if (!input.userId) return;
@@ -77,6 +79,7 @@ export async function notifyTaskEvent(input: {
       type: input.type,
       taskTitle: input.taskTitle,
       fromName: input.fromName,
+      emoji: input.emoji,
     }).catch((err: unknown) => {
       console.warn('[task-notif] Slack DM failed:', err);
     });
@@ -94,9 +97,10 @@ export async function notifyTaskEvent(input: {
       handoff_acknowledged: 'Your handoff was acknowledged',
       handoff_stale: 'A handoff to you needs attention',
       review_stale: 'A task in Review needs an update',
+      reacted: 'Someone reacted to your comment',
     };
     const payload = JSON.stringify({
-      title: label[input.type],
+      title: input.emoji ? `${input.emoji} ${label[input.type]}` : label[input.type],
       body: input.taskTitle,
       taskId: input.taskId,
     });

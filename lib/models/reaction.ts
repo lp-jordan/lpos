@@ -16,6 +16,13 @@ export interface MessageReaction {
   userIds: string[];
 }
 
+/** How long one actor's reaction ping is suppressed for the same parent entity.
+ *  Reacting is cheap and often repeated (un-react then re-react, or three emoji
+ *  in a row); without a window the author gets a burst of near-identical pings.
+ *  Long enough to collapse a flurry, short enough that a reaction hours later
+ *  still reads as a fresh acknowledgement. */
+export const REACTION_NOTIFY_WINDOW_MIN = 60;
+
 /** Groups flat `(entry, user, emoji)` rows into per-entry, per-emoji tallies.
  *  Emoji order follows REACTION_EMOJIS so a given set always renders in the
  *  same order regardless of who reacted first. */

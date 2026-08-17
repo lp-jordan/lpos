@@ -1,8 +1,10 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { requireProspectsAccess, getSession } from '@/lib/services/api-auth';
-import { getProspectStore } from '@/lib/services/container';
-import { REACTION_VALUES } from '@/lib/models/reaction';
+import { getProspectStore, getProspectNotificationStore } from '@/lib/services/container';
+import { notifyProspectEvent } from '@/lib/services/prospect-notification-service';
+import { getUserById } from '@/lib/store/user-store';
+import { REACTION_VALUES, REACTION_NOTIFY_WINDOW_MIN } from '@/lib/models/reaction';
 
 type Ctx = { params: Promise<{ prospectId: string; updateId: string }> };
 
@@ -28,5 +30,30 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
 
   const reactions = store.toggleUpdateReaction(updateId, session!.userId, body.emoji);
+
+  // Notify the update's author — but only when the reaction was ADDED (removing
+  // one is not an event anyone needs to hear about), never to yourself, and at
+  // most once per actor per prospect per REACTION_NOTIFY_WINDOW_MIN. The window
+  // is what makes un-react/re-react toggling and rapid multi-emoji reacting
+  // collapse into a single ping instead of a burst.
+  const added = reactions.some((r) => r.emoji === body.emoji && r.userIds.includes(session!.userId));
+  if (added && existing.authorId !== session!.userId) {
+    const since = new Date(Date.now() - REACTION_NOTIFY_WINDOW_MIN * 60_000).toISOString();
+    const notifStore = getProspectNotificationStore();
+    if (!notifStore.hasRecentReaction(existing.authorId, prospectId, session!.userId, since)) {
+      const prospect = getProspectStore().getById(prospectId);
+      const actor    = getUserById(session!.userId);
+      void notifyProspectEvent({
+        userId:     existing.authorId,
+        type:       'reacted',
+        prospectId,
+        company:    prospect?.company ?? '',
+        fromUserId: session!.userId,
+        fromName:   actor?.name,
+        emoji:      body.emoji,
+      });
+    }
+  }
+
   return NextResponse.json({ reactions });
 }

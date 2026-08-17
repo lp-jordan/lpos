@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-08-17 — Notifications for message reactions
+
+**Timestamp:** 2026-08-17T01:00:00Z
+
+**User prompt (verbatim):** "I think we'd want to add notis for these - a thumbs up is a meaningful acknowledgement"
+
+**Response summary:** Reactions now notify the message author on both surfaces. New `reacted` notification type on both the task and prospect notification systems, carrying the emoji itself so the bell, push title, and Slack DM show *which* reaction landed. Fires only when a reaction is added (never on removal), never to yourself, and at most once per actor per parent per hour.
+
+**Files changed:**
+- `lib/models/reaction.ts` — new `REACTION_NOTIFY_WINDOW_MIN = 60`.
+- `lib/models/task-notification.ts`, `lib/models/prospect-notification.ts` — `'reacted'` added to both type unions; optional `emoji` on both notification interfaces.
+- `lib/store/core-db.ts` — `emoji TEXT` on both notification tables in `initSchema`, plus an idempotent v26 `ALTER TABLE … ADD COLUMN emoji TEXT` for each.
+- `lib/store/task-notification-store.ts`, `lib/store/prospect-notification-store.ts` — persist/read `emoji`; new `hasRecentReaction(userId, parentId, fromUserId, sinceIso)` used for dedupe.
+- `lib/services/task-notification-service.ts`, `lib/services/prospect-notification-service.ts` — accept `emoji`, prefix it onto the push title, add the `reacted` push label.
+- `lib/services/slack-service.ts` — `reacted` DM label, `sendSlackTaskDm` takes `emoji`.
+- `app/api/prospects/[prospectId]/updates/[updateId]/reactions/route.ts`, `app/api/tasks/[taskId]/comments/[commentId]/reactions/route.ts` — fire the notification after a successful add.
+- `components/shell/NotifBell.tsx` — `reacted` labels for both systems; the emoji renders inline ahead of the label when present.
+- `docs/README.md` — Message Reactions section: new Notifications subsection, corrected gaps list.
+
+**Implementation summary:** The route decides whether the toggle was an add by checking the returned settled set for the caller's id under that emoji, so there is no second query and no ambiguity about which direction the toggle went. Dedupe is a single indexed lookup against the notification table itself (no new state): if the same actor already pinged this author about this task/prospect within the window, the ping is skipped. Notification dispatch is fire-and-forget (`void`) so a slow Slack or push call can't delay the reaction response.
+
+**Decision rationale:** Author-only. Broadcasting a reaction to every assignee would make the quietest interaction in the app the loudest, and `update_posted` already covers the wider audience when something substantive happens. Emoji stored in its own nullable column rather than baked into the title text — the bell, push, and Slack each format it differently, and a column keeps the display decision in the presentation layer. Dedupe scoped per parent rather than per message: the pathological case is one person working down a thread reacting to several messages at once, which should read as one nudge.
+
+**Alternatives considered:** No dedupe at all — rejected, un-react/re-react is a single click and would double-ping. Dedupe per message — would still burst when someone reacts to several comments on one task. Retracting the notification when a reaction is removed — rejected as surprising: the author may have already seen it, and disappearing notifications read as bugs. Notifying on every emoji change from the same person — that is exactly the burst the window exists to collapse.
+
+**Checks run:** `npx tsc --noEmit` — clean (the `transcriptEditorHref` errors noted in the previous entry have since been resolved by the other session). Scratch in-memory DB run covering: the v26 ALTER applied twice (second pass correctly skipped), a pre-v26 row reading back `emoji = NULL`, and the dedupe predicate — suppressed for the same actor 1 minute later, not suppressed for a different actor, a different task, or the same actor 3 hours later.
+
+**Assumptions / follow-ups:** Slack DMs only exist on the task side (there is no prospect Slack path today) — prospect reactions reach the bell and browser push. Notifications take effect on the next server restart, when the v26 migration runs. Reactions still do not appear in activity feeds or the catch-up digest.
+
 ## 2026-08-17 — Emoji reactions on people updates and task comments
 
 **Timestamp:** 2026-08-17T00:00:00Z

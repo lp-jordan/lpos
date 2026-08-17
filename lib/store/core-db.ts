@@ -188,6 +188,7 @@ function initSchema(db: DatabaseSync): void {
       task_title   TEXT NOT NULL,
       from_user_id TEXT,
       from_name    TEXT,
+      emoji        TEXT,
       read         INTEGER NOT NULL DEFAULT 0,
       created_at   TEXT NOT NULL
     );
@@ -359,6 +360,7 @@ function initSchema(db: DatabaseSync): void {
       company      TEXT NOT NULL,
       from_user_id TEXT,
       from_name    TEXT,
+      emoji        TEXT,
       read         INTEGER NOT NULL DEFAULT 0,
       created_at   TEXT NOT NULL
     );
@@ -1174,6 +1176,20 @@ function runMigrations(db: DatabaseSync): void {
     `);
   } catch (err) {
     console.warn('[core-db v25] reaction tables create skipped:', (err as Error).message);
+  }
+
+  // v26: `emoji` on both notification tables — carries which reaction was added
+  // for type='reacted'. Nullable; every pre-v26 row and every non-reaction row
+  // leaves it NULL.
+  try {
+    db.exec(`ALTER TABLE task_notifications ADD COLUMN emoji TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE prospect_notifications ADD COLUMN emoji TEXT`);
+  } catch {
+    // Column already exists
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

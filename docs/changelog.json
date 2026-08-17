@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-17T01:00:00Z",
+    "title": "Reactions now notify the person you reacted to",
+    "summary": "Emoji reactions now send a notification to the author of the message you reacted to — a thumbs up reads as a real acknowledgement, so it should reach the person it's meant for. The notification shows the actual emoji next to the label in the bell, in browser push, and in the Slack DM for task comments. Only the message author is notified, never yourself, and only when a reaction is added — taking one back is silent. Repeat reacting is collapsed: if the same person reacts again on the same task or person within an hour, it stays a single notification rather than a burst."
+  },
+  {
     "timestamp": "2026-08-17T00:00:00Z",
     "title": "Emoji reactions on people updates and task comments",
     "summary": "You can now react to a message with an emoji instead of writing a reply — on the People page Updates log and on task board comments. Hover a message and click the smiley to pick from a fixed set (👍 🎉 ❤️ 😂 👀 🙌 🔥 ✅); click an existing reaction pill to add yours or take it back. Each pill shows a count and names who reacted on hover, and highlights when you are one of them. Reactions are stored per user so two people reacting at the same time can't overwrite each other, and they are removed automatically when the message is deleted. Reactions deliberately send no notification — they are the quiet alternative to a reply. Also fixed a long-standing bug where editing a People update didn't visibly update the entry until the page was reloaded."

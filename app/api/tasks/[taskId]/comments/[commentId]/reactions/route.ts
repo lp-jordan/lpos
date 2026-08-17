@@ -2,8 +2,10 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
-import { getTaskCommentStore } from '@/lib/services/container';
-import { REACTION_VALUES } from '@/lib/models/reaction';
+import { getTaskCommentStore, getTaskNotificationStore, getTaskStore } from '@/lib/services/container';
+import { notifyTaskEvent } from '@/lib/services/task-notification-service';
+import { getUserById } from '@/lib/store/user-store';
+import { REACTION_VALUES, REACTION_NOTIFY_WINDOW_MIN } from '@/lib/models/reaction';
 
 type Params = { params: Promise<{ taskId: string; commentId: string }> };
 
@@ -29,5 +31,29 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const reactions = store.toggleReaction(commentId, session.userId, payload.emoji);
+
+  // Notify the comment's author — but only when the reaction was ADDED (removing
+  // one is not an event anyone needs to hear about), never to yourself, and at
+  // most once per actor per task per REACTION_NOTIFY_WINDOW_MIN. The window is
+  // what makes un-react/re-react toggling and rapid multi-emoji reacting
+  // collapse into a single ping instead of a burst.
+  const added = reactions.some((r) => r.emoji === payload.emoji && r.userIds.includes(session.userId));
+  if (added && comment.authorId !== session.userId) {
+    const since = new Date(Date.now() - REACTION_NOTIFY_WINDOW_MIN * 60_000).toISOString();
+    if (!getTaskNotificationStore().hasRecentReaction(comment.authorId, taskId, session.userId, since)) {
+      const task  = getTaskStore().getById(taskId);
+      const actor = getUserById(session.userId);
+      void notifyTaskEvent({
+        userId:    comment.authorId,
+        type:      'reacted',
+        taskId,
+        taskTitle: task?.description ?? '',
+        fromUserId: session.userId,
+        fromName:  actor?.name,
+        emoji:     payload.emoji,
+      });
+    }
+  }
+
   return NextResponse.json({ reactions });
 }

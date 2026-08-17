@@ -321,12 +321,18 @@ Lets any user with access to a surface react to a message with one of a fixed se
 3. The store runs `DELETE`; if that deleted nothing, it runs `INSERT OR IGNORE`. No read-modify-write, so two people reacting at once cannot clobber each other.
 4. The route returns the entry's **full** reaction set (not a delta); the client replaces its optimistic state with it, or rolls back to the pre-click state if the request failed.
 5. Reads: one extra query per log/thread (not per entry) joins reactions in; `reactions` is always present on `ProspectUpdate` / `TaskComment`, possibly empty.
+6. Notify: if the reaction was **added** (never on removal) and the actor is not the author, the message author gets a `reacted` notification carrying the emoji — bell + Socket.io + browser push, and Slack DM on the task side. Suppressed when that actor already pinged that author on that parent within `REACTION_NOTIFY_WINDOW_MIN` (60), so toggling or firing off three emoji in a row is one ping, not a burst.
 
 ### Storage
 Two parallel tables, `prospect_update_reactions` and `task_comment_reactions`, each `(entry_id, user_id, emoji, created_at)` with a composite PK on the first three and `ON DELETE CASCADE` to the parent. Created in `initSchema` and by the idempotent v25 block in `runMigrations`. A single polymorphic table was rejected precisely because it could not carry those FK cascades.
 
+### Notifications
+Type `reacted` on both `TaskNotifType` and `ProspectNotifType`, with a nullable `emoji` column on `task_notifications` / `prospect_notifications` (v26) so the bell, push title, and Slack DM can show *which* reaction landed — a 👍 is an acknowledgement, and which emoji it was is the entire message. Dedupe lives in `hasRecentReaction()` on each notification store; the window constant is `REACTION_NOTIFY_WINDOW_MIN` in `lib/models/reaction.ts`.
+
 ### Current status / known gaps
-- No notification on reaction — deliberate: a reaction is the low-noise alternative to a reply. Wiring one would hook `notifyProspectEvent` / the task notification store.
+- Only the message author is notified — not task assignees or prospect watchers. `update_posted` already covers the broader audience for new updates.
+- The dedupe window is per parent (task / prospect), not per message, so reacting to three different comments on the same task inside an hour is one ping.
+- Removing a reaction never notifies, and never retracts an already-sent notification.
 - Reactions do not appear in activity feeds or the catch-up digest.
 - The bar is not rendered on `handoff` / `handoff_ack` / `review_ack` system callouts (the API would accept them); they are chain-of-custody markers, not messages.
 

@@ -10,6 +10,7 @@ interface NotifRow {
   task_title: string;
   from_user_id: string | null;
   from_name: string | null;
+  emoji: string | null;
   read: number;
   created_at: string;
 }
@@ -23,6 +24,7 @@ function rowToNotif(row: NotifRow): TaskNotification {
     taskTitle: row.task_title,
     fromUserId: row.from_user_id ?? undefined,
     fromName: row.from_name ?? undefined,
+    emoji: row.emoji ?? undefined,
     read: row.read === 1,
     createdAt: row.created_at,
   };
@@ -54,6 +56,7 @@ export class TaskNotificationStore {
     taskTitle: string;
     fromUserId?: string;
     fromName?: string;
+    emoji?: string;
   }): TaskNotification {
     const notif: TaskNotification = {
       notifId: randomUUID(),
@@ -63,14 +66,15 @@ export class TaskNotificationStore {
       taskTitle: input.taskTitle,
       fromUserId: input.fromUserId,
       fromName: input.fromName,
+      emoji: input.emoji,
       read: false,
       createdAt: new Date().toISOString(),
     };
     getCoreDb()
       .prepare(
         `INSERT INTO task_notifications
-           (notif_id, user_id, type, task_id, task_title, from_user_id, from_name, read, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+           (notif_id, user_id, type, task_id, task_title, from_user_id, from_name, emoji, read, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
       )
       .run(
         notif.notifId,
@@ -80,9 +84,24 @@ export class TaskNotificationStore {
         notif.taskTitle,
         notif.fromUserId ?? null,
         notif.fromName ?? null,
+        notif.emoji ?? null,
         notif.createdAt,
       );
     return notif;
+  }
+
+  /** True if this user already got a reaction ping from this actor on this task
+   *  since `sinceIso`. Used to collapse rapid-fire reacting (and un-react /
+   *  re-react toggling) into a single notification. */
+  hasRecentReaction(userId: string, taskId: string, fromUserId: string, sinceIso: string): boolean {
+    const row = getCoreDb()
+      .prepare(
+        `SELECT 1 AS hit FROM task_notifications
+         WHERE user_id = ? AND task_id = ? AND from_user_id = ? AND type = 'reacted' AND created_at >= ?
+         LIMIT 1`,
+      )
+      .get(userId, taskId, fromUserId, sinceIso) as { hit: number } | undefined;
+    return !!row;
   }
 
   markRead(notifId: string): void {

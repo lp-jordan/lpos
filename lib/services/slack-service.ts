@@ -39,7 +39,7 @@ async function lookupSlackUserId(email: string): Promise<string | null> {
   return data.user.id;
 }
 
-const LABELS: Record<TaskNotifType, (fromName?: string) => string> = {
+const LABELS: Record<TaskNotifType, (fromName?: string, emoji?: string) => string> = {
   assigned:             (from) => `You were assigned a task${from ? ` by ${from}` : ''}`,
   mentioned:            (from) => `${from ?? 'Someone'} mentioned you in a task`,
   status_changed:       ()     => 'A task you\'re on has been updated',
@@ -48,6 +48,7 @@ const LABELS: Record<TaskNotifType, (fromName?: string) => string> = {
   handoff_acknowledged: (from) => `${from ?? 'Someone'} acknowledged your handoff`,
   handoff_stale:        ()     => 'A handoff to you has been idle — please take a look',
   review_stale:         ()     => 'A task you\'re on has been sitting in Review — post an update or acknowledge',
+  reacted:              (from, emoji) => `${from ?? 'Someone'} reacted ${emoji ?? ''}`.trim() + ' to your comment',
 };
 
 export async function sendSlackTaskDm(input: {
@@ -55,13 +56,14 @@ export async function sendSlackTaskDm(input: {
   type: TaskNotifType;
   taskTitle: string;
   fromName?: string;
+  emoji?: string;
 }): Promise<void> {
   if (!TOKEN) return;
 
   const slackUserId = await lookupSlackUserId(input.email);
   if (!slackUserId) return;
 
-  const text = `${LABELS[input.type](input.fromName)}\n> ${input.taskTitle}`;
+  const text = `${LABELS[input.type](input.fromName, input.emoji)}\n> ${input.taskTitle}`;
   await postDm(slackUserId, text);
 }
 

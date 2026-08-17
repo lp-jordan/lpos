@@ -40,6 +40,7 @@ const PUSH_LABEL: Record<ProspectNotifType, string> = {
   mentioned:      'You were mentioned in a prospect update',
   status_changed: 'Prospect status changed',
   promoted:       'Prospect promoted to client',
+  reacted:        'Someone reacted to your update',
 };
 
 export async function notifyProspectEvent(input: {
@@ -49,6 +50,8 @@ export async function notifyProspectEvent(input: {
   company:     string;
   fromUserId?: string;
   fromName?:   string;
+  /** Only meaningful for type='reacted'. */
+  emoji?:      string;
 }): Promise<void> {
   if (!input.userId) return;
 
@@ -65,7 +68,7 @@ export async function notifyProspectEvent(input: {
   if (vapidReady) {
     const subs = getPushSubs(input.userId);
     const payload = JSON.stringify({
-      title: PUSH_LABEL[input.type],
+      title: input.emoji ? `${input.emoji} ${PUSH_LABEL[input.type]}` : PUSH_LABEL[input.type],
       body:  input.company,
       prospectId: input.prospectId,
     });

@@ -10,6 +10,7 @@ interface NotifRow {
   company:      string;
   from_user_id: string | null;
   from_name:    string | null;
+  emoji:        string | null;
   read:         number;
   created_at:   string;
 }
@@ -23,6 +24,7 @@ function rowToNotif(row: NotifRow): ProspectNotification {
     company:    row.company,
     fromUserId: row.from_user_id ?? undefined,
     fromName:   row.from_name    ?? undefined,
+    emoji:      row.emoji        ?? undefined,
     read:       row.read === 1,
     createdAt:  row.created_at,
   };
@@ -50,6 +52,7 @@ export class ProspectNotificationStore {
     company:     string;
     fromUserId?: string;
     fromName?:   string;
+    emoji?:      string;
   }): ProspectNotification {
     const notif: ProspectNotification = {
       notifId:    randomUUID(),
@@ -59,14 +62,15 @@ export class ProspectNotificationStore {
       company:    input.company,
       fromUserId: input.fromUserId,
       fromName:   input.fromName,
+      emoji:      input.emoji,
       read:       false,
       createdAt:  new Date().toISOString(),
     };
     getCoreDb()
       .prepare(`
         INSERT INTO prospect_notifications
-          (notif_id, user_id, type, prospect_id, company, from_user_id, from_name, read, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+          (notif_id, user_id, type, prospect_id, company, from_user_id, from_name, emoji, read, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
       `)
       .run(
         notif.notifId,
@@ -76,9 +80,24 @@ export class ProspectNotificationStore {
         notif.company,
         notif.fromUserId ?? null,
         notif.fromName   ?? null,
+        notif.emoji      ?? null,
         notif.createdAt,
       );
     return notif;
+  }
+
+  /** True if this user already got a reaction ping from this actor on this
+   *  prospect since `sinceIso`. Used to collapse rapid-fire reacting (and
+   *  un-react / re-react toggling) into a single notification. */
+  hasRecentReaction(userId: string, prospectId: string, fromUserId: string, sinceIso: string): boolean {
+    const row = getCoreDb()
+      .prepare(`
+        SELECT 1 AS hit FROM prospect_notifications
+        WHERE user_id = ? AND prospect_id = ? AND from_user_id = ? AND type = 'reacted' AND created_at >= ?
+        LIMIT 1
+      `)
+      .get(userId, prospectId, fromUserId, sinceIso) as { hit: number } | undefined;
+    return !!row;
   }
 
   markRead(notifId: string): void {

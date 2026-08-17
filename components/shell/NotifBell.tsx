@@ -52,6 +52,7 @@ const TASK_NOTIF_LABEL: Record<TaskNotifType, string> = {
   handoff_acknowledged: 'Handoff acknowledged',
   handoff_stale:        'Handoff needs attention',
   review_stale:         'Sitting in Review',
+  reacted:              'Reacted to your comment',
 };
 
 const PROSPECT_NOTIF_LABEL: Record<ProspectNotifType, string> = {
@@ -60,6 +61,7 @@ const PROSPECT_NOTIF_LABEL: Record<ProspectNotifType, string> = {
   mentioned:      'Mentioned in prospect',
   status_changed: 'Prospect status changed',
   promoted:       'Prospect promoted',
+  reacted:        'Reacted to your update',
 };
 
 function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; onClick: () => void }) {
@@ -70,7 +72,9 @@ function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; on
       onClick={onClick}
       role="menuitem"
     >
-      <div className="notif-task-type">{PROSPECT_NOTIF_LABEL[notif.type]}</div>
+      <div className="notif-task-type">
+        {notif.emoji ? `${notif.emoji} ` : ''}{PROSPECT_NOTIF_LABEL[notif.type]}
+      </div>
       <div className="notif-task-title">{notif.company}</div>
       {notif.fromName && (
         <div className="notif-task-from">by {notif.fromName}</div>
@@ -114,7 +118,9 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
       onClick={onClick}
       role="menuitem"
     >
-      <div className="notif-task-type">{TASK_NOTIF_LABEL[notif.type]}</div>
+      <div className="notif-task-type">
+        {notif.emoji ? `${notif.emoji} ` : ''}{TASK_NOTIF_LABEL[notif.type]}
+      </div>
       <div className="notif-task-title">{notif.taskTitle}</div>
       {notif.fromName && (
         <div className="notif-task-from">by {notif.fromName}</div>
