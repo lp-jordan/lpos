@@ -23,15 +23,63 @@ const LIBREOFFICE_WIN_PATHS = [
   'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
 ];
 
-export function resolveLibreOfficeBinary(): string | null {
-  if (process.platform === 'win32') {
-    for (const candidate of LIBREOFFICE_WIN_PATHS) {
-      if (fs.existsSync(candidate)) return candidate;
+// macOS installs (brew cask or the .dmg) put the binary inside the app bundle as
+// `soffice` — there is no `libreoffice` command on PATH by default.
+const LIBREOFFICE_MAC_PATHS = [
+  '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+  path.join(os.homedir(), 'Applications/LibreOffice.app/Contents/MacOS/soffice'),
+];
+
+const LIBREOFFICE_LINUX_PATHS = [
+  '/usr/bin/soffice',
+  '/usr/local/bin/soffice',
+  '/opt/libreoffice/program/soffice',
+  '/snap/bin/libreoffice',
+];
+
+// Command names to look up on PATH as a last resort (covers custom installs / symlinks).
+const LIBREOFFICE_PATH_COMMANDS = ['soffice', 'libreoffice'];
+
+/** Search each PATH entry for one of the given executable names; returns an absolute path or null. */
+function findLibreOfficeOnPath(): string | null {
+  const pathValue = process.env.PATH;
+  if (!pathValue) return null;
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.EXE').split(';').filter(Boolean)
+    : [''];
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const cmd of LIBREOFFICE_PATH_COMMANDS) {
+      for (const ext of exts) {
+        const candidate = path.join(dir, cmd + ext);
+        try {
+          if (fs.existsSync(candidate)) return candidate;
+        } catch {
+          /* unreadable PATH entry — skip */
+        }
+      }
     }
-    return null;
   }
-  // Linux/macOS: rely on PATH
-  return 'libreoffice';
+  return null;
+}
+
+export function resolveLibreOfficeBinary(): string | null {
+  // 1. Explicit override wins on every platform (falls through if the path is stale/missing).
+  const override = process.env.LPOS_LIBREOFFICE_BINARY?.trim();
+  if (override && fs.existsSync(override)) return override;
+
+  // 2. Platform-specific well-known install locations.
+  const wellKnown = process.platform === 'win32'
+    ? LIBREOFFICE_WIN_PATHS
+    : process.platform === 'darwin'
+      ? LIBREOFFICE_MAC_PATHS
+      : LIBREOFFICE_LINUX_PATHS;
+  for (const candidate of wellKnown) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  // 3. Fall back to a real PATH scan so a returned value is always a concrete, existing binary.
+  return findLibreOfficeOnPath();
 }
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
