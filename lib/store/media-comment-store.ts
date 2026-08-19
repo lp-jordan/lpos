@@ -407,6 +407,23 @@ export function getAbandonedMirrorCommentIds(
   return new Set(rows.map((r) => r.comment_id));
 }
 
+/**
+ * Asset-wide variant of the above, for the all-versions read. Same abandoned-
+ * mirror semantics, just not pinned to one version.
+ */
+export function getAbandonedMirrorCommentIdsForAsset(assetId: string): Set<string> {
+  const db = getCoreDb();
+  const rows = db.prepare(
+    `SELECT DISTINCT mc.comment_id
+       FROM media_comments mc
+       JOIN media_comment_mirror_jobs mj ON mj.comment_id = mc.comment_id
+      WHERE mc.asset_id = ?
+        AND mc.deleted_at IS NULL
+        AND mj.status = 'abandoned'`,
+  ).all(assetId) as Array<{ comment_id: string }>;
+  return new Set(rows.map((r) => r.comment_id));
+}
+
 // ── Phase 1 reads ────────────────────────────────────────────────────────────
 
 /**
@@ -434,6 +451,11 @@ export interface ThreadedMediaComment {
   authorAvatar: string | null;
   createdAt:    string;
   completed:    boolean;
+  /** The asset version this comment was left on. Comments are version-scoped
+   *  (locked §11 #1), so a consumer reading across versions — editpanel's
+   *  comment-marker pull — needs this to tell "note on the current cut" from
+   *  "note on an older cut that was re-rendered". */
+  assetVersionId?: string;
   /** Phase 2: true when the outbound Frame.io mirror has abandoned this comment
    *  after exhausting the 3h retry window (locked §11 #7). The UI surfaces
    *  this as a small `!` indicator with a hover tooltip. Replies don't get
@@ -488,6 +510,41 @@ export function getThreadedCommentsForAssetVersion(
       ORDER BY thread_root_id, created_at ASC`,
   ).all(projectId, assetId, assetVersionId) as MediaCommentRow[];
 
+  return buildThreadedResult(rows, getAbandonedMirrorCommentIds(projectId, assetId, assetVersionId));
+}
+
+/**
+ * Every non-deleted comment on an asset, across ALL of its versions.
+ *
+ * Version-scoped reads (above) are right for the LPOS UI, which pins the
+ * comment list to whichever version chip the user has selected. They are wrong
+ * for editpanel: a re-render mints a new asset version and a new Frame.io file,
+ * so notes left on the cut the reviewer was actually watching stay pinned to
+ * that older version and vanish from a current-version-only read. Editpanel has
+ * no version cycler to compensate, so its markers silently went missing.
+ *
+ * Deliberately keyed on asset_id alone (no project predicate): asset_id is
+ * globally unique, and an asset that moved projects would otherwise strand its
+ * pre-move comments.
+ */
+export function getThreadedCommentsForAssetAllVersions(assetId: string): ThreadedReadResult {
+  const db = getCoreDb();
+  const rows = db.prepare(
+    `SELECT * FROM media_comments
+      WHERE asset_id = ?
+        AND deleted_at IS NULL
+      ORDER BY thread_root_id, created_at ASC`,
+  ).all(assetId) as MediaCommentRow[];
+
+  return buildThreadedResult(rows, getAbandonedMirrorCommentIdsForAsset(assetId));
+}
+
+/**
+ * Shared row → threaded-shape mapper. Grouping is by thread_root_id, which is
+ * stable across versions (a reply always lands on its parent's version), so the
+ * same code serves both the version-scoped and all-versions reads.
+ */
+function buildThreadedResult(rows: MediaCommentRow[], abandoned: Set<string>): ThreadedReadResult {
   // Group by thread root. Map<threadRootId, { root: row | null, replies: row[] }>.
   // The query orders by thread_root_id + created_at ASC, so the root of each
   // thread (which has thread_root_id === comment_id) appears before its replies.
@@ -501,10 +558,6 @@ export function getThreadedCommentsForAssetVersion(
 
   const rowLookup = new Map<string, { authorUserId: string | null; authorExternalName: string | null; commentId: string }>();
   const comments: ThreadedMediaComment[] = [];
-
-  // Phase 2: which top-level comments have abandoned outbound mirrors? One
-  // query, returned as a Set for O(1) lookup during the per-row mapping below.
-  const abandoned = getAbandonedMirrorCommentIds(projectId, assetId, assetVersionId);
 
   for (const { root, replies } of byThread.values()) {
     if (!root) continue;  // orphan reply (parent was soft-deleted) — drop for now
@@ -544,6 +597,7 @@ export function getThreadedCommentsForAssetVersion(
       authorAvatar:    root.author_avatar_url,
       createdAt:       root.created_at,
       completed:       root.completed === 1,
+      assetVersionId:  root.asset_version_id,
       mirrorAbandoned: abandoned.has(root.comment_id),
       replies:         replyOut,
     });

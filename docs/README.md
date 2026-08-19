@@ -111,7 +111,9 @@ All versioning failures are non-fatal (logged as warnings) to avoid blocking the
 ## Frame.io Comment Sync
 
 ### What it does
-Shows Frame.io review comments in the media detail panel and theater mode, and lets operators post, reply, edit, delete, and **check off (mark complete)** comments. Comments are NOT mirrored in a local DB — Frame.io is the single source of truth. LPOS only stores side metadata locally: comment author names (`comment-authors-store`) and the parent links for replies posted as fake top-level comments (`comment-replies-store`).
+Shows review comments in the media detail panel and theater mode, and lets operators post, reply, edit, delete, and **check off (mark complete)** comments. Since the local-comments refactor, the local `media_comments` table (core-db) is the read source: the Frame.io webhook shadow-captures every comment event into it, and reads additionally pull the live Frame.io thread on demand (`frameio-comment-sync`, throttled 15s/file, idempotent on the `frameio_comment_id` UNIQUE index) so a missed webhook self-heals. Outbound writes still mirror to Frame.io.
+
+**Comments are version-scoped** (`media_comments.asset_version_id`). A re-render mints a new asset version and a new Frame.io file, so notes stay attached to the cut the reviewer was watching; the media panel exposes version chips (`?version=`) to read older cuts.
 
 ### Key files
 | File | Role |
@@ -143,8 +145,12 @@ The "check off" flag lives only in Frame.io, and a user's PATCH is exactly what 
 - `fetchComments` masks each comment with its pending value and **only drops the guard once the fetched `completed` matches it** — i.e. Frame.io has propagated the write. After that, genuine external changes flow through normally.
 - Theater-mode toggles register the same guard via the panel's `onCommentCompleted` callback.
 
+### EditPanel comment markers (all versions, all assets)
+`GET /api/ep/projects/:projectId/assets/:assetId/comments` is the EditPanel-facing read, used to place `frameio:{id}` markers on the source Resolve timeline. Unlike the browser route it has no version cycler behind it, so as of 2026-08-19 it reads **every version** of the asset and freshens each version's Frame.io thread first. Each comment carries `assetVersionId` / `versionNumber` / `isCurrentVersion`; the response carries `currentVersionId` + `versionCount`. Before that change it read only the current version's thread, which hid every note left on a superseded cut (measured on prod at the time: 241 unresolved comments across 84 assets).
+
 ### Current status / known gaps
 - Working; the sticky guard tolerates arbitrary Frame.io read-after-write lag without a fixed timeout.
+- The webhook shadow-capture converts Frame.io's frame-count timestamps at a hardcoded 24 fps (`data.timestamp / 24`), matching `frameio.ts`. Comments captured via the on-demand pull go through the same conversion, so a 25p asset's marker offsets carry a small systematic skew.
 - A comment deleted while its toggle is still pending leaves a harmless orphaned entry in the in-memory guard map (bounded by comment count, cleared on panel close).
 - Reply notifications cover only LPOS-authored parent comments (external Frame.io reviewers can't be notified in-app). No notification yet for *new top-level* comments left in LPOS — only replies.
 
