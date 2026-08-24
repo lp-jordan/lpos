@@ -3339,3 +3339,23 @@ Additional hardening: added `nodeStream.on('error', ...)` to catch stream errors
 **Commands / checks run:** `npx tsc --noEmit -p tsconfig.json` — clean (only the unrelated platform-stub error, itself resolved elsewhere this day). Diagnostics gathered from the user's live Edge console.
 
 **Assumptions / follow-ups:** CORS caveat surfaced to the user — forcing hls.js means it makes a CORS-checked XHR for the CF manifest, so the LPOS access origin must be in each video's Cloudflare `allowedOrigins` (tailnet host was previously backfilled; localhost access could 403). The retained `ERROR` diagnostic will catch any such CORS failure. Next step: user confirms the button now appears in Edge (and no `[useHlsPlayer] ERROR` lines), then a final commit strips ALL temporary diagnostics.
+
+---
+
+## 2026-08-24 — Diagnose: Frame.io review link for Apollon "E1_1" shows "2_3"
+
+**Timestamp:** 2026-08-24 (UTC)
+
+**User prompt (verbatim):** "I am trying to create a frame.io review link from lpos with the Q1+Q2 Apollon asset E1_1. It keeps using 2_3 for some reason when it makes the link"
+
+**Response summary:** Analysis only — no files changed. Traced the "New review link" flow (MediaDetailPanel → DeliverableModal → POST /api/projects/[projectId]/deliverables → createDeliverableForAssets → frameio.createShareLink). Confirmed the resolver prefers `asset.frameio.stackId` over `asset.frameio.assetId` (deliverable-publish.ts:74-89), and a Frame.io share of a version-stack asset renders the stack's head version.
+
+For the Apollon Wealth project (`1e20b0c5-aa1c-4cd6-a444-e0dfb36cdc47`): E1_1 = asset `06be9065-64d7-42a3-bd1d-fb9d93aaeb00`, file `5f4700a4-…` (v2), stack `0b23766f-…`. 2_3 = asset `d6021071-…` with NO stack (plain files `0ac1ea7a`/`5b791d48`/`031505bf`). Verified the LPOS canonical DB is internally consistent — E1_1's stack is unique to E1_1 and does not reference any 2_3 id — so the mislabel originates on the Frame.io side: stack `0b23766f`'s head version is (apparently) a 2_3 file, i.e. the version stack was mis-assembled during the 06-23 upload.
+
+**Files changed:** none (docs/project history.md + docs/changelog.json log entries only).
+
+**Decision rationale:** Could not confirm the live Frame.io stack contents — tokens in data/frameio-tokens.json are AES-GCM encrypted with `LPOS_AUTH_SECRET` (Doppler), unavailable offline; did not start the server or read secrets from the running process. Handed the user the stored E1_1 review URL (view/0b23766f) to confirm whether (1) the stack is corrupted but a real E1_1 file exists → fix on Frame.io or repoint LPOS to file `5f4700a4`; or (2) file `5f4700a4` itself is 2_3 content → E1_1 needs a correct re-upload. Fix deferred pending that confirmation.
+
+**Commands/checks:** sqlite3 queries against data/lpos-canonical-assets.sqlite (assets, asset_versions, distribution_records) and data/lpos-core.sqlite (deliverables, deliverable_assets); grep of data/finalize-trace.log (only covers ≥06-30, post-dates the 06-23 upload); code read of deliverable-publish.ts, frameio.ts, canonical-asset-store.ts, media-registry.ts.
+
+**Assumptions / open questions:** Awaiting user confirmation of what stack `0b23766f` / file `5f4700a4` resolve to on Frame.io before applying a fix.
