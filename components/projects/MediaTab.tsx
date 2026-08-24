@@ -24,14 +24,23 @@ import { UPLOAD_CHUNK_SIZE_BYTES } from '@/lib/upload-constants';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Mirrors the server-side normalizeAssetKey: strip extension, uppercase, alphanumeric only. */
+/** Mirrors the server-side normalizeAssetKey (canonical-asset-store.ts): strip extension,
+ *  uppercase, collapse separator runs to a single underscore, keep [A-Z0-9_].
+ *  IMPORTANT: underscores are PRESERVED — dropping them made distinct codes collide
+ *  (e.g. "E1_1" → "E11", falsely matching the unrelated "E11" asset). */
 function normalizeKey(s: string): string {
-  return s.replace(/\.[^/.]+$/, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return s
+    .replace(/\.[^/.]+$/, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[_\s-]+/g, '_')
+    .replace(/[^A-Z0-9_]/g, '');
 }
 
-/** Mirrors the server-side stripVersionSuffix. No underscore prefix since normalizeKey removes them. */
+/** Mirrors the server-side stripVersionSuffix — optional leading underscore since
+ *  normalizeKey now preserves underscores (e.g. "MYVIDEO_V2" → "MYVIDEO"). */
 function stripVersionSuffix(key: string): string {
-  return key.replace(/V\d+$/, '');
+  return key.replace(/_?V\d+$/, '');
 }
 
 function formatBytes(b: number | null): string {

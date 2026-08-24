@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-24T15:30:00Z",
+    "title": "Fix: upload version-match no longer confuses E1_1 with E11",
+    "summary": "The drag-and-drop upload's client-side preflight version check stripped underscores when comparing filenames, so \"E1_1\" normalized to \"E11\" and was wrongly flagged as a new version of the unrelated \"E11\" asset (and the modal could only be accepted or cancelled, blocking the upload). Aligned the browser's normalizeKey/stripVersionSuffix with the server's normalizeAssetKey so underscores are preserved on both sides; distinct codes like E1_1 and E11 no longer collide, while genuine re-uploads still match their asset."
+  },
+  {
     "timestamp": "2026-08-24T00:00:00Z",
     "title": "Diagnose: Frame.io review link for Apollon E1_1 shows 2_3",
     "summary": "Investigated why creating a review link for the Apollon asset E1_1 surfaces the 2_3 clip. The deliverables review-link resolver prefers an asset's Frame.io version-stack over its file (deliverable-publish.ts), and a stack share renders the stack head. Confirmed the LPOS canonical DB is internally consistent \u2014 E1_1's stack 0b23766f is unique to E1_1 and 2_3 has no stack \u2014 so the mislabel originates from the Frame.io stack itself (head version is a 2_3 file, likely a mis-assembled version stack at upload). No code changed; fix deferred pending confirmation of the live Frame.io stack contents."

@@ -3359,3 +3359,21 @@ For the Apollon Wealth project (`1e20b0c5-aa1c-4cd6-a444-e0dfb36cdc47`): E1_1 = 
 **Commands/checks:** sqlite3 queries against data/lpos-canonical-assets.sqlite (assets, asset_versions, distribution_records) and data/lpos-core.sqlite (deliverables, deliverable_assets); grep of data/finalize-trace.log (only covers ≥06-30, post-dates the 06-23 upload); code read of deliverable-publish.ts, frameio.ts, canonical-asset-store.ts, media-registry.ts.
 
 **Assumptions / open questions:** Awaiting user confirmation of what stack `0b23766f` / file `5f4700a4` resolve to on Frame.io before applying a fix.
+
+---
+
+## 2026-08-24 — Fix: client preflight version-match dropped underscores (E1_1 wrongly flagged as version of E11)
+
+**Timestamp:** 2026-08-24 (UTC)
+
+**User prompt (verbatim):** "Why did this happen anyway? / I am trying to re-upload E1_1 but it thinks its a version of E11... which is a separate video" (follow-up: confirmed the file is named E1_1.mp4 with an underscore; cannot decline the version prompt — it cancels the upload).
+
+**Response summary:** Root-caused and fixed. The drag-and-drop upload runs a CLIENT-SIDE preflight (`findLocalVersionCandidate` in components/projects/MediaTab.tsx) whose `normalizeKey` used `/[^A-Z0-9]/g` — stripping underscores — while the server's `normalizeAssetKey` (lib/store/canonical-asset-store.ts) uses `/[^A-Z0-9_]/g` and PRESERVES them. So the browser normalized "E1_1.mp4" → "E11", colliding with the unrelated "E11" asset and flagging the upload as a new version of E11 before any bytes uploaded. Confirmed via data: the old E1_1 asset (06be9065) had been deleted, no E1_1 asset exists in project 1e20b0c5, yet ingest_jobs showed three cancelled "E1_1.mp4" jobs at progress 0 (2026-08-24 15:14–15:19) — a preflight-time cancel. Aligned the client `normalizeKey` (and `stripVersionSuffix` → `/_?V\d+$/`) with the server so both compute "E1_1". Also documented the secondary UX gap: declining the version modal (MediaTab.tsx:953-956) cancels the reserved job and skips the file — there is no "upload as a separate asset" path.
+
+**Files changed:** components/projects/MediaTab.tsx (client normalizeKey/stripVersionSuffix); docs/project history.md; docs/changelog.json.
+
+**Decision rationale:** Making the client mirror the server exactly is the minimal, correct fix — the comment already claimed it mirrored the server, so this restores intended behavior. Verified with a node harness: E1_1≠E11 now, and real re-uploads (e.g. B1_1) still match. Underscore preservation only removes FALSE collisions; genuine matches (same function both sides) are unaffected.
+
+**Commands/checks:** sqlite3 against lpos-canonical-assets.sqlite (assets/versions/media_files) and lpos-ingest-queue.sqlite (ingest_jobs, upload_sessions) to capture the exact received filename; node harness comparing client vs server normalization across E1_1/E11/B1_1/2_3/A2_3_AWM. Did not run the dev server (user manages lifecycle).
+
+**Assumptions / follow-ups:** (1) Decline path should offer "upload as separate asset" instead of cancelling — not yet implemented. (2) Both normalizers are still lossy for non-underscore separators (a file literally named "E1.1.mp4" or "E1(1).mp4" would normalize to "E11" on BOTH sides and still false-match) — separate hardening. (3) Unrelated pre-existing data issue still open: E1_1's Frame.io version stack 0b23766f has a stray 2_3 render as its head (v3), so review links show 2_3 — awaiting Frame.io cleanup and/or the offered LPOS stackId repoint.
