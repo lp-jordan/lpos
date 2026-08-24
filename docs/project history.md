@@ -3377,3 +3377,28 @@ For the Apollon Wealth project (`1e20b0c5-aa1c-4cd6-a444-e0dfb36cdc47`): E1_1 = 
 **Commands/checks:** sqlite3 against lpos-canonical-assets.sqlite (assets/versions/media_files) and lpos-ingest-queue.sqlite (ingest_jobs, upload_sessions) to capture the exact received filename; node harness comparing client vs server normalization across E1_1/E11/B1_1/2_3/A2_3_AWM. Did not run the dev server (user manages lifecycle).
 
 **Assumptions / follow-ups:** (1) Decline path should offer "upload as separate asset" instead of cancelling — not yet implemented. (2) Both normalizers are still lossy for non-underscore separators (a file literally named "E1.1.mp4" or "E1(1).mp4" would normalize to "E11" on BOTH sides and still false-match) — separate hardening. (3) Unrelated pre-existing data issue still open: E1_1's Frame.io version stack 0b23766f has a stray 2_3 render as its head (v3), so review links show 2_3 — awaiting Frame.io cleanup and/or the offered LPOS stackId repoint.
+
+---
+
+## 2026-08-24 — Add "Upload as separate asset" option to the version-confirm modal
+
+**Timestamp:** 2026-08-24 (UTC)
+
+**User prompt (verbatim):** "I deleted the frame.io stack with the mixed e1_1 and 2_3. I'm reuploading E1_1 after a rebuild and then I'll try recreating. ashare. / But yes, I think the simplest addition to help this is to allow an option to upload a separate asset alongside cancel and create new version"
+
+**Response summary:** Added a third choice to the version-confirmation flow. Previously the modal was binary (Create Version / Cancel) and declining cancelled the whole upload — there was no way to say "this is a distinct asset, upload it separately." The modal now offers Create Version N+1 / Upload as separate asset / Cancel, wired through every upload path (chunked browser upload + its server-side fallback, file-path register, and NAS ingest).
+
+**Files changed:**
+- contexts/VersionConfirmContext.tsx — `requestVersionConfirmation` now resolves a 3-way `VersionDecision` ('version'|'separate'|'cancel'); modal gains an "Upload as separate asset" button; "apply to all" carries the positive decision across a batch.
+- components/projects/MediaTab.tsx — preflight builds a `FileUploadDecision` map; upload loop honors separate (uploads with no replaceId, force-finalizes as new if the server still matches); new `confirmChunkedAsNew` helper; all four `requestVersionConfirmation` call sites updated; `registerPath`/`nasIngestFromPath` take an options object carrying `forceNewAsset`.
+- lib/services/media-finalization.ts — `FinalizeInput.forceNewAsset`; detection block guarded with `&& !forceNewAsset`.
+- app/api/projects/[projectId]/media/upload/[uploadId]/confirm/route.ts — accepts `forceNewAsset` (replaceAssetId no longer required in that case).
+- app/api/projects/[projectId]/media/register/route.ts and .../ingest-from-nas/route.ts — accept `forceNewAsset` to skip detection.
+- app/globals.css — new `.modal-btn-secondary` (outlined-accent) style.
+- docs/README.md — documented version detection + the three-way modal.
+
+**Decision rationale:** "Separate" is implemented as an explicit `forceNewAsset` flag that skips version/duplicate detection server-side, rather than relying on the name not matching — so it works even for genuine name collisions where both client and server match. The server stays the source of truth: the chunked "separate" path uploads with no replaceId and, only if the server still flags a version, force-finalizes the already-staged temp file as a new asset (no re-upload). Kept Cancel = abort-batch semantics unchanged to limit blast radius.
+
+**Commands/checks:** `npx tsc --noEmit` → exit 0, no errors. Did not run the dev server (user manages lifecycle); UI not visually run.
+
+**Assumptions / follow-ups:** (1) Cancel still aborts the entire batch (pre-existing behavior) — not changed here. (2) Both normalizers remain lossy for non-underscore separators (e.g. a file literally named "E1.1.mp4" still normalizes to "E11") — separate hardening if desired. (3) Modal now has three action buttons in a small box; if they crowd on very narrow viewports they will wrap — acceptable, not visually verified.

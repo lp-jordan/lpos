@@ -37,15 +37,19 @@ export async function POST(
     return NextResponse.json({ error: `Upload session is ${session.status}` }, { status: 409 });
   }
 
-  let body: { replaceAssetId?: unknown };
+  let body: { replaceAssetId?: unknown; forceNewAsset?: unknown };
   try {
     body = await req.json() as typeof body;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
+  // forceNewAsset finalizes the staged upload as a brand-new asset instead of a
+  // version of the detected match ("Upload as separate asset"). replaceAssetId is
+  // then not required and ignored.
+  const forceNewAsset = body.forceNewAsset === true;
   const { replaceAssetId } = body;
-  if (typeof replaceAssetId !== 'string' || !replaceAssetId.trim()) {
+  if (!forceNewAsset && (typeof replaceAssetId !== 'string' || !replaceAssetId.trim())) {
     return NextResponse.json({ error: 'replaceAssetId is required' }, { status: 400 });
   }
 
@@ -92,7 +96,8 @@ export async function POST(
       tempPath: session.temp_path,
       mediaDir,
       preComputedHash,
-      replaceAssetId,
+      replaceAssetId: forceNewAsset ? undefined : (replaceAssetId as string),
+      forceNewAsset,
       jobId: session.job_id,
       actor,
     });

@@ -33,6 +33,10 @@ export interface FinalizeInput {
   mediaDir:        string;
   preComputedHash: string;          // 'sha256:...'
   replaceAssetId?: string;
+  /** When true, skip version/duplicate detection and always register a brand-new
+   *  asset — even if the filename would normally match an existing one. Set by the
+   *  "Upload as separate asset" choice in the version-confirm modal. */
+  forceNewAsset?:  boolean;
   jobId?:          string;
   actor:           ActivityActor;
   /** Editpanel render provenance — set only when this finalize was triggered by
@@ -49,14 +53,16 @@ export type FinalizeResult =
 export async function finalizeUploadedAsset(input: FinalizeInput): Promise<FinalizeResult> {
   const {
     projectId, project, filename, tempPath, mediaDir,
-    preComputedHash, replaceAssetId, jobId, actor, editpanelRender,
+    preComputedHash, replaceAssetId, forceNewAsset, jobId, actor, editpanelRender,
   } = input;
 
   const ingestQueue = getIngestQueue();
   const ext = path.extname(filename).toLowerCase();
 
   // ── Version / duplicate detection ──────────────────────────────────────────
-  if (!replaceAssetId) {
+  // Skipped entirely when the caller forces a brand-new asset ("Upload as
+  // separate asset") — the user has explicitly opted out of version-stacking.
+  if (!replaceAssetId && !forceNewAsset) {
     const versionCandidate = findCanonicalVersionCandidate(
       projectId, filename, tempPath, preComputedHash,
     );

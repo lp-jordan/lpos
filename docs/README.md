@@ -35,8 +35,16 @@ Before the upload loop starts, `MediaTab.tsx` calls `POST /api/projects/:id/inge
 ### Stale queued job sweep
 `IngestQueueService` runs a sweep every 2 minutes. Jobs that are `queued` with no `temp_path` (upload never started — client left before the XHR began) and older than 10 minutes are auto-failed. The sweep is skipped when any job is actively `ingesting` (queued jobs in that case are legitimately waiting their turn).
 
+### Version detection & the version-confirm modal
+When a newly uploaded file's name matches an existing asset, LPOS offers to register it as a new **version** of that asset (which replaces downstream Frame.io/LeaderPass mappings) rather than a separate item.
+
+- **Name matching** is by a normalized key: strip extension, uppercase, collapse `[_\s-]+`→`_`, keep `[A-Z0-9_]`. The server implementation is `normalizeAssetKey`/`findCanonicalVersionCandidate` in `lib/store/canonical-asset-store.ts`; the client preflight mirror is `normalizeKey`/`findLocalVersionCandidate` in `MediaTab.tsx`. **These two must stay in lock-step** — a past bug had the client dropping underscores (`E1_1`→`E11`), so it falsely matched the unrelated `E11` asset before any bytes uploaded. Underscores are now preserved on both sides. (Both are still lossy for other separators, e.g. a file literally named `E1.1.mp4` normalizes to `E11`.)
+- **Where it fires:** a fast client-side preflight at drag time (`findLocalVersionCandidate`), plus an authoritative server check during finalize/register/ingest (`finalizeUploadedAsset`, `media/register`, `media/ingest-from-nas`). The server is the source of truth; the preflight is only UX to prompt before uploading.
+- **The modal** (`contexts/VersionConfirmContext.tsx`) offers three choices: **Create Version N+1** (`replaceAssetId`), **Upload as separate asset** (`forceNewAsset: true` — skips version detection and registers a brand-new asset), and **Cancel** (aborts the batch). An "apply to all remaining" checkbox carries the positive choice across the batch.
+- **`forceNewAsset`** is plumbed through `finalizeUploadedAsset` (skips the detection block) and accepted by the chunked `…/upload/[uploadId]/confirm`, `media/register`, and `media/ingest-from-nas` routes. For the chunked path, "separate" uploads with no `replaceAssetId`; if the server still detects a match it force-finalizes the staged upload as new via `confirmChunkedAsNew`.
+
 ### Current status
-Ingest, Frame.io upload, and Cloudflare/LeaderPass publish pipelines are all operational. Boot recovery handles interrupted ingests on server restart. Stale pre-reserved jobs are cleaned up automatically every 2 minutes.
+Ingest, Frame.io upload, and Cloudflare/LeaderPass publish pipelines are all operational. Boot recovery handles interrupted ingests on server restart. Stale pre-reserved jobs are cleaned up automatically every 2 minutes. The version-confirm modal supports version / separate-asset / cancel.
 
 ---
 

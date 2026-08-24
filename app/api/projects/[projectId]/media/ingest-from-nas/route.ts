@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
   // ── Body ────────────────────────────────────────────────────────────────────
-  const body = await req.json() as { sourcePath?: string; replaceAssetId?: string };
+  const body = await req.json() as { sourcePath?: string; replaceAssetId?: string; forceNewAsset?: boolean };
   const sourcePath = body.sourcePath?.trim();
   if (!sourcePath) return NextResponse.json({ error: 'sourcePath is required' }, { status: 400 });
 
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
 
   // ── Version / duplicate pre-check ────────────────────────────────────────────
-  if (!body.replaceAssetId) {
+  if (!body.replaceAssetId && !body.forceNewAsset) {
     const candidate = findCanonicalVersionCandidate(projectId, filename, normalizedSource, hash);
 
     if (candidate?.duplicate) {
@@ -112,6 +112,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       mediaDir,
       preComputedHash: hash,
       replaceAssetId: body.replaceAssetId,
+      forceNewAsset: body.forceNewAsset,
       actor,
     });
 

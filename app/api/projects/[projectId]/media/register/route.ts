@@ -26,6 +26,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       description?: string;
       tags?: string[];
       replaceAssetId?: string;
+      /** Skip version detection and register as a brand-new asset. */
+      forceNewAsset?: boolean;
     };
 
     if (!body.filePath?.trim()) {
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       // Keep the registration flow alive even for temporarily unreachable paths.
     }
 
-    const versionCandidate = !body.replaceAssetId
+    const versionCandidate = (!body.replaceAssetId && !body.forceNewAsset)
       ? findCanonicalVersionCandidate(projectId, originalFilename, normalised)
       : null;
 

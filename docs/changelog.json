@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-24T16:30:00Z",
+    "title": "Upload: choose \"separate asset\" when a filename looks like a version",
+    "summary": "The version-confirmation modal shown when an upload's name matches an existing asset now offers a third option \u2014 Upload as separate asset \u2014 alongside Create Version and Cancel. Previously declining cancelled the upload entirely, so a distinct clip that happened to share a name pattern couldn't be added. Backed by a new forceNewAsset flag that skips version detection end-to-end (chunked upload + confirm, file-path register, and NAS ingest); the chunked path force-finalizes the already-staged file as a new asset if the server still detects a match, so no re-upload is needed."
+  },
+  {
     "timestamp": "2026-08-24T15:30:00Z",
     "title": "Fix: upload version-match no longer confuses E1_1 with E11",
     "summary": "The drag-and-drop upload's client-side preflight version check stripped underscores when comparing filenames, so \"E1_1\" normalized to \"E11\" and was wrongly flagged as a new version of the unrelated \"E11\" asset (and the modal could only be accepted or cancelled, blocking the upload). Aligned the browser's normalizeKey/stripVersionSuffix with the server's normalizeAssetKey so underscores are preserved on both sides; distinct codes like E1_1 and E11 no longer collide, while genuine re-uploads still match their asset."

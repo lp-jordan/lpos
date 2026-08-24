@@ -11364,6 +11364,21 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .modal-btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
 .modal-btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
+/* Secondary action — outlined accent, sits between ghost (cancel) and primary. */
+.modal-btn-secondary {
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.modal-btn-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.modal-btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .modal-mode-toggle {
   display: flex;
   gap: 0;

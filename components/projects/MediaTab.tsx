@@ -43,6 +43,12 @@ function stripVersionSuffix(key: string): string {
   return key.replace(/_?V\d+$/, '');
 }
 
+/** Resolved decision for a file that matched an existing asset by name. */
+type FileUploadDecision =
+  | { action: 'version'; replaceId: string }
+  | { action: 'separate' }
+  | { action: 'cancel' };
+
 function formatBytes(b: number | null): string {
   if (b === null) return '—';
   if (b < 1024)        return `${b} B`;
@@ -861,6 +867,24 @@ const { openMenu } = useContextMenu();
     } catch { /* fire and forget */ }
   }
 
+  /** Finalize an already-staged (awaiting_confirmation) chunked upload as a brand-new
+   *  asset rather than a version of the detected match. Backs the "Upload as separate
+   *  asset" choice. */
+  async function confirmChunkedAsNew(uploadId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/media/upload/${uploadId}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forceNewAsset: true }),
+      });
+      if (res.ok) return { ok: true };
+      const d = await res.json() as { error?: string };
+      return { ok: false, error: d.error ?? 'Failed to register as a separate asset' };
+    } catch {
+      return { ok: false, error: 'Network error registering separate asset' };
+    }
+  }
+
   // Orchestrates the full chunked upload flow for a single file.
   async function uploadFile(
     file: File,
@@ -905,16 +929,22 @@ const { openMenu } = useContextMenu();
       // Pre-check: detect version candidates by name before any upload starts.
       // Shows the confirmation modal immediately at drag-and-drop time rather than
       // waiting for each file to finish uploading and hash before asking.
-      // Map of fileIndex → replaceAssetId (confirmed) or null (declined).
-      const replaceMap = new Map<number, string | null>();
+      // Map of fileIndex → the user's decision for a matched file.
+      const decisionMap = new Map<number, FileUploadDecision>();
       for (let i = 0; i < files.length; i++) {
         const candidate = findLocalVersionCandidate(files[i].name);
         if (candidate) {
-          const confirmed = await requestVersionConfirmation(
+          const decision = await requestVersionConfirmation(
             candidate,
             candidate.frameio?.version ?? 1,
           );
-          replaceMap.set(i, confirmed ? candidate.assetId : null);
+          if (decision === 'version') {
+            decisionMap.set(i, { action: 'version', replaceId: candidate.assetId });
+          } else if (decision === 'separate') {
+            decisionMap.set(i, { action: 'separate' });
+          } else {
+            decisionMap.set(i, { action: 'cancel' });
+          }
         }
       }
 
@@ -956,16 +986,30 @@ const { openMenu } = useContextMenu();
           continue;
         }
 
-        // If pre-checked, upload directly with or without replaceAssetId
-        if (replaceMap.has(i)) {
-          const replaceId = replaceMap.get(i);
-          if (replaceId === null) {
-            // User declined the version bump — cancel the reserved slot and skip
+        // If pre-checked, act on the user's decision for this file.
+        if (decisionMap.has(i)) {
+          const decision = decisionMap.get(i)!;
+          if (decision.action === 'cancel') {
+            // User cancelled — release the reserved slot and skip.
             if (reservedJobId) cancelIngestJob(reservedJobId);
             continue;
           }
-          const result = await uploadFile(files[i], replaceId, reservedJobId);
-          if (!result.ok) setUploadError(result.error ?? `Upload failed for "${files[i].name}"`);
+          if (decision.action === 'version') {
+            const result = await uploadFile(files[i], decision.replaceId, reservedJobId);
+            if (!result.ok) setUploadError(result.error ?? `Upload failed for "${files[i].name}"`);
+            continue;
+          }
+          // 'separate': upload as a brand-new asset. Upload with no replaceId; if the
+          // SERVER still detects a version match (a collision the client saw too),
+          // force-finalize the staged upload as a new asset instead of re-prompting.
+          const result = await uploadFile(files[i], undefined, reservedJobId);
+          if (result.ok) continue;
+          if (result.code === 'version_confirmation_required' && result.uploadId) {
+            const asNew = await confirmChunkedAsNew(result.uploadId);
+            if (!asNew.ok) setUploadError(asNew.error ?? `Upload failed for "${files[i].name}"`);
+            continue;
+          }
+          setUploadError(result.error ?? `Upload failed for "${files[i].name}"`);
           continue;
         }
 
@@ -976,17 +1020,20 @@ const { openMenu } = useContextMenu();
         // (e.g., a concurrent upload registered an asset between pre-check and upload).
         // The file is already on the server — confirm or discard without re-uploading.
         if (firstAttempt.code === 'version_confirmation_required' && firstAttempt.existingAsset && firstAttempt.uploadId) {
-          const confirmed = await requestVersionConfirmation(
+          const decision = await requestVersionConfirmation(
             firstAttempt.existingAsset,
             firstAttempt.currentVersionNumber ?? firstAttempt.existingAsset.frameio.version ?? 1,
           );
-          if (confirmed) {
+          if (decision === 'version') {
             const confirmResult = await confirmChunkedVersion(firstAttempt.uploadId, firstAttempt.existingAsset.assetId);
             if (confirmResult.code === 'no_change_needed') {
               setUploadInfo(confirmResult.message ?? `No update was made — this file is identical to the current version.`);
             } else if (!confirmResult.ok) {
               setUploadError(confirmResult.error ?? `Upload failed for "${files[i].name}"`);
             }
+          } else if (decision === 'separate') {
+            const asNew = await confirmChunkedAsNew(firstAttempt.uploadId);
+            if (!asNew.ok) setUploadError(asNew.error ?? `Upload failed for "${files[i].name}"`);
           } else {
             await abortChunkedUpload(firstAttempt.uploadId);
           }
@@ -1055,11 +1102,12 @@ const { openMenu } = useContextMenu();
     setUploadError(null);
     for (let i = 0; i < paths.length; i++) {
       try {
-        const registerPath = async (replaceAssetId?: string) => fetch(`/api/projects/${projectId}/media/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePath: paths[i], replaceAssetId }),
-        });
+        const registerPath = async (opts?: { replaceAssetId?: string; forceNewAsset?: boolean }) =>
+          fetch(`/api/projects/${projectId}/media/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath: paths[i], ...opts }),
+          });
 
         let res = await registerPath();
         if (!res.ok) {
@@ -1070,17 +1118,17 @@ const { openMenu } = useContextMenu();
             currentVersionNumber?: number;
           };
           if (d.code === 'version_confirmation_required' && d.existingAsset) {
-            const confirmed = await requestVersionConfirmation(
+            const decision = await requestVersionConfirmation(
               d.existingAsset,
               d.currentVersionNumber ?? d.existingAsset.frameio.version ?? 1,
             );
-            if (confirmed) {
-              res = await registerPath(d.existingAsset.assetId);
-              if (res.ok) continue;
-              const retry = await res.json() as { error?: string };
-              setUploadError(retry.error ?? `Failed to register "${paths[i]}"`);
-              continue;
-            }
+            if (decision === 'cancel') continue;
+            res = decision === 'version'
+              ? await registerPath({ replaceAssetId: d.existingAsset.assetId })
+              : await registerPath({ forceNewAsset: true });
+            if (res.ok) continue;
+            const retry = await res.json() as { error?: string };
+            setUploadError(retry.error ?? `Failed to register "${paths[i]}"`);
             continue;
           }
           setUploadError(d.error ?? `Failed to register "${paths[i]}"`);
@@ -1092,13 +1140,16 @@ const { openMenu } = useContextMenu();
     void fetchAssets();
   }
 
-  async function nasIngestFromPath(sourcePath: string, replaceAssetId?: string): Promise<void> {
+  async function nasIngestFromPath(
+    sourcePath: string,
+    opts?: { replaceAssetId?: string; forceNewAsset?: boolean },
+  ): Promise<void> {
     setUploadError(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/media/ingest-from-nas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourcePath, replaceAssetId }),
+        body: JSON.stringify({ sourcePath, ...opts }),
       });
       const data = await res.json() as {
         asset?: unknown;
@@ -1114,11 +1165,15 @@ const { openMenu } = useContextMenu();
       }
 
       if (data.code === 'version_confirmation_required' && data.existingAsset) {
-        const confirmed = await requestVersionConfirmation(
+        const decision = await requestVersionConfirmation(
           data.existingAsset,
           data.currentVersionNumber ?? data.existingAsset.frameio.version ?? 1,
         );
-        if (confirmed) await nasIngestFromPath(sourcePath, data.existingAsset.assetId);
+        if (decision === 'version') {
+          await nasIngestFromPath(sourcePath, { replaceAssetId: data.existingAsset.assetId });
+        } else if (decision === 'separate') {
+          await nasIngestFromPath(sourcePath, { forceNewAsset: true });
+        }
         return;
       }
 
