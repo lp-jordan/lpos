@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-25T12:00:00Z",
+    "title": "Red banner warns when the storage drive (NAS) is disconnected",
+    "summary": "A persistent red banner now appears across LPOS for internal users whenever an enabled storage drive — the NAS-backed \"LeaderPass Main\" — is not mounted or not writable, so a host reset that silently drops the NAS mount no longer goes unnoticed. It polls a new lightweight /api/storage/status endpoint every 30s (built on the existing drive-mount detection), names the affected drive(s), and clears itself the moment the drive is reconnected. Hidden from external client guests."
+  },
+  {
     "timestamp": "2026-08-24T16:30:00Z",
     "title": "Upload: choose \"separate asset\" when a filename looks like a version",
     "summary": "The version-confirmation modal shown when an upload's name matches an existing asset now offers a third option \u2014 Upload as separate asset \u2014 alongside Create Version and Cancel. Previously declining cancelled the upload entirely, so a distinct clip that happened to share a name pattern couldn't be added. Backed by a new forceNewAsset flag that skips version detection end-to-end (chunked upload + confirm, file-path register, and NAS ingest); the chunked path force-finalizes the already-staged file as a new asset if the server still detects a match, so no re-upload is needed."

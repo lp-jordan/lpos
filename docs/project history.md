@@ -3402,3 +3402,32 @@ For the Apollon Wealth project (`1e20b0c5-aa1c-4cd6-a444-e0dfb36cdc47`): E1_1 = 
 **Commands/checks:** `npx tsc --noEmit` → exit 0, no errors. Did not run the dev server (user manages lifecycle); UI not visually run.
 
 **Assumptions / follow-ups:** (1) Cancel still aborts the entire batch (pre-existing behavior) — not changed here. (2) Both normalizers remain lossy for non-underscore separators (e.g. a file literally named "E1.1.mp4" still normalizes to "E11") — separate hardening if desired. (3) Modal now has three action buttons in a small box; if they crowd on very narrow viewports they will wrap — acceptable, not visually verified.
+
+---
+
+## 2026-08-25 — Add persistent red drive-down banner when the active storage drive (LeaderPass Main / NAS) is not mounted
+
+**Timestamp:** 2026-08-25 (UTC)
+
+**User prompt (verbatim):** "Can we put a little persistent red notification on LPOS when the main storage drive (LeaderPass Main, the current active drive) is not active? We are running into issues with not realizing the host computer has been reset, therefore lost connection to our NAS."
+
+**Response summary:** Added an app-wide, persistent red banner that appears for internal (non-guest) users whenever an enabled storage volume — the NAS-backed "LeaderPass Main" in production — is not mounted or not writable. Reused the existing drive-mount detection: `getStorageAllocationDecision()` in storage-volume-service already reports `"Drive not mounted"`. Added a thin `getStorageMountStatus()` that compares the *enabled* volumes in `data/storage-config.json` against the live `/Volumes` scan (an enabled volume absent from the scan → problem), a lightweight auth-gated `GET /api/storage/status` endpoint, and a `DriveMountBanner` client component that polls every 30s and renders a pulsing red bar naming the down drive(s). Mounted in AppShell's home + default branches, guarded `!isGuest`.
+
+**Files changed:**
+- lib/services/storage-volume-service.ts — new `EnabledVolumeHealth`/`StorageMountStatus` types + `getStorageMountStatus()` (derives from the cached allocation decision + config enabled volumes).
+- app/api/storage/status/route.ts — new `GET` returning `{ ok, activeLabel, problems[], checkedAt }`, `Cache-Control: no-store`.
+- components/shell/DriveMountBanner.tsx — new client banner; 30s `fetch` poll, renders only when problems exist, pluralized message, distinguishes "not connected" vs "not writable".
+- components/shell/AppShell.tsx — import + `{!isGuest && <DriveMountBanner />}` in the home and default shell branches.
+- app/globals.css — new `.drive-banner` red/pulsing variant (z-index 9998, below restart banner's 9999).
+- docs/README.md — new "Storage Drives & Drive-Down Banner" section.
+- docs/project history.md, docs/changelog.json — this entry.
+
+**Decision rationale:** Leaned entirely on the pre-existing mount detection rather than adding a new prober — the allocation service already scans `/Volumes` and emits the exact `"Drive not mounted"` reason, and its 2-min cache is skipped precisely when nothing is eligible, so a dropped sole-drive is re-detected on the next poll. The status endpoint is deliberately non-admin (only labels + availability, no config secrets) so every logged-in staffer sees the warning, but guarded `!isGuest` so external clients never see internal infra alerts. Plain `fetch`+`setInterval` matches the house polling style (no SWR/react-query in the project). Banner mirrors the existing `RestartCountdownBanner` pattern for consistency.
+
+**Decision rationale (why not the notif bell):** The bell is per-user, dismissible, and dropdown-hidden — wrong for a host-level "everything is failing" condition. A persistent top banner is unmissable and self-clears when the drive returns.
+
+**Alternatives considered:** (1) Socket.io push instead of polling — rejected; no server-side mount watcher exists and a 30s poll is cheap and simpler. (2) A configurable "which volume is main" setting in `lpos_settings` — unnecessary; checking *all enabled* volumes already covers LeaderPass Main and any future enabled drive. (3) Reducing the allocation cache TTL for faster detection — rejected; the cache is already bypassed in the drive-down case, so worst-case latency only applies while a healthy decision is cached (~2 min), acceptable for a host-reset warning.
+
+**Commands/checks:** `npx tsc --noEmit` → exit 0 (clean). Did not run the dev server (user manages lifecycle); banner not visually exercised (would require unmounting the live NAS). Verified current config: `data/storage-config.json` has `/Volumes/LeaderPass Main` enabled at priority 0 and it is currently mounted, so `ok:true` / banner hidden in the healthy state.
+
+**Assumptions / follow-ups:** (1) A mounted-but-hung NAS (mount point still present) is only flagged if it becomes non-writable — a true liveness probe (write test / statfs timeout) would be a separate hardening. (2) Detection latency is up to ~2 min while a healthy allocation decision is cached; lower it by shrinking `CACHE_TTL_MS` or having the banner endpoint force a fresh probe if faster awareness is wanted. (3) Drive banner and restart banner can overlap (both fixed top:0) — acceptable given restart is momentary.

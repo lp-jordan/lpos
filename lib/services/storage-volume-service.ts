@@ -229,6 +229,64 @@ export function getStorageAllocationDecision(): StorageAllocationDecision {
   return decision;
 }
 
+export interface EnabledVolumeHealth {
+  rootPath: string;
+  label: string;
+  mounted: boolean;
+  writable: boolean;
+  reason: string | null;
+  priority: number;
+}
+
+export interface StorageMountStatus {
+  /** True when every enabled configured volume is mounted and writable. */
+  ok: boolean;
+  /** Label of the currently active (eligible, highest-priority) drive, if any. */
+  activeLabel: string | null;
+  /** Enabled configured volumes that are not currently usable. */
+  problems: EnabledVolumeHealth[];
+  checkedAt: string;
+}
+
+/**
+ * Health of the enabled configured storage drives — used by the app-wide
+ * drive-down banner. A drive the admin enabled but that is no longer mounted
+ * (e.g. the host was reset and lost its NAS mount) will be absent from the
+ * detected-volume list, which we surface as a "Drive not mounted" problem.
+ *
+ * Derives from getStorageAllocationDecision() so it shares that function's
+ * 2-minute cache in the healthy case; when nothing is eligible the decision is
+ * not cached, so a dropped drive is re-detected on the next poll.
+ */
+export function getStorageMountStatus(): StorageMountStatus {
+  const decision = getStorageAllocationDecision();
+  const config = readStorageConfig();
+  const detectedByRoot = new Map(decision.volumes.map((volume) => [volume.rootPath, volume]));
+
+  const problems: EnabledVolumeHealth[] = [];
+  for (const preference of config.volumes) {
+    if (!preference.enabled) continue;
+    const rootPath = normalizeRootPath(preference.rootPath);
+    const label = path.basename(rootPath) || rootPath;
+    const detected = detectedByRoot.get(rootPath);
+
+    if (!detected || !detected.available) {
+      problems.push({ rootPath, label, mounted: false, writable: false, reason: 'Drive not mounted', priority: preference.priority });
+    } else if (!detected.writable) {
+      problems.push({ rootPath, label, mounted: true, writable: false, reason: 'Drive is not writable', priority: preference.priority });
+    }
+  }
+
+  problems.sort((a, b) => a.priority - b.priority);
+
+  return {
+    ok: problems.length === 0,
+    activeLabel: decision.active?.label ?? null,
+    problems,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 export function resolveProjectMediaStorageDir(projectId: string): string {
   const decision = getStorageAllocationDecision();
   if (!decision.active) {

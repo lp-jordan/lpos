@@ -13,6 +13,7 @@ import { ContextMenuProvider } from '@/contexts/ContextMenuContext';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { VersionConfirmProvider } from '@/contexts/VersionConfirmContext';
 import { RestartCountdownBanner } from '@/components/shell/RestartCountdownBanner';
+import { DriveMountBanner } from '@/components/shell/DriveMountBanner';
 import { PresenceReporter } from '@/components/PresenceReporter';
 import type { UserSummary } from '@/lib/models/user';
 import type { AppVersion } from '@/lib/version';
@@ -145,6 +146,7 @@ export function AppShell({
             <div className="app-home" data-guest={isGuest || undefined}>
               <PresenceReporter />
               <RestartCountdownBanner />
+              {!isGuest && <DriveMountBanner />}
               <VersionTag version={version} />
               {children}
               {currentUser && !isGuest && <NotifBell />}
@@ -168,6 +170,7 @@ export function AppShell({
             <div className="app-inner" data-guest={isGuest || undefined}>
               <PresenceReporter />
               <RestartCountdownBanner />
+              {!isGuest && <DriveMountBanner />}
               <VersionTag version={version} />
               {currentUser && !isSignIn && !isGuest && <NotifBell />}
               {currentUser && !isSignIn && !isGuest && <UserMenu user={currentUser} />}

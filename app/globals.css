@@ -1438,6 +1438,47 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   pointer-events: none;
 }
 
+/* ── Drive-down banner ──
+ * Persistent, higher-contrast red alert shown when an enabled storage drive
+ * (e.g. the NAS-backed "LeaderPass Main") is not mounted/writable. Sits at the
+ * very top; if the restart banner is also visible they may briefly overlap —
+ * acceptable since the restart countdown is a momentary event before refresh. */
+.drive-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 20px;
+  text-align: center;
+  background: rgba(200, 40, 40, 0.92);
+  border-bottom: 1px solid rgba(255, 120, 120, 0.6);
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(150, 0, 0, 0.35);
+  animation: drive-banner-pulse 2.4s ease-in-out infinite, restart-banner-in 250ms ease;
+}
+
+.drive-banner-icon {
+  flex-shrink: 0;
+  color: #fff;
+}
+
+.drive-banner strong {
+  font-weight: 800;
+}
+
+@keyframes drive-banner-pulse {
+  0%, 100% { background: rgba(200, 40, 40, 0.92); }
+  50%      { background: rgba(176, 24, 24, 0.98); }
+}
+
 /* ── Breadcrumb ── */
 
 .breadcrumb-bar {

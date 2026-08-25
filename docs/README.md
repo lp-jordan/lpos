@@ -350,6 +350,34 @@ Type `reacted` on both `TaskNotifType` and `ProspectNotifType`, with a nullable 
 - Reactions do not appear in activity feeds or the catch-up digest.
 - The bar is not rendered on `handoff` / `handoff_ack` / `review_ack` system callouts (the API would accept them); they are chain-of-custody markers, not messages.
 
+## Storage Drives & Drive-Down Banner
+
+How LPOS picks a storage volume and warns staff when the active drive (the NAS-backed "LeaderPass Main") disappears.
+
+### What it does
+Managed media/photos are written under a chosen local volume (default managed root `LPOS/`). Admins enable candidate volumes and set priority in Settings → Storage. When the host Mac is reset it can silently lose its NAS mount, so a **persistent red banner** appears app-wide for internal (non-guest) users whenever an *enabled* volume is not mounted or not writable.
+
+### Key files and entry points
+| File | Role |
+|------|------|
+| `lib/services/storage-volume-service.ts` | Detects host volumes (`detectHostVolumes`), builds the allocation decision (`getStorageAllocationDecision`, 2-min cache), and reports per-drive health (`getStorageMountStatus`). |
+| `lib/store/storage-config-store.ts` | Persists the enabled-volume preferences to `data/storage-config.json` (`rootPath`, `enabled`, `priority`, thresholds). |
+| `app/api/storage/status/route.ts` | `GET /api/storage/status` — auth-gated (middleware), non-admin readable; returns `{ ok, activeLabel, problems[], checkedAt }`. |
+| `app/api/storage/config/route.ts` | `GET`/`PUT` full config + allocation (PUT admin-only). |
+| `components/shell/DriveMountBanner.tsx` | Client banner; polls `/api/storage/status` every 30s and renders when `problems.length > 0`. |
+| `components/shell/AppShell.tsx` | Mounts `<DriveMountBanner />` (guarded `!isGuest`) in the home and default shell branches. |
+
+### Data flow (inputs → outputs)
+`storage-config.json` enabled volumes + live `/Volumes` scan → `getStorageMountStatus()` marks each enabled volume `mounted`/`writable`; a volume absent from the scan → `reason: "Drive not mounted"` → `/api/storage/status` → banner polls, shows red alert naming the down drive(s).
+
+### Detection latency
+`getStorageAllocationDecision()` caches for 2 minutes **only while an active volume exists**. If the sole enabled drive drops, nothing is eligible, the decision is not cached, and the drop is reflected on the next 30s poll. While a healthy decision is still cached, a fresh drop can take up to ~2 min to surface — acceptable for a host-reset warning.
+
+### Current status / known gaps
+- Banner is shown to non-guest users only (external client guests never see internal infra alerts).
+- The banner and the restart-countdown banner are both `position: fixed; top: 0` and can briefly overlap if a restart is announced while a drive is down.
+- "Enabled but not mounted" is the signal; a drive that is mounted but hung (not unmounted) is only flagged if it becomes non-writable.
+
 ## Responsive Layout & Mobile
 
 How the app adapts between desktop and phone-sized screens.
