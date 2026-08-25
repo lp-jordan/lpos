@@ -127,7 +127,13 @@ export function ScriptsTab({ projectId, readOnly = false }: Readonly<Props>) {
         icon: <OpenIcon />,
         onClick: () => setEditingScript(script),
       }] : []),
-      ...(!isMulti ? [{ type: 'separator' as const }] : []),
+      {
+        type: 'item' as const,
+        label: count > 1 ? `Download ${count} scripts` : 'Download',
+        icon: <DownloadIcon />,
+        onClick: () => void downloadScripts(isMulti ? [...selectedIds] : [script.scriptId]),
+      },
+      ...(!readOnly ? [{ type: 'separator' as const }] : []),
       ...(!readOnly ? [{
         type: 'item' as const,
         label: count > 1 ? `Delete ${count} scripts` : 'Delete',
@@ -245,6 +251,51 @@ export function ScriptsTab({ projectId, readOnly = false }: Readonly<Props>) {
     void fetchScripts();
   }
 
+  // ── Download ──────────────────────────────────────────────────────────────
+  // 1 file → browser-native direct link (server names it via Content-Disposition).
+  // 2+ files → POST the selection to the zip endpoint and save the streamed .zip.
+  // Mirrors batchDownload() in ProjectDetail.tsx (transcripts).
+
+  async function downloadScripts(ids: string[]) {
+    if (ids.length === 0) return;
+
+    if (ids.length === 1) {
+      const a = document.createElement('a');
+      a.href = `/api/projects/${projectId}/scripts/${ids[0]}/file`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/scripts/download-zip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptIds: ids }),
+      });
+      if (!res.ok) {
+        console.error('[downloadScripts] zip endpoint failed:', res.status, await res.text());
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') ?? '';
+      const match = /filename="([^"]+)"/.exec(cd);
+      const filename = match?.[1] ?? 'scripts.zip';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[downloadScripts] failed:', err);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return <p className="m-empty">Loading…</p>;
@@ -359,6 +410,7 @@ export function ScriptsTab({ projectId, readOnly = false }: Readonly<Props>) {
                 onDoubleClick={() => handleRowDoubleClick(s)}
                 onContextMenu={(e) => handleRowContextMenu(s, idx, e)}
                 onDelete={() => handleDelete(s)}
+                onDownload={() => void downloadScripts([s.scriptId])}
               />
             ))}
           </div>
@@ -390,6 +442,7 @@ function ScriptRow({
   onDoubleClick,
   onContextMenu,
   onDelete,
+  onDownload,
 }: {
   script: ScriptAsset;
   isEditing: boolean;
@@ -399,6 +452,7 @@ function ScriptRow({
   onDoubleClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onDelete: () => void;
+  onDownload: () => void;
 }) {
   const ext = script.originalFilename.split('.').pop()?.toUpperCase() ?? '';
 
@@ -431,8 +485,16 @@ function ScriptRow({
       <span className={`proj-file-status proj-file-status--${script.status}`}>
         {script.status === 'processing' ? 'Extracting…' : script.status}
       </span>
-      {!readOnly && (
-        <div className="proj-file-actions">
+      <div className="proj-file-actions">
+        <button
+          type="button"
+          className="proj-file-action"
+          onClick={(e) => { e.stopPropagation(); onDownload(); }}
+          title="Download script"
+        >
+          <DownloadIcon small />
+        </button>
+        {!readOnly && (
           <button
             type="button"
             className="proj-file-action proj-file-action--danger"
@@ -441,8 +503,8 @@ function ScriptRow({
           >
             <TrashIcon small />
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -465,6 +527,17 @@ function OpenIcon() {
       <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
       <polyline points="15 3 21 3 21 9"/>
       <line x1="10" y1="14" x2="21" y2="3"/>
+    </svg>
+  );
+}
+
+function DownloadIcon({ small }: { small?: boolean }) {
+  const s = small ? 13 : 14;
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>
   );
 }

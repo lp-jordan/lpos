@@ -1,5 +1,10 @@
 [
   {
+    "timestamp": "2026-08-25T18:09:32Z",
+    "title": "Download button for scripts (single + batch)",
+    "summary": "The project Scripts tab can now download scripts: a per-row download button and a right-click \"Download\" (or \"Download N scripts\" on a multi-selection). Following the existing transcripts convention, one selected script downloads as its raw original file and two or more come down as a single streamed .zip (scripts-<project>.zip). Single-file downloads reuse the existing scripts/[scriptId]/file route; batch adds a new scripts/download-zip route. Downloading is available to guests too since it's non-destructive."
+  },
+  {
     "timestamp": "2026-08-25T12:00:00Z",
     "title": "Red banner warns when the storage drive (NAS) is disconnected",
     "summary": "A persistent red banner now appears across LPOS for internal users whenever an enabled storage drive — the NAS-backed \"LeaderPass Main\" — is not mounted or not writable, so a host reset that silently drops the NAS mount no longer goes unnoticed. It polls a new lightweight /api/storage/status endpoint every 30s (built on the existing drive-mount detection), names the affected drive(s), and clears itself the moment the drive is reconnected. Hidden from external client guests."
