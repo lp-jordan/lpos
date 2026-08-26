@@ -15,7 +15,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const STYLE_DOC = path.join(process.cwd(), 'docs', 'platform-image-style.md');
+// Canonical docs live at the workspace root (../docs from the app cwd). The
+// former lpos-dashboard/docs copy was retired in the 2026-08-26 docs
+// reconciliation; the candidate list keeps this resilient if the cwd differs.
+const STYLE_DOC_CANDIDATES = [
+  path.join(process.cwd(), '..', 'docs', 'platform-image-style.md'),
+  path.join(process.cwd(), 'docs', 'platform-image-style.md'),
+];
 const START = '<!-- STYLE_DIRECTIVE:START -->';
 const END = '<!-- STYLE_DIRECTIVE:END -->';
 
@@ -28,7 +34,8 @@ const FALLBACK_DIRECTIVE =
 /** Extract the STYLE_DIRECTIVE block from the style doc, else the fallback. */
 export function loadStyleDirective(): string {
   try {
-    const raw = fs.readFileSync(STYLE_DOC, 'utf8');
+    const styleDoc = STYLE_DOC_CANDIDATES.find((p) => fs.existsSync(p)) ?? STYLE_DOC_CANDIDATES[0];
+    const raw = fs.readFileSync(styleDoc, 'utf8');
     const i = raw.indexOf(START);
     const j = raw.indexOf(END);
     if (i >= 0 && j > i) {
