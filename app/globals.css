@@ -238,65 +238,6 @@ a:focus-visible {
   background: var(--line);
 }
 
-/* ── What's New sparkle ──────────────────────────────────────────────── */
-.whats-new-sparkle {
-  position: absolute;
-  top: -4px;
-  right: -24px;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--accent-strong);
-  cursor: pointer;
-  animation: sparkle-pulse 2.8s ease-in-out infinite;
-}
-
-.whats-new-sparkle:hover {
-  animation: none;
-  opacity: 1;
-  transform: scale(1.25) rotate(15deg);
-  transition: transform 0.15s ease;
-}
-
-@keyframes sparkle-pulse {
-  0%, 100% { opacity: 0.6; transform: scale(1) rotate(0deg); }
-  50%       { opacity: 1;   transform: scale(1.2) rotate(20deg); }
-}
-
-.whats-new-modal {
-  max-width: 460px;
-}
-
-.whats-new-list {
-  list-style: none;
-  padding: 0;
-  margin: 4px 0 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.whats-new-item {
-  display: flex;
-  gap: 10px;
-  color: var(--text);
-  font-size: 0.95rem;
-  line-height: 1.5;
-}
-
-.whats-new-item::before {
-  content: '✦';
-  color: var(--accent-strong);
-  flex-shrink: 0;
-  font-size: 0.65rem;
-  margin-top: 5px;
-}
-
 .signin-shell {
   min-height: 100vh;
   display: grid;
