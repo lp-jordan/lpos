@@ -350,6 +350,29 @@ Type `reacted` on both `TaskNotifType` and `ProspectNotifType`, with a nullable 
 - Reactions do not appear in activity feeds or the catch-up digest.
 - The bar is not rendered on `handoff` / `handoff_ack` / `review_ack` system callouts (the API would accept them); they are chain-of-custody markers, not messages.
 
+## Wish List / Feature Requests (dashboard + EditPanel)
+
+### What it does
+One shared feature-request / to-do list. Dashboard users file wishes from the shell **Wish List** button; EditPanel editors file them from the **Feedback** button. Both land in the same `wishes` table, tagged by `source`, so the LPOS owner reviews everything in one place and marks items done / deletes them from the dashboard. Because LPOS is the single source of truth, every EditPanel instance polls and shows the same list with live Open/Done status — no per-instance state.
+
+### Key files and entry points
+- `lib/models/wish.ts` — `WishItem` (+ `WishSource` = `'dashboard' | 'editpanel'`, `sourceInstance`).
+- `lib/store/wish-store.ts` — CRUD; `create()` defaults `source='dashboard'`.
+- `lib/store/core-db.ts` — `wishes` table (`source` NOT NULL DEFAULT `'dashboard'`, `source_instance`, `idx_wishes_source`); v27 migration backfills existing DBs.
+- `app/api/wishes/route.ts` + `[wishId]/route.ts` — dashboard (session-cookie) GET/POST/PATCH/DELETE.
+- `app/api/ep/wishes/route.ts` — EditPanel (`X-EP-Token`) GET (shared list) + POST (create). No middleware change — `/api/ep/*` is already public in `middleware.ts`; `requireEpToken` guards the handler.
+- `components/shell/WishListButton.tsx` — dashboard panel; badges editpanel-origin rows with an "EditPanel" tag + machine name.
+- EditPanel side: `electron/workers/lpos_client.js` (`listWishes`/`createWish`), `electron/main.js` (`lpos:wishes-*` IPC, injects the machine label as `instance`), `electron/preload.js`, `electron/renderer/components/FeedbackOverlay.jsx` (polls every 15s while open).
+
+### Data flow (inputs → outputs)
+1. Editor submits from the Feedback modal → `window.lposAPI.createWish` → `lpos:wishes-create` → `POST /api/ep/wishes` with `{ title, description, instance }`.
+2. `requireEpToken` resolves the machine's linked LPOS user; the store writes `source='editpanel'`, `submitted_by` = that user, `source_instance` = the machine.
+3. Every EditPanel instance's Feedback panel `GET /api/ep/wishes` on open + every 15s; the dashboard Wish List reads `GET /api/wishes`. Status changes made in the dashboard therefore appear in EditPanel within ~15s.
+
+### Current status / known gaps
+- Management (mark done / delete) is dashboard-only by design; EditPanel is submit + read-only status. No EP-side edit/delete/complete, and no "in-progress" state (Open/Done only).
+- Editor attribution is per-machine (the token's linked user); multiple editors on one machine all attribute to that user, disambiguated only by the machine label.
+
 ## Storage Drives & Drive-Down Banner
 
 How LPOS picks a storage volume and warns staff when the active drive (the NAS-backed "LeaderPass Main") disappears.

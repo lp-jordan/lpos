@@ -76,10 +76,13 @@ function initSchema(db: DatabaseSync): void {
       submitted_by_name TEXT NOT NULL,
       completed         INTEGER NOT NULL DEFAULT 0,
       created_at        TEXT NOT NULL,
-      completed_at      TEXT
+      completed_at      TEXT,
+      source            TEXT NOT NULL DEFAULT 'dashboard',
+      source_instance   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_wishes_submitted_by ON wishes(submitted_by);
     CREATE INDEX IF NOT EXISTS idx_wishes_completed    ON wishes(completed);
+    CREATE INDEX IF NOT EXISTS idx_wishes_source       ON wishes(source);
 
     CREATE TABLE IF NOT EXISTS client_owners (
       client_name TEXT PRIMARY KEY,
@@ -1190,6 +1193,27 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`ALTER TABLE prospect_notifications ADD COLUMN emoji TEXT`);
   } catch {
     // Column already exists
+  }
+
+  // v27: wish origin tracking. `source` distinguishes dashboard-submitted wishes
+  // from editor feature requests arriving via /api/ep/wishes (EditPanel);
+  // `source_instance` records the submitting machine for editpanel rows so the
+  // Wish List can show which editor/machine raised it. Every pre-v27 row is a
+  // dashboard wish (NOT NULL DEFAULT covers them); source_instance stays NULL.
+  try {
+    db.exec(`ALTER TABLE wishes ADD COLUMN source TEXT NOT NULL DEFAULT 'dashboard'`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE wishes ADD COLUMN source_instance TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_wishes_source ON wishes(source)`);
+  } catch {
+    // Index already exists
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

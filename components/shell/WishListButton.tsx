@@ -216,10 +216,17 @@ function WishRow({ wish, currentUserId, onToggle, onDelete }: Readonly<RowProps>
       </button>
 
       <div className="wishlist-row-body">
-        <p className="wishlist-row-title">{wish.title}</p>
+        <p className="wishlist-row-title">
+          {wish.title}
+          {wish.source === 'editpanel' && (
+            <span className="wishlist-badge" title="Submitted from EditPanel">EditPanel</span>
+          )}
+        </p>
         {wish.description && <p className="wishlist-row-desc">{wish.description}</p>}
         <p className="wishlist-row-meta">
-          {wish.submittedByName} · {formatDate(wish.createdAt)}
+          {wish.submittedByName}
+          {wish.source === 'editpanel' && wish.sourceInstance && ` · ${wish.sourceInstance}`}
+          {' · '}{formatDate(wish.createdAt)}
           {wish.completedAt && ` · done ${formatDate(wish.completedAt)}`}
         </p>
       </div>

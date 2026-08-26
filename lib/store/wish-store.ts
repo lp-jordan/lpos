@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { WishItem } from '@/lib/models/wish';
+import type { WishItem, WishSource } from '@/lib/models/wish';
 import { getCoreDb } from './core-db';
 
 interface WishRow {
@@ -11,6 +11,8 @@ interface WishRow {
   completed: number;
   created_at: string;
   completed_at: string | null;
+  source: string | null;
+  source_instance: string | null;
 }
 
 function rowToWish(row: WishRow): WishItem {
@@ -23,6 +25,8 @@ function rowToWish(row: WishRow): WishItem {
     completed: row.completed === 1,
     createdAt: row.created_at,
     completedAt: row.completed_at ?? undefined,
+    source: (row.source === 'editpanel' ? 'editpanel' : 'dashboard'),
+    sourceInstance: row.source_instance ?? undefined,
   };
 }
 
@@ -45,6 +49,8 @@ export class WishStore {
     description?: string;
     submittedBy: string;
     submittedByName: string;
+    source?: WishSource;
+    sourceInstance?: string;
   }): WishItem {
     const wish: WishItem = {
       wishId: randomUUID(),
@@ -54,12 +60,23 @@ export class WishStore {
       submittedByName: input.submittedByName,
       completed: false,
       createdAt: new Date().toISOString(),
+      source: input.source ?? 'dashboard',
+      sourceInstance: input.sourceInstance?.trim() || undefined,
     };
 
     getCoreDb().prepare(
-      `INSERT INTO wishes (wish_id, title, description, submitted_by, submitted_by_name, completed, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`,
-    ).run(wish.wishId, wish.title, wish.description ?? null, wish.submittedBy, wish.submittedByName, wish.createdAt);
+      `INSERT INTO wishes (wish_id, title, description, submitted_by, submitted_by_name, completed, created_at, source, source_instance)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    ).run(
+      wish.wishId,
+      wish.title,
+      wish.description ?? null,
+      wish.submittedBy,
+      wish.submittedByName,
+      wish.createdAt,
+      wish.source,
+      wish.sourceInstance ?? null,
+    );
 
     return wish;
   }
