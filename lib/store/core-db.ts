@@ -83,10 +83,10 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_wishes_submitted_by ON wishes(submitted_by);
     CREATE INDEX IF NOT EXISTS idx_wishes_completed    ON wishes(completed);
     -- NOTE: idx_wishes_source is intentionally NOT created here. On a pre-v27
-    -- database the `source` column doesn't exist yet at initSchema time (it's
+    -- database the source column does not exist yet at initSchema time (it is
     -- added by the v27 migration, which runs AFTER initSchema), so indexing it
     -- here crashes with "no such column: source". The v27 migration block
-    -- creates this index after ALTER TABLE ... ADD COLUMN source.
+    -- creates this index after ALTER TABLE wishes ADD COLUMN source.
 
     CREATE TABLE IF NOT EXISTS client_owners (
       client_name TEXT PRIMARY KEY,
