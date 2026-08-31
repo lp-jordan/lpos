@@ -144,11 +144,23 @@ export interface ProspectDocument {
   type:        ProspectDocumentType;
   /** Display caption under the cover. For `other` docs this is the slot label. */
   title:       string | null;
-  /** The living Google Doc (or any) URL. */
+  /** The living Google Doc (or any) URL. For uploaded-file documents this is the
+   *  local serve URL (`/api/attachment?key=…`) derived from `fileKey`. */
   url:         string;
   /** Google file id extracted from `url`, when it is a Google Docs/Drive link.
-   *  Drives thumbnail fetch + PDF export; null for non-Google URLs. */
+   *  Drives thumbnail fetch + PDF export; null for non-Google URLs and for
+   *  uploaded-file documents. */
   fileId:      string | null;
+  /** R2 object key when this document is an uploaded file (e.g. a PDF) rather
+   *  than a link. Null for link documents. When set, `url` serves the file and
+   *  `fileName`/`mime`/`size` describe it. */
+  fileKey:     string | null;
+  /** Original filename of the uploaded file; null for link documents. */
+  fileName:    string | null;
+  /** MIME type of the uploaded file; null for link documents. */
+  mime:        string | null;
+  /** Byte size of the uploaded file; null for link documents. */
+  size:        number | null;
   createdAt:   string;
   updatedAt:   string;
 }

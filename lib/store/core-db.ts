@@ -314,6 +314,12 @@ function initSchema(db: DatabaseSync): void {
       title       TEXT,
       url         TEXT NOT NULL,
       file_id     TEXT,
+      -- Uploaded-file documents (e.g. PDFs): file_key is the R2 object key; the
+      -- rest describe the blob. All NULL for plain link documents.
+      file_key    TEXT,
+      file_name   TEXT,
+      mime        TEXT,
+      size        INTEGER,
       created_at  TEXT NOT NULL,
       updated_at  TEXT NOT NULL
     );
@@ -1218,6 +1224,22 @@ function runMigrations(db: DatabaseSync): void {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_wishes_source ON wishes(source)`);
   } catch {
     // Index already exists
+  }
+
+  // v28: uploaded-file documents — a person's Documents section can now hold an
+  // uploaded PDF (stored in R2) alongside the Google Doc link slots. These four
+  // columns describe the blob; all NULL for existing link documents.
+  for (const col of [
+    'file_key TEXT',
+    'file_name TEXT',
+    'mime TEXT',
+    'size INTEGER',
+  ]) {
+    try {
+      db.exec(`ALTER TABLE prospect_documents ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists
+    }
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

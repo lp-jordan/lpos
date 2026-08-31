@@ -73,6 +73,10 @@ interface DocumentRow {
   title:       string | null;
   url:         string;
   file_id:     string | null;
+  file_key:    string | null;
+  file_name:   string | null;
+  mime:        string | null;
+  size:        number | null;
   created_at:  string;
   updated_at:  string;
 }
@@ -161,8 +165,49 @@ function rowToDocument(row: DocumentRow): ProspectDocument {
     title:      row.title,
     url:        row.url,
     fileId:     row.file_id,
+    fileKey:    row.file_key ?? null,
+    fileName:   row.file_name ?? null,
+    mime:       row.mime ?? null,
+    size:       row.size ?? null,
     createdAt:  row.created_at,
     updatedAt:  row.updated_at,
+  };
+}
+
+/** Local serve URL for an uploaded document file, given its R2 key. */
+function fileServeUrl(fileKey: string): string {
+  return `/api/attachment?key=${encodeURIComponent(fileKey)}`;
+}
+
+export interface DocumentFileInput {
+  key:  string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+/**
+ * Validates an uploaded-file descriptor (from a request body) against the
+ * prospect it targets. The key must carry the server-minted document prefix, so
+ * a caller can only reference a file it just uploaded for this prospect.
+ * Returns `null` when no file is present, `'invalid'` when it is malformed, or
+ * the sanitized descriptor when valid.
+ */
+export function parseDocumentFile(prospectId: string, raw: unknown): DocumentFileInput | 'invalid' | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'invalid';
+  const f = raw as Record<string, unknown>;
+  const key  = typeof f.key === 'string' ? f.key : '';
+  const name = typeof f.name === 'string' ? f.name : '';
+  const size = typeof f.size === 'number' ? f.size : NaN;
+  if (!key.startsWith(`attachments/${prospectId}/documents/`) || key.includes('..')) {
+    return 'invalid';
+  }
+  return {
+    key,
+    name: name.trim() || 'document.pdf',
+    mime: 'application/pdf',
+    size: Number.isFinite(size) ? size : 0,
   };
 }
 
@@ -596,31 +641,45 @@ export class ProspectStore {
     ).map(rowToDocument);
   }
 
+  getDocumentById(documentId: string): ProspectDocument | null {
+    const row = getCoreDb()
+      .prepare('SELECT * FROM prospect_documents WHERE document_id = ?')
+      .get(documentId) as DocumentRow | undefined;
+    return row ? rowToDocument(row) : null;
+  }
+
   addDocument(
     prospectId: string,
-    input: { type: ProspectDocumentType; url: string; title?: string | null },
+    input: { type: ProspectDocumentType; url?: string; title?: string | null; file?: DocumentFileInput | null },
   ): ProspectDocument {
     const now = new Date().toISOString();
+    // A document is either an uploaded file (PDF in R2) or a link. For a file the
+    // url is the local serve endpoint and there's no Google file id.
+    const isFile = !!input.file;
     const doc: ProspectDocument = {
       documentId: randomUUID(),
       prospectId,
       type:       input.type,
       title:      input.title ?? null,
-      url:        input.url.trim(),
-      fileId:     extractGoogleFileId(input.url),
+      url:        isFile ? fileServeUrl(input.file!.key) : (input.url ?? '').trim(),
+      fileId:     isFile ? null : extractGoogleFileId(input.url ?? ''),
+      fileKey:    isFile ? input.file!.key  : null,
+      fileName:   isFile ? input.file!.name : null,
+      mime:       isFile ? input.file!.mime : null,
+      size:       isFile ? input.file!.size : null,
       createdAt:  now,
       updatedAt:  now,
     };
     getCoreDb().prepare(`
-      INSERT INTO prospect_documents (document_id, prospect_id, type, title, url, file_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(doc.documentId, doc.prospectId, doc.type, doc.title, doc.url, doc.fileId, doc.createdAt, doc.updatedAt);
+      INSERT INTO prospect_documents (document_id, prospect_id, type, title, url, file_id, file_key, file_name, mime, size, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(doc.documentId, doc.prospectId, doc.type, doc.title, doc.url, doc.fileId, doc.fileKey, doc.fileName, doc.mime, doc.size, doc.createdAt, doc.updatedAt);
     return doc;
   }
 
   updateDocument(
     documentId: string,
-    patch: { type?: ProspectDocumentType; url?: string; title?: string | null },
+    patch: { type?: ProspectDocumentType; url?: string; title?: string | null; file?: DocumentFileInput | null },
   ): ProspectDocument | null {
     const row = getCoreDb()
       .prepare('SELECT * FROM prospect_documents WHERE document_id = ?')
@@ -631,15 +690,29 @@ export class ProspectStore {
       ...current,
       type:      patch.type  ?? current.type,
       title:     patch.title !== undefined ? patch.title : current.title,
-      url:       patch.url   !== undefined ? patch.url.trim() : current.url,
       updatedAt: new Date().toISOString(),
     };
-    // Re-derive the Google file id whenever the URL changes.
-    next.fileId = patch.url !== undefined ? extractGoogleFileId(next.url) : current.fileId;
+    if (patch.file !== undefined && patch.file !== null) {
+      // Swap to (or replace with) an uploaded file.
+      next.url      = fileServeUrl(patch.file.key);
+      next.fileId   = null;
+      next.fileKey  = patch.file.key;
+      next.fileName = patch.file.name;
+      next.mime     = patch.file.mime;
+      next.size     = patch.file.size;
+    } else if (patch.url !== undefined) {
+      // Switch to (or update) a link — clears any prior uploaded-file metadata.
+      next.url      = patch.url.trim();
+      next.fileId   = extractGoogleFileId(next.url);
+      next.fileKey  = null;
+      next.fileName = null;
+      next.mime     = null;
+      next.size     = null;
+    }
     getCoreDb().prepare(`
-      UPDATE prospect_documents SET type = ?, title = ?, url = ?, file_id = ?, updated_at = ?
+      UPDATE prospect_documents SET type = ?, title = ?, url = ?, file_id = ?, file_key = ?, file_name = ?, mime = ?, size = ?, updated_at = ?
       WHERE document_id = ?
-    `).run(next.type, next.title, next.url, next.fileId, next.updatedAt, documentId);
+    `).run(next.type, next.title, next.url, next.fileId, next.fileKey, next.fileName, next.mime, next.size, next.updatedAt, documentId);
     return next;
   }
 

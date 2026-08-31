@@ -40,10 +40,14 @@ function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: P
   const caption = doc.type === 'other' ? '' : (doc.title || '');
   const info    = parseGoogleDoc(doc.url);
 
+  const isFile = !!doc.fileKey;
+
   async function copyLink(e: React.MouseEvent) {
     e.stopPropagation();
+    // Uploaded files store a root-relative serve URL; copy an absolute link.
+    const link = doc.url.startsWith('/') ? `${window.location.origin}${doc.url}` : doc.url;
     try {
-      await navigator.clipboard.writeText(doc.url);
+      await navigator.clipboard.writeText(link);
       setCopied(true);
       setTimeout(() => setCopied(false), 1400);
     } catch { /* clipboard blocked — no-op */ }
@@ -71,6 +75,17 @@ function DocumentCover({ prospectId, doc, onEdit }: { prospectId: string; doc: P
       >
         {/* accent bar */}
         <div style={{ height: 4, background: fill, flexShrink: 0 }} />
+
+        {/* uploaded-file marker — distinguishes a PDF from a linked Google Doc */}
+        {isFile && (
+          <span style={{
+            position: 'absolute', top: 8, right: 6, zIndex: 1,
+            background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: '0.5rem', fontWeight: 700,
+            letterSpacing: '0.05em', padding: '1px 4px', borderRadius: 3,
+          }}>
+            PDF
+          </span>
+        )}
 
         {/* generated placeholder body */}
         <div style={{ flex: 1, padding: 8, display: 'flex', flexDirection: 'column', minHeight: 0, filter: hovered ? 'blur(1.5px)' : 'none', transition: 'filter 140ms ease' }}>
