@@ -768,6 +768,9 @@ export function ProjectsPageClient({
         <div className="proj-controls-right">
           <SortToggle mode={clientSort} onChange={setClientSort} />
           <ViewToggle mode={viewMode} onChange={setViewMode} />
+          <button type="button" className="proj-new-btn" onClick={() => router.push('/projects/link-hubs')}>
+            Link Hubs
+          </button>
           <button type="button" className="proj-new-btn" onClick={() => setShowNewModal(true)}>
             + New Client
           </button>
