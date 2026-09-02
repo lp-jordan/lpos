@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHubDetail, saveHub, deleteHub, type HubOwnerType } from '@/lib/store/link-hubs-db';
-import { pushHubToDelivery, type PushResult } from '@/lib/services/link-hub-delivery';
+import { pushHubToDelivery, ensureHubVideoOrigins, type PushResult } from '@/lib/services/link-hub-delivery';
 
 type Ctx = { params: Promise<{ hubId: string }> };
 const OWNER_TYPES: HubOwnerType[] = ['client', 'person', 'leaderpass'];
@@ -43,6 +43,11 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
 
   try {
     const detail = saveHub(hubId, { name: body.name, owner_label: body.owner_label ?? body.name, owner_type, items, access });
+
+    // Best-effort: allow the leaderpass origin on each video's Cloudflare settings.
+    ensureHubVideoOrigins(hubId).catch((err) =>
+      console.warn('[link-hub] ensureHubVideoOrigins failed:', (err as Error).message),
+    );
 
     // Best-effort push to the delivery app — never fails the save; report the outcome.
     let push: PushResult;

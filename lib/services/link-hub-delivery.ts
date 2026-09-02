@@ -16,6 +16,7 @@
 import { getHubDetail } from '@/lib/store/link-hubs-db';
 import { getCanonicalMediaAsset } from '@/lib/store/canonical-asset-store';
 import { getSetting } from '@/lib/store/lpos-settings-store';
+import { getVideoDetails, applyVideoSettings } from '@/lib/services/cloudflare-stream';
 
 export const LINK_HUB_INGEST_URL_SETTING = 'link_hubs.ingest_url';
 
@@ -86,6 +87,57 @@ export function buildHubPayload(hubId: string): { payload: IngestPayload; skippe
     },
     skipped,
   };
+}
+
+/**
+ * Origins to ensure on Cloudflare for every video delivered through a hub:
+ * `*.leaderpass.com` (covers whatever leaderpass subdomain the app is served
+ * from) plus the delivery app's own host (so it also plays on the current URL).
+ */
+function deliveryOrigins(): string[] {
+  const set = new Set<string>(['*.leaderpass.com']);
+  const rawUrl = getSetting<string>(LINK_HUB_INGEST_URL_SETTING, process.env.LINK_HUB_INGEST_URL ?? '').trim();
+  if (rawUrl) {
+    try {
+      const host = new URL(/^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`).host.toLowerCase();
+      if (host) set.add(host);
+    } catch {
+      /* ignore a malformed url */
+    }
+  }
+  return [...set];
+}
+
+/** Merge the delivery origins into a video's CF allowedOrigins. Returns true if it changed. */
+async function ensureAllowedOrigins(uid: string): Promise<boolean> {
+  const want = deliveryOrigins();
+  const current = await getVideoDetails(uid);
+  const have = new Set(current.allowedOrigins.map((o) => o.toLowerCase()));
+  const missing = want.filter((o) => !have.has(o.toLowerCase()));
+  if (missing.length === 0) return false;
+  await applyVideoSettings(uid, { allowedOrigins: [...current.allowedOrigins, ...missing] });
+  return true;
+}
+
+/**
+ * When videos are in a hub, make sure each one allows the leaderpass origin on
+ * Cloudflare (merged, never clobbering existing origins). Best-effort per video;
+ * called on hub save. Never throws.
+ */
+export async function ensureHubVideoOrigins(hubId: string): Promise<{ updated: number; failed: number }> {
+  const built = buildHubPayload(hubId);
+  if (!built) return { updated: 0, failed: 0 };
+  let updated = 0;
+  let failed = 0;
+  for (const item of built.payload.items) {
+    try {
+      if (await ensureAllowedOrigins(item.asset.cf_stream_uid)) updated += 1;
+    } catch (err) {
+      failed += 1;
+      console.warn(`[link-hub] allowedOrigins update failed for ${item.asset.cf_stream_uid}:`, (err as Error).message);
+    }
+  }
+  return { updated, failed };
 }
 
 /** POST a hub to the delivery app. Never throws on config gaps — returns a reason. */
