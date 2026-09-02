@@ -241,3 +241,45 @@ export function saveHub(hubId: string, input: SaveHubInput): LinkHubDetail {
 export function deleteHub(hubId: string): void {
   getLinkHubsDb().prepare('DELETE FROM hubs WHERE id = ?').run(hubId);
 }
+
+/**
+ * Append assets to a hub (for the "Add to Link Hub" action from the Media tab).
+ * Assets already in the hub are skipped; new ones mint a stable share token.
+ * Returns how many were actually added.
+ */
+export function addAssetsToHub(
+  hubId: string,
+  items: Array<{ asset_id: string; project_id: string; client_title: string }>,
+): { added: number } {
+  const db = getLinkHubsDb();
+  let added = 0;
+  db.exec('BEGIN');
+  try {
+    const existing = new Set(
+      (db.prepare('SELECT asset_id FROM hub_items WHERE hub_id = ?').all(hubId) as Array<{ asset_id: string }>).map(
+        (r) => r.asset_id,
+      ),
+    );
+    const maxRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM hub_items WHERE hub_id = ?').get(hubId) as {
+      m: number;
+    };
+    let sort = (maxRow?.m ?? -1) + 1;
+    const ins = db.prepare(
+      `INSERT INTO hub_items (hub_id, asset_id, project_id, client_title, share_token, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const it of items) {
+      if (existing.has(it.asset_id)) continue;
+      ins.run(hubId, it.asset_id, it.project_id, (it.client_title || '').trim() || it.asset_id, newShareToken(db), sort);
+      existing.add(it.asset_id);
+      sort += 1;
+      added += 1;
+    }
+    if (added > 0) db.prepare('UPDATE hubs SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), hubId);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { added };
+}

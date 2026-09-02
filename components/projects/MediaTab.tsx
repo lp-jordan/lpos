@@ -12,6 +12,7 @@ import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModa
 import { DeliverablesHub } from '@/components/projects/DeliverablesHub';
 import { DeliverableModal } from '@/components/projects/DeliverableModal';
 import { MoveAssetsModal } from '@/components/projects/MoveAssetsModal';
+import { AddToLinkHubModal } from '@/components/link-hubs/AddToLinkHubModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
@@ -559,6 +560,7 @@ export function MediaTab({
   const [spanishWorking,      setSpanishWorking]      = useState(false);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
+  const [addToHubAssets,      setAddToHubAssets]      = useState<MediaAsset[] | null>(null);
   const [nasActive, setNasActive] = useState(false);
   // CF settings state removed with the gear button (cleanup pass).
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
@@ -1369,6 +1371,22 @@ const { openMenu } = useContextMenu();
           setShowMoveModal({ assetIds: ids });
         },
       },
+      {
+        type: 'item' as const,
+        label: 'Add to Link Hub…',
+        icon: (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+        ),
+        onClick: () => {
+          const chosen = selectedIds.has(asset.assetId) && selectedIds.size > 1
+            ? assets.filter((a) => selectedIds.has(a.assetId))
+            : [asset];
+          setAddToHubAssets(chosen);
+        },
+      },
       { type: 'separator' as const },
       {
         type: 'item' as const,
@@ -1811,6 +1829,17 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
+              onClick={() => setAddToHubAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+              Add to Link Hub
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
               onClick={() => {
                 const selected = assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid);
                 if (selected.length) setThumbnailBatchAssets(selected);
@@ -1965,6 +1994,25 @@ const { openMenu } = useContextMenu();
             .filter((u): u is string => Boolean(u))}
           onClose={() => setThumbnailBatchAssets(null)}
           onDone={() => { void fetchAssets(); }}
+        />
+      )}
+
+      {addToHubAssets && (
+        <AddToLinkHubModal
+          assets={addToHubAssets.map((a) => ({ assetId: a.assetId, name: a.name }))}
+          projectId={projectId}
+          onClose={() => setAddToHubAssets(null)}
+          onAdded={(added, hubName) => {
+            setAddToHubAssets(null);
+            setSelectedIds(new Set());
+            toast({
+              id: `link-hub-add:${Date.now()}`,
+              kind: 'publish',
+              tone: 'info',
+              title: 'Added to Link Hub',
+              body: `${added} video${added === 1 ? '' : 's'} → ${hubName}`,
+            });
+          }}
         />
       )}
 
