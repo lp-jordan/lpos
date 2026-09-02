@@ -119,7 +119,7 @@ function newShareToken(db: DatabaseSync): string {
 // ── reads ─────────────────────────────────────────────────────────────────────
 
 export function listHubs(): LinkHubSummary[] {
-  return getLinkHubsDb()
+  const rows = getLinkHubsDb()
     .prepare(
       `SELECT h.*,
               (SELECT COUNT(*) FROM hub_items i WHERE i.hub_id = h.id)          AS video_count,
@@ -128,6 +128,10 @@ export function listHubs(): LinkHubSummary[] {
        ORDER BY h.updated_at DESC`,
     )
     .all() as LinkHubSummary[];
+  // node:sqlite returns null-prototype row objects; spread into plain objects so
+  // they can be passed from this Server Component into the Client component (RSC
+  // rejects null-prototype objects at that boundary).
+  return rows.map((r) => ({ ...r }));
 }
 
 export function getHub(hubId: string): LinkHub | undefined {
