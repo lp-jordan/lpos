@@ -29,6 +29,8 @@ export function ManageHubModal({ hubId, onClose, onSaved }: Props) {
   const [access, setAccess] = useState<string[]>([]);
 
   const [search, setSearch] = useState('');
+  const [videoView, setVideoView] = useState<'inhub' | 'all'>('inhub');
+  const [projectFilter, setProjectFilter] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
@@ -68,16 +70,61 @@ export function ManageHubModal({ hubId, onClose, onSaved }: Props) {
     };
   }, [hubId]);
 
-  const filtered = useMemo(() => {
+  const assetById = useMemo(() => {
+    const m: Record<string, AssetOption> = {};
+    for (const a of assets) m[a.assetId] = a;
+    return m;
+  }, [assets]);
+
+  // Projects present in the asset list, for the filter dropdown.
+  const projects = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of assets) if (!map.has(a.projectId)) map.set(a.projectId, `${a.clientName} · ${a.projectName}`);
+    return [...map.entries()].map(([id, label]) => ({ id, label })).sort((x, y) => x.label.localeCompare(y.label));
+  }, [assets]);
+
+  // The list to show, grouped by project. "In hub" reads from `order` (source of
+  // truth) so it shows the hub's contents even if a project is archived.
+  const displayGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return assets;
-    return assets.filter(
-      (a) =>
+    const base: AssetOption[] =
+      videoView === 'inhub'
+        ? order.map(
+            (id) =>
+              assetById[id] ?? {
+                assetId: id,
+                projectId: selected[id]?.project_id ?? '',
+                projectName: 'Project unavailable',
+                clientName: '—',
+                name: selected[id]?.client_title ?? id,
+                durationS: 0,
+                thumbnailUrl: null,
+                cfStatus: null,
+              },
+          )
+        : assets;
+
+    const list = base.filter((a) => {
+      if (projectFilter && a.projectId !== projectFilter) return false;
+      if (!q) return true;
+      return (
         a.name.toLowerCase().includes(q) ||
         a.clientName.toLowerCase().includes(q) ||
-        a.projectName.toLowerCase().includes(q),
-    );
-  }, [assets, search]);
+        a.projectName.toLowerCase().includes(q) ||
+        (selected[a.assetId]?.client_title ?? '').toLowerCase().includes(q)
+      );
+    });
+
+    const groups = new Map<string, { label: string; items: AssetOption[] }>();
+    for (const a of list) {
+      const key = a.projectId || a.projectName;
+      if (!groups.has(key)) groups.set(key, { label: `${a.clientName} · ${a.projectName}`, items: [] });
+      groups.get(key)!.items.push(a);
+    }
+    const arr = [...groups.values()].sort((x, y) => x.label.localeCompare(y.label));
+    for (const g of arr) g.items.sort((a, b) => a.name.localeCompare(b.name));
+    return arr;
+  }, [assets, assetById, order, selected, search, videoView, projectFilter]);
 
   function toggle(a: AssetOption) {
     if (selected[a.assetId]) {
@@ -181,51 +228,100 @@ export function ManageHubModal({ hubId, onClose, onSaved }: Props) {
 
             {tab === 'videos' && (
               <div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div className="modal-mode-toggle" style={{ flex: '0 0 auto' }}>
+                    <button type="button" className={`modal-mode-btn${videoView === 'inhub' ? ' active' : ''}`} onClick={() => setVideoView('inhub')}>
+                      In hub · {selectedCount}
+                    </button>
+                    <button type="button" className={`modal-mode-btn${videoView === 'all' ? ' active' : ''}`} onClick={() => setVideoView('all')}>
+                      All videos
+                    </button>
+                  </div>
+                  <select
+                    className="modal-input"
+                    style={{ flex: '1 1 150px', maxWidth: 240 }}
+                    value={projectFilter}
+                    onChange={(e) => setProjectFilter(e.target.value)}
+                    aria-label="Filter by project"
+                  >
+                    <option value="">All projects</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <input
                   className="modal-input"
                   style={{ marginBottom: 10 }}
-                  placeholder="Search videos by title, client, or project…"
+                  placeholder="Search by title, client, or project…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
-                <div style={{ maxHeight: '42vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {filtered.length === 0 && <p className="modal-body-text">No playable videos found.</p>}
-                  {filtered.map((a) => {
-                    const on = !!selected[a.assetId];
-                    return (
+                <div style={{ maxHeight: '40vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {displayGroups.length === 0 && (
+                    <p className="modal-body-text" style={{ padding: '8px 2px' }}>
+                      {videoView === 'inhub' ? 'No videos in this hub yet — switch to “All videos” to add some.' : 'No playable videos found.'}
+                    </p>
+                  )}
+                  {displayGroups.map((g) => (
+                    <div key={g.label}>
                       <div
-                        key={a.assetId}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 11,
-                          padding: '9px 11px',
-                          border: '1px solid var(--line)',
-                          borderRadius: 10,
-                          background: on ? 'var(--accent-soft, rgba(219,175,95,0.12))' : 'var(--surface-inset, rgba(11,16,22,0.5))',
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: 1,
+                          background: 'var(--surface-2, #182430)',
+                          padding: '7px 4px 6px',
+                          fontSize: 11,
+                          letterSpacing: '0.05em',
+                          textTransform: 'uppercase',
+                          fontWeight: 600,
+                          color: 'var(--muted-soft, #9d9287)',
+                          borderBottom: '1px solid var(--line, rgba(113,131,150,0.2))',
+                          marginBottom: 4,
                         }}
                       >
-                        <input type="checkbox" checked={on} onChange={() => toggle(a)} aria-label={`Include ${a.name}`} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: 'var(--muted-soft, #9d9287)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {a.clientName} · {a.projectName} · {fmtDuration(a.durationS)}
-                            {a.cfStatus && a.cfStatus !== 'ready' ? ` · CF: ${a.cfStatus}` : ''}
-                          </div>
-                          {on ? (
-                            <input
-                              className="modal-input"
-                              style={{ marginTop: 5, fontSize: '0.82rem', padding: '6px 9px' }}
-                              value={selected[a.assetId].client_title}
-                              onChange={(e) => setTitle(a.assetId, e.target.value)}
-                              placeholder="Client-facing title"
-                            />
-                          ) : (
-                            <div style={{ fontSize: 13, color: 'var(--text, #f4eee2)', marginTop: 2 }}>{a.name}</div>
-                          )}
-                        </div>
+                        {g.label} <span style={{ opacity: 0.7 }}>({g.items.length})</span>
                       </div>
-                    );
-                  })}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {g.items.map((a) => {
+                          const on = !!selected[a.assetId];
+                          return (
+                            <div
+                              key={a.assetId}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 11,
+                                padding: '9px 11px',
+                                border: '1px solid var(--line)',
+                                borderRadius: 10,
+                                background: on ? 'var(--accent-soft, rgba(219,175,95,0.12))' : 'var(--surface-inset, rgba(11,16,22,0.5))',
+                              }}
+                            >
+                              <input type="checkbox" checked={on} onChange={() => toggle(a)} aria-label={`Include ${a.name}`} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                {on ? (
+                                  <input
+                                    className="modal-input"
+                                    style={{ fontSize: '0.82rem', padding: '6px 9px' }}
+                                    value={selected[a.assetId].client_title}
+                                    onChange={(e) => setTitle(a.assetId, e.target.value)}
+                                    placeholder="Client-facing title"
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: 13, color: 'var(--text, #f4eee2)' }}>{a.name}</div>
+                                )}
+                                <div style={{ fontSize: 11, color: 'var(--muted-soft, #9d9287)', marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {[on ? `LPOS: ${a.name}` : null, a.durationS ? fmtDuration(a.durationS) : null, a.cfStatus && a.cfStatus !== 'ready' ? `CF: ${a.cfStatus}` : null].filter(Boolean).join(' · ')}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
