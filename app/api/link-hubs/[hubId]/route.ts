@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHubDetail, saveHub, deleteHub, type HubOwnerType } from '@/lib/store/link-hubs-db';
-import { pushHubToDelivery, ensureHubVideoOrigins, type PushResult } from '@/lib/services/link-hub-delivery';
+import { pushHubToDelivery, ensureHubVideoOrigins, deleteHubFromDelivery, type PushResult } from '@/lib/services/link-hub-delivery';
 
 type Ctx = { params: Promise<{ hubId: string }> };
 const OWNER_TYPES: HubOwnerType[] = ['client', 'person', 'leaderpass'];
@@ -63,13 +63,16 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   }
 }
 
-/**
- * DELETE /api/link-hubs/:hubId — remove the hub locally.
- * NOTE (v1): does not yet remove the hub from the delivery app (its ingest is
- * upsert-only). Add a delivery-side delete before exposing this in the UI.
- */
+/** DELETE /api/link-hubs/:hubId — remove the hub here and from the delivery app. */
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const { hubId } = await params;
+  // Remove from the delivery app first so client access is revoked; best-effort.
+  let delivery: { deleted: boolean; reason?: string };
+  try {
+    delivery = await deleteHubFromDelivery(hubId);
+  } catch (err) {
+    delivery = { deleted: false, reason: (err as Error).message };
+  }
   deleteHub(hubId);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, delivery });
 }

@@ -172,3 +172,23 @@ export async function pushHubToDelivery(hubId: string): Promise<PushResult> {
 
   return { pushed: true, videos: built.payload.items.length, skipped: built.skipped };
 }
+
+/** Tell the delivery app to remove a hub (revokes client access + kills links). */
+export async function deleteHubFromDelivery(hubId: string): Promise<{ deleted: boolean; reason?: string }> {
+  const config = resolveConfig();
+  if (!config) return { deleted: false, reason: 'delivery app not configured' };
+  const res = await fetch(`${config.baseUrl}/api/ingest/${encodeURIComponent(hubId)}`, {
+    method: 'DELETE',
+    headers: { 'x-lpos-token': config.token },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.text()).slice(0, 300);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`delivery delete responded ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
+  return { deleted: true };
+}

@@ -1,38 +1,11 @@
 'use client';
 import { useCallback, useState } from 'react';
 import Link from 'next/link';
-import type { HubSummary, OwnerType } from './types';
+import type { HubSummary } from './types';
 import { NewHubModal } from './NewHubModal';
 import { ManageHubModal } from './ManageHubModal';
-
-const OWNER_COLORS: Record<OwnerType, { fg: string; bg: string; bd: string }> = {
-  client: { fg: '#74a9e2', bg: 'rgba(116,169,226,0.15)', bd: 'rgba(116,169,226,0.3)' },
-  person: { fg: 'var(--muted, #c4b8a8)', bg: 'var(--surface-3, rgba(31,43,55,0.9))', bd: 'var(--line, rgba(113,131,150,0.2))' },
-  leaderpass: { fg: 'var(--accent-strong, #f2cf91)', bg: 'var(--accent-soft, rgba(219,175,95,0.18))', bd: 'rgba(219,175,95,0.34)' },
-};
-
-function OwnerBadge({ hub }: { hub: HubSummary }) {
-  const c = OWNER_COLORS[hub.owner_type];
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        fontSize: 11,
-        fontWeight: 600,
-        padding: '2px 8px',
-        borderRadius: 100,
-        color: c.fg,
-        background: c.bg,
-        border: `1px solid ${c.bd}`,
-      }}
-    >
-      <span style={{ width: 5, height: 5, borderRadius: '50%', background: c.fg }} />
-      {hub.owner_label}
-    </span>
-  );
-}
+import { useContextMenu } from '@/contexts/ContextMenuContext';
+import { ConfirmModal } from '@/components/shared/ConfirmModal';
 
 function fmtDate(iso: string): string {
   try {
@@ -46,6 +19,9 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
   const [hubs, setHubs] = useState<HubSummary[]>(initialHubs);
   const [showNew, setShowNew] = useState(false);
   const [manageId, setManageId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const { openMenu } = useContextMenu();
 
   const refresh = useCallback(async () => {
     try {
@@ -57,6 +33,43 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
       /* ignore */
     }
   }, []);
+
+  async function doDelete(id: string) {
+    const res = await fetch(`/api/link-hubs/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete hub');
+    await refresh();
+  }
+
+  function openHubMenu(e: React.MouseEvent, h: HubSummary) {
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY, [
+      {
+        type: 'item' as const,
+        label: 'Manage…',
+        icon: (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </svg>
+        ),
+        onClick: () => setManageId(h.id),
+      },
+      { type: 'separator' as const },
+      {
+        type: 'item' as const,
+        label: 'Delete hub',
+        danger: true,
+        icon: (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+          </svg>
+        ),
+        onClick: () => {
+          setDeleteError(null);
+          setConfirmDelete({ id: h.id, name: h.name });
+        },
+      },
+    ]);
+  }
 
   return (
     <div style={{ maxWidth: 980, margin: '0 auto', padding: '24px 22px 60px' }}>
@@ -104,6 +117,7 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
           hubs.map((h) => (
             <div
               key={h.id}
+              onContextMenu={(e) => openHubMenu(e, h)}
               style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr 78px 78px 120px 96px',
@@ -117,8 +131,8 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
                 <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-strong, #fff9ef)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {h.name}
                 </div>
-                <div style={{ marginTop: 4 }}>
-                  <OwnerBadge hub={h} />
+                <div style={{ marginTop: 3, fontSize: 12, color: 'var(--muted-soft, #9d9287)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {h.owner_label}
                 </div>
               </div>
               <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text, #f4eee2)' }}>{h.video_count}</span>
@@ -147,6 +161,10 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
         )}
       </div>
 
+      <p style={{ marginTop: 10, fontSize: 12, color: 'var(--muted-soft, #9d9287)' }}>
+        Right-click a hub to manage or delete it.
+      </p>
+
       {showNew && (
         <NewHubModal
           onClose={() => setShowNew(false)}
@@ -159,6 +177,27 @@ export function LinkHubsPageClient({ initialHubs }: { initialHubs: HubSummary[] 
       )}
       {manageId && (
         <ManageHubModal hubId={manageId} onClose={() => setManageId(null)} onSaved={() => void refresh()} />
+      )}
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete link hub?"
+          body={`“${confirmDelete.name}” will be removed — its videos and login access, and its share links will stop working. This can’t be undone.`}
+          confirmLabel="Delete hub"
+          danger
+          error={deleteError}
+          onConfirm={async () => {
+            try {
+              await doDelete(confirmDelete.id);
+              setConfirmDelete(null);
+            } catch (err) {
+              setDeleteError((err as Error).message);
+            }
+          }}
+          onClose={() => {
+            setConfirmDelete(null);
+            setDeleteError(null);
+          }}
+        />
       )}
     </div>
   );

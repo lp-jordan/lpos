@@ -1,6 +1,5 @@
 'use client';
 import { useState } from 'react';
-import type { OwnerType } from './types';
 
 interface Props {
   onClose: () => void;
@@ -10,7 +9,6 @@ interface Props {
 export function NewHubModal({ onClose, onCreated }: Props) {
   const [name, setName] = useState('');
   const [ownerLabel, setOwnerLabel] = useState('');
-  const [ownerType, setOwnerType] = useState<OwnerType>('client');
   const [firstEmail, setFirstEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +28,6 @@ export function NewHubModal({ onClose, onCreated }: Props) {
         body: JSON.stringify({
           name: name.trim(),
           owner_label: (ownerLabel || name).trim(),
-          owner_type: ownerType,
           firstEmail: firstEmail.trim() || undefined,
         }),
       });
@@ -59,18 +56,10 @@ export function NewHubModal({ onClose, onCreated }: Props) {
             <label className="modal-label">Hub name</label>
             <input className="modal-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Steve — Highlights" autoFocus />
           </div>
-          <div className="modal-field">
-            <label className="modal-label">Owner label</label>
-            <input className="modal-input" value={ownerLabel} onChange={(e) => setOwnerLabel(e.target.value)} placeholder="Steve Molyneux (defaults to hub name)" />
-          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div className="modal-field">
-              <label className="modal-label">Owner type</label>
-              <select className="modal-input" value={ownerType} onChange={(e) => setOwnerType(e.target.value as OwnerType)}>
-                <option value="client">Client</option>
-                <option value="person">Person</option>
-                <option value="leaderpass">LeaderPass</option>
-              </select>
+              <label className="modal-label">Owner label</label>
+              <input className="modal-input" value={ownerLabel} onChange={(e) => setOwnerLabel(e.target.value)} placeholder="(defaults to hub name)" />
             </div>
             <div className="modal-field">
               <label className="modal-label">First login email</label>

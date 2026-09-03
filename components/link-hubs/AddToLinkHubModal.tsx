@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import type { HubSummary, OwnerType } from './types';
+import type { HubSummary } from './types';
 
 interface Props {
   assets: Array<{ assetId: string; name: string }>;
@@ -16,7 +16,6 @@ export function AddToLinkHubModal({ assets, projectId, onClose, onAdded }: Props
   const [hubId, setHubId] = useState('');
   const [newName, setNewName] = useState('');
   const [newOwner, setNewOwner] = useState('');
-  const [newType, setNewType] = useState<OwnerType>('client');
   const [newEmail, setNewEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -66,7 +65,6 @@ export function AddToLinkHubModal({ assets, projectId, onClose, onAdded }: Props
           body: JSON.stringify({
             name: newName.trim(),
             owner_label: (newOwner || newName).trim(),
-            owner_type: newType,
             firstEmail: newEmail.trim() || undefined,
           }),
         });
@@ -142,17 +140,9 @@ export function AddToLinkHubModal({ assets, projectId, onClose, onAdded }: Props
                     <input className="modal-input" value={newOwner} onChange={(e) => setNewOwner(e.target.value)} placeholder="(defaults to name)" />
                   </div>
                   <div className="modal-field">
-                    <label className="modal-label">Owner type</label>
-                    <select className="modal-input" value={newType} onChange={(e) => setNewType(e.target.value as OwnerType)}>
-                      <option value="client">Client</option>
-                      <option value="person">Person</option>
-                      <option value="leaderpass">LeaderPass</option>
-                    </select>
+                    <label className="modal-label">First login email</label>
+                    <input className="modal-input" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="orlando@company.com" />
                   </div>
-                </div>
-                <div className="modal-field">
-                  <label className="modal-label">First login email</label>
-                  <input className="modal-input" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="orlando@company.com" />
                 </div>
               </>
             )}

@@ -229,11 +229,19 @@ export function ManageHubModal({ hubId, onClose, onSaved }: Props) {
             {tab === 'videos' && (
               <div>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <div className="modal-mode-toggle" style={{ flex: '0 0 auto' }}>
-                    <button type="button" className={`modal-mode-btn${videoView === 'inhub' ? ' active' : ''}`} onClick={() => setVideoView('inhub')}>
+                  <div style={{ display: 'inline-flex', background: 'var(--surface-inset, rgba(11,16,22,0.5))', border: '1px solid var(--line)', borderRadius: 9, padding: 3, flex: '0 0 auto' }}>
+                    <button
+                      type="button"
+                      onClick={() => setVideoView('inhub')}
+                      style={{ padding: '6px 12px', borderRadius: 6, fontSize: 12.5, fontWeight: 600, border: 0, cursor: 'pointer', background: videoView === 'inhub' ? 'var(--surface-3, #1f2b37)' : 'transparent', color: videoView === 'inhub' ? 'var(--text-strong, #fff9ef)' : 'var(--muted-soft, #9d9287)' }}
+                    >
                       In hub · {selectedCount}
                     </button>
-                    <button type="button" className={`modal-mode-btn${videoView === 'all' ? ' active' : ''}`} onClick={() => setVideoView('all')}>
+                    <button
+                      type="button"
+                      onClick={() => setVideoView('all')}
+                      style={{ padding: '6px 12px', borderRadius: 6, fontSize: 12.5, fontWeight: 600, border: 0, cursor: 'pointer', background: videoView === 'all' ? 'var(--surface-3, #1f2b37)' : 'transparent', color: videoView === 'all' ? 'var(--text-strong, #fff9ef)' : 'var(--muted-soft, #9d9287)' }}
+                    >
                       All videos
                     </button>
                   </div>
