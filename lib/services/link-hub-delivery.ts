@@ -16,7 +16,7 @@
 import { getHubDetail } from '@/lib/store/link-hubs-db';
 import { getCanonicalMediaAsset } from '@/lib/store/canonical-asset-store';
 import { getSetting } from '@/lib/store/lpos-settings-store';
-import { getVideoDetails, applyVideoSettings } from '@/lib/services/cloudflare-stream';
+import { getVideoDetails, applyVideoSettings, cloudflareFrameThumbnailUrl } from '@/lib/services/cloudflare-stream';
 
 export const LINK_HUB_INGEST_URL_SETTING = 'link_hubs.ingest_url';
 
@@ -27,7 +27,7 @@ interface IngestPayload {
     asset_id: string;
     client_title: string;
     share_token: string;
-    asset: { lpos_name: string; cf_stream_uid: string; duration_s: number };
+    asset: { lpos_name: string; cf_stream_uid: string; duration_s: number; thumbnail_url: string | null };
   }>;
 }
 
@@ -62,6 +62,7 @@ export function buildHubPayload(hubId: string): { payload: IngestPayload; skippe
       skipped.push(item.client_title || item.asset_id);
       continue;
     }
+    const durationS = Math.round(asset?.duration ?? 0);
     items.push({
       asset_id: item.asset_id,
       client_title: item.client_title,
@@ -69,7 +70,9 @@ export function buildHubPayload(hubId: string): { payload: IngestPayload; skippe
       asset: {
         lpos_name: asset?.name ?? item.asset_id,
         cf_stream_uid: uid,
-        duration_s: Math.round(asset?.duration ?? 0),
+        duration_s: durationS,
+        // A real per-video frame (~10% in, min 1s) — not the batched poster.
+        thumbnail_url: cloudflareFrameThumbnailUrl(uid, Math.max(1, Math.round(durationS * 0.1))),
       },
     });
   }

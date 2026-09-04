@@ -86,6 +86,18 @@ export function getDefaultAllowedOrigins(): string[] {
   return list.map(normalizeOrigin).filter(Boolean);
 }
 
+/**
+ * URL of a still frame from a video at `timeSec` seconds — a real per-video
+ * thumbnail, independent of any custom uploaded poster. Returns null if the
+ * account's customer subdomain isn't configured.
+ */
+export function cloudflareFrameThumbnailUrl(uid: string, timeSec: number, height = 320): string | null {
+  const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
+  if (!sub || !uid) return null;
+  const t = Math.max(0, Math.round(timeSec));
+  return `https://customer-${sub}.cloudflarestream.com/${uid}/thumbnails/thumbnail.jpg?time=${t}s&height=${height}`;
+}
+
 export function getCloudflareStreamConfigDiagnostic(): ConfigDiagnostic {
   const env = readCloudflareEnv();
   const details: string[] = [];
