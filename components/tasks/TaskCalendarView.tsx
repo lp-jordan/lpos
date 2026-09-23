@@ -71,6 +71,43 @@ function fmtDay(s: string): string {
   const d = fromIso(s);
   return `${DOW_LABELS[(d.getDay() + 6) % 7]} ${d.getDate()}`;
 }
+// ── Working days ───────────────────────────────────────────────────────────
+// Nobody works weekends, so a span's *length* is counted in working days and
+// drags never land on one. In a Monday-first grid Sat/Sun are always the last
+// two columns, which is why a working span clipped to one week is always a
+// single contiguous run ending at Friday — see WORK_END_COL in segmentsForWeek.
+
+function isWeekend(iso: string): boolean {
+  const d = fromIso(iso).getDay();
+  return d === 0 || d === 6;
+}
+
+/** Nearest working day. Saturday falls back to Friday, Sunday forward to Monday. */
+function snapToWorkday(iso: string): string {
+  if (!isWeekend(iso)) return iso;
+  return toIso(addDays(fromIso(iso), fromIso(iso).getDay() === 6 ? -1 : 1));
+}
+
+/** Working days from start to end, inclusive. 0 when end precedes start. */
+function workdaySpan(start: string, end: string): number {
+  const total = dayDiff(start, end);
+  if (total < 0) return 0;
+  let n = 0;
+  for (let i = 0; i <= total; i++) {
+    if (!isWeekend(toIso(addDays(fromIso(start), i)))) n++;
+  }
+  return n;
+}
+
+/** Shift by n working days. n = 0 returns the day unchanged. */
+function addWorkdays(iso: string, n: number): string {
+  let cur = fromIso(iso);
+  let left = n;
+  while (left > 0) { cur = addDays(cur, 1); if (!isWeekend(toIso(cur))) left--; }
+  while (left < 0) { cur = addDays(cur, -1); if (!isWeekend(toIso(cur))) left++; }
+  return toIso(cur);
+}
+
 function fmtRange(start: string, end: string): string {
   const ds = fromIso(start);
   const de = fromIso(end);
@@ -99,24 +136,27 @@ interface Segment {
  * lowest lane it doesn't collide in, so a week uses as few rows as it can.
  */
 function segmentsForWeek(weekStart: string, tasks: Task[]): Segment[] {
-  const weekEnd = toIso(addDays(fromIso(weekStart), 6));
+  // Friday. Bars stop here: a span that runs into next week breaks visually at
+  // the weekend and resumes on Monday, which is exactly how the work reads.
+  const WORK_END_COL = 4;
+  const weekWorkEnd = toIso(addDays(fromIso(weekStart), WORK_END_COL));
 
   const segs: Segment[] = tasks
     .filter((t) => {
       if (!t.scheduledStart || !t.scheduledEnd) return false;
-      return !(dayDiff(weekStart, t.scheduledEnd) < 0 || dayDiff(t.scheduledStart, weekEnd) < 0);
+      return !(dayDiff(weekStart, t.scheduledEnd) < 0 || dayDiff(t.scheduledStart, weekWorkEnd) < 0);
     })
     .map((t) => {
       const rawStart = dayDiff(weekStart, t.scheduledStart!);
       const rawEnd = dayDiff(weekStart, t.scheduledEnd!);
       const col = Math.max(0, rawStart);
-      const endCol = Math.min(6, rawEnd);
+      const endCol = Math.min(WORK_END_COL, rawEnd);
       return {
         task: t,
         col,
         span: endCol - col + 1,
         clipStart: rawStart < 0,
-        clipEnd: rawEnd > 6,
+        clipEnd: rawEnd > WORK_END_COL,
         lane: 0,
       };
     })
@@ -376,7 +416,7 @@ export function TaskCalendarView({
   }, [view, selectedDay, today]);
 
   /** Scheduled tasks whose span covers a given day, in stacking order. */
-  const tasksOnDay = useCallback((dateIso: string) => scheduled
+  const tasksOnDay = useCallback((dateIso: string) => isWeekend(dateIso) ? [] : scheduled
     .filter((t) => dayDiff(t.scheduledStart!, dateIso) >= 0 && dayDiff(dateIso, t.scheduledEnd!) >= 0)
     .sort((a, b) => a.scheduleOrder - b.scheduleOrder), [scheduled]);
 
@@ -439,12 +479,14 @@ export function TaskCalendarView({
       mode,
       taskId: task.taskId,
       edge,
+      // Counted in WORKING days: grabbing a Fri-start bar on the following
+      // Monday is an offset of 1, not 3.
       grabOffset: start && end && hit
-        ? Math.max(0, Math.min(dayDiff(start, end), dayDiff(start, hit.date)))
+        ? Math.max(0, Math.min(workdaySpan(start, end) - 1, workdaySpan(start, snapToWorkday(hit.date)) - 1))
         : 0,
       origStart: start,
       origEnd: end,
-      origLen: start && end ? dayDiff(start, end) + 1 : 1,
+      origLen: start && end ? workdaySpan(start, end) : 1,
       moved: false,
     };
     if (start && end) {
@@ -454,14 +496,14 @@ export function TaskCalendarView({
   }
 
   function showPill(x: number, y: number, start: string, end: string, mode: DragMode) {
-    const days = dayDiff(start, end) + 1;
+    const days = workdaySpan(start, end);
     const orig = dragRef.current?.origLen ?? days;
     const diff = days - orig;
     setPill({
       x,
       y,
       range: fmtRange(start, end),
-      detail: `${days} day${days === 1 ? '' : 's'}`,
+      detail: `${days} working day${days === 1 ? '' : 's'}`,
       delta: mode === 'resize'
         ? (diff > 0 ? `+${diff}` : diff < 0 ? `−${Math.abs(diff)}` : 'no change')
         : null,
@@ -488,9 +530,11 @@ export function TaskCalendarView({
         return;
       }
 
+      const landing = snapToWorkday(hit.date);
+
       if (drag.mode === 'schedule') {
-        setPreviewBoth({ taskId: drag.taskId, start: hit.date, end: hit.date });
-        showPill(e.clientX, e.clientY, hit.date, hit.date, 'schedule');
+        setPreviewBoth({ taskId: drag.taskId, start: landing, end: landing });
+        showPill(e.clientX, e.clientY, landing, landing, 'schedule');
         return;
       }
 
@@ -501,13 +545,15 @@ export function TaskCalendarView({
 
       let next: Preview;
       if (drag.mode === 'move') {
-        const len = dayDiff(start, end);
-        const ns = toIso(addDays(fromIso(hit.date), -drag.grabOffset));
-        next = { taskId: drag.taskId, start: ns, end: toIso(addDays(fromIso(ns), len)) };
+        // Preserve the working-day length, so a 3-day job dropped on a Thursday
+        // becomes Thu, Fri, Mon rather than Thu, Fri, Sat.
+        const len = workdaySpan(start, end);
+        const ns = addWorkdays(landing, -drag.grabOffset);
+        next = { taskId: drag.taskId, start: ns, end: addWorkdays(ns, len - 1) };
       } else if (drag.edge === 'start') {
-        next = { taskId: drag.taskId, start: hit.date <= end ? hit.date : end, end };
+        next = { taskId: drag.taskId, start: landing <= end ? landing : end, end };
       } else {
-        next = { taskId: drag.taskId, start, end: hit.date >= start ? hit.date : start };
+        next = { taskId: drag.taskId, start, end: landing >= start ? landing : start };
       }
       setPreviewBoth(next);
       showPill(e.clientX, e.clientY, next.start, next.end, drag.mode);
@@ -542,8 +588,9 @@ export function TaskCalendarView({
       if (!hit) { setPreviewBoth(null); return; }   // let go over nothing — snap back
 
       const cur = previewRef.current;
-      const start = drag.mode === 'schedule' ? hit.date : cur?.start;
-      const end = drag.mode === 'schedule' ? hit.date : cur?.end;
+      const dropDay = snapToWorkday(hit.date);
+      const start = drag.mode === 'schedule' ? dropDay : cur?.start;
+      const end = drag.mode === 'schedule' ? dropDay : cur?.end;
       setPreviewBoth(null);
       if (!start || !end) return;
 
@@ -817,9 +864,11 @@ export function TaskCalendarView({
                         onClick={compact ? () => setSelectedDay(dIso) : undefined}
                         onContextMenu={(e) => {
                           e.preventDefault();
-                          setDayMenu({ date: dIso, x: e.clientX, y: e.clientY });
+                          // Snapped, so the menu offers (and names) a day that
+                          // can actually hold work.
+                          setDayMenu({ date: snapToWorkday(dIso), x: e.clientX, y: e.clientY });
                         }}
-                        onDoubleClick={() => onNewTaskOnDay(dIso)}
+                        onDoubleClick={() => onNewTaskOnDay(snapToWorkday(dIso))}
                       >
                         <span className="cal-daynum">{day.getDate()}</span>
                         {compact && dots.length > 0 && (
