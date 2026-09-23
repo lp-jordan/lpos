@@ -39,6 +39,10 @@ const MIN_LANES = 2;
  *  absurdly tall rows, and a narrow one still leaves room to read a bar. */
 const CELL_MIN_H = 104;
 const CELL_MAX_H = 176;
+/** Below this width the month collapses to the compact, dot-per-day layout. */
+const COMPACT_MAX_W = 640;
+const COMPACT_CELL_MIN_H = 40;
+const COMPACT_CELL_MAX_H = 64;
 
 // ── Date helpers ───────────────────────────────────────────────────────────
 // Everything is an inclusive ISO day string. Dates are built at local noon so a
@@ -329,11 +333,46 @@ export function TaskCalendarView({
     return () => ro.disconnect();
   }, []);
 
+  /**
+   * Phone layout, iOS-Calendar style: the month collapses to small squares that
+   * carry dots instead of bars, and the selected day's work is listed below the
+   * grid. A span bar is simply unreadable in a ~50px-wide cell.
+   */
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(`(max-width: ${COMPACT_MAX_W}px)`);
+    const apply = () => setCompact(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
   /** Square, clamped. 0 before the first measurement — rows then fall back to
    *  their content height, which is what they did before this existed. */
   const squareRowHeight = cellWidth
-    ? Math.min(Math.max(cellWidth, CELL_MIN_H), CELL_MAX_H)
+    ? Math.min(
+      Math.max(cellWidth, compact ? COMPACT_CELL_MIN_H : CELL_MIN_H),
+      compact ? COMPACT_CELL_MAX_H : CELL_MAX_H,
+    )
     : 0;
+
+  /** Which day the compact list is showing. Follows the month when you page
+   *  away from the one holding the current selection. */
+  const [selectedDay, setSelectedDay] = useState(today);
+  useEffect(() => {
+    const d = fromIso(selectedDay);
+    if (d.getFullYear() === view.year && d.getMonth() === view.month) return;
+    const now = fromIso(today);
+    setSelectedDay(now.getFullYear() === view.year && now.getMonth() === view.month
+      ? today
+      : toIso(new Date(view.year, view.month, 1, 12)));
+  }, [view, selectedDay, today]);
+
+  /** Scheduled tasks whose span covers a given day, in stacking order. */
+  const tasksOnDay = useCallback((dateIso: string) => scheduled
+    .filter((t) => dayDiff(t.scheduledStart!, dateIso) >= 0 && dayDiff(dateIso, t.scheduledEnd!) >= 0)
+    .sort((a, b) => a.scheduleOrder - b.scheduleOrder), [scheduled]);
 
   /** Everything the window-level pointer handlers need, refreshed each render so
    *  the listeners themselves can register once and never churn. */
@@ -730,8 +769,11 @@ export function TaskCalendarView({
             const laneCount = Math.max(maxLane + 2, MIN_LANES);
             // The row is square, or tall enough for its stacked bars — whichever
             // is bigger. The cells carry it (they're in flow); the lane box just
-            // overlays them.
-            const rowHeight = Math.max(DAYNUM_H + laneCount * LANE_STEP + 8, squareRowHeight);
+            // overlays them. Compact draws no bars, so it takes the square
+            // straight: reserving lane space there would undo the small squares.
+            const rowHeight = compact
+              ? squareRowHeight
+              : Math.max(DAYNUM_H + laneCount * LANE_STEP + 8, squareRowHeight);
 
             return (
               <div key={weekStart} className="cal-week" data-week-start={weekStart}>
@@ -739,6 +781,9 @@ export function TaskCalendarView({
                   {Array.from({ length: 7 }, (_, i) => {
                     const day = addDays(fromIso(weekStart), i);
                     const dIso = toIso(day);
+                    // Compact: a bar is unreadable in a ~50px cell, so the day
+                    // carries dots and the list below the grid does the reading.
+                    const dots = compact ? tasksOnDay(dIso) : [];
                     return (
                       <div
                         key={dIso}
@@ -747,7 +792,9 @@ export function TaskCalendarView({
                           i >= 5 ? 'cal-cell--weekend' : '',
                           day.getMonth() !== view.month ? 'cal-cell--outside' : '',
                           dIso === today ? 'cal-cell--today' : '',
+                          compact && dIso === selectedDay ? 'cal-cell--picked' : '',
                         ].filter(Boolean).join(' ')}
+                        onClick={compact ? () => setSelectedDay(dIso) : undefined}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           setDayMenu({ date: dIso, x: e.clientX, y: e.clientY });
@@ -755,19 +802,73 @@ export function TaskCalendarView({
                         onDoubleClick={() => onNewTaskOnDay(dIso)}
                       >
                         <span className="cal-daynum">{day.getDate()}</span>
+                        {compact && dots.length > 0 && (
+                          <span className="cal-dots">
+                            {dots.slice(0, 3).map((t) => (
+                              <span
+                                key={t.taskId}
+                                className="cal-dot"
+                                style={{ background: colorByStatus ? statusColor(t.status) : 'var(--muted-soft)' }}
+                              />
+                            ))}
+                          </span>
+                        )}
                       </div>
                     );
                   })}
                 </div>
 
-                <div className="cal-lanes">
-                  {segs.map(renderBar)}
-                </div>
+                {!compact && (
+                  <div className="cal-lanes">
+                    {segs.map(renderBar)}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+
+      {/* Compact day list — what the dots in the grid above stand for. */}
+      {compact && (() => {
+        const dayTasks = tasksOnDay(selectedDay);
+        return (
+          <div className="cal-daylist">
+            <div className="cal-daylist-head">
+              <span className="cal-daylist-date">{fmtRange(selectedDay, selectedDay)}</span>
+              <button
+                type="button"
+                className="cal-daylist-add"
+                onClick={() => onNewTaskOnDay(selectedDay)}
+              >
+                + New task
+              </button>
+            </div>
+            {dayTasks.length === 0 ? (
+              <p className="cal-daylist-empty">Nothing planned for this day.</p>
+            ) : dayTasks.map((t) => (
+              <button
+                key={t.taskId}
+                type="button"
+                data-task-id={t.taskId}
+                className="cal-daylist-row"
+                style={{ '--cal-bar-color': colorByStatus ? statusColor(t.status) : 'var(--line-strong)' } as React.CSSProperties}
+                onClick={() => onSelectTask(t.taskId)}
+                onContextMenu={(e) => { e.stopPropagation(); onCardContextMenu(e, t.taskId); }}
+              >
+                <span className="cal-daylist-main">
+                  {t.clientName !== 'General' && <span className="cal-daylist-client">{t.clientName}</span>}
+                  <span className="cal-daylist-title">{t.description}</span>
+                  {t.scheduledStart !== t.scheduledEnd && (
+                    <span className="cal-daylist-span">{fmtRange(t.scheduledStart!, t.scheduledEnd!)}</span>
+                  )}
+                </span>
+                {renderAvatars(t)}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       <div ref={railRef} className={`cal-rail${railOpen ? '' : ' cal-rail--collapsed'}`}>
         <button

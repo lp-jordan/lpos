@@ -20717,12 +20717,42 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .task-ctx-day-head { color: var(--muted-soft, #9d9287); font-size: 0.67rem; font-weight: 700; letter-spacing: 0.07em; padding: 7px 10px 6px; text-transform: uppercase; }
 .task-view-btn--standalone { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 10px; }
 
+/* ── Compact (phone) month: dots per day, detail in the list below ─────────
+   Mirrors iOS Calendar. The grid answers "which days are busy"; the list
+   answers "with what". Kept in sync with COMPACT_MAX_W in TaskCalendarView. */
+.cal-dots { display: flex; gap: 3px; inset-inline: 0; justify-content: center; position: absolute; bottom: 5px; }
+.cal-dot { border-radius: 50%; height: 5px; width: 5px; }
+.cal-cell--picked { background: var(--accent-soft, rgba(219,175,95,0.18)); box-shadow: inset 0 0 0 1px rgba(219,175,95,0.45); }
+
+.cal-daylist { background: var(--surface, #121a22); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 13px; }
+.cal-daylist-head { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
+.cal-daylist-date { color: var(--text-strong); font-size: 0.86rem; font-weight: 600; }
+.cal-daylist-add { background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); cursor: pointer; font: inherit; font-size: 0.75rem; padding: 5px 11px; }
+.cal-daylist-add:hover { border-color: var(--accent); color: var(--text); }
+.cal-daylist-empty { color: var(--muted-soft, #9d9287); font-size: 0.78rem; margin: 2px 0 0; }
+.cal-daylist-row { align-items: center; background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-left: 3px solid var(--cal-bar-color); border-radius: 9px; color: inherit; cursor: pointer; display: flex; font: inherit; gap: 9px; justify-content: space-between; padding: 9px 11px; text-align: left; width: 100%; }
+.cal-daylist-row:hover { border-color: var(--cal-bar-color); }
+.cal-daylist-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cal-daylist-client { color: var(--cal-bar-color); font-size: 0.63rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.cal-daylist-title { color: var(--text); font-size: 0.83rem; }
+.cal-daylist-span { color: var(--muted-soft, #9d9287); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.cal-daylist-row .task-card-avatar { border-color: var(--surface-2, #1e1e28); height: 22px; width: 22px; font-size: 0.57rem; }
+
 @media (max-width: 760px) {
   .cal-bar-client, .cal-bar-avs { display: none; }
-  .cal-dow { font-size: 0.57rem; padding: 7px 5px; }
-  .cal-cell { padding: 4px; }
   .cal-bar { font-size: 0.7rem; gap: 5px; padding: 0 4px; }
   .cal-legend { margin-left: 0; }
   .cal-rail-group { flex-direction: column; gap: 4px; }
   .cal-rail-group-label { flex: none; padding-top: 0; text-align: left; }
+}
+
+@media (max-width: 640px) {
+  .cal-dow { font-size: 0.55rem; letter-spacing: 0.04em; padding: 6px 0; text-align: center; }
+  .cal-cell { padding: 3px 0 0; position: relative; text-align: center; }
+  .cal-daynum { font-size: 0.8rem; }
+  .cal-cell--today .cal-daynum { line-height: 22px; min-width: 22px; }
+  /* Chips wrap to full width so long titles stay readable on a phone. */
+  .cal-rail-group-items { width: 100%; }
+  .cal-chip { width: 100%; }
+  .cal-rail-hint { display: none; }
 }
