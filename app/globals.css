@@ -20679,11 +20679,26 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 /* Unscheduled rail — the source and the bin for calendar drags. */
 .cal-rail { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px 13px; }
-.cal-rail-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; }
+/* The whole header is the collapse toggle — reset the button chrome. */
+.cal-rail-head { align-items: center; background: none; border: none; color: inherit; cursor: pointer; display: flex; flex-wrap: wrap; font: inherit; gap: 8px; margin-bottom: 9px; padding: 0; text-align: left; width: 100%; }
+.cal-rail-head:hover .cal-rail-title { color: var(--text-strong); }
+.cal-rail-head:focus-visible { border-radius: 8px; box-shadow: var(--focus-ring); outline: none; }
+.cal-rail-caret { color: var(--muted-soft, #9d9287); flex-shrink: 0; transition: transform .15s; }
+.cal-rail-caret--open { transform: rotate(90deg); }
+/* Collapsed, the header strip is still a drop target for unplanning a bar. */
+.cal-rail--collapsed { padding-bottom: 11px; }
+.cal-rail--collapsed .cal-rail-head { margin-bottom: 0; }
+@media (prefers-reduced-motion: reduce) { .cal-rail-caret { transition: none; } }
 .cal-rail-title { color: var(--text); font-size: 0.82rem; font-weight: 600; }
 .cal-rail-count { background: var(--surface-2, #1e1e28); border-radius: 999px; color: var(--muted); font-size: 0.7rem; padding: 1px 8px; }
 .cal-rail-hint { color: var(--muted-soft, #9d9287); font-size: 0.72rem; }
-.cal-rail-items { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Capped + scrollable: the backlog can be hundreds of chips, and an
+   uncapped rail pushes the calendar itself off the page. */
+.cal-rail-items { display: flex; flex-wrap: wrap; gap: 8px; max-height: 208px; overflow-y: auto; padding-right: 4px; }
+.cal-rail-items::-webkit-scrollbar { width: 8px; }
+.cal-rail-items::-webkit-scrollbar-track { background: transparent; }
+.cal-rail-items::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+.cal-rail-items::-webkit-scrollbar-thumb:hover { background: var(--muted-soft, #555); }
 .cal-rail-empty { color: var(--muted-soft, #9d9287); font-size: 0.75rem; }
 .cal-chip { align-items: center; background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-left: 3px solid var(--cal-bar-color); border-radius: 8px; cursor: grab; display: inline-flex; gap: 7px; padding: 7px 10px 7px 9px; touch-action: none; transition: border-color .15s; user-select: none; }
 .cal-chip:hover { border-color: var(--cal-bar-color); }

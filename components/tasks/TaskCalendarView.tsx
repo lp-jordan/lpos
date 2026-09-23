@@ -205,6 +205,25 @@ export function TaskCalendarView({
   const [preview, setPreview] = useState<Preview | null>(null);
   const [pill, setPill] = useState<PillState | null>(null);
   const [dayMenu, setDayMenu] = useState<{ date: string; x: number; y: number } | null>(null);
+  // Collapsing the rail matters more than it sounds: every pre-calendar task is
+  // unscheduled, so on first use this list is the whole backlog and would push
+  // the grid off screen. SSR-safe — the stored value is read post-hydration.
+  const [railOpen, setRailOpen] = useState(true);
+  const didRestoreRail = useRef(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('lpos:tasks:calendarRail');
+      if (stored === 'open' || stored === 'closed') setRailOpen(stored === 'open');
+    } catch { /* localStorage may be blocked */ }
+    didRestoreRail.current = true;
+  }, []);
+  useEffect(() => {
+    if (!didRestoreRail.current) return;
+    try {
+      window.localStorage.setItem('lpos:tasks:calendarRail', railOpen ? 'open' : 'closed');
+    } catch { /* ignore */ }
+  }, [railOpen]);
 
   const dragRef = useRef<DragState | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -661,13 +680,30 @@ export function TaskCalendarView({
         </div>
       </div>
 
-      <div ref={railRef} className="cal-rail">
-        <div className="cal-rail-head">
+      <div ref={railRef} className={`cal-rail${railOpen ? '' : ' cal-rail--collapsed'}`}>
+        <button
+          type="button"
+          className="cal-rail-head"
+          onClick={() => setRailOpen((v) => !v)}
+          aria-expanded={railOpen}
+          title={railOpen ? 'Collapse the unscheduled list' : 'Expand the unscheduled list'}
+        >
+          <svg
+            className={`cal-rail-caret${railOpen ? ' cal-rail-caret--open' : ''}`}
+            width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
           <span className="cal-rail-title">Unscheduled</span>
           <span className="cal-rail-count">{unscheduled.length}</span>
-          <span className="cal-rail-hint">Drag onto a day to plan it — drag a bar back here to unplan it.</span>
-        </div>
-        <div className="cal-rail-items">
+          <span className="cal-rail-hint">
+            {railOpen
+              ? 'Drag onto a day to plan it — drag a bar back here to unplan it.'
+              : 'Drag a bar here to unplan it, or expand to plan one.'}
+          </span>
+        </button>
+        <div className="cal-rail-items" hidden={!railOpen}>
           {unscheduled.length === 0 ? (
             <span className="cal-rail-empty">Everything&rsquo;s on the calendar.</span>
           ) : unscheduled.map((t) => (
