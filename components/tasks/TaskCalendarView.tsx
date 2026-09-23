@@ -179,6 +179,11 @@ interface Props {
   /** False paints every bar a neutral surface — the grid then reads purely as
    *  who-is-busy-when, without the status colours competing. */
   colorByStatus: boolean;
+  /** Toggles `colorByStatus`. The control lives in the calendar's own month bar
+   *  next to the legend it affects, not in the global task toolbar — it is a
+   *  calendar-only setting, and having it there made the toolbar reflow every
+   *  time you switched between board and calendar. */
+  onToggleColor: () => void;
   selectedTaskId: string | null;
   highlightTaskId: string | null;
   renamingTaskId: string | null;
@@ -195,6 +200,7 @@ export function TaskCalendarView({
   users,
   statuses,
   colorByStatus,
+  onToggleColor,
   selectedTaskId,
   highlightTaskId,
   renamingTaskId,
@@ -743,16 +749,30 @@ export function TaskCalendarView({
           Today
         </button>
 
-        {colorByStatus && (
-          <div className="cal-legend">
-            {statuses.map((s) => (
-              <span key={s.value} className="cal-legend-item">
-                <span className="cal-legend-dot" style={{ background: s.color }} />
-                {s.label}
-              </span>
-            ))}
-          </div>
-        )}
+        <div className="cal-legend">
+          {colorByStatus && statuses.map((s) => (
+            <span key={s.value} className="cal-legend-item">
+              <span className="cal-legend-dot" style={{ background: s.color }} />
+              {s.label}
+            </span>
+          ))}
+          <button
+            type="button"
+            className={`cal-colorbtn${colorByStatus ? ' cal-colorbtn--on' : ''}`}
+            onClick={onToggleColor}
+            aria-pressed={colorByStatus}
+            title={colorByStatus ? 'Status colours on — click to mute' : 'Status colours off — click to restore'}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="13.5" cy="6.5" r="2.5" />
+              <circle cx="17.5" cy="13" r="2.5" />
+              <circle cx="8.5" cy="7.5" r="2.5" />
+              <circle cx="6.5" cy="13.5" r="2.5" />
+              <path d="M12 2a10 10 0 0 0 0 20 2 2 0 0 0 2-2 2 2 0 0 1 2-2h1a5 5 0 0 0 5-5c0-6-4.5-11-10-11z" />
+            </svg>
+            {colorByStatus ? 'Colour' : 'Muted'}
+          </button>
+        </div>
       </div>
 
       <div className="cal-grid">

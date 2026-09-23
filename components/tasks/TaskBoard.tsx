@@ -445,153 +445,138 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           ))}
         </div>
 
-        {/* Mine / Others / All toggle */}
-        <div className="task-scope-toggle">
-          <button
-            type="button"
-            className={`task-scope-btn${viewScope === 'mine' ? ' task-scope-btn--active' : ''}`}
-            onClick={() => setViewScope('mine')}
-          >
-            Mine
-          </button>
-          <button
-            type="button"
-            className={`task-scope-btn${viewScope === 'others' ? ' task-scope-btn--active' : ''}`}
-            onClick={() => setViewScope('others')}
-          >
-            Others
-          </button>
-          <button
-            type="button"
-            className={`task-scope-btn${viewScope === 'all' ? ' task-scope-btn--active' : ''}`}
-            onClick={() => setViewScope('all')}
-          >
-            All
-          </button>
+        {/* Control cluster — pinned right, fixed slot order: scope -> view ->
+            action. Both slots hold their width when a tab has nothing to put in
+            them, so switching tabs never reflows the row. */}
+        <div className="task-toolbar-cluster">
+          {/* Mine / Others / All toggle */}
+          <div className="task-scope-toggle">
+            <button
+              type="button"
+              className={`task-scope-btn${viewScope === 'mine' ? ' task-scope-btn--active' : ''}`}
+              onClick={() => setViewScope('mine')}
+            >
+              Mine
+            </button>
+            <button
+              type="button"
+              className={`task-scope-btn${viewScope === 'others' ? ' task-scope-btn--active' : ''}`}
+              onClick={() => setViewScope('others')}
+            >
+              Others
+            </button>
+            <button
+              type="button"
+              className={`task-scope-btn${viewScope === 'all' ? ' task-scope-btn--active' : ''}`}
+              onClick={() => setViewScope('all')}
+            >
+              All
+            </button>
+          </div>
+
+          {/* View slot. The three-bar glyph means "board" on Editing and
+              "kanban" on Platform — it is the same icon, so it sits FIRST in
+              both toggles. Putting it second in one of them made it appear to
+              jump sides when switching tabs. Pre-Production has no second view
+              and leaves the slot empty, at width. */}
+          <div className="task-toolbar-slot task-toolbar-slot--view">
+            {activeTaskType === 'editing' && (
+              <div className="task-view-toggle" role="tablist" aria-label="View">
+                <button
+                  type="button"
+                  className={`task-view-btn${editingView === 'board' ? ' task-view-btn--active' : ''}`}
+                  onClick={() => setEditingView('board')}
+                  title="Board view — grouped by status"
+                  aria-label="Board view"
+                  aria-pressed={editingView === 'board'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3"  y="4" width="5" height="16" rx="1"/>
+                    <rect x="10" y="4" width="5" height="10" rx="1"/>
+                    <rect x="17" y="4" width="4" height="13" rx="1"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className={`task-view-btn${editingView === 'calendar' ? ' task-view-btn--active' : ''}`}
+                  onClick={() => setEditingView('calendar')}
+                  title="Calendar view — which days each editor is working on what"
+                  aria-label="Calendar view"
+                  aria-pressed={editingView === 'calendar'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="18" rx="2"/>
+                    <line x1="16" y1="2" x2="16" y2="6"/>
+                    <line x1="8" y1="2" x2="8" y2="6"/>
+                    <line x1="3" y1="10" x2="21" y2="10"/>
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {activeTaskType === 'platform' && (
+              <div className="task-view-toggle" role="tablist" aria-label="View">
+                <button
+                  type="button"
+                  className={`task-view-btn${platformView === 'kanban' ? ' task-view-btn--active' : ''}`}
+                  onClick={() => changePlatformView('kanban')}
+                  title="Kanban view — grouped by status"
+                  aria-label="Kanban view"
+                  aria-pressed={platformView === 'kanban'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3"  y="4" width="5" height="16" rx="1"/>
+                    <rect x="10" y="4" width="5" height="10" rx="1"/>
+                    <rect x="17" y="4" width="4" height="13" rx="1"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className={`task-view-btn${platformView === 'list' ? ' task-view-btn--active' : ''}`}
+                  onClick={() => changePlatformView('list')}
+                  title="List view — grouped by category"
+                  aria-label="List view"
+                  aria-pressed={platformView === 'list'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="8" y1="6" x2="21" y2="6"/>
+                    <line x1="8" y1="12" x2="21" y2="12"/>
+                    <line x1="8" y1="18" x2="21" y2="18"/>
+                    <line x1="3" y1="6" x2="3.01" y2="6"/>
+                    <line x1="3" y1="12" x2="3.01" y2="12"/>
+                    <line x1="3" y1="18" x2="3.01" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Action slot. Editing used to have no toolbar entry at all, relying
+              on the Not Started column's "+" — which the calendar view doesn't
+              have, leaving no discoverable way to add a task there. */}
+          <div className="task-toolbar-slot task-toolbar-slot--action">
+            {activeTaskType === 'preprod' ? (
+              canEditPreprodCols && (
+                <button
+                  type="button"
+                  className="task-board-add-btn"
+                  onClick={() => setShowColumnEditor(true)}
+                  title="Add, rename, recolor, reorder, or delete columns on the Pre-Production board."
+                >
+                  Manage columns
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                className="task-board-add-btn"
+                onClick={() => setShowNewTask(true)}
+              >
+                + New Task
+              </button>
+            )}
+          </div>
         </div>
-
-        {/* Board / Calendar toggle — Editing only. The calendar plans *which days*
-            an editor works on a job; it is not a due-date view. */}
-        {activeTaskType === 'editing' && (
-          <div className="task-view-toggle" role="tablist" aria-label="View">
-            <button
-              type="button"
-              className={`task-view-btn${editingView === 'board' ? ' task-view-btn--active' : ''}`}
-              onClick={() => setEditingView('board')}
-              title="Board view — grouped by status"
-              aria-label="Board view"
-              aria-pressed={editingView === 'board'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3"  y="4" width="5" height="16" rx="1"/>
-                <rect x="10" y="4" width="5" height="10" rx="1"/>
-                <rect x="17" y="4" width="4" height="13" rx="1"/>
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`task-view-btn${editingView === 'calendar' ? ' task-view-btn--active' : ''}`}
-              onClick={() => setEditingView('calendar')}
-              title="Calendar view — which days each editor is working on what"
-              aria-label="Calendar view"
-              aria-pressed={editingView === 'calendar'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="18" rx="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* Status colours on/off — calendar only. Off mutes every bar to one
-            neutral so the month reads as availability rather than pipeline. */}
-        {activeTaskType === 'editing' && editingView === 'calendar' && (
-          <button
-            type="button"
-            className={`task-view-btn task-view-btn--standalone${calendarColor ? ' task-view-btn--active' : ''}`}
-            onClick={() => setCalendarColor((v) => !v)}
-            title={calendarColor ? 'Status colours on — click to mute' : 'Status colours off — click to restore'}
-            aria-pressed={calendarColor}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="13.5" cy="6.5" r="2.5"/>
-              <circle cx="17.5" cy="13" r="2.5"/>
-              <circle cx="8.5" cy="7.5" r="2.5"/>
-              <circle cx="6.5" cy="13.5" r="2.5"/>
-              <path d="M12 2a10 10 0 0 0 0 20 2 2 0 0 0 2-2 2 2 0 0 1 2-2h1a5 5 0 0 0 5-5c0-6-4.5-11-10-11z"/>
-            </svg>
-            Colour
-          </button>
-        )}
-
-        {/* List / Kanban view toggle — Platform only. */}
-        {activeTaskType === 'platform' && (
-          <div className="task-view-toggle" role="tablist" aria-label="View">
-            <button
-              type="button"
-              className={`task-view-btn${platformView === 'list' ? ' task-view-btn--active' : ''}`}
-              onClick={() => changePlatformView('list')}
-              title="List view — grouped by category"
-              aria-label="List view"
-              aria-pressed={platformView === 'list'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <line x1="8" y1="6" x2="21" y2="6"/>
-                <line x1="8" y1="12" x2="21" y2="12"/>
-                <line x1="8" y1="18" x2="21" y2="18"/>
-                <line x1="3" y1="6" x2="3.01" y2="6"/>
-                <line x1="3" y1="12" x2="3.01" y2="12"/>
-                <line x1="3" y1="18" x2="3.01" y2="18"/>
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`task-view-btn${platformView === 'kanban' ? ' task-view-btn--active' : ''}`}
-              onClick={() => changePlatformView('kanban')}
-              title="Kanban view — grouped by status"
-              aria-label="Kanban view"
-              aria-pressed={platformView === 'kanban'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3"  y="4" width="5" height="16" rx="1"/>
-                <rect x="10" y="4" width="5" height="10" rx="1"/>
-                <rect x="17" y="4" width="4" height="13" rx="1"/>
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* Editing has its own column-level "+" in the Not Started column;
-            the toolbar button is hidden there to avoid two entry points.
-            Platform's kanban statuses don't map to a single starting point
-            cleanly, so it keeps the toolbar button as the canonical add.
-            Pre-Production behaves like Editing: column-level "+" on the
-            first column; toolbar add hidden — and entirely suppressed when
-            no columns exist yet (forces the editor flow first). */}
-        {activeTaskType === 'platform' && (
-          <button
-            type="button"
-            className="task-board-add-btn"
-            onClick={() => setShowNewTask(true)}
-          >
-            + New Task
-          </button>
-        )}
-
-        {/* Pre-Production-only: column-management entry, gated on permission. */}
-        {activeTaskType === 'preprod' && canEditPreprodCols && (
-          <button
-            type="button"
-            className="task-board-add-btn"
-            onClick={() => setShowColumnEditor(true)}
-            title="Add, rename, recolor, reorder, or delete columns on the Pre-Production board."
-          >
-            Manage columns
-          </button>
-        )}
       </div>
 
       {/* Transient error banner (drag failures, scope-refetch failures) */}
@@ -653,6 +638,7 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           users={users}
           statuses={taskTypeConfig.statuses}
           colorByStatus={calendarColor}
+          onToggleColor={() => setCalendarColor((v) => !v)}
           selectedTaskId={selectedTaskId}
           highlightTaskId={highlightedId}
           renamingTaskId={renamingTaskId}

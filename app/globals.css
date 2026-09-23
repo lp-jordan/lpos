@@ -20715,7 +20715,27 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .task-ctx-status-dot { border-radius: 3px; flex-shrink: 0; height: 9px; width: 9px; }
 .task-ctx-check { color: var(--accent); margin-left: auto; }
 .task-ctx-day-head { color: var(--muted-soft, #9d9287); font-size: 0.67rem; font-weight: 700; letter-spacing: 0.07em; padding: 7px 10px 6px; text-transform: uppercase; }
-.task-view-btn--standalone { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 10px; }
+/* Toolbar zones: tabs own the left, this cluster owns the right. Both slots
+   keep their width when a tab has nothing for them, so nothing reflows when
+   you switch tabs. */
+.task-toolbar-cluster { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.task-toolbar-slot { display: flex; justify-content: flex-end; }
+.task-toolbar-slot--view { min-width: 82px; }
+.task-toolbar-slot--action { min-width: 142px; }
+/* .task-board-add-btn carries margin-left:auto for its old flush-left home;
+   inside the cluster the slot does the aligning. */
+.task-toolbar-slot .task-board-add-btn { margin-left: 0; }
+
+/* Status-colour toggle — lives in the calendar's month bar beside the legend. */
+.cal-colorbtn { align-items: center; background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 999px; color: var(--muted-soft, #9d9287); cursor: pointer; display: inline-flex; font: inherit; font-size: 0.72rem; gap: 6px; padding: 4px 11px; transition: border-color .15s, color .15s; }
+.cal-colorbtn:hover { border-color: var(--accent); color: var(--text); }
+.cal-colorbtn--on { color: var(--accent-strong, #f2cf91); }
+
+@media (max-width: 620px) {
+  .task-toolbar-cluster { margin-left: 0; width: 100%; }
+  .task-toolbar-slot--view, .task-toolbar-slot--action { min-width: 0; }
+  .task-toolbar-slot--action { margin-left: auto; }
+}
 
 /* ── Compact (phone) month: dots per day, detail in the list below ─────────
    Mirrors iOS Calendar. The grid answers "which days are busy"; the list
