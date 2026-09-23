@@ -72,6 +72,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   const [calendarColor, setCalendarColor] = useState(true);
   // Set when the calendar opens the New Task modal from a specific day.
   const [newTaskDate, setNewTaskDate] = useState<string | null>(null);
+  // Per-date exceptions to the default working week, shared by everyone —
+  // a skipped holiday or an opened-up Saturday is a fact about the studio,
+  // not about one person's view.
+  const [dayOverrides, setDayOverrides] = useState<Record<string, boolean>>({});
   const [viewScope, setViewScope] = useState<'mine' | 'others' | 'all'>('mine');
   const [scopeLoading, setScopeLoading] = useState(false);
   const [phaseAnimKey, setPhaseAnimKey] = useState(0);
@@ -176,6 +180,45 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     })();
     return () => { cancelled = true; };
   }, [viewScope]);
+
+  // Working-day overrides. Fetched once — the table holds one row per exception,
+  // so it is a few dozen rows at most.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/calendar-days');
+        if (!res.ok) return;
+        const data = await res.json() as { overrides?: Array<{ date: string; working: boolean }> };
+        if (cancelled) return;
+        const map: Record<string, boolean> = {};
+        for (const o of data.overrides ?? []) map[o.date] = o.working;
+        setDayOverrides(map);
+      } catch { /* calendar falls back to the default Mon-Fri pattern */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSetDayWorking = useCallback((date: string, working: boolean | null) => {
+    const prev = dayOverrides;
+    setDayOverrides((cur) => {
+      const next = { ...cur };
+      if (working === null) delete next[date]; else next[date] = working;
+      return next;
+    });
+    const req = working === null
+      ? fetch(`/api/calendar-days?date=${encodeURIComponent(date)}`, { method: 'DELETE' })
+      : fetch('/api/calendar-days', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, working }),
+      });
+    req.then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+      .catch((err: Error) => {
+        setDayOverrides(prev);
+        setDragError(`Failed to update that day: ${err.message}`);
+      });
+  }, [dayOverrides]);
 
   // Auto-clear the error banner so a transient drag failure doesn't stick on screen.
   useEffect(() => {
@@ -648,6 +691,8 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           onRenameCommit={handleRenameCommit}
           onRenameCancel={() => setRenamingTaskId(null)}
           onNewTaskOnDay={(date) => { setNewTaskDate(date); setShowNewTask(true); }}
+          dayOverrides={dayOverrides}
+          onSetDayWorking={handleSetDayWorking}
         />
       ) : activeTaskType === 'platform' && platformView === 'list' ? (
         <PlatformListView

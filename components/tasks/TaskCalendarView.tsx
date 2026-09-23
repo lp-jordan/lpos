@@ -71,41 +71,70 @@ function fmtDay(s: string): string {
   const d = fromIso(s);
   return `${DOW_LABELS[(d.getDay() + 6) % 7]} ${d.getDate()}`;
 }
-// ── Working days ───────────────────────────────────────────────────────────
-// Nobody works weekends, so a span's *length* is counted in working days and
-// drags never land on one. In a Monday-first grid Sat/Sun are always the last
-// two columns, which is why a working span clipped to one week is always a
-// single contiguous run ending at Friday — see WORK_END_COL in segmentsForWeek.
+// ── Working calendar ───────────────────────────────────────────────────────
+// Which days are worked is DATA, not a rule. A default weekly pattern supplies
+// the common case, and a per-date override can depart from it in either
+// direction — skipping a Tuesday for a holiday, or opening a Saturday for a
+// push. Weekends therefore cost no stored rows at all, and nothing about them
+// is special-cased below.
 
-function isWeekend(iso: string): boolean {
-  const d = fromIso(iso).getDay();
-  return d === 0 || d === 6;
+/** JS getDay() indices that are off unless an override says otherwise. */
+const DEFAULT_OFF_DOW = new Set([0, 6]);
+/** Bound on outward day scans, so a pathological all-off set can't spin. */
+const MAX_DAY_SCAN = 400;
+
+/** date -> true (worked) | false (off). Absent means "use the default pattern". */
+export type DayOverrides = Record<string, boolean>;
+
+interface WorkCalendar {
+  isOff(iso: string): boolean;
+  /** Nearest worked day. Ties resolve backwards, so Saturday falls to Friday
+   *  while Sunday (whose Saturday neighbour is also off) reaches Monday. */
+  snap(iso: string): string;
+  /** Worked days from start to end, inclusive. 0 when end precedes start. */
+  span(start: string, end: string): number;
+  /** Shift by n worked days. n = 0 returns the day unchanged. */
+  add(iso: string, n: number): string;
 }
 
-/** Nearest working day. Saturday falls back to Friday, Sunday forward to Monday. */
-function snapToWorkday(iso: string): string {
-  if (!isWeekend(iso)) return iso;
-  return toIso(addDays(fromIso(iso), fromIso(iso).getDay() === 6 ? -1 : 1));
-}
-
-/** Working days from start to end, inclusive. 0 when end precedes start. */
-function workdaySpan(start: string, end: string): number {
-  const total = dayDiff(start, end);
-  if (total < 0) return 0;
-  let n = 0;
-  for (let i = 0; i <= total; i++) {
-    if (!isWeekend(toIso(addDays(fromIso(start), i)))) n++;
+function makeWorkCalendar(overrides: DayOverrides): WorkCalendar {
+  function isOff(iso: string): boolean {
+    const o = overrides[iso];
+    if (o !== undefined) return !o;
+    return DEFAULT_OFF_DOW.has(fromIso(iso).getDay());
   }
-  return n;
-}
 
-/** Shift by n working days. n = 0 returns the day unchanged. */
-function addWorkdays(iso: string, n: number): string {
-  let cur = fromIso(iso);
-  let left = n;
-  while (left > 0) { cur = addDays(cur, 1); if (!isWeekend(toIso(cur))) left--; }
-  while (left < 0) { cur = addDays(cur, -1); if (!isWeekend(toIso(cur))) left++; }
-  return toIso(cur);
+  function snap(iso: string): string {
+    if (!isOff(iso)) return iso;
+    for (let d = 1; d <= MAX_DAY_SCAN; d++) {
+      const back = toIso(addDays(fromIso(iso), -d));
+      if (!isOff(back)) return back;
+      const fwd = toIso(addDays(fromIso(iso), d));
+      if (!isOff(fwd)) return fwd;
+    }
+    return iso;
+  }
+
+  function span(start: string, end: string): number {
+    const total = dayDiff(start, end);
+    if (total < 0) return 0;
+    let n = 0;
+    for (let i = 0; i <= total; i++) {
+      if (!isOff(toIso(addDays(fromIso(start), i)))) n++;
+    }
+    return n;
+  }
+
+  function add(iso: string, n: number): string {
+    let cur = fromIso(iso);
+    let left = n;
+    let guard = 0;
+    while (left > 0 && guard++ < MAX_DAY_SCAN) { cur = addDays(cur, 1); if (!isOff(toIso(cur))) left--; }
+    while (left < 0 && guard++ < MAX_DAY_SCAN) { cur = addDays(cur, -1); if (!isOff(toIso(cur))) left++; }
+    return toIso(cur);
+  }
+
+  return { isOff, snap, span, add };
 }
 
 function fmtRange(start: string, end: string): string {
@@ -130,53 +159,86 @@ interface Segment {
   lane: number;
 }
 
+interface WeekEntry {
+  task: Task;
+  runs: Array<{ col: number; span: number; clipStart: boolean; clipEnd: boolean }>;
+  minCol: number;
+  maxCol: number;
+  lane: number;
+}
+
 /**
- * Clip every scheduled task to one week and stack the results. Manual
- * scheduleOrder wins; ties fall back to start day. Each segment drops into the
- * lowest lane it doesn't collide in, so a week uses as few rows as it can.
+ * Break each task's coverage of one week into contiguous runs of WORKED days,
+ * then stack. A skipped day splits a bar in two, which is how "we're not on
+ * this that day" should read; the weekend break is just the common case of it.
+ *
+ * Runs of the same task always share a lane — collision is tested against the
+ * task's whole extent in the week, so nothing threads through another bar's gap.
  */
-function segmentsForWeek(weekStart: string, tasks: Task[]): Segment[] {
-  // Friday. Bars stop here: a span that runs into next week breaks visually at
-  // the weekend and resumes on Monday, which is exactly how the work reads.
-  const WORK_END_COL = 4;
-  const weekWorkEnd = toIso(addDays(fromIso(weekStart), WORK_END_COL));
+function segmentsForWeek(weekStart: string, tasks: Task[], cal: WorkCalendar): Segment[] {
+  const days = Array.from({ length: 7 }, (_, i) => toIso(addDays(fromIso(weekStart), i)));
+  const weekEnd = days[6];
 
-  const segs: Segment[] = tasks
-    .filter((t) => {
-      if (!t.scheduledStart || !t.scheduledEnd) return false;
-      return !(dayDiff(weekStart, t.scheduledEnd) < 0 || dayDiff(t.scheduledStart, weekWorkEnd) < 0);
-    })
-    .map((t) => {
-      const rawStart = dayDiff(weekStart, t.scheduledStart!);
-      const rawEnd = dayDiff(weekStart, t.scheduledEnd!);
-      const col = Math.max(0, rawStart);
-      const endCol = Math.min(WORK_END_COL, rawEnd);
-      return {
-        task: t,
-        col,
-        span: endCol - col + 1,
-        clipStart: rawStart < 0,
-        clipEnd: rawEnd > WORK_END_COL,
-        lane: 0,
-      };
-    })
-    .sort((a, b) => (a.task.scheduleOrder - b.task.scheduleOrder)
-      || (a.col - b.col)
-      || a.task.taskId.localeCompare(b.task.taskId));
+  const entries: WeekEntry[] = [];
 
-  const lanes: Segment[][] = [];
-  for (const seg of segs) {
+  for (const t of tasks) {
+    if (!t.scheduledStart || !t.scheduledEnd) continue;
+    if (dayDiff(weekStart, t.scheduledEnd) < 0 || dayDiff(t.scheduledStart, weekEnd) < 0) continue;
+
+    const runs: WeekEntry['runs'] = [];
+    let runStart = -1;
+    for (let i = 0; i <= 7; i++) {
+      const d = days[i];
+      const worked = i < 7
+        && dayDiff(t.scheduledStart, d) >= 0
+        && dayDiff(d, t.scheduledEnd) >= 0
+        && !cal.isOff(d);
+
+      if (worked && runStart === -1) runStart = i;
+      if (!worked && runStart !== -1) {
+        const firstIso = days[runStart];
+        const lastIso = days[i - 1];
+        runs.push({
+          col: runStart,
+          span: i - runStart,
+          // Square the end only where worked days genuinely continue past it —
+          // so a span whose tail falls on skipped days still shows its handle.
+          clipStart: cal.span(t.scheduledStart, toIso(addDays(fromIso(firstIso), -1))) > 0,
+          clipEnd: cal.span(toIso(addDays(fromIso(lastIso), 1)), t.scheduledEnd) > 0,
+        });
+        runStart = -1;
+      }
+    }
+    if (runs.length === 0) continue;
+
+    const last = runs[runs.length - 1];
+    entries.push({
+      task: t,
+      runs,
+      minCol: runs[0].col,
+      maxCol: last.col + last.span - 1,
+      lane: 0,
+    });
+  }
+
+  entries.sort((a, b) => (a.task.scheduleOrder - b.task.scheduleOrder)
+    || (a.minCol - b.minCol)
+    || a.task.taskId.localeCompare(b.task.taskId));
+
+  const lanes: Array<Array<{ min: number; max: number }>> = [];
+  for (const e of entries) {
     let i = 0;
     for (;;) {
       const row = lanes[i];
-      const collides = row?.some((o) => seg.col < o.col + o.span && o.col < seg.col + seg.span);
+      const collides = row?.some((o) => e.minCol <= o.max && o.min <= e.maxCol);
       if (!collides) break;
       i++;
     }
-    (lanes[i] ??= []).push(seg);
-    seg.lane = i;
+    (lanes[i] ??= []).push({ min: e.minCol, max: e.maxCol });
+    e.lane = i;
   }
-  return segs;
+
+  return entries.flatMap((e) => e.runs.map((r) => ({ ...r, task: e.task, lane: e.lane })));
 }
 
 // ── Drag state ─────────────────────────────────────────────────────────────
@@ -233,6 +295,10 @@ interface Props {
   onRenameCommit: (taskId: string, title: string) => void;
   onRenameCancel: () => void;
   onNewTaskOnDay: (date: string) => void;
+  /** Per-date exceptions to the default working week. */
+  dayOverrides: DayOverrides;
+  /** `working = null` clears the override, returning the day to the default. */
+  onSetDayWorking: (date: string, working: boolean | null) => void;
 }
 
 export function TaskCalendarView({
@@ -250,8 +316,14 @@ export function TaskCalendarView({
   onRenameCommit,
   onRenameCancel,
   onNewTaskOnDay,
+  dayOverrides,
+  onSetDayWorking,
 }: Readonly<Props>) {
   const today = useMemo(todayIso, []);
+  const cal = useMemo(() => makeWorkCalendar(dayOverrides), [dayOverrides]);
+  /** True when this date departs from the default weekly pattern. */
+  const isDefaultOff = useCallback(
+    (iso: string) => DEFAULT_OFF_DOW.has(fromIso(iso).getDay()), []);
   const [view, setView] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -416,14 +488,14 @@ export function TaskCalendarView({
   }, [view, selectedDay, today]);
 
   /** Scheduled tasks whose span covers a given day, in stacking order. */
-  const tasksOnDay = useCallback((dateIso: string) => isWeekend(dateIso) ? [] : scheduled
+  const tasksOnDay = useCallback((dateIso: string) => cal.isOff(dateIso) ? [] : scheduled
     .filter((t) => dayDiff(t.scheduledStart!, dateIso) >= 0 && dayDiff(dateIso, t.scheduledEnd!) >= 0)
-    .sort((a, b) => a.scheduleOrder - b.scheduleOrder), [scheduled]);
+    .sort((a, b) => a.scheduleOrder - b.scheduleOrder), [scheduled, cal]);
 
   /** Everything the window-level pointer handlers need, refreshed each render so
    *  the listeners themselves can register once and never churn. */
-  const latest = useRef({ scheduled, tasks, onSchedule });
-  latest.current = { scheduled, tasks, onSchedule };
+  const latest = useRef({ scheduled, tasks, onSchedule, cal });
+  latest.current = { scheduled, tasks, onSchedule, cal };
 
   // ── Geometry ─────────────────────────────────────────────────────────────
 
@@ -453,7 +525,7 @@ export function TaskCalendarView({
    */
   const orderForDrop = useCallback((weekStart: string, lanesTop: number, pointerY: number, taskId: string): number => {
     const wantLane = Math.max(0, Math.floor((pointerY - lanesTop - DAYNUM_H) / LANE_STEP));
-    const others = segmentsForWeek(weekStart, latest.current.scheduled)
+    const others = segmentsForWeek(weekStart, latest.current.scheduled, latest.current.cal)
       .map((s) => s.task)
       .filter((t) => t.taskId !== taskId);
 
@@ -482,11 +554,11 @@ export function TaskCalendarView({
       // Counted in WORKING days: grabbing a Fri-start bar on the following
       // Monday is an offset of 1, not 3.
       grabOffset: start && end && hit
-        ? Math.max(0, Math.min(workdaySpan(start, end) - 1, workdaySpan(start, snapToWorkday(hit.date)) - 1))
+        ? Math.max(0, Math.min(cal.span(start, end) - 1, cal.span(start, cal.snap(hit.date)) - 1))
         : 0,
       origStart: start,
       origEnd: end,
-      origLen: start && end ? workdaySpan(start, end) : 1,
+      origLen: start && end ? cal.span(start, end) : 1,
       moved: false,
     };
     if (start && end) {
@@ -496,7 +568,7 @@ export function TaskCalendarView({
   }
 
   function showPill(x: number, y: number, start: string, end: string, mode: DragMode) {
-    const days = workdaySpan(start, end);
+    const days = latest.current.cal.span(start, end);
     const orig = dragRef.current?.origLen ?? days;
     const diff = days - orig;
     setPill({
@@ -530,7 +602,7 @@ export function TaskCalendarView({
         return;
       }
 
-      const landing = snapToWorkday(hit.date);
+      const landing = latest.current.cal.snap(hit.date);
 
       if (drag.mode === 'schedule') {
         setPreviewBoth({ taskId: drag.taskId, start: landing, end: landing });
@@ -547,9 +619,9 @@ export function TaskCalendarView({
       if (drag.mode === 'move') {
         // Preserve the working-day length, so a 3-day job dropped on a Thursday
         // becomes Thu, Fri, Mon rather than Thu, Fri, Sat.
-        const len = workdaySpan(start, end);
-        const ns = addWorkdays(landing, -drag.grabOffset);
-        next = { taskId: drag.taskId, start: ns, end: addWorkdays(ns, len - 1) };
+        const len = latest.current.cal.span(start, end);
+        const ns = latest.current.cal.add(landing, -drag.grabOffset);
+        next = { taskId: drag.taskId, start: ns, end: latest.current.cal.add(ns, len - 1) };
       } else if (drag.edge === 'start') {
         next = { taskId: drag.taskId, start: landing <= end ? landing : end, end };
       } else {
@@ -588,7 +660,7 @@ export function TaskCalendarView({
       if (!hit) { setPreviewBoth(null); return; }   // let go over nothing — snap back
 
       const cur = previewRef.current;
-      const dropDay = snapToWorkday(hit.date);
+      const dropDay = latest.current.cal.snap(hit.date);
       const start = drag.mode === 'schedule' ? dropDay : cur?.start;
       const end = drag.mode === 'schedule' ? dropDay : cur?.end;
       setPreviewBoth(null);
@@ -831,7 +903,7 @@ export function TaskCalendarView({
 
         <div ref={gridRef}>
           {weeks.map((weekStart) => {
-            const segs = segmentsForWeek(weekStart, scheduled);
+            const segs = segmentsForWeek(weekStart, scheduled, cal);
             const maxLane = segs.reduce((m, s) => Math.max(m, s.lane), -1);
             const laneCount = Math.max(maxLane + 2, MIN_LANES);
             // The row is square, or tall enough for its stacked bars — whichever
@@ -850,13 +922,13 @@ export function TaskCalendarView({
                     const dIso = toIso(day);
                     // Compact: a bar is unreadable in a ~50px cell, so the day
                     // carries dots and the list below the grid does the reading.
-                    const dots = compact ? tasksOnDay(dIso) : [];
+                    const dots = compact && !cal.isOff(dIso) ? tasksOnDay(dIso) : [];
                     return (
                       <div
                         key={dIso}
                         className={[
                           'cal-cell',
-                          i >= 5 ? 'cal-cell--weekend' : '',
+                          cal.isOff(dIso) ? 'cal-cell--off' : '',
                           day.getMonth() !== view.month ? 'cal-cell--outside' : '',
                           dIso === today ? 'cal-cell--today' : '',
                           compact && dIso === selectedDay ? 'cal-cell--picked' : '',
@@ -866,9 +938,9 @@ export function TaskCalendarView({
                           e.preventDefault();
                           // Snapped, so the menu offers (and names) a day that
                           // can actually hold work.
-                          setDayMenu({ date: snapToWorkday(dIso), x: e.clientX, y: e.clientY });
+                          setDayMenu({ date: dIso, x: e.clientX, y: e.clientY });
                         }}
-                        onDoubleClick={() => onNewTaskOnDay(snapToWorkday(dIso))}
+                        onDoubleClick={() => onNewTaskOnDay(cal.snap(dIso))}
                       >
                         <span className="cal-daynum">{day.getDate()}</span>
                         {compact && dots.length > 0 && (
@@ -1002,16 +1074,51 @@ export function TaskCalendarView({
           onMouseDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >
-          <div className="task-ctx-day-head">{fmtRange(dayMenu.date, dayMenu.date)}</div>
+          <div className="task-ctx-day-head">
+            {fmtRange(dayMenu.date, dayMenu.date)}
+            {cal.isOff(dayMenu.date) && <span className="task-ctx-day-off"> · off</span>}
+          </div>
+
+          {!cal.isOff(dayMenu.date) && (
+            <button
+              type="button"
+              className="task-ctx-item"
+              onClick={() => { onNewTaskOnDay(dayMenu.date); setDayMenu(null); }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              New task on this day
+            </button>
+          )}
+
+          {/* Skip / work. Toggling back to the default pattern clears the
+              override rather than storing a row that says nothing. */}
           <button
             type="button"
             className="task-ctx-item"
-            onClick={() => { onNewTaskOnDay(dayMenu.date); setDayMenu(null); }}
+            onClick={() => {
+              const wantWorking = cal.isOff(dayMenu.date);
+              const matchesDefault = wantWorking === !isDefaultOff(dayMenu.date);
+              onSetDayWorking(dayMenu.date, matchesDefault ? null : wantWorking);
+              setDayMenu(null);
+            }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            New task on this day
+            {cal.isOff(dayMenu.date) ? (
+              <>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+                Work this day
+              </>
+            ) : (
+              <>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" /><line x1="5.6" y1="5.6" x2="18.4" y2="18.4" />
+                </svg>
+                Skip this day
+              </>
+            )}
           </button>
         </div>
       )}

@@ -1278,6 +1278,25 @@ function runMigrations(db: DatabaseSync): void {
     // scheduled_start doesn't exist yet — shouldn't happen post-v29, but tolerate
   }
 
+  // v30: Calendar day overrides — per-date exceptions to the default working
+  // week, in EITHER direction. `working = 0` skips a normally-working day (a
+  // holiday, a studio closure, a shoot day); `working = 1` opens a normally-off
+  // one (a Saturday push). Absence of a row means "use the default pattern", so
+  // weekends cost no rows at all. Deliberately a calendar-wide fact, not
+  // per-person — the Editing calendar has no per-editor lanes.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS calendar_day_overrides (
+        date       TEXT PRIMARY KEY,
+        working    INTEGER NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+  } catch (err) {
+    console.warn('[core-db v30] calendar_day_overrides create skipped:', (err as Error).message);
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.

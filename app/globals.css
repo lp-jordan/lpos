@@ -20627,10 +20627,17 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-cells { display: grid; grid-template-columns: repeat(7, 1fr); position: relative; }
 .cal-cell { border-right: 1px solid rgba(113,131,150,0.11); padding: 5px 8px; }
 .cal-cell:last-child { border-right: none; }
-/* Weekends hold no work at all now — bars stop at Friday and drags snap past
-   them — so they read as off rather than merely tinted. */
-.cal-cell--weekend { background: rgba(9,13,18,0.55); }
-.cal-cell--weekend .cal-daynum { opacity: 0.4; }
+/* Off days — weekends by default, plus anything skipped via right-click.
+   Bars break across them and drags snap past them, so they read as genuinely
+   unavailable rather than merely tinted. The hatch distinguishes a skipped
+   day from a dark cell. */
+.cal-cell--off {
+  background:
+    repeating-linear-gradient(135deg, rgba(146,166,185,0.05) 0 6px, transparent 6px 12px),
+    rgba(9,13,18,0.55);
+}
+.cal-cell--off .cal-daynum { opacity: 0.4; }
+.task-ctx-day-off { color: var(--muted-soft, #9d9287); font-weight: 600; }
 .cal-cell--outside .cal-daynum { opacity: 0.28; }
 .cal-daynum { color: var(--muted); font-size: 0.73rem; font-variant-numeric: tabular-nums; font-weight: 500; }
 .cal-cell--today .cal-daynum { background: var(--accent); border-radius: 999px; color: #14202b; display: inline-block; font-weight: 700; line-height: 20px; min-width: 20px; text-align: center; }
