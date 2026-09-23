@@ -89,14 +89,18 @@ export function calendarDefaultVisible(task: Task): boolean {
 }
 
 // ── Working calendar ───────────────────────────────────────────────────────
-// Which days are worked is DATA, not a rule. A default weekly pattern supplies
-// the common case, and a per-date override can depart from it in either
-// direction — skipping a Tuesday for a holiday, or opening a Saturday for a
-// push. Weekends therefore cost no stored rows at all, and nothing about them
-// is special-cased below.
+// Which days are worked is DATA, not a rule, and there is no weekly pattern:
+// EVERY day is workable, including weekends, until someone explicitly skips it.
+// A skip splits a span — Mon, [skip Tue], Wed — and the weekend is just the
+// common case of that, not a special case in the code.
 
-/** JS getDay() indices that are off unless an override says otherwise. */
-const DEFAULT_OFF_DOW = new Set([0, 6]);
+/**
+ * JS getDay() indices that are off before any override. Deliberately EMPTY:
+ * weekends are ordinary workable days, and a Saturday only becomes off when
+ * someone right-clicks Skip on it. Kept as the seam where a configurable
+ * working week would plug in (admin Settings) without touching anything below.
+ */
+const DEFAULT_OFF_DOW = new Set<number>();
 /** Bound on outward day scans, so a pathological all-off set can't spin. */
 const MAX_DAY_SCAN = 400;
 
@@ -338,7 +342,9 @@ export function TaskCalendarView({
 }: Readonly<Props>) {
   const today = useMemo(todayIso, []);
   const cal = useMemo(() => makeWorkCalendar(dayOverrides), [dayOverrides]);
-  /** True when this date departs from the default weekly pattern. */
+  /** Whether this date is off *before* any override. With DEFAULT_OFF_DOW empty
+   *  this is always false — every day starts workable — but it keeps the
+   *  clear-vs-store decision below correct if a default pattern is ever added. */
   const isDefaultOff = useCallback(
     (iso: string) => DEFAULT_OFF_DOW.has(fromIso(iso).getDay()), []);
   const [view, setView] = useState(() => {
@@ -593,7 +599,7 @@ export function TaskCalendarView({
       x,
       y,
       range: fmtRange(start, end),
-      detail: `${days} working day${days === 1 ? '' : 's'}`,
+      detail: `${days} day${days === 1 ? '' : 's'}`,
       delta: mode === 'resize'
         ? (diff > 0 ? `+${diff}` : diff < 0 ? `−${Math.abs(diff)}` : 'no change')
         : null,
@@ -946,6 +952,9 @@ export function TaskCalendarView({
                         key={dIso}
                         className={[
                           'cal-cell',
+                          // Weekend shading is purely cosmetic — it reads as a
+                          // week boundary, not as an unavailable day.
+                          i >= 5 ? 'cal-cell--weekend' : '',
                           cal.isOff(dIso) ? 'cal-cell--off' : '',
                           day.getMonth() !== view.month ? 'cal-cell--outside' : '',
                           dIso === today ? 'cal-cell--today' : '',

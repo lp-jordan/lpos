@@ -20627,10 +20627,13 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-cells { display: grid; grid-template-columns: repeat(7, 1fr); position: relative; }
 .cal-cell { border-right: 1px solid rgba(113,131,150,0.11); padding: 5px 8px; }
 .cal-cell:last-child { border-right: none; }
-/* Off days — weekends by default, plus anything skipped via right-click.
-   Bars break across them and drags snap past them, so they read as genuinely
-   unavailable rather than merely tinted. The hatch distinguishes a skipped
-   day from a dark cell. */
+/* Weekend tint: cosmetic only. Weekends are ordinary workable days — this just
+   marks the end of the week so the grid is easy to scan. */
+.cal-cell--weekend { background: rgba(9,13,18,0.3); }
+
+/* Off days — days someone has explicitly skipped. Bars break across them and
+   drags snap past them, so they read as genuinely unavailable. The hatch is
+   what distinguishes a skipped day from a merely shaded one. */
 .cal-cell--off {
   background:
     repeating-linear-gradient(135deg, rgba(146,166,185,0.05) 0 6px, transparent 6px 12px),
