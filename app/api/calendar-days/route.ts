@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getCalendarDayStore } from '@/lib/store/calendar-day-store';
+import { emitCalendarDayChanged } from '@/lib/services/task-broadcasts';
 
 async function requireSession() {
   const cookieStore = await cookies();
@@ -31,6 +32,8 @@ export async function POST(req: NextRequest) {
 
   const saved = getCalendarDayStore().set(body.date, body.working, session.userId);
   if (!saved) return NextResponse.json({ error: 'date must be YYYY-MM-DD' }, { status: 400 });
+
+  emitCalendarDayChanged(saved.date, saved.working);
   return NextResponse.json({ override: saved });
 }
 
@@ -43,5 +46,7 @@ export async function DELETE(req: NextRequest) {
   if (!date) return NextResponse.json({ error: 'date is required' }, { status: 400 });
 
   getCalendarDayStore().clear(date);
+
+  emitCalendarDayChanged(date, null);
   return NextResponse.json({ ok: true });
 }

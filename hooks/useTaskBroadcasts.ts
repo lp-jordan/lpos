@@ -8,6 +8,10 @@ interface Handlers {
   onCreated: (task: Task) => void;
   onUpdated: (task: Task) => void;
   onDeleted: (taskId: string) => void;
+  /** Working-calendar override changed. `working: null` means it was cleared
+   *  and the date reverts to the default weekly pattern. Shares this namespace
+   *  — see emitCalendarDayChanged. */
+  onCalendarDay?: (date: string, working: boolean | null) => void;
 }
 
 /**
@@ -31,6 +35,9 @@ export function useTaskBroadcasts(handlers: Handlers) {
     socket.on('task:created', (task: Task) => handlersRef.current.onCreated(task));
     socket.on('task:updated', (task: Task) => handlersRef.current.onUpdated(task));
     socket.on('task:deleted', (payload: { taskId: string }) => handlersRef.current.onDeleted(payload.taskId));
+    socket.on('calendar-day:changed', (payload: { date: string; working: boolean | null }) => {
+      handlersRef.current.onCalendarDay?.(payload.date, payload.working);
+    });
     return () => { socket.disconnect(); };
   }, []);
 }

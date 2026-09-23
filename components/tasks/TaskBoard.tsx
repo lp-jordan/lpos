@@ -200,7 +200,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
   }, []);
 
   const handleSetDayWorking = useCallback((date: string, working: boolean | null) => {
-    const prev = dayOverrides;
+    // Roll back only THIS date on failure, not the whole map — broadcasts from
+    // other users mutate it concurrently, and restoring a whole snapshot would
+    // undo their changes too.
+    const prevValue = dayOverrides[date];
     setDayOverrides((cur) => {
       const next = { ...cur };
       if (working === null) delete next[date]; else next[date] = working;
@@ -215,7 +218,11 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
       });
     req.then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
       .catch((err: Error) => {
-        setDayOverrides(prev);
+        setDayOverrides((cur) => {
+          const next = { ...cur };
+          if (prevValue === undefined) delete next[date]; else next[date] = prevValue;
+          return next;
+        });
         setDragError(`Failed to update that day: ${err.message}`);
       });
   }, [dayOverrides]);
@@ -349,10 +356,21 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     setTasks((prev) => prev.filter((t) => t.taskId !== taskId));
     setSelectedTaskId((cur) => cur === taskId ? null : cur);
   }, []);
+  // Someone else skipping a holiday has to reach every open board — otherwise
+  // two people plan against different working weeks. Idempotent: applying an
+  // override we already hold is a no-op, so our own echo is harmless.
+  const onBroadcastCalendarDay = useCallback((date: string, working: boolean | null) => {
+    setDayOverrides((cur) => {
+      const next = { ...cur };
+      if (working === null) delete next[date]; else next[date] = working;
+      return next;
+    });
+  }, []);
   useTaskBroadcasts({
     onCreated: onBroadcastCreated,
     onUpdated: onBroadcastUpdated,
     onDeleted: onBroadcastDeleted,
+    onCalendarDay: onBroadcastCalendarDay,
   });
 
   const handleCreated = useCallback((task: Task) => {

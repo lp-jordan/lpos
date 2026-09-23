@@ -31,3 +31,15 @@ export function emitTaskUpdated(task: Task): void {
 export function emitTaskDeleted(taskId: string): void {
   namespace()?.emit('task:deleted', { taskId });
 }
+
+/**
+ * Working-calendar day overrides (skip / work a date).
+ *
+ * Deliberately rides the `/tasks` namespace rather than opening a second one:
+ * the only consumer is the task board, which already holds that socket, and a
+ * day override is a change to how that board reads. `working: null` means the
+ * override was cleared and the day reverts to the default weekly pattern.
+ */
+export function emitCalendarDayChanged(date: string, working: boolean | null): void {
+  namespace()?.emit('calendar-day:changed', { date, working });
+}
