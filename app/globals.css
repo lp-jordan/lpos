@@ -20620,7 +20620,11 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 
 .cal-week { border-bottom: 1px solid var(--line); position: relative; }
 .cal-week:last-child { border-bottom: none; }
-.cal-cells { display: grid; grid-template-columns: repeat(7, 1fr); inset: 0; position: absolute; }
+/* Cells are in flow and drive the row's height (set inline, square-ish); the
+   lane box overlays them. This is the inverse of the original layering, where
+   the lanes carried the height and cells were absolutely stretched over it —
+   which made rows only as tall as their bars, i.e. wide flat rectangles. */
+.cal-cells { display: grid; grid-template-columns: repeat(7, 1fr); position: relative; }
 .cal-cell { border-right: 1px solid rgba(113,131,150,0.11); padding: 5px 8px; }
 .cal-cell:last-child { border-right: none; }
 .cal-cell--weekend { background: rgba(9,13,18,0.42); }
@@ -20634,7 +20638,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
    offset from the top in JS (DAYNUM_H), not by padding here: an absolutely
    positioned child is placed against the padding edge, so padding would not
    push them clear of the day numbers. */
-.cal-lanes { pointer-events: none; position: relative; }
+.cal-lanes { inset: 0; pointer-events: none; position: absolute; }
 .cal-bar { pointer-events: auto; }
 
 .cal-bar { align-items: center; background: var(--surface-3, #1f2b37); border: 1px solid var(--line); border-left: 3px solid var(--cal-bar-color); border-radius: 7px; cursor: grab; display: flex; gap: 7px; height: 28px; overflow: hidden; padding: 0 7px 0 8px; position: absolute; touch-action: none; transition: border-color .15s, box-shadow .15s, opacity .15s; user-select: none; }

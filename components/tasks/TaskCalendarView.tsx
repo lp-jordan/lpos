@@ -35,6 +35,10 @@ const DAYNUM_H = 26;
 /** Minimum lanes a week row reserves. Keeps row heights stable mid-drag, so the
  *  day under the cursor doesn't shift out from under the pointer. */
 const MIN_LANES = 2;
+/** Day cells aim to be square. Clamped so a very wide window doesn't produce
+ *  absurdly tall rows, and a narrow one still leaves room to read a bar. */
+const CELL_MIN_H = 104;
+const CELL_MAX_H = 176;
 
 // ── Date helpers ───────────────────────────────────────────────────────────
 // Everything is an inclusive ISO day string. Dates are built at local noon so a
@@ -305,6 +309,31 @@ export function TaskCalendarView({
     renameInputRef.current?.focus();
     renameInputRef.current?.select();
   }, [renamingTaskId]);
+
+  /**
+   * Track one day-cell's width so rows can be driven to roughly square. Without
+   * this, a week row is only as tall as the bars inside it, so cells render as
+   * wide flat rectangles and anything below the grid (the unscheduled rail)
+   * appears to be squashing the calendar. Measured rather than done with CSS
+   * `aspect-ratio`, because a row also has to be free to grow past square when
+   * it holds more stacked bars than a square would fit.
+   */
+  const [cellWidth, setCellWidth] = useState(0);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      setCellWidth((entry?.contentRect.width ?? 0) / 7);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /** Square, clamped. 0 before the first measurement — rows then fall back to
+   *  their content height, which is what they did before this existed. */
+  const squareRowHeight = cellWidth
+    ? Math.min(Math.max(cellWidth, CELL_MIN_H), CELL_MAX_H)
+    : 0;
 
   /** Everything the window-level pointer handlers need, refreshed each render so
    *  the listeners themselves can register once and never churn. */
@@ -699,10 +728,14 @@ export function TaskCalendarView({
             const segs = segmentsForWeek(weekStart, scheduled);
             const maxLane = segs.reduce((m, s) => Math.max(m, s.lane), -1);
             const laneCount = Math.max(maxLane + 2, MIN_LANES);
+            // The row is square, or tall enough for its stacked bars — whichever
+            // is bigger. The cells carry it (they're in flow); the lane box just
+            // overlays them.
+            const rowHeight = Math.max(DAYNUM_H + laneCount * LANE_STEP + 8, squareRowHeight);
 
             return (
               <div key={weekStart} className="cal-week" data-week-start={weekStart}>
-                <div className="cal-cells">
+                <div className="cal-cells" style={{ minHeight: `${rowHeight}px` }}>
                   {Array.from({ length: 7 }, (_, i) => {
                     const day = addDays(fromIso(weekStart), i);
                     const dIso = toIso(day);
@@ -727,7 +760,7 @@ export function TaskCalendarView({
                   })}
                 </div>
 
-                <div className="cal-lanes" style={{ height: `${DAYNUM_H + laneCount * LANE_STEP + 8}px` }}>
+                <div className="cal-lanes">
                   {segs.map(renderBar)}
                 </div>
               </div>
