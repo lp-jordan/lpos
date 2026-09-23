@@ -20600,7 +20600,12 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
    A scheduling view, not a due-date view: nothing here styles a past date as
    late. Bars are absolutely positioned over a 7-column grid; see
    components/tasks/TaskCalendarView.tsx for the lane-packing that places them. */
-.cal-root { display: flex; flex-direction: column; gap: 12px; position: relative; }
+.cal-root {
+  display: flex; flex-direction: column; gap: 12px; position: relative;
+  /* Weekend tint. Darker than --surface and shifted blue, so Sat/Sun read as
+     the end of the week without reading as unavailable — that's the hatch. */
+  --cal-weekend: rgba(6, 18, 40, 0.5);
+}
 
 .cal-monthbar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
 .cal-monthlabel { color: var(--text-strong); font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; margin-left: 4px; }
@@ -20616,7 +20621,7 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-grid { background: var(--surface, #121a22); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
 .cal-dow-row { border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(7, 1fr); }
 .cal-dow { color: var(--muted-soft, #9d9287); font-size: 0.65rem; font-weight: 600; letter-spacing: 0.09em; padding: 8px 10px; text-transform: uppercase; }
-.cal-dow--weekend { opacity: 0.55; }
+.cal-dow--weekend { color: #7f93b5; opacity: 0.8; }
 
 .cal-week { border-bottom: 1px solid var(--line); position: relative; }
 .cal-week:last-child { border-bottom: none; }
@@ -20628,8 +20633,9 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-cell { border-right: 1px solid rgba(113,131,150,0.11); padding: 5px 8px; }
 .cal-cell:last-child { border-right: none; }
 /* Weekend tint: cosmetic only. Weekends are ordinary workable days — this just
-   marks the end of the week so the grid is easy to scan. */
-.cal-cell--weekend { background: rgba(9,13,18,0.3); }
+   marks the end of the week so the grid is easy to scan. Over --surface
+   (#121a22) this lands near #0c1628: a touch darker, and visibly bluer. */
+.cal-cell--weekend { background: var(--cal-weekend); }
 
 /* Off days — days someone has explicitly skipped. Bars break across them and
    drags snap past them, so they read as genuinely unavailable. The hatch is
