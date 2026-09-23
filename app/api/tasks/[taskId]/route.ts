@@ -43,6 +43,8 @@ export async function PATCH(
     scheduledStart?: string | null;
     scheduledEnd?: string | null;
     scheduleOrder?: number;
+    /** null clears the override; omit the field to leave it untouched. */
+    calendarVisible?: boolean | null;
   };
 
   const prev = getTaskStore().getById(taskId);
@@ -62,7 +64,7 @@ export async function PATCH(
   // one drag across a month would otherwise emit a dozen "Task updated" entries.
   // Only skip when the patch is *purely* scheduling; a drag that also changed
   // status still gets logged below.
-  const SCHEDULE_KEYS = new Set(['scheduledStart', 'scheduledEnd', 'scheduleOrder']);
+  const SCHEDULE_KEYS = new Set(['scheduledStart', 'scheduledEnd', 'scheduleOrder', 'calendarVisible']);
   const scheduleOnly = Object.keys(body).length > 0
     && Object.keys(body).every((k) => SCHEDULE_KEYS.has(k));
 

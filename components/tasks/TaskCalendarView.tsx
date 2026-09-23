@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@/lib/models/task';
 import type { TaskTypeStatus } from '@/lib/models/task-phase';
 import { isTerminalStatus } from '@/lib/models/task-phase';
+import { REVIEW_STATUS } from '@/lib/models/task-review-checkin';
 import type { UserSummary } from '@/lib/models/user';
 
 /**
@@ -71,6 +72,22 @@ function fmtDay(s: string): string {
   const d = fromIso(s);
   return `${DOW_LABELS[(d.getDay() + 6) % 7]} ${d.getDate()}`;
 }
+/**
+ * The default rule for whether a task belongs on the calendar. The calendar
+ * shows work that is in an editor's hands, so two statuses drop out of it:
+ *
+ *  - Done: finished work isn't planning.
+ *  - In Review: the job has left the editor and is waiting on someone else, so
+ *    there is no day on which they are working on it.
+ *
+ * "Usually" is the operative word — `Task.calendarVisible` overrides this in
+ * either direction, for the job that is genuinely parked or the one that is
+ * genuinely still being worked while nominally in review.
+ */
+export function calendarDefaultVisible(task: Task): boolean {
+  return !isTerminalStatus(task.taskType, task.status) && task.status !== REVIEW_STATUS;
+}
+
 // ── Working calendar ───────────────────────────────────────────────────────
 // Which days are worked is DATA, not a rule. A default weekly pattern supplies
 // the common case, and a per-date override can depart from it in either
@@ -373,13 +390,14 @@ export function TaskCalendarView({
   );
 
   /**
-   * Finished work isn't planning, so a done task leaves the calendar entirely —
-   * grid and rail both. Its stored span is deliberately left untouched in the
-   * DB: re-opening the task puts the bar back exactly where it was rather than
-   * dumping it in the unscheduled rail.
+   * What the calendar shows: the task's own override if it has one, otherwise
+   * the default rule (see calendarDefaultVisible). Stored spans are left
+   * untouched either way, so a task that comes back — a review bounce to Making
+   * Changes, or an un-hide — restores its bar where it was rather than landing
+   * in the unscheduled rail.
    */
   const planned = useMemo(
-    () => tasks.filter((t) => !isTerminalStatus(t.taskType, t.status)),
+    () => tasks.filter((t) => t.calendarVisible ?? calendarDefaultVisible(t)),
     [tasks],
   );
 

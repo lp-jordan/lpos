@@ -24,6 +24,13 @@ interface Props {
    *  currently sits on the calendar. */
   onUnplan?: () => void;
   onPlanToday?: () => void;
+  /** Calendar visibility. `calendarShown` is the resolved state (override or
+   *  default); passing `null` to the setter clears the override. Offered on the
+   *  board as well as the calendar — a task hidden from the calendar has to be
+   *  reachable somewhere to be un-hidden. */
+  calendarShown?: boolean;
+  calendarDefaultShown?: boolean;
+  onSetCalendarVisible?: (value: boolean | null) => void;
 }
 
 export function TaskContextMenu({
@@ -40,6 +47,9 @@ export function TaskContextMenu({
   onStatusChange,
   onUnplan,
   onPlanToday,
+  calendarShown,
+  calendarDefaultShown,
+  onSetCalendarVisible,
 }: Readonly<Props>) {
   const [mode, setMode] = useState<'root' | 'reassign' | 'status' | 'confirm_delete'>('root');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(assignedTo);
@@ -116,7 +126,33 @@ export function TaskContextMenu({
               <span className="task-ctx-chevron">›</span>
             </button>
           )}
-          {(onUnplan || onPlanToday) && <div className="task-ctx-divider" />}
+          {(onUnplan || onPlanToday || onSetCalendarVisible) && <div className="task-ctx-divider" />}
+
+          {onSetCalendarVisible && (
+            <button
+              type="button"
+              className="task-ctx-item"
+              onClick={() => {
+                const want = !calendarShown;
+                // Back to the default rule? Clear the override rather than
+                // storing a row that agrees with it.
+                onSetCalendarVisible(want === calendarDefaultShown ? null : want);
+                onClose();
+              }}
+            >
+              {calendarShown ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+              {calendarShown ? 'Hide from calendar' : 'Show on calendar'}
+            </button>
+          )}
           {onUnplan && (
             <button type="button" className="task-ctx-item" onClick={() => { onUnplan(); onClose(); }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">

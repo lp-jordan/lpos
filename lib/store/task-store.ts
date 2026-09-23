@@ -17,6 +17,7 @@ interface TaskRow {
   scheduled_start: string | null;
   scheduled_end: string | null;
   schedule_order: number | null;
+  calendar_visible: number | null;
 }
 
 /** Schedule fields move as a unit — a partial patch would let start and end drift. */
@@ -24,6 +25,11 @@ export interface TaskSchedulePatch {
   scheduledStart: string | null;
   scheduledEnd: string | null;
   scheduleOrder?: number;
+}
+
+/** null clears the override and returns the task to the default rule. */
+export interface TaskCalendarVisibilityPatch {
+  calendarVisible: boolean | null;
 }
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -63,6 +69,9 @@ function rowToTask(row: TaskRow, assignedTo: string[]): Task {
     scheduledStart: row.scheduled_start ?? null,
     scheduledEnd: row.scheduled_end ?? null,
     scheduleOrder: row.schedule_order ?? 0,
+    calendarVisible: row.calendar_visible === null || row.calendar_visible === undefined
+      ? null
+      : row.calendar_visible === 1,
   };
 }
 
@@ -141,6 +150,7 @@ export class TaskStore {
       scheduledStart: sched.start,
       scheduledEnd: sched.end,
       scheduleOrder: 0,
+      calendarVisible: null,
     };
 
     withTransaction(db, () => {
@@ -160,7 +170,8 @@ export class TaskStore {
   update(
     taskId: string,
     patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'taskType' | 'clientName' | 'category'>>
-      & Partial<TaskSchedulePatch>,
+      & Partial<TaskSchedulePatch>
+      & Partial<TaskCalendarVisibilityPatch>,
   ): Task | null {
     const db = getCoreDb();
     const existing = this.getById(taskId);
@@ -189,13 +200,17 @@ export class TaskStore {
       ? normalizeSchedule(patch.scheduledStart, patch.scheduledEnd)
       : { start: existing.scheduledStart, end: existing.scheduledEnd };
     const scheduleOrder = patch.scheduleOrder ?? existing.scheduleOrder;
+    // undefined means "leave alone"; null means "clear back to the default rule".
+    const calendarVisible = patch.calendarVisible !== undefined
+      ? patch.calendarVisible
+      : existing.calendarVisible;
 
     withTransaction(db, () => {
       db.prepare(
         `UPDATE tasks SET description = ?, task_type = ?, category = ?, priority = ?, status = ?, completed_at = ?, client_name = ?,
-                scheduled_start = ?, scheduled_end = ?, schedule_order = ?
+                scheduled_start = ?, scheduled_end = ?, schedule_order = ?, calendar_visible = ?
          WHERE task_id = ?`,
-      ).run(next.description, next.taskType, nextCategory, next.priority, next.status, completedAt, next.clientName, sched.start, sched.end, scheduleOrder, taskId);
+      ).run(next.description, next.taskType, nextCategory, next.priority, next.status, completedAt, next.clientName, sched.start, sched.end, scheduleOrder, calendarVisible === null ? null : (calendarVisible ? 1 : 0), taskId);
 
       if (patch.assignedTo !== undefined) {
         db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(taskId);
@@ -205,7 +220,7 @@ export class TaskStore {
       }
     });
 
-    return { ...next, category: nextCategory, scheduledStart: sched.start, scheduledEnd: sched.end, scheduleOrder };
+    return { ...next, category: nextCategory, scheduledStart: sched.start, scheduledEnd: sched.end, scheduleOrder, calendarVisible };
   }
 
   delete(taskId: string): boolean {

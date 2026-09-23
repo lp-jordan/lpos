@@ -1278,6 +1278,18 @@ function runMigrations(db: DatabaseSync): void {
     // scheduled_start doesn't exist yet — shouldn't happen post-v29, but tolerate
   }
 
+  // v31: Per-task calendar visibility override. TRI-STATE on purpose:
+  //   NULL -> follow the default rule (hide Done and In Review)
+  //   0    -> force hidden, whatever the status says
+  //   1    -> force shown, whatever the status says
+  // Mirrors calendar_day_overrides: a default rule for the common case, and an
+  // explicit escape hatch in either direction. Rows only depart from the rule.
+  try {
+    db.exec(`ALTER TABLE tasks ADD COLUMN calendar_visible INTEGER`);
+  } catch {
+    // Column already exists — v31 already ran
+  }
+
   // v30: Calendar day overrides — per-date exceptions to the default working
   // week, in EITHER direction. `working = 0` skips a normally-working day (a
   // holiday, a studio closure, a shoot day); `working = 1` opens a normally-off

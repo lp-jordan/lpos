@@ -21,7 +21,7 @@ import { TaskCard } from './TaskCard';
 import { TaskDetailModal } from './TaskDetailModal';
 import { TaskContextMenu } from './TaskContextMenu';
 import { PlatformListView } from './PlatformListView';
-import { TaskCalendarView } from './TaskCalendarView';
+import { TaskCalendarView, calendarDefaultVisible } from './TaskCalendarView';
 import { PreprodColumnEditorModal } from './PreprodColumnEditorModal';
 import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 import { useTaskBroadcasts } from '@/hooks/useTaskBroadcasts';
@@ -482,6 +482,27 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     }
   }
 
+  /** Per-task calendar visibility override. `null` returns it to the default
+   *  rule (Done and In Review hidden). */
+  async function handleContextCalendarVisible(taskId: string, value: boolean | null) {
+    const prevTask = tasks.find((t) => t.taskId === taskId);
+    if (!prevTask) return;
+    setTasks((prev) => prev.map((t) => t.taskId === taskId ? { ...t, calendarVisible: value } : t));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ calendarVisible: value }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { task: Task };
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? data.task : t));
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? prevTask : t));
+      setDragError(`Failed to update calendar visibility: ${(err as Error).message}`);
+    }
+  }
+
   async function handleContextDelete(taskId: string) {
     setTasks((prev) => prev.filter((t) => t.taskId !== taskId));
     setSelectedTaskId(null);
@@ -797,6 +818,15 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
                 const d = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
                 handleSchedule(contextMenu.taskId, d, d, 0);
               }
+              : undefined}
+            calendarShown={activeTaskType === 'editing'
+              ? (ctxTask.calendarVisible ?? calendarDefaultVisible(ctxTask))
+              : undefined}
+            calendarDefaultShown={activeTaskType === 'editing' ? calendarDefaultVisible(ctxTask) : undefined}
+            // Offered on the board too, not just the calendar: a task hidden
+            // from the calendar can only be un-hidden somewhere it still shows.
+            onSetCalendarVisible={activeTaskType === 'editing'
+              ? (v) => void handleContextCalendarVisible(contextMenu.taskId, v)
               : undefined}
             onRename={() => setRenamingTaskId(contextMenu.taskId)}
             onReassign={(ids) => void handleContextReassign(contextMenu.taskId, ids)}

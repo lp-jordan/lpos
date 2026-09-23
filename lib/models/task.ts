@@ -26,4 +26,8 @@ export interface Task {
   scheduledEnd: string | null;
   /** Manual stack position among the bars sharing a week on the calendar. */
   scheduleOrder: number;
+  /** Per-task override of whether this appears on the calendar at all.
+   *  null = follow the default rule (Done and In Review are hidden, since
+   *  neither is in an editor's hands); true/false force it either way. */
+  calendarVisible: boolean | null;
 }
