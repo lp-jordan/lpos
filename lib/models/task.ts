@@ -17,4 +17,13 @@ export interface Task {
   assignedTo: string[];
   createdAt: string;
   completedAt?: string;
+  /** Calendar: first day the task is planned for, inclusive ISO day (YYYY-MM-DD).
+   *  Null means it isn't on the calendar. NOT a due date — nothing treats a past
+   *  date as late. Editing tasks in practice, though the column is type-agnostic. */
+  scheduledStart: string | null;
+  /** Calendar: last day, inclusive. Always non-null when scheduledStart is set,
+   *  and never earlier than it (the store normalises both invariants). */
+  scheduledEnd: string | null;
+  /** Manual stack position among the bars sharing a week on the calendar. */
+  scheduleOrder: number;
 }

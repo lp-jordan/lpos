@@ -14,6 +14,32 @@ interface TaskRow {
   created_by: string;
   created_at: string;
   completed_at: string | null;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  schedule_order: number | null;
+}
+
+/** Schedule fields move as a unit — a partial patch would let start and end drift. */
+export interface TaskSchedulePatch {
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  scheduleOrder?: number;
+}
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Collapse any schedule input to the two invariants the calendar relies on:
+ * start and end are both set or both null, and end is never before start.
+ * Anything malformed unschedules rather than persisting a half-state — a bar
+ * that can't be positioned is worse than one sitting in the unscheduled rail.
+ */
+function normalizeSchedule(start: string | null | undefined, end: string | null | undefined): { start: string | null; end: string | null } {
+  const s = typeof start === 'string' && ISO_DAY.test(start) ? start : null;
+  if (!s) return { start: null, end: null };
+  const e = typeof end === 'string' && ISO_DAY.test(end) ? end : s;
+  // Lexicographic comparison is chronological for zero-padded ISO days.
+  return e < s ? { start: s, end: s } : { start: s, end: e };
 }
 
 interface AssigneeRow {
@@ -34,6 +60,9 @@ function rowToTask(row: TaskRow, assignedTo: string[]): Task {
     assignedTo,
     createdAt: row.created_at,
     completedAt: row.completed_at ?? undefined,
+    scheduledStart: row.scheduled_start ?? null,
+    scheduledEnd: row.scheduled_end ?? null,
+    scheduleOrder: row.schedule_order ?? 0,
   };
 }
 
@@ -91,10 +120,13 @@ export class TaskStore {
     status?: string;
     createdBy: string;
     assignedTo?: string[];
+    scheduledStart?: string | null;
+    scheduledEnd?: string | null;
   }): Task {
     const db = getCoreDb();
     // Category only applies to Platform tasks; ignore any value passed for Editing.
     const category = input.taskType === 'platform' ? (input.category?.trim() || null) : null;
+    const sched = normalizeSchedule(input.scheduledStart, input.scheduledEnd);
     const task: Task = {
       taskId: randomUUID(),
       description: input.description.trim(),
@@ -106,13 +138,16 @@ export class TaskStore {
       createdBy: input.createdBy,
       assignedTo: input.assignedTo?.length ? input.assignedTo : [input.createdBy],
       createdAt: new Date().toISOString(),
+      scheduledStart: sched.start,
+      scheduledEnd: sched.end,
+      scheduleOrder: 0,
     };
 
     withTransaction(db, () => {
       db.prepare(
-        `INSERT INTO tasks (task_id, description, client_name, task_type, category, priority, status, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(task.taskId, task.description, task.clientName, task.taskType, task.category, task.priority, task.status, task.createdBy, task.createdAt);
+        `INSERT INTO tasks (task_id, description, client_name, task_type, category, priority, status, created_by, created_at, scheduled_start, scheduled_end, schedule_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(task.taskId, task.description, task.clientName, task.taskType, task.category, task.priority, task.status, task.createdBy, task.createdAt, task.scheduledStart, task.scheduledEnd, task.scheduleOrder);
 
       for (const userId of task.assignedTo) {
         db.prepare('INSERT INTO task_assignees (task_id, user_id) VALUES (?, ?)').run(task.taskId, userId);
@@ -124,7 +159,8 @@ export class TaskStore {
 
   update(
     taskId: string,
-    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'taskType' | 'clientName' | 'category'>>,
+    patch: Partial<Pick<Task, 'status' | 'description' | 'assignedTo' | 'priority' | 'taskType' | 'clientName' | 'category'>>
+      & Partial<TaskSchedulePatch>,
   ): Task | null {
     const db = getCoreDb();
     const existing = this.getById(taskId);
@@ -147,11 +183,19 @@ export class TaskStore {
     // Editing should clear the category rather than carry it as orphan metadata.
     const nextCategory = next.taskType === 'platform' ? (next.category ?? null) : null;
 
+    // Schedule only moves when the caller actually sent scheduledStart; a patch
+    // that omits it (a status change, a rename) must leave the calendar alone.
+    const sched = patch.scheduledStart !== undefined
+      ? normalizeSchedule(patch.scheduledStart, patch.scheduledEnd)
+      : { start: existing.scheduledStart, end: existing.scheduledEnd };
+    const scheduleOrder = patch.scheduleOrder ?? existing.scheduleOrder;
+
     withTransaction(db, () => {
       db.prepare(
-        `UPDATE tasks SET description = ?, task_type = ?, category = ?, priority = ?, status = ?, completed_at = ?, client_name = ?
+        `UPDATE tasks SET description = ?, task_type = ?, category = ?, priority = ?, status = ?, completed_at = ?, client_name = ?,
+                scheduled_start = ?, scheduled_end = ?, schedule_order = ?
          WHERE task_id = ?`,
-      ).run(next.description, next.taskType, nextCategory, next.priority, next.status, completedAt, next.clientName, taskId);
+      ).run(next.description, next.taskType, nextCategory, next.priority, next.status, completedAt, next.clientName, sched.start, sched.end, scheduleOrder, taskId);
 
       if (patch.assignedTo !== undefined) {
         db.prepare('DELETE FROM task_assignees WHERE task_id = ?').run(taskId);
@@ -161,7 +205,7 @@ export class TaskStore {
       }
     });
 
-    return { ...next, category: nextCategory };
+    return { ...next, category: nextCategory, scheduledStart: sched.start, scheduledEnd: sched.end, scheduleOrder };
   }
 
   delete(taskId: string): boolean {

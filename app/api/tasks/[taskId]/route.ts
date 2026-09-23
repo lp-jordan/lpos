@@ -38,6 +38,11 @@ export async function PATCH(
     taskType?: TaskType;
     clientName?: string;
     category?: string | null;
+    // Calendar scheduling. Sending scheduledStart: null unschedules; omitting the
+    // field entirely leaves the schedule untouched (the store makes that distinction).
+    scheduledStart?: string | null;
+    scheduledEnd?: string | null;
+    scheduleOrder?: number;
   };
 
   const prev = getTaskStore().getById(taskId);
@@ -53,7 +58,15 @@ export async function PATCH(
   const statusChanged = body.status !== undefined && prev !== null && body.status !== prev.status;
   const assigneesChanged = body.assignedTo !== undefined;
 
-  recordActivity({
+  // A calendar drag is a planning gesture, not an event worth a timeline row —
+  // one drag across a month would otherwise emit a dozen "Task updated" entries.
+  // Only skip when the patch is *purely* scheduling; a drag that also changed
+  // status still gets logged below.
+  const SCHEDULE_KEYS = new Set(['scheduledStart', 'scheduledEnd', 'scheduleOrder']);
+  const scheduleOnly = Object.keys(body).length > 0
+    && Object.keys(body).every((k) => SCHEDULE_KEYS.has(k));
+
+  if (!scheduleOnly) recordActivity({
     actor_type: 'user',
     actor_id: session.userId,
     actor_display: actorName ?? null,

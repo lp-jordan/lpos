@@ -41,6 +41,10 @@ export async function POST(req: NextRequest) {
      *  and routed to the first task_comments row — keeps the user's intent intact even
      *  though the dedicated `notes` column has been removed in F1. */
     notes?: string | null;
+    /** Calendar: create the task already planned onto a day. Set by the New Task
+     *  modal when it was opened from an empty day on the Editing calendar. */
+    scheduledStart?: string | null;
+    scheduledEnd?: string | null;
   };
 
   if (!body.description?.trim()) {
@@ -65,6 +69,8 @@ export async function POST(req: NextRequest) {
     status: body.status,
     createdBy: session.userId,
     assignedTo: body.assignedTo,
+    scheduledStart: body.scheduledStart ?? null,
+    scheduledEnd: body.scheduledEnd ?? body.scheduledStart ?? null,
   });
 
   // Route inbound `notes` into the Updates stream as the inaugural comment.

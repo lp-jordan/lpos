@@ -21,6 +21,7 @@ import { TaskCard } from './TaskCard';
 import { TaskDetailModal } from './TaskDetailModal';
 import { TaskContextMenu } from './TaskContextMenu';
 import { PlatformListView } from './PlatformListView';
+import { TaskCalendarView } from './TaskCalendarView';
 import { PreprodColumnEditorModal } from './PreprodColumnEditorModal';
 import { NewTaskModal } from '@/components/dashboard/NewTaskModal';
 import { useTaskBroadcasts } from '@/hooks/useTaskBroadcasts';
@@ -63,6 +64,14 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     setPlatformView(next);
     try { window.localStorage.setItem('lpos:tasks:platformView', next); } catch { /* ignore */ }
   }
+  // Editing-only: kanban board vs scheduling calendar. Same persistence pattern as
+  // platformView above — restored from localStorage in the effect further down.
+  const [editingView, setEditingView] = useState<'board' | 'calendar'>('board');
+  // Calendar-only: paint bars with their status colour, or all-neutral so the grid
+  // reads purely as who-is-busy-when.
+  const [calendarColor, setCalendarColor] = useState(true);
+  // Set when the calendar opens the New Task modal from a specific day.
+  const [newTaskDate, setNewTaskDate] = useState<string | null>(null);
   const [viewScope, setViewScope] = useState<'mine' | 'others' | 'all'>('mine');
   const [scopeLoading, setScopeLoading] = useState(false);
   const [phaseAnimKey, setPhaseAnimKey] = useState(0);
@@ -88,6 +97,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
       if (t === 'preprod' || t === 'editing' || t === 'platform') setActiveTaskType(t);
       const s = window.localStorage.getItem('lpos:tasks:scope');
       if (s === 'mine' || s === 'others' || s === 'all') setViewScope(s);
+      const ev = window.localStorage.getItem('lpos:tasks:editingView');
+      if (ev === 'board' || ev === 'calendar') setEditingView(ev);
+      const cc = window.localStorage.getItem('lpos:tasks:calendarColor');
+      if (cc === '0' || cc === '1') setCalendarColor(cc === '1');
     } catch { /* localStorage may be blocked */ }
     didRestoreRef.current = true;
   }, []);
@@ -96,8 +109,10 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     try {
       window.localStorage.setItem('lpos:tasks:taskType', activeTaskType);
       window.localStorage.setItem('lpos:tasks:scope', viewScope);
+      window.localStorage.setItem('lpos:tasks:editingView', editingView);
+      window.localStorage.setItem('lpos:tasks:calendarColor', calendarColor ? '1' : '0');
     } catch { /* ignore */ }
-  }, [activeTaskType, viewScope]);
+  }, [activeTaskType, viewScope, editingView, calendarColor]);
 
   // Deep-link in: read ?task= via useSearchParams (not a one-shot window.location read)
   // so it also fires when we're *already* on /dashboard and the param arrives via a soft
@@ -356,6 +371,56 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
     });
   }
 
+  /**
+   * Calendar drop: write the new span optimistically, then PATCH. Mirrors
+   * handleDragEnd's rollback-on-failure so a dropped bar never lies about where
+   * it landed. Passing start=null unplans the task back to the rail.
+   */
+  const handleSchedule = useCallback((taskId: string, start: string | null, end: string | null, order: number) => {
+    const prevTask = tasks.find((t) => t.taskId === taskId);
+    if (!prevTask) return;
+
+    setTasks((prev) => prev.map((t) => t.taskId === taskId
+      ? { ...t, scheduledStart: start, scheduledEnd: start ? (end ?? start) : null, scheduleOrder: order }
+      : t));
+
+    fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduledStart: start, scheduledEnd: end, scheduleOrder: order }),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ task: Task }>;
+      })
+      .then((d) => setTasks((prev) => prev.map((t) => t.taskId === taskId ? d.task : t)))
+      .catch((err: Error) => {
+        setTasks((prev) => prev.map((t) => t.taskId === taskId ? prevTask : t));
+        setDragError(`Failed to reschedule: ${err.message}`);
+      });
+  }, [tasks]);
+
+  async function handleContextStatus(taskId: string, status: string) {
+    const prevTask = tasks.find((t) => t.taskId === taskId);
+    if (!prevTask) return;
+    setTasks((prev) => prev.map((t) => t.taskId === taskId
+      ? { ...t, status, completedAt: isTerminalStatus(t.taskType, status) ? new Date().toISOString() : undefined }
+      : t));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { task: Task };
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? data.task : t));
+    } catch (err) {
+      setTasks((prev) => prev.map((t) => t.taskId === taskId ? prevTask : t));
+      setDragError(`Failed to change status: ${(err as Error).message}`);
+    }
+  }
+
   async function handleContextDelete(taskId: string) {
     setTasks((prev) => prev.filter((t) => t.taskId !== taskId));
     setSelectedTaskId(null);
@@ -405,7 +470,64 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           </button>
         </div>
 
-        {/* List / Kanban view toggle — Platform only. Editing is kanban-only by design. */}
+        {/* Board / Calendar toggle — Editing only. The calendar plans *which days*
+            an editor works on a job; it is not a due-date view. */}
+        {activeTaskType === 'editing' && (
+          <div className="task-view-toggle" role="tablist" aria-label="View">
+            <button
+              type="button"
+              className={`task-view-btn${editingView === 'board' ? ' task-view-btn--active' : ''}`}
+              onClick={() => setEditingView('board')}
+              title="Board view — grouped by status"
+              aria-label="Board view"
+              aria-pressed={editingView === 'board'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3"  y="4" width="5" height="16" rx="1"/>
+                <rect x="10" y="4" width="5" height="10" rx="1"/>
+                <rect x="17" y="4" width="4" height="13" rx="1"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`task-view-btn${editingView === 'calendar' ? ' task-view-btn--active' : ''}`}
+              onClick={() => setEditingView('calendar')}
+              title="Calendar view — which days each editor is working on what"
+              aria-label="Calendar view"
+              aria-pressed={editingView === 'calendar'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="18" rx="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Status colours on/off — calendar only. Off mutes every bar to one
+            neutral so the month reads as availability rather than pipeline. */}
+        {activeTaskType === 'editing' && editingView === 'calendar' && (
+          <button
+            type="button"
+            className={`task-view-btn task-view-btn--standalone${calendarColor ? ' task-view-btn--active' : ''}`}
+            onClick={() => setCalendarColor((v) => !v)}
+            title={calendarColor ? 'Status colours on — click to mute' : 'Status colours off — click to restore'}
+            aria-pressed={calendarColor}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="13.5" cy="6.5" r="2.5"/>
+              <circle cx="17.5" cy="13" r="2.5"/>
+              <circle cx="8.5" cy="7.5" r="2.5"/>
+              <circle cx="6.5" cy="13.5" r="2.5"/>
+              <path d="M12 2a10 10 0 0 0 0 20 2 2 0 0 0 2-2 2 2 0 0 1 2-2h1a5 5 0 0 0 5-5c0-6-4.5-11-10-11z"/>
+            </svg>
+            Colour
+          </button>
+        )}
+
+        {/* List / Kanban view toggle — Platform only. */}
         {activeTaskType === 'platform' && (
           <div className="task-view-toggle" role="tablist" aria-label="View">
             <button
@@ -525,6 +647,22 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
             </p>
           )}
         </div>
+      ) : activeTaskType === 'editing' && editingView === 'calendar' ? (
+        <TaskCalendarView
+          tasks={visibleTasks}
+          users={users}
+          statuses={taskTypeConfig.statuses}
+          colorByStatus={calendarColor}
+          selectedTaskId={selectedTaskId}
+          highlightTaskId={highlightedId}
+          renamingTaskId={renamingTaskId}
+          onSelectTask={(id) => setSelectedTaskId((prev) => prev === id ? null : id)}
+          onCardContextMenu={handleCardContextMenu}
+          onSchedule={handleSchedule}
+          onRenameCommit={handleRenameCommit}
+          onRenameCancel={() => setRenamingTaskId(null)}
+          onNewTaskOnDay={(date) => { setNewTaskDate(date); setShowNewTask(true); }}
+        />
       ) : activeTaskType === 'platform' && platformView === 'list' ? (
         <PlatformListView
           tasks={visibleTasks}
@@ -588,6 +726,9 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
       {contextMenu && (() => {
         const ctxTask = tasks.find((t) => t.taskId === contextMenu.taskId);
         if (!ctxTask) return null;
+        // The calendar has no status columns to drag between, and it can plan or
+        // unplan — so it gets three extra items the board doesn't need.
+        const onCalendar = activeTaskType === 'editing' && editingView === 'calendar';
         return (
           <TaskContextMenu
             x={contextMenu.x}
@@ -595,6 +736,19 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
             taskId={contextMenu.taskId}
             assignedTo={ctxTask.assignedTo}
             users={users}
+            statuses={onCalendar ? taskTypeConfig.statuses : undefined}
+            currentStatus={onCalendar ? ctxTask.status : undefined}
+            onStatusChange={onCalendar ? (s) => void handleContextStatus(contextMenu.taskId, s) : undefined}
+            onUnplan={onCalendar && ctxTask.scheduledStart
+              ? () => handleSchedule(contextMenu.taskId, null, null, 0)
+              : undefined}
+            onPlanToday={onCalendar && !ctxTask.scheduledStart
+              ? () => {
+                const n = new Date();
+                const d = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+                handleSchedule(contextMenu.taskId, d, d, 0);
+              }
+              : undefined}
             onRename={() => setRenamingTaskId(contextMenu.taskId)}
             onReassign={(ids) => void handleContextReassign(contextMenu.taskId, ids)}
             onDelete={() => void handleContextDelete(contextMenu.taskId)}
@@ -623,8 +777,9 @@ export function TaskBoard({ initialTasks, allProjects, users, currentUserId, com
           users={users}
           currentUserId={currentUserId}
           taskType={activeTaskType}
+          defaultScheduledDate={newTaskDate ?? undefined}
           onCreated={handleCreated}
-          onClose={() => setShowNewTask(false)}
+          onClose={() => { setShowNewTask(false); setNewTaskDate(null); }}
         />
       )}
 

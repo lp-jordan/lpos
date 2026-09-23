@@ -20595,3 +20595,112 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 @media (prefers-reduced-motion: reduce) {
   .te-page * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ═══ Editing calendar (month grid, multi-day spans) ═══════════════════════
+   A scheduling view, not a due-date view: nothing here styles a past date as
+   late. Bars are absolutely positioned over a 7-column grid; see
+   components/tasks/TaskCalendarView.tsx for the lane-packing that places them. */
+.cal-root { display: flex; flex-direction: column; gap: 12px; position: relative; }
+
+.cal-monthbar { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.cal-monthlabel { color: var(--text-strong); font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; margin-left: 4px; }
+.cal-navbtn { align-items: center; background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); cursor: pointer; display: inline-flex; height: 30px; justify-content: center; padding: 0; transition: border-color .15s, color .15s; width: 30px; }
+.cal-navbtn:hover { border-color: var(--accent); color: var(--text); }
+.cal-todaybtn { background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); cursor: pointer; font-size: 0.78rem; margin-left: 6px; padding: 6px 12px; transition: border-color .15s, color .15s; }
+.cal-todaybtn:hover { border-color: var(--accent); color: var(--text); }
+
+.cal-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 4px 14px; margin-left: auto; }
+.cal-legend-item { align-items: center; color: var(--muted-soft, #9d9287); display: inline-flex; font-size: 0.71rem; gap: 6px; }
+.cal-legend-dot { border-radius: 3px; height: 9px; width: 9px; }
+
+.cal-grid { background: var(--surface, #121a22); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.cal-dow-row { border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-dow { color: var(--muted-soft, #9d9287); font-size: 0.65rem; font-weight: 600; letter-spacing: 0.09em; padding: 8px 10px; text-transform: uppercase; }
+.cal-dow--weekend { opacity: 0.55; }
+
+.cal-week { border-bottom: 1px solid var(--line); position: relative; }
+.cal-week:last-child { border-bottom: none; }
+.cal-cells { display: grid; grid-template-columns: repeat(7, 1fr); inset: 0; position: absolute; }
+.cal-cell { border-right: 1px solid rgba(113,131,150,0.11); padding: 5px 8px; }
+.cal-cell:last-child { border-right: none; }
+.cal-cell--weekend { background: rgba(9,13,18,0.42); }
+.cal-cell--outside .cal-daynum { opacity: 0.28; }
+.cal-daynum { color: var(--muted); font-size: 0.73rem; font-variant-numeric: tabular-nums; font-weight: 500; }
+.cal-cell--today .cal-daynum { background: var(--accent); border-radius: 999px; color: #14202b; display: inline-block; font-weight: 700; line-height: 20px; min-width: 20px; text-align: center; }
+
+/* Lanes sit above the day cells and hold the bars; height is set inline from the
+   week's lane count. pointer-events:none so right-click and double-click reach
+   the day cells underneath — only the bars themselves take input. Bars are
+   offset from the top in JS (DAYNUM_H), not by padding here: an absolutely
+   positioned child is placed against the padding edge, so padding would not
+   push them clear of the day numbers. */
+.cal-lanes { pointer-events: none; position: relative; }
+.cal-bar { pointer-events: auto; }
+
+.cal-bar { align-items: center; background: var(--surface-3, #1f2b37); border: 1px solid var(--line); border-left: 3px solid var(--cal-bar-color); border-radius: 7px; cursor: grab; display: flex; gap: 7px; height: 28px; overflow: hidden; padding: 0 7px 0 8px; position: absolute; touch-action: none; transition: border-color .15s, box-shadow .15s, opacity .15s; user-select: none; }
+.cal-bar:hover { border-color: var(--cal-bar-color); box-shadow: 0 4px 14px rgba(0,0,0,0.45); }
+.cal-bar:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.cal-bar--mono { border-left-color: var(--line-strong); }
+.cal-bar--clip-start { border-bottom-left-radius: 2px; border-left-width: 0; border-top-left-radius: 2px; }
+.cal-bar--clip-end { border-bottom-right-radius: 2px; border-top-right-radius: 2px; }
+.cal-bar--done { opacity: 0.45; }
+.cal-bar--done:hover { opacity: 0.75; }
+.cal-bar--done .cal-bar-title { text-decoration: line-through; text-decoration-color: rgba(244,238,226,0.45); }
+.cal-bar--selected { border-color: var(--accent); }
+.cal-bar--highlight { animation: task-highlight-pulse 1.6s ease-out forwards; }
+/* The bar being dragged stays lit and tracks the cursor rather than dimming. */
+.cal-bar--active { border-color: var(--cal-bar-color); box-shadow: 0 0 0 1px var(--cal-bar-color), 0 12px 28px rgba(0,0,0,0.55); cursor: grabbing; opacity: 1; z-index: 5; }
+.cal-bar--active .cal-bar-title { color: var(--text-strong); }
+
+.cal-bar-client { color: var(--cal-bar-color); flex-shrink: 0; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.cal-bar--mono .cal-bar-client, .cal-bar--mono .cal-chip-client { color: var(--muted); }
+.cal-bar-title { color: var(--text); flex: 1 1 auto; font-size: 0.78rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-bar-avs { align-items: center; display: flex; flex-shrink: 0; }
+.cal-bar-avs .task-card-avatar { border-color: var(--surface-3, #1f2b37); height: 21px; width: 21px; font-size: 0.56rem; }
+.cal-bar-rename { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--accent); border-radius: 5px; color: var(--text); flex: 1 1 auto; font: inherit; font-size: 0.78rem; min-width: 0; outline: none; padding: 2px 6px; }
+
+/* Resize grips. Invisible until hover, solid gold while actually resizing. */
+.cal-handle { cursor: ew-resize; height: 100%; position: absolute; top: 0; width: 9px; z-index: 2; }
+.cal-handle--start { left: 0; }
+.cal-handle--end { right: 0; }
+.cal-bar:hover .cal-handle::after { background: rgba(244,238,226,0.35); border-radius: 2px; content: ""; height: 12px; left: 3px; position: absolute; top: 50%; transform: translateY(-50%); width: 2px; }
+.cal-bar.cal-bar--resizing-start .cal-handle--start::after,
+.cal-bar.cal-bar--resizing-end .cal-handle--end::after { background: var(--accent); border-radius: 0; content: ""; height: 100%; position: absolute; top: 0; transform: none; width: 3px; }
+.cal-bar.cal-bar--resizing-start .cal-handle--start::after { left: 0; right: auto; }
+.cal-bar.cal-bar--resizing-end .cal-handle--end::after { left: auto; right: 0; }
+
+/* Drag readout — hangs under the grabbed handle. */
+.cal-pill { align-items: center; background: var(--surface-3, #1f2b37); border: 1px solid var(--line-strong); border-radius: 9px; box-shadow: 0 14px 30px rgba(0,0,0,0.55); color: var(--text); display: flex; font-size: 0.74rem; font-variant-numeric: tabular-nums; gap: 8px; padding: 5px 10px; pointer-events: none; position: fixed; transform: translateX(-50%); white-space: nowrap; z-index: 950; }
+.cal-pill::before { border: 5px solid transparent; border-bottom-color: var(--line-strong); content: ""; left: 50%; position: absolute; top: -10px; transform: translateX(-50%); }
+.cal-pill-range { color: var(--text-strong); font-weight: 600; }
+.cal-pill-detail { color: var(--muted-soft, #9d9287); }
+.cal-pill-delta { background: var(--accent-soft, rgba(219,175,95,0.18)); border-radius: 999px; color: var(--accent-strong, #f2cf91); font-weight: 700; padding: 1px 8px; }
+.cal-pill-delta--zero { background: rgba(113,131,150,0.18); color: var(--muted); }
+
+/* Unscheduled rail — the source and the bin for calendar drags. */
+.cal-rail { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px 13px; }
+.cal-rail-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 9px; }
+.cal-rail-title { color: var(--text); font-size: 0.82rem; font-weight: 600; }
+.cal-rail-count { background: var(--surface-2, #1e1e28); border-radius: 999px; color: var(--muted); font-size: 0.7rem; padding: 1px 8px; }
+.cal-rail-hint { color: var(--muted-soft, #9d9287); font-size: 0.72rem; }
+.cal-rail-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.cal-rail-empty { color: var(--muted-soft, #9d9287); font-size: 0.75rem; }
+.cal-chip { align-items: center; background: var(--surface-2, #1e1e28); border: 1px solid var(--line); border-left: 3px solid var(--cal-bar-color); border-radius: 8px; cursor: grab; display: inline-flex; gap: 7px; padding: 7px 10px 7px 9px; touch-action: none; transition: border-color .15s; user-select: none; }
+.cal-chip:hover { border-color: var(--cal-bar-color); }
+.cal-chip-client { color: var(--cal-bar-color); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.cal-chip-title { color: var(--text); font-size: 0.78rem; }
+.cal-chip .task-card-avatar { border-color: var(--surface-2, #1e1e28); height: 21px; width: 21px; font-size: 0.56rem; }
+
+/* Context-menu additions shared with the board's menu. */
+.task-ctx-status-dot { border-radius: 3px; flex-shrink: 0; height: 9px; width: 9px; }
+.task-ctx-check { color: var(--accent); margin-left: auto; }
+.task-ctx-day-head { color: var(--muted-soft, #9d9287); font-size: 0.67rem; font-weight: 700; letter-spacing: 0.07em; padding: 7px 10px 6px; text-transform: uppercase; }
+.task-view-btn--standalone { background: var(--surface-inset, rgba(11,16,22,0.78)); border: 1px solid var(--line); border-radius: 10px; }
+
+@media (max-width: 760px) {
+  .cal-bar-client, .cal-bar-avs { display: none; }
+  .cal-dow { font-size: 0.57rem; padding: 7px 5px; }
+  .cal-cell { padding: 4px; }
+  .cal-bar { font-size: 0.7rem; gap: 5px; padding: 0 4px; }
+  .cal-legend { margin-left: 0; }
+}

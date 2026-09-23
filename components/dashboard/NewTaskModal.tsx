@@ -24,6 +24,10 @@ interface Props {
    *  project-scoped surface where the client is already known). */
   defaultClientName?: string;
   lockedClient?: boolean;
+  /** Calendar-only. When set, the new task is created already planned onto that
+   *  day (inclusive ISO day). Passed by the Editing calendar when the modal was
+   *  opened from a specific date. */
+  defaultScheduledDate?: string;
   onCreated: (task: Task) => void;
   onClose: () => void;
 }
@@ -35,6 +39,7 @@ export function NewTaskModal({
   taskType: initialTaskType,
   defaultClientName,
   lockedClient,
+  defaultScheduledDate,
   onCreated,
   onClose,
 }: Readonly<Props>) {
@@ -156,6 +161,8 @@ export function NewTaskModal({
           priority,
           assignedTo: assigneeIds.length > 0 ? assigneeIds : [currentUserId],
           notes: notes.trim() || null,
+          scheduledStart: defaultScheduledDate ?? null,
+          scheduledEnd: defaultScheduledDate ?? null,
         }),
       });
       if (!res.ok) {

@@ -52,8 +52,22 @@ function initSchema(db: DatabaseSync): void {
       status       TEXT NOT NULL DEFAULT 'not_started',
       created_by   TEXT NOT NULL,
       created_at   TEXT NOT NULL,
-      completed_at TEXT
+      completed_at TEXT,
+      -- Calendar scheduling (v29). Inclusive ISO *day* strings (YYYY-MM-DD), not
+      -- timestamps — this is "which days is this being worked on", deliberately
+      -- not a due date. NULL on both means the task isn't on the calendar.
+      scheduled_start TEXT,
+      scheduled_end   TEXT,
+      -- Manual stack position among bars sharing a week on the calendar. REAL, not
+      -- INTEGER, so a bar dropped between two others takes the midpoint of their
+      -- orders — one row changes per reorder instead of renumbering the week.
+      schedule_order  REAL NOT NULL DEFAULT 0
     );
+    -- idx_tasks_scheduled is created by the v29 migration block, NOT here: on an
+    -- existing DB the CREATE TABLE above is a no-op, so scheduled_start doesn't
+    -- exist until v29's ALTERs run — and indexing it here would throw inside
+    -- initSchema and take the whole app down on boot. Same reason as
+    -- idx_tasks_task_type below.
     CREATE INDEX IF NOT EXISTS idx_tasks_client    ON tasks(client_name);
     CREATE INDEX IF NOT EXISTS idx_tasks_status    ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
@@ -1240,6 +1254,28 @@ function runMigrations(db: DatabaseSync): void {
     } catch {
       // Column already exists
     }
+  }
+
+  // v29: Editing calendar — schedule a task onto a span of days. Inclusive ISO day
+  // strings, NULL when the task isn't on the calendar. Deliberately not due dates:
+  // nothing in the app treats a past scheduled_end as late. Each ALTER gets its own
+  // try so a half-applied v29 (or a fresh DB, where initSchema already added all
+  // three) still reaches the ones it's missing.
+  for (const col of [
+    'scheduled_start TEXT',
+    'scheduled_end TEXT',
+    'schedule_order REAL NOT NULL DEFAULT 0',
+  ]) {
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists
+    }
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_start)`);
+  } catch {
+    // scheduled_start doesn't exist yet — shouldn't happen post-v29, but tolerate
   }
 
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.

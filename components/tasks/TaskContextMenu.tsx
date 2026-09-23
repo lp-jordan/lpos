@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { UserSummary } from '@/lib/models/user';
+import type { TaskTypeStatus } from '@/lib/models/task-phase';
 
 interface Props {
   x: number;
@@ -13,6 +14,16 @@ interface Props {
   onReassign: (userIds: string[]) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** Calendar-only. The board changes status by dragging between columns; the
+   *  calendar has no columns, so it passes the status list to get a submenu here.
+   *  Omitted by the board, which renders exactly the menu it always has. */
+  statuses?: TaskTypeStatus[];
+  currentStatus?: string;
+  onStatusChange?: (status: string) => void;
+  /** Calendar-only. Exactly one of these renders, depending on whether the task
+   *  currently sits on the calendar. */
+  onUnplan?: () => void;
+  onPlanToday?: () => void;
 }
 
 export function TaskContextMenu({
@@ -24,8 +35,13 @@ export function TaskContextMenu({
   onReassign,
   onDelete,
   onClose,
+  statuses,
+  currentStatus,
+  onStatusChange,
+  onUnplan,
+  onPlanToday,
 }: Readonly<Props>) {
-  const [mode, setMode] = useState<'root' | 'reassign' | 'confirm_delete'>('root');
+  const [mode, setMode] = useState<'root' | 'reassign' | 'status' | 'confirm_delete'>('root');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(assignedTo);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +106,39 @@ export function TaskContextMenu({
             Reassign
             <span className="task-ctx-chevron">›</span>
           </button>
+          {statuses && statuses.length > 0 && onStatusChange && (
+            <button type="button" className="task-ctx-item" onClick={() => setMode('status')}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none" />
+              </svg>
+              Status
+              <span className="task-ctx-chevron">›</span>
+            </button>
+          )}
+          {(onUnplan || onPlanToday) && <div className="task-ctx-divider" />}
+          {onUnplan && (
+            <button type="button" className="task-ctx-item" onClick={() => { onUnplan(); onClose(); }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+                <line x1="9.5" y1="15" x2="14.5" y2="19" /><line x1="14.5" y1="15" x2="9.5" y2="19" />
+              </svg>
+              Unplan
+            </button>
+          )}
+          {onPlanToday && (
+            <button type="button" className="task-ctx-item" onClick={() => { onPlanToday(); onClose(); }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+                <line x1="12" y1="14" x2="12" y2="20" /><line x1="9" y1="17" x2="15" y2="17" />
+              </svg>
+              Plan for today
+            </button>
+          )}
           <div className="task-ctx-divider" />
           <button type="button" className="task-ctx-item task-ctx-item--danger" onClick={() => setMode('confirm_delete')}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -118,6 +167,33 @@ export function TaskContextMenu({
                 />
                 <span>{u.name}</span>
               </label>
+            ))}
+          </div>
+        </>
+      )}
+
+      {mode === 'status' && statuses && onStatusChange && (
+        <>
+          <div className="task-ctx-back-row">
+            <button type="button" className="task-ctx-back" onClick={() => setMode('root')}>‹ Back</button>
+            <span className="task-ctx-section-label">Status</span>
+          </div>
+          <div className="task-ctx-user-list">
+            {statuses.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                className="task-ctx-item"
+                onClick={() => { onStatusChange(s.value); onClose(); }}
+              >
+                <span className="task-ctx-status-dot" style={{ background: s.color }} />
+                {s.label}
+                {currentStatus === s.value && (
+                  <svg className="task-ctx-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </button>
             ))}
           </div>
         </>
