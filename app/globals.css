@@ -20643,9 +20643,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-bar--mono { border-left-color: var(--line-strong); }
 .cal-bar--clip-start { border-bottom-left-radius: 2px; border-left-width: 0; border-top-left-radius: 2px; }
 .cal-bar--clip-end { border-bottom-right-radius: 2px; border-top-right-radius: 2px; }
-.cal-bar--done { opacity: 0.45; }
-.cal-bar--done:hover { opacity: 0.75; }
-.cal-bar--done .cal-bar-title { text-decoration: line-through; text-decoration-color: rgba(244,238,226,0.45); }
 .cal-bar--selected { border-color: var(--accent); }
 .cal-bar--highlight { animation: task-highlight-pulse 1.6s ease-out forwards; }
 /* The bar being dragged stays lit and tracks the cursor rather than dimming. */
@@ -20694,7 +20691,11 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .cal-rail-hint { color: var(--muted-soft, #9d9287); font-size: 0.72rem; }
 /* Capped + scrollable: the backlog can be hundreds of chips, and an
    uncapped rail pushes the calendar itself off the page. */
-.cal-rail-items { display: flex; flex-wrap: wrap; gap: 8px; max-height: 208px; overflow-y: auto; padding-right: 4px; }
+.cal-rail-items { display: flex; flex-direction: column; gap: 9px; max-height: 232px; overflow-y: auto; padding-right: 4px; }
+/* Grouped by client — the closest thing to "by project" the data carries. */
+.cal-rail-group { align-items: flex-start; display: flex; gap: 10px; }
+.cal-rail-group-label { color: var(--muted-soft, #9d9287); flex: 0 0 116px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em; overflow: hidden; padding-top: 9px; text-align: right; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.cal-rail-group-items { display: flex; flex: 1 1 auto; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .cal-rail-items::-webkit-scrollbar { width: 8px; }
 .cal-rail-items::-webkit-scrollbar-track { background: transparent; }
 .cal-rail-items::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
@@ -20718,4 +20719,6 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
   .cal-cell { padding: 4px; }
   .cal-bar { font-size: 0.7rem; gap: 5px; padding: 0 4px; }
   .cal-legend { margin-left: 0; }
+  .cal-rail-group { flex-direction: column; gap: 4px; }
+  .cal-rail-group-label { flex: none; padding-top: 0; text-align: left; }
 }

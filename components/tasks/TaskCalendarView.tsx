@@ -246,19 +246,51 @@ export function TaskCalendarView({
     [statuses],
   );
 
+  /**
+   * Finished work isn't planning, so a done task leaves the calendar entirely —
+   * grid and rail both. Its stored span is deliberately left untouched in the
+   * DB: re-opening the task puts the bar back exactly where it was rather than
+   * dumping it in the unscheduled rail.
+   */
+  const planned = useMemo(
+    () => tasks.filter((t) => !isTerminalStatus(t.taskType, t.status)),
+    [tasks],
+  );
+
   // Apply the in-flight drag on top of server state, so the bar tracks the
   // cursor without a round trip per pointer move.
-  const effective = useMemo(() => tasks.map((t) => (
+  const effective = useMemo(() => planned.map((t) => (
     preview && preview.taskId === t.taskId
       ? { ...t, scheduledStart: preview.start, scheduledEnd: preview.end }
       : t
-  )), [tasks, preview]);
+  )), [planned, preview]);
 
   const scheduled = useMemo(() => effective.filter((t) => t.scheduledStart && t.scheduledEnd), [effective]);
   const unscheduled = useMemo(
     () => effective.filter((t) => !t.scheduledStart).sort((a, b) => a.scheduleOrder - b.scheduleOrder),
     [effective],
   );
+
+  /**
+   * The rail groups by client, which is as close to "by project" as the data
+   * gets — Editing tasks lost their project_id in the v8 migration and carry
+   * only a client name. Alphabetical, with the "General" sentinel (tasks tied to
+   * no client) parked at the end rather than sorted in among real names.
+   */
+  const unscheduledGroups = useMemo(() => {
+    const byClient = new Map<string, Task[]>();
+    for (const t of unscheduled) {
+      const existing = byClient.get(t.clientName);
+      if (existing) existing.push(t);
+      else byClient.set(t.clientName, [t]);
+    }
+    return Array.from(byClient, ([client, items]) => ({ client, items }))
+      .sort((a, b) => {
+        if (a.client === 'General') return 1;
+        if (b.client === 'General') return -1;
+        return a.client.localeCompare(b.client);
+      });
+  }, [unscheduled]);
 
   const weeks = useMemo(() => {
     const first = new Date(view.year, view.month, 1, 12);
@@ -504,9 +536,34 @@ export function TaskCalendarView({
     );
   }
 
+  /** Rail chip. No client label on the chip itself — the group heading above it
+   *  already says whose it is. */
+  function renderChip(t: Task) {
+    return (
+      <div
+        key={t.taskId}
+        data-task-id={t.taskId}
+        className={`cal-chip${!colorByStatus ? ' cal-bar--mono' : ''}${highlightTaskId === t.taskId ? ' cal-bar--highlight' : ''}`}
+        style={{ '--cal-bar-color': colorByStatus ? statusColor(t.status) : 'var(--line-strong)' } as React.CSSProperties}
+        title={`${t.clientName} — ${t.description}`}
+        role="button"
+        tabIndex={0}
+        onPointerDown={(e) => beginDrag(e, t, 'schedule')}
+        onClick={() => {
+          if (suppressClickRef.current) return;
+          if (!dragRef.current) onSelectTask(t.taskId);
+        }}
+        onContextMenu={(e) => { e.stopPropagation(); onCardContextMenu(e, t.taskId); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectTask(t.taskId); }}
+      >
+        <span className="cal-chip-title">{t.description}</span>
+        {renderAvatars(t)}
+      </div>
+    );
+  }
+
   function renderBar(seg: Segment) {
     const t = seg.task;
-    const done = isTerminalStatus(t.taskType, t.status);
     const isDragging = dragRef.current?.taskId === t.taskId && preview !== null;
     const isRenaming = renamingTaskId === t.taskId;
     const color = colorByStatus ? statusColor(t.status) : 'var(--line-strong)';
@@ -517,7 +574,6 @@ export function TaskCalendarView({
         data-task-id={t.taskId}
         className={[
           'cal-bar',
-          done ? 'cal-bar--done' : '',
           seg.clipStart ? 'cal-bar--clip-start' : '',
           seg.clipEnd ? 'cal-bar--clip-end' : '',
           isDragging ? 'cal-bar--active' : '',
@@ -706,25 +762,10 @@ export function TaskCalendarView({
         <div className="cal-rail-items" hidden={!railOpen}>
           {unscheduled.length === 0 ? (
             <span className="cal-rail-empty">Everything&rsquo;s on the calendar.</span>
-          ) : unscheduled.map((t) => (
-            <div
-              key={t.taskId}
-              data-task-id={t.taskId}
-              className={`cal-chip${!colorByStatus ? ' cal-bar--mono' : ''}${highlightTaskId === t.taskId ? ' cal-bar--highlight' : ''}`}
-              style={{ '--cal-bar-color': colorByStatus ? statusColor(t.status) : 'var(--line-strong)' } as React.CSSProperties}
-              role="button"
-              tabIndex={0}
-              onPointerDown={(e) => beginDrag(e, t, 'schedule')}
-              onClick={() => {
-                if (suppressClickRef.current) return;
-                if (!dragRef.current) onSelectTask(t.taskId);
-              }}
-              onContextMenu={(e) => { e.stopPropagation(); onCardContextMenu(e, t.taskId); }}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectTask(t.taskId); }}
-            >
-              {t.clientName !== 'General' && <span className="cal-chip-client">{t.clientName}</span>}
-              <span className="cal-chip-title">{t.description}</span>
-              {renderAvatars(t)}
+          ) : unscheduledGroups.map(({ client, items }) => (
+            <div key={client} className="cal-rail-group">
+              <span className="cal-rail-group-label" title={client}>{client}</span>
+              <div className="cal-rail-group-items">{items.map(renderChip)}</div>
             </div>
           ))}
         </div>
