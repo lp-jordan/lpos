@@ -20915,7 +20915,8 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .shm-icon { width: 30px; height: 28px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-3); color: var(--text); display: inline-grid; place-items: center; cursor: pointer; padding: 0; }
 .shm-icon:hover { border-color: var(--accent); }
 .shm-open { font-size: 0.8rem; font-weight: 600; color: var(--accent); text-decoration: none; padding: 4px 6px; }
-.shm-toggles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 16px; }
+.shm-toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; }
+.shm-toggle { white-space: nowrap; }
 .shm-toggle {
   display: flex; align-items: center; gap: 10px; border: 0; background: none; color: var(--muted-soft);
   font: inherit; font-size: 0.84rem; padding: 6px 0; cursor: pointer; text-align: left;
