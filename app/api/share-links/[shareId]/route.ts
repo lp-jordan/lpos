@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
 import { getShareLink, revokeShareLink, updateShareLink, type ShareLinkPatch } from '@/lib/store/share-links-db';
 import { resolveShareView } from '@/lib/services/share-links';
+import { kickShareDownloads } from '@/lib/services/share-downloads';
 
 type Ctx = { params: Promise<{ shareId: string }> };
 
@@ -26,6 +27,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const patch = await req.json() as ShareLinkPatch;
   const share = updateShareLink(shareId, patch);
   if (!share) return NextResponse.json({ error: 'Share not found' }, { status: 404 });
+  kickShareDownloads();
   return NextResponse.json({ share });
 }
 
@@ -35,5 +37,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { shareId } = await params;
   if (!getShareLink(shareId)) return NextResponse.json({ error: 'Share not found' }, { status: 404 });
   revokeShareLink(shareId);
+  kickShareDownloads();
   return new NextResponse(null, { status: 204 });
 }

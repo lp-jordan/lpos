@@ -53,6 +53,11 @@ interface Props {
   onChanged?: () => void;
 }
 
+function fmtGB(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
+}
+
 export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
   const { toast } = useToast();
   const [share, setShare] = useState<ShareLink | null>(null);
@@ -77,7 +82,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[] }>) {
+  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[]; downloadsUntil: string }>) {
     const res = await fetch(`/api/share-links/${shareId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
@@ -168,6 +173,33 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                 </button>
               ))}
             </div>
+
+            {share.caps.download && (() => {
+              const dl = items.map((i) => i.download);
+              const ready = dl.filter((d) => d?.state === 'ready').length;
+              const failed = dl.filter((d) => d?.state === 'failed').length;
+              const bytes = dl.reduce((n, d) => n + (d?.original?.size ?? 0) + (d?.web?.size ?? 0), 0);
+              const until = share.downloadsUntil ? share.downloadsUntil.slice(0, 10) : '';
+              return (
+                <div className="shm-downloads">
+                  <span className="shm-dl-status">
+                    {ready === items.length ? `Downloads ready · ${fmtGB(bytes)} in storage`
+                      : `Preparing downloads · ${ready} of ${items.length} ready`}
+                    {failed > 0 && <span className="shm-warn"> · {failed} failed</span>}
+                  </span>
+                  <label className="shm-until">
+                    Until
+                    <input
+                      type="date"
+                      value={until}
+                      min={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => { if (e.target.value) void patch({ downloadsUntil: new Date(`${e.target.value}T23:59:59`).toISOString() }); }}
+                      aria-label="Downloads available until"
+                    />
+                  </label>
+                </div>
+              );
+            })()}
 
             <div className="shm-label">Who</div>
             <div className="shm-seg" role="radiogroup" aria-label="Who can open this share">

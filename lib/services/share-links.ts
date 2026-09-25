@@ -12,6 +12,7 @@ import { getAsset } from '@/lib/store/media-registry';
 import { findTilesForAsset, getPass, getPassTree, getTile } from '@/lib/store/platform-pass-store';
 import { getProjectStore } from '@/lib/services/container';
 import { listCanonicalMediaAssets } from '@/lib/store/canonical-asset-store';
+import { downloadStatusFor, type AssetDownloadStatus } from '@/lib/services/share-downloads';
 import {
   addShareItems,
   listShareItems,
@@ -40,7 +41,8 @@ export interface ShareViewItem {
   videoToken:    string;
   /** Where the player streams from: Frame.io/Cloudflare, the local file, or nowhere yet. */
   stream:        'frameio' | 'local' | null;
-  downloadable:  boolean;
+  /** Download files for this video (null when the share's Download switch is off). Served from R2, never LPOS. */
+  download:      AssetDownloadStatus | null;
 }
 
 export interface ShareViewGroup {
@@ -63,7 +65,7 @@ function platformTitle(assetId: string, titleTileId: string | null): string | nu
   return tile ? tile.title.trim() : null;
 }
 
-function buildItem(it: ShareLinkItem): ShareViewItem | null {
+function buildItem(it: ShareLinkItem, withDownloads: boolean): ShareViewItem | null {
   const asset = getAsset(it.projectId, it.assetId);
   if (!asset) return null;
   const lposName  = asset.name || asset.originalFilename;
@@ -81,7 +83,7 @@ function buildItem(it: ShareLinkItem): ShareViewItem | null {
     thumbnailUrl: `/api/projects/${it.projectId}/media/${it.assetId}/thumbnail`,
     videoToken:   it.videoToken,
     stream:       asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
-    downloadable: !!asset.filePath,
+    download:     withDownloads ? downloadStatusFor(it.assetId) : null,
   };
 }
 
@@ -106,7 +108,7 @@ function itemsFor(share: ShareLink): ShareLinkItem[] {
 export function resolveShareView(share: ShareLink): ShareView {
   const groups: ShareViewGroup[] = [];
   for (const it of itemsFor(share)) {
-    const item = buildItem(it);
+    const item = buildItem(it, share.caps.download);
     if (!item) continue;
     const last = groups[groups.length - 1];
     if (last && last.title === it.section) last.items.push(item);

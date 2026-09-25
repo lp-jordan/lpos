@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
+import { kickShareDownloads } from '@/lib/services/share-downloads';
 import { addShareItems, getShareLink, removeShareItem, setShareItemTitle } from '@/lib/store/share-links-db';
 
 type Ctx = { params: Promise<{ shareId: string }> };
@@ -22,6 +23,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const { items } = await req.json() as { items?: Array<{ assetId: string; projectId: string; clientTitle?: string | null }> };
   if (!items?.length) return NextResponse.json({ error: 'No videos given' }, { status: 400 });
   addShareItems(shareId, items);
+  kickShareDownloads();
   return NextResponse.json({ ok: true });
 }
 
@@ -44,5 +46,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { assetId } = await req.json() as { assetId?: string };
   if (!assetId) return NextResponse.json({ error: 'assetId is required' }, { status: 400 });
   removeShareItem(shareId, assetId);
+  kickShareDownloads();
   return NextResponse.json({ ok: true });
 }

@@ -24,6 +24,7 @@ import { AssetCommentsSection, useAssetComments } from '@/components/media/Asset
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import type { ShareView, ShareViewItem } from '@/lib/services/share-links';
+import type { DownloadKind } from '@/lib/services/share-downloads';
 
 type Source = { kind: 'share' | 'video'; token: string };
 
@@ -81,6 +82,13 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   }, [source.kind, source.token]);
 
   useEffect(() => { void load(); }, [load]);
+  // While any video's download files are still being made, refresh so its button lights up when ready.
+  const preparing = !!view?.groups.some((g) => g.items.some((i) => i.download?.state === 'preparing'));
+  useEffect(() => {
+    if (!preparing) return;
+    const t = setInterval(() => void load(), 5000);
+    return () => clearInterval(t);
+  }, [preparing, load]);
 
   const items = useMemo(() => view?.groups.flatMap((g) => g.items) ?? [], [view]);
   const item: ShareViewItem | null = items.find((i) => i.assetId === assetId) ?? items[0] ?? null;
@@ -118,18 +126,39 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   }
   const videoUrl = (i: ShareViewItem) => `${origin}/v/${i.videoToken}`;
   const shareUrl = view ? `${origin}/s/${view.share.token}` : '';
-  const downloadUrl = (i: ShareViewItem) => `/api/projects/${i.projectId}/media/${i.assetId}/download`;
-
-  function download(i: ShareViewItem) {
+  // Downloads come from R2 via a short-lived signed link (the route redirects);
+  // nothing is served from LPOS's disk.
+  function startDownload(i: ShareViewItem, kind: DownloadKind) {
+    if (!view) return;
     const a = document.createElement('a');
-    a.href = downloadUrl(i);
-    a.download = '';
+    a.href = `/api/share-links/view/${view.share.token}/download?assetId=${encodeURIComponent(i.assetId)}&kind=${kind}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
   }
-  function downloadAll() {
-    items.filter((i) => i.downloadable).forEach((i, n) => setTimeout(() => download(i), n * 400));
+  function downloadItems(i: ShareViewItem) {
+    const d = i.download;
+    if (!d || d.state !== 'ready') return [];
+    return [
+      ...(d.original ? [{ type: 'item' as const, label: `Original · ${fmtBytes(d.original.size)}`, onClick: () => startDownload(i, 'original') }] : []),
+      ...(d.web ? [{ type: 'item' as const, label: `Web (1080p) · ${fmtBytes(d.web.size)}`, onClick: () => startDownload(i, 'web') }] : []),
+      ...(caps?.transcripts && d.transcripts.length ? [{ type: 'separator' as const }] : []),
+      ...(caps?.transcripts ? d.transcripts.map((k) => ({ type: 'item' as const, label: `Transcript (.${k})`, onClick: () => startDownload(i, k) })) : []),
+    ];
+  }
+  function openDownloadMenu(e: React.MouseEvent, i: ShareViewItem) {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, downloadItems(i));
+  }
+  function openDownloadAllMenu(e: React.MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const ready = items.filter((i) => i.download?.state === 'ready');
+    const all = (kind: DownloadKind) => ready.forEach((i, n) => setTimeout(() => startDownload(i, kind), n * 600));
+    openMenu(r.left, r.bottom + 4, [
+      { type: 'item' as const, label: `All originals (${ready.length})`, onClick: () => all('original') },
+      { type: 'item' as const, label: `All web copies (${ready.length})`, onClick: () => all('web') },
+    ]);
   }
 
   function onVideoContext(e: React.MouseEvent, i: ShareViewItem) {
@@ -138,7 +167,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
     openMenu(e.clientX, e.clientY, [
       ...(caps.reshare ? [{ type: 'item' as const, label: 'Copy video link', onClick: () => void copy(videoUrl(i), 'Video link copied') }] : []),
       ...(source.kind === 'share' ? [{ type: 'item' as const, label: 'Copy share link', onClick: () => void copy(shareUrl, 'Share link copied') }] : []),
-      ...(caps.download && i.downloadable ? [{ type: 'item' as const, label: 'Download', onClick: () => download(i) }] : []),
+      ...(caps.download && i.download?.state === 'ready' ? [{ type: 'separator' as const }, ...downloadItems(i)] : []),
     ]);
   }
 
@@ -190,8 +219,9 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
         internal={caps.internal}
         right={(
           <>
-            {caps.download && items.some((i) => i.downloadable) && (
-              <button type="button" className="shv-btn shv-btn--gold" onClick={downloadAll}><IconDownload /> Download all</button>
+            {caps.download && items.length > 1 && (
+              <button type="button" className="shv-btn shv-btn--gold" onClick={openDownloadAllMenu}
+                disabled={!items.some((i) => i.download?.state === 'ready')}><IconDownload /> Download all</button>
             )}
             {!caps.internal && (
               <button
@@ -216,7 +246,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                   <div key={i.assetId} className="shv-row-wrap" onContextMenu={(e) => onVideoContext(e, i)}>
                     <button
                       type="button"
-                      className={`shv-row${i.assetId === item?.assetId ? ' is-sel' : ''}`}
+                      className={`shv-row${i.assetId === item?.assetId ? ' is-sel' : ''}${caps.reshare && caps.download ? ' shv-row--two' : !caps.reshare && !caps.download ? ' shv-row--none' : ''}`}
                       onClick={() => { setAssetId(i.assetId); setSeekTarget(null); }}
                     >
                       <img className="shv-thumb" src={i.thumbnailUrl} alt="" loading="lazy" />
@@ -227,11 +257,14 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                         </span>
                       </span>
                     </button>
-                    {caps.reshare && (
-                      <button type="button" className="shv-icon-btn shv-row-copy" onClick={() => void copy(videoUrl(i), 'Video link copied')} title="Copy video link" aria-label="Copy video link">
-                        <IconLink />
-                      </button>
-                    )}
+                    <span className="shv-row-actions">
+                      {caps.reshare && (
+                        <button type="button" className="shv-icon-btn shv-row-copy" onClick={() => void copy(videoUrl(i), 'Video link copied')} title="Copy video link" aria-label="Copy video link">
+                          <IconLink />
+                        </button>
+                      )}
+                      {caps.download && <DownloadButton item={i} onOpen={openDownloadMenu} small />}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -266,9 +299,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                 {caps.reshare && (
                   <button type="button" className="shv-icon-btn" onClick={() => void copy(videoUrl(item), 'Video link copied')} title="Copy video link" aria-label="Copy video link"><IconLink /></button>
                 )}
-                {caps.download && item.downloadable && (
-                  <button type="button" className="shv-icon-btn" onClick={() => download(item)} title="Download" aria-label="Download"><IconDownload /></button>
-                )}
+                {caps.download && <DownloadButton item={item} onOpen={openDownloadMenu} />}
               </div>
               {!clientView && item.title !== item.lposName && <div className="shv-staff-note">{item.lposName}</div>}
             </>
@@ -302,6 +333,34 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
         )}
       </div>
     </div>
+  );
+}
+
+function fmtBytes(n: number): string {
+  if (!n) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+/** Per-video download button: opens Original / Web / transcripts; shows progress while files are prepared. */
+function DownloadButton({ item, onOpen, small }: Readonly<{ item: ShareViewItem; onOpen: (e: React.MouseEvent, i: ShareViewItem) => void; small?: boolean }>) {
+  const d = item.download;
+  const ready = d?.state === 'ready';
+  const title = ready ? 'Download'
+    : d?.state === 'failed' ? `Download unavailable${d.error ? ` — ${d.error}` : ''}`
+    : `Preparing download${d?.progress ? ` · ${d.progress}%` : ''}`;
+  return (
+    <button
+      type="button"
+      className={`shv-icon-btn shv-dl${small ? ' shv-dl--small' : ''}${ready ? '' : ' is-waiting'}${d?.state === 'failed' ? ' is-failed' : ''}`}
+      onClick={(e) => { if (ready) onOpen(e, item); else e.stopPropagation(); }}
+      aria-disabled={!ready}
+      title={title}
+      aria-label={title}
+    >
+      {ready || d?.state === 'failed' ? <IconDownload /> : <span className="shv-dl-spin" aria-hidden="true" />}
+    </button>
   );
 }
 

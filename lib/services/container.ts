@@ -262,6 +262,11 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   globalThis.__lpos_uploadQueueService = uploadQueueService;
   uploadQueueService.start();
 
+  // Share downloads: keeps R2 holding exactly the files share clients can
+  // download (uploads, web-copy encodes, expiry, purge). Starts after the upload
+  // queue so its jobs show in the Upload Tray.
+  void import('@/lib/services/share-downloads').then((m) => m.ensureShareDownloadWorker());
+
   ingestQueueService = new IngestQueueService(io);
   globalThis.__lpos_ingestQueueService = ingestQueueService;
   ingestQueueService.start();

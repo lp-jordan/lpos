@@ -62,6 +62,10 @@ export interface ShareLink {
   createdAt:  string;
   updatedAt:  string;
   revokedAt:  string | null;
+  /** While Download is on: when downloads switch themselves off (14 days after being turned on, editable). */
+  downloadsUntil: string | null;
+  /** When Download last went off (by hand or by expiry) — starts the 3-day grace before R2 files are purged. */
+  downloadsOffAt: string | null;
 }
 
 export interface ShareLinkItem {
@@ -82,6 +86,7 @@ interface ShareRow {
   id: string; token: string; name: string; pass_id: string | null; stage: string;
   caps: string; audience: string; created_by: string | null;
   created_at: string; updated_at: string; revoked_at: string | null;
+  downloads_until: string | null; downloads_off_at: string | null;
 }
 
 interface ItemRow {
@@ -132,9 +137,33 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_sl_items_token ON share_link_items(video_token);
   `);
-  for (const col of ['section TEXT', 'title_tile_id TEXT']) {
+  for (const col of ['section TEXT', 'title_tile_id TEXT', 'removed_at TEXT']) {
     try { db.exec(`ALTER TABLE share_link_items ADD COLUMN ${col}`); } catch { /* already there */ }
   }
+  for (const col of ['downloads_until TEXT', 'downloads_off_at TEXT']) {
+    try { db.exec(`ALTER TABLE share_links ADD COLUMN ${col}`); } catch { /* already there */ }
+  }
+  // Client downloads: one R2 copy per asset VERSION (not per share), reused by
+  // every share that offers it. kind: original | web | srt | vtt | txt.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS share_download_files (
+      asset_version_id TEXT NOT NULL,
+      kind             TEXT NOT NULL,
+      asset_id         TEXT NOT NULL,
+      project_id       TEXT NOT NULL,
+      r2_key           TEXT,
+      ext              TEXT,
+      size             INTEGER,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      progress         INTEGER NOT NULL DEFAULT 0,
+      error            TEXT,
+      created_at       TEXT NOT NULL,
+      updated_at       TEXT NOT NULL,
+      ready_at         TEXT,
+      PRIMARY KEY (asset_version_id, kind)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sdf_asset ON share_download_files(asset_id);
+  `);
 }
 
 export function getShareLinksDb(): DatabaseSync {
@@ -186,6 +215,8 @@ function rowToShare(row: ShareRow, emails: string[]): ShareLink {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     revokedAt: row.revoked_at,
+    downloadsUntil: row.downloads_until ?? null,
+    downloadsOffAt: row.downloads_off_at ?? null,
   };
 }
 
@@ -287,11 +318,12 @@ export function createShareLink(input: CreateShareInput): ShareLink {
   const now = new Date().toISOString();
   db.exec('BEGIN');
   try {
+    const downloadsUntil = caps.download ? new Date(Date.now() + DOWNLOAD_DAYS * 86_400_000).toISOString() : null;
     db.prepare(
-      `INSERT INTO share_links (id, token, name, pass_id, stage, caps, audience, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO share_links (id, token, name, pass_id, stage, caps, audience, created_by, created_at, updated_at, downloads_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(id, token, input.name.trim() || 'Untitled share', input.passId ?? null, 'review', JSON.stringify(caps), audience,
-      input.createdBy ?? null, now, now);
+      input.createdBy ?? null, now, now, downloadsUntil);
     for (const email of normaliseEmails(input.emails ?? [])) {
       db.prepare('INSERT OR IGNORE INTO share_link_emails (share_id, email) VALUES (?, ?)').run(id, email);
     }
@@ -309,7 +341,11 @@ export interface ShareLinkPatch {
   caps?:     Partial<ShareCaps>;
   audience?: ShareAudience;
   emails?:   string[];
+  /** ISO date; only meaningful while Download is on. */
+  downloadsUntil?: string;
 }
+
+export const DOWNLOAD_DAYS = 14;
 
 export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | null {
   const db = getShareLinksDb();
@@ -320,8 +356,19 @@ export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | 
   // Internal and staff-only are the same thing seen from two controls — keep them in step.
   if (patch.caps && 'internal' in patch.caps) audience = caps.internal ? 'staff' : (audience === 'staff' ? 'link' : audience);
   if (patch.audience) caps.internal = patch.audience === 'staff';
-  db.prepare("UPDATE share_links SET name = ?, caps = ?, audience = ?, stage = 'review', updated_at = ? WHERE id = ?")
-    .run(patch.name?.trim() || current.name, JSON.stringify(caps), audience, new Date().toISOString(), id);
+  // Download on → a fresh 14-day window (unless one is still running); off → start the purge grace clock.
+  const now = new Date();
+  let downloadsUntil = current.downloadsUntil;
+  let downloadsOffAt = current.downloadsOffAt;
+  if (caps.download && !current.caps.download) {
+    if (!downloadsUntil || new Date(downloadsUntil) <= now) downloadsUntil = new Date(now.getTime() + DOWNLOAD_DAYS * 86_400_000).toISOString();
+    downloadsOffAt = null;
+  } else if (!caps.download && current.caps.download) {
+    downloadsOffAt = now.toISOString();
+  }
+  if (patch.downloadsUntil && caps.download) downloadsUntil = patch.downloadsUntil;
+  db.prepare("UPDATE share_links SET name = ?, caps = ?, audience = ?, stage = 'review', downloads_until = ?, downloads_off_at = ?, updated_at = ? WHERE id = ?")
+    .run(patch.name?.trim() || current.name, JSON.stringify(caps), audience, downloadsUntil, downloadsOffAt, now.toISOString(), id);
   if (patch.emails) {
     db.prepare('DELETE FROM share_link_emails WHERE share_id = ?').run(id);
     for (const email of normaliseEmails(patch.emails)) {
@@ -344,7 +391,7 @@ export function addShareItems(shareId: string, items: NewShareItem[]): void {
 
 export function removeShareItem(shareId: string, assetId: string): void {
   const db = getShareLinksDb();
-  db.prepare('UPDATE share_link_items SET in_list = 0 WHERE share_id = ? AND asset_id = ?').run(shareId, assetId);
+  db.prepare('UPDATE share_link_items SET in_list = 0, removed_at = ? WHERE share_id = ? AND asset_id = ?').run(new Date().toISOString(), shareId, assetId);
   touch(db, shareId);
 }
 
@@ -364,9 +411,9 @@ export function repointShareItemsForAsset(fromAssetId: string, toAssetId: string
   }
   // Merge: where a share already has the destination, the moving asset's entry just leaves the list.
   db.prepare(
-    `UPDATE share_link_items SET in_list = 0
+    `UPDATE share_link_items SET in_list = 0, removed_at = ?
       WHERE asset_id = ? AND share_id IN (SELECT share_id FROM share_link_items WHERE asset_id = ?)`,
-  ).run(fromAssetId, toAssetId);
+  ).run(new Date().toISOString(), fromAssetId, toAssetId);
   db.prepare(
     `UPDATE share_link_items SET asset_id = ?, project_id = ?
       WHERE asset_id = ? AND share_id NOT IN (SELECT share_id FROM share_link_items WHERE asset_id = ?)`,
@@ -375,7 +422,7 @@ export function repointShareItemsForAsset(fromAssetId: string, toAssetId: string
 
 /** A deleted asset leaves every share (its per-video links stop working). */
 export function removeAssetFromAllShares(assetId: string): void {
-  getShareLinksDb().prepare('UPDATE share_link_items SET in_list = 0 WHERE asset_id = ?').run(assetId);
+  getShareLinksDb().prepare('UPDATE share_link_items SET in_list = 0, removed_at = ? WHERE asset_id = ?').run(new Date().toISOString(), assetId);
 }
 
 export function revokeShareLink(id: string): void {
@@ -400,7 +447,7 @@ function upsertItemRow(db: DatabaseSync, shareId: string, it: NewShareItem, opts
     if (opts.inList && existing.in_list === 0) {
       db.prepare(
         `UPDATE share_link_items
-            SET in_list = 1, position = ?,
+            SET in_list = 1, removed_at = NULL, position = ?,
                 section = COALESCE(?, section), title_tile_id = COALESCE(?, title_tile_id)
           WHERE share_id = ? AND asset_id = ?`,
       ).run(opts.position, it.section ?? null, it.titleTileId ?? null, shareId, it.assetId);

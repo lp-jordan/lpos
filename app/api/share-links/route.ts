@@ -9,10 +9,12 @@ import { getSession, requireRole } from '@/lib/services/api-auth';
 import { createShareLink, getShareLinkForPass, type CreateShareInput } from '@/lib/store/share-links-db';
 import { getPass } from '@/lib/store/platform-pass-store';
 import { listShareSummaries, passShareItems } from '@/lib/services/share-links';
+import { ensureShareDownloadWorker } from '@/lib/services/share-downloads';
 
 export async function GET(req: NextRequest) {
   const deny = await requireRole(req, 'user');
   if (deny) return deny;
+  ensureShareDownloadWorker();
   const sp = new URL(req.url).searchParams;
   return NextResponse.json({
     shares: listShareSummaries({ projectId: sp.get('projectId') ?? undefined, passId: sp.get('passId') ?? undefined, assetId: sp.get('assetId') ?? undefined }),

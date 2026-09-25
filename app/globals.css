@@ -19700,3 +19700,19 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 /* Single-video link (/v/): just the player, sized to fit the window. */
 .shv-solo { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding: 20px 16px 32px; }
 .shv-solo .shv-player { width: min(100%, calc((100dvh - 120px) * 16 / 9)); }
+/* Per-video download + copy actions in the share library row */
+.shv-row--two { padding-right: 72px; }
+.shv-row--none { padding-right: 6px; }
+.shv-row-title { overflow-wrap: anywhere; }
+.shv-row-actions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; align-items: center; }
+.shv-row-actions .shv-row-copy { position: static; transform: none; }
+.shv-dl--small { width: 28px; height: 26px; }
+.shv-dl.is-waiting { cursor: progress; }
+.shv-dl.is-failed { color: var(--warning); cursor: not-allowed; }
+.shv-dl-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: shvSpin 0.9s linear infinite; }
+@keyframes shvSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .shv-dl-spin { animation: none; } }
+.shv-btn:disabled { opacity: 0.5; cursor: progress; }
+.shm-downloads { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); font-size: 0.8rem; color: var(--muted); }
+.shm-until { display: inline-flex; align-items: center; gap: 8px; color: var(--muted-soft); }
+.shm-until input { background: var(--surface-3); border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); font: inherit; font-size: 0.8rem; padding: 3px 6px; color-scheme: dark; }
