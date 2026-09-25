@@ -16,6 +16,7 @@ interface UploadSessionRow {
   project_id: string;
   filename: string;
   temp_path: string;
+  skip_cloudflare: number;
   status: string;
 }
 
@@ -99,6 +100,7 @@ export async function POST(
       replaceAssetId: forceNewAsset ? undefined : (replaceAssetId as string),
       forceNewAsset,
       jobId: session.job_id,
+      skipCloudflare: session.skip_cloudflare === 1,
       actor,
     });
   } catch (err) {

@@ -562,9 +562,11 @@ export function MediaTab({
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
   const [addToHubAssets,      setAddToHubAssets]      = useState<MediaAsset[] | null>(null);
   const [nasActive, setNasActive] = useState(false);
-  // One-shot NAS-mode opt-out of the Cloudflare Stream auto-upload. Applies to
-  // the very next drop (every file in it), then re-arms itself OFF so CF
-  // auto-upload resumes without the operator having to remember to switch back.
+  // One-shot opt-out of the Cloudflare Stream auto-upload (upload-zone right-click).
+  // Applies to the very next upload batch (every file in it, any upload path),
+  // then re-arms itself OFF so CF auto-upload resumes without the operator having
+  // to remember to switch back.
+  const skipCfRef = useRef(false);
   const [skipCfNextUpload, setSkipCfNextUpload] = useState(false);
   // CF settings state removed with the gear button (cleanup pass).
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
@@ -756,12 +758,13 @@ const { openMenu } = useContextMenu();
     file: File,
     jobId: string,
     replaceAssetId?: string,
+    skipCloudflare?: boolean,
   ): Promise<{ uploadId: string; bytesReceived: number } | null> {
     try {
       const res = await fetch(`/api/projects/${projectId}/media/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, fileSize: file.size, jobId, replaceAssetId }),
+        body: JSON.stringify({ filename: file.name, fileSize: file.size, jobId, replaceAssetId, skipCloudflare }),
       });
       if (!res.ok) {
         const d = await res.json() as { error?: string };
@@ -896,6 +899,7 @@ const { openMenu } = useContextMenu();
     file: File,
     replaceAssetId?: string,
     reservedJobId?: string,
+    skipCloudflare?: boolean,
   ): Promise<{
     ok: boolean;
     code?: string;
@@ -908,7 +912,7 @@ const { openMenu } = useContextMenu();
       return { ok: false, error: `No ingest job ID for "${file.name}"` };
     }
 
-    const session = await initiateChunkedUpload(file, reservedJobId, replaceAssetId);
+    const session = await initiateChunkedUpload(file, reservedJobId, replaceAssetId, skipCloudflare);
     if (!session) return { ok: false, error: `Failed to initiate upload for "${file.name}"` };
 
     const chunksResult = await uploadChunks(file, session.uploadId, session.bytesReceived);
@@ -920,6 +924,7 @@ const { openMenu } = useContextMenu();
 
   async function uploadFiles(files: File[]) {
     if (!files.length) return;
+    const skipCloudflare = consumeSkipCf();
     setUploadError(null);
     setUploadInfo(null);
     startBatch();
@@ -1001,14 +1006,14 @@ const { openMenu } = useContextMenu();
             continue;
           }
           if (decision.action === 'version') {
-            const result = await uploadFile(files[i], decision.replaceId, reservedJobId);
+            const result = await uploadFile(files[i], decision.replaceId, reservedJobId, skipCloudflare);
             if (!result.ok) setUploadError(result.error ?? `Upload failed for "${files[i].name}"`);
             continue;
           }
           // 'separate': upload as a brand-new asset. Upload with no replaceId; if the
           // SERVER still detects a version match (a collision the client saw too),
           // force-finalize the staged upload as a new asset instead of re-prompting.
-          const result = await uploadFile(files[i], undefined, reservedJobId);
+          const result = await uploadFile(files[i], undefined, reservedJobId, skipCloudflare);
           if (result.ok) continue;
           if (result.code === 'version_confirmation_required' && result.uploadId) {
             const asNew = await confirmChunkedAsNew(result.uploadId);
@@ -1019,7 +1024,7 @@ const { openMenu } = useContextMenu();
           continue;
         }
 
-        const firstAttempt = await uploadFile(files[i], undefined, reservedJobId);
+        const firstAttempt = await uploadFile(files[i], undefined, reservedJobId, skipCloudflare);
         if (firstAttempt.ok) continue;
 
         // Fallback: server detected a version conflict that the pre-check missed
@@ -1065,7 +1070,6 @@ const { openMenu } = useContextMenu();
     if (!currentUser?.nasIngestAccess) return;
     const next = !nasActive;
     setNasActive(next);
-    if (!next) setSkipCfNextUpload(false);
     fetch('/api/me', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1073,25 +1077,36 @@ const { openMenu } = useContextMenu();
     }).catch(() => {});
   }
 
+  function setSkipCf(next: boolean) {
+    skipCfRef.current = next;
+    setSkipCfNextUpload(next);
+  }
+
+  /** Read-and-clear the one-shot CF opt-out. Called once per upload batch. */
+  function consumeSkipCf(): boolean {
+    const skip = skipCfRef.current;
+    if (skip) setSkipCf(false);
+    return skip;
+  }
+
   function handleUploadZoneContextMenu(e: React.MouseEvent) {
-    if (!currentUser?.nasIngestAccess) return;
     e.preventDefault();
     openMenu(e.clientX, e.clientY, [
-      {
-        type: 'item',
-        label: nasActive ? 'Disable NAS ingest mode' : 'Enable NAS ingest mode',
-        onClick: () => { void toggleNasIngestActive(); },
-      },
-      ...(nasActive ? [
-        { type: 'separator' as const },
+      ...(currentUser?.nasIngestAccess ? [
         {
           type: 'item' as const,
-          label: skipCfNextUpload
-            ? 'Cancel: skip Cloudflare for next upload'
-            : 'Skip Cloudflare for next upload',
-          onClick: () => setSkipCfNextUpload((v) => !v),
+          label: nasActive ? 'Disable NAS ingest mode' : 'Enable NAS ingest mode',
+          onClick: () => { void toggleNasIngestActive(); },
         },
+        { type: 'separator' as const },
       ] : []),
+      {
+        type: 'item',
+        label: skipCfNextUpload
+          ? 'Cancel: skip Cloudflare for next upload'
+          : 'Skip Cloudflare for next upload',
+        onClick: () => setSkipCf(!skipCfRef.current),
+      },
     ]);
   }
 
@@ -1115,7 +1130,7 @@ const { openMenu } = useContextMenu();
     return '\\\\' + decodeURIComponent(withoutScheme).replace(/\//g, '\\');
   }
 
-  async function registerPaths(paths: string[]) {
+  async function registerPaths(paths: string[], skipCloudflare = false) {
     setUploadError(null);
     for (let i = 0; i < paths.length; i++) {
       try {
@@ -1123,7 +1138,7 @@ const { openMenu } = useContextMenu();
           fetch(`/api/projects/${projectId}/media/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filePath: paths[i], ...opts }),
+            body: JSON.stringify({ filePath: paths[i], ...opts, ...(skipCloudflare ? { skipCloudflare } : {}) }),
           });
 
         let res = await registerPath();
@@ -1219,13 +1234,12 @@ const { openMenu } = useContextMenu();
         .filter((p) => ACCEPTED_EXTS.some((ext) => p.toLowerCase().endsWith(ext)));
 
       if (paths.length) {
+        // Consume the one-shot CF opt-out: this batch gets it, the next doesn't.
+        const skipCloudflare = consumeSkipCf();
         if (nasActive) {
-          // Consume the one-shot CF opt-out: this drop gets it, the next doesn't.
-          const skipCloudflare = skipCfNextUpload;
-          if (skipCloudflare) setSkipCfNextUpload(false);
           for (const p of paths) void nasIngestFromPath(p, skipCloudflare ? { skipCloudflare } : undefined);
         } else {
-          void registerPaths(paths);
+          void registerPaths(paths, skipCloudflare);
         }
         return;
       }
@@ -1692,14 +1706,14 @@ const { openMenu } = useContextMenu();
                   borderRadius: '3px', padding: '0.1rem 0.35rem',
                 }}>NAS</span>
               )}
-              {nasActive && skipCfNextUpload && (
+              {skipCfNextUpload && (
                 <span style={{
-                  position: 'absolute', top: '0.5rem', right: '2.9rem',
+                  position: 'absolute', top: '0.5rem', right: nasActive ? '2.9rem' : '0.6rem',
                   fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.06em',
                   textTransform: 'uppercase',
                   background: 'var(--color-warning, #d97706)', color: '#fff',
                   borderRadius: '3px', padding: '0.1rem 0.35rem',
-                }} title="The next drop will not auto-upload to Cloudflare Stream">No CF · next drop</span>
+                }} title="The next upload will not auto-upload to Cloudflare Stream">No CF · next upload</span>
               )}
             </>
           )}

@@ -25,14 +25,14 @@ export async function POST(
   const project = getProjectStore().getById(projectId);
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
-  let body: { filename?: unknown; fileSize?: unknown; jobId?: unknown; replaceAssetId?: unknown };
+  let body: { filename?: unknown; fileSize?: unknown; jobId?: unknown; replaceAssetId?: unknown; skipCloudflare?: unknown };
   try {
     body = await req.json() as typeof body;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { filename, fileSize, jobId, replaceAssetId } = body;
+  const { filename, fileSize, jobId, replaceAssetId, skipCloudflare } = body;
 
   if (typeof filename !== 'string' || !filename.trim()) {
     return NextResponse.json({ error: 'filename is required' }, { status: 400 });
@@ -89,8 +89,8 @@ export async function POST(
   db.prepare(`
     INSERT INTO upload_sessions
       (upload_id, job_id, project_id, filename, file_size, bytes_received, temp_path,
-       replace_asset_id, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'uploading', ?, ?)
+       replace_asset_id, skip_cloudflare, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'uploading', ?, ?)
   `).run(
     uploadId,
     jobId,
@@ -99,6 +99,7 @@ export async function POST(
     fileSize,
     tempPath,
     typeof replaceAssetId === 'string' ? replaceAssetId : null,
+    skipCloudflare === true ? 1 : 0,
     now,
     now,
   );

@@ -28,6 +28,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       replaceAssetId?: string;
       /** Skip version detection and register as a brand-new asset. */
       forceNewAsset?: boolean;
+      /** One-shot opt-out of the chained Cloudflare Stream auto-upload. */
+      skipCloudflare?: boolean;
     };
 
     if (!body.filePath?.trim()) {
@@ -100,7 +102,11 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       search_text: `${asset.name || asset.originalFilename} ${project.name} ${project.clientName}`.trim(),
     });
 
-    triggerFrameIOUpload(projectId, asset.assetId, { actor, clientId: project.clientName || null });
+    triggerFrameIOUpload(projectId, asset.assetId, {
+      actor,
+      clientId: project.clientName || null,
+      skipCloudflare: body.skipCloudflare === true,
+    });
 
     // Probe duration and extract thumbnail in background
     if (normalised && fs.existsSync(normalised)) {

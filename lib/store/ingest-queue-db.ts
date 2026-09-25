@@ -102,6 +102,14 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_upload_sessions_project ON upload_sessions(project_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_upload_sessions_status  ON upload_sessions(status, updated_at);
   `);
+
+  // Migration: one-shot "Skip Cloudflare for next upload" opt-out, carried on the
+  // session so it survives the finalize / confirm split (safe to run repeatedly)
+  try {
+    db.exec(`ALTER TABLE upload_sessions ADD COLUMN skip_cloudflare INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
 }
 
 export function getIngestQueueDb(): DatabaseSync {

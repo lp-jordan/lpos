@@ -19,6 +19,7 @@ interface UploadSessionRow {
   bytes_received: number;
   temp_path: string;
   replace_asset_id: string | null;
+  skip_cloudflare: number;
   status: string;
 }
 
@@ -90,6 +91,7 @@ export async function POST(
       preComputedHash,
       replaceAssetId: session.replace_asset_id ?? undefined,
       jobId: session.job_id,
+      skipCloudflare: session.skip_cloudflare === 1,
       actor,
     });
   } catch (err) {
