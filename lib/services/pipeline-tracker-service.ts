@@ -20,6 +20,8 @@ import type { PromotionQueueService } from '@/lib/services/promotion-queue-servi
 import { patchAsset } from '@/lib/store/media-registry';
 import { triggerFrameIOUpload } from '@/lib/services/frameio-upload';
 import { triggerLeaderPassPublish } from '@/lib/services/leaderpass-publish';
+import { triggerCloudflareUpload } from '@/lib/services/cloudflare-publish';
+import { getDefaultAllowedOrigins } from '@/lib/services/cloudflare-stream';
 import { lpaiProvisioningStatus, type LpaiProvisioningRecord } from '@/lib/services/lpai-provisioning-status';
 import type {
   PipelineEntry,
@@ -730,6 +732,11 @@ export class PipelineTrackerService {
       case 'upload:frameio':
         patchAsset(entry.projectId, entry.assetId!, { frameio: { status: 'none', lastError: null } });
         triggerFrameIOUpload(entry.projectId, entry.assetId!);
+        break;
+      case 'upload:cloudflare':
+        // Leave cloudflare.status = 'failed' so runCloudflareUpload can adopt the
+        // prior uid if its bytes already reached CF (no multi-GB re-upload).
+        triggerCloudflareUpload(entry.projectId, entry.assetId!, { allowedOrigins: getDefaultAllowedOrigins() });
         break;
       case 'upload:leaderpass':
         patchAsset(entry.projectId, entry.assetId!, {

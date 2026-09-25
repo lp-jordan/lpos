@@ -13,6 +13,7 @@ import {
   getCloudflareStreamConfigDiagnostic,
   getCloudflareFileSize,
   getCloudflareVideoState,
+  CF_BYTES_RECEIVED_STATES,
   isCloudflareStreamConfigured,
   listCloudflareVideos,
   uploadCaptionsVtt,
@@ -61,8 +62,10 @@ function getQueue() {
 
 // Orchestration-level retry. The low-level cloudflare-stream fetches already
 // retry transient 5xx/409 per-chunk; this is the outer safety net for a whole-
-// upload failure (e.g. the create-upload call, or a ready-poll timeout). In-
-// memory (per assetId) — a process restart resets it, which is fine.
+// upload failure (e.g. the create-upload call, or a ready-wait stall). A retry
+// after the bytes already landed adopts the existing CF uid instead of
+// re-uploading (see adoptUid in runCloudflareUpload). In-memory (per assetId) —
+// a process restart resets it, which is fine.
 const MAX_CF_RETRIES   = 2;
 const CF_RETRY_DELAY_MS = 30_000;
 const cfRetryAttempts  = new Map<string, number>();
@@ -166,6 +169,23 @@ export async function runCloudflareUpload(
   const priorCloudflare = getLatestDistributionInfoForAsset(assetId, 'cloudflare');
   const priorPosterUrl  = readPriorPosterUrl(priorCloudflare);
 
+  // Adopt a previous attempt whose bytes already reached Cloudflare. A failure
+  // AFTER the upload finished (ready-wait stall, restart mid-encode) must not
+  // re-send the whole file — for a 25 GB live event that's hours of transfer
+  // thrown away while the original encode was fine. If CF has every byte
+  // (queued / inprogress / ready) we skip straight to the ready-wait on that uid.
+  let adoptUid: string | null = null;
+  if (asset.cloudflare.status === 'failed' && asset.cloudflare.uid) {
+    try {
+      const existing = await getCloudflareVideoState(asset.cloudflare.uid);
+      if (existing.cfState && CF_BYTES_RECEIVED_STATES.has(existing.cfState)) {
+        adoptUid = asset.cloudflare.uid;
+      }
+    } catch {
+      // Gone from CF / unreachable — fall through to a fresh upload.
+    }
+  }
+
   // Register a queue job so this upload shows as a "Cloudflare" stage in the
   // pipeline (the tracker is queue-job-driven, not status-driven).
   const queue    = getQueue();
@@ -174,42 +194,49 @@ export async function runCloudflareUpload(
   const cancelled = () => (jobId ? queue?.isCancelled(jobId) ?? false : false);
 
   patchAsset(projectId, assetId, {
-    cloudflare: { status: 'uploading', progress: 0, lastError: null, readyAt: null },
+    cloudflare: adoptUid
+      ? { status: 'processing', progress: 100, lastError: null, readyAt: null }
+      : { status: 'uploading', progress: 0, lastError: null, readyAt: null },
   });
 
   // Hoisted so the catch block can tear down a half-uploaded CF video on cancel.
   let prepared: { uid: string; uploadUrl: string } | null = null;
   try {
-    prepared = await createCloudflareTusUpload(asset);
-    console.log(`[cloudflare-publish] upload initialized for asset ${assetId}; uid=${prepared.uid}`);
+    if (adoptUid) {
+      prepared = { uid: adoptUid, uploadUrl: asset.cloudflare.uploadUrl ?? '' };
+      console.log(`[cloudflare-publish] adopting existing Cloudflare upload uid=${adoptUid} for asset ${assetId} (bytes already received; skipping re-upload)`);
+    } else {
+      prepared = await createCloudflareTusUpload(asset);
+      console.log(`[cloudflare-publish] upload initialized for asset ${assetId}; uid=${prepared.uid}`);
 
-    patchAsset(projectId, assetId, {
-      cloudflare: { uid: prepared.uid, uploadUrl: prepared.uploadUrl, creator: asset.assetId },
-    });
+      patchAsset(projectId, assetId, {
+        cloudflare: { uid: prepared.uid, uploadUrl: prepared.uploadUrl, creator: asset.assetId },
+      });
 
-    // Lock allowed origins immediately — before any bytes are transferred.
-    const allowedOrigins = options?.allowedOrigins ?? null;
-    if (allowedOrigins && allowedOrigins.length > 0) {
-      try {
-        await applyVideoSettings(prepared.uid, { allowedOrigins });
-        console.log(`[cloudflare-publish] allowedOrigins set for uid=${prepared.uid}`);
-      } catch (err) {
-        console.warn(`[cloudflare-publish] failed to set allowedOrigins for uid=${prepared.uid}:`, err);
+      // Lock allowed origins immediately — before any bytes are transferred.
+      const allowedOrigins = options?.allowedOrigins ?? null;
+      if (allowedOrigins && allowedOrigins.length > 0) {
+        try {
+          await applyVideoSettings(prepared.uid, { allowedOrigins });
+          console.log(`[cloudflare-publish] allowedOrigins set for uid=${prepared.uid}`);
+        } catch (err) {
+          console.warn(`[cloudflare-publish] failed to set allowedOrigins for uid=${prepared.uid}:`, err);
+        }
       }
+
+      await uploadFileToCloudflareTus(prepared.uploadUrl, asset.filePath, {
+        onProgress: (progress) => {
+          if (jobId) queue?.setProgress(jobId, progress);
+          patchAsset(projectId, assetId, { cloudflare: { progress } });
+        },
+        isCancelled: jobId ? cancelled : undefined,
+      });
+
+      console.log(`[cloudflare-publish] upload complete for asset ${assetId}; waiting for Cloudflare processing`);
+      patchAsset(projectId, assetId, {
+        cloudflare: { status: 'processing', progress: 100, uploadedAt: new Date().toISOString() },
+      });
     }
-
-    await uploadFileToCloudflareTus(prepared.uploadUrl, asset.filePath, {
-      onProgress: (progress) => {
-        if (jobId) queue?.setProgress(jobId, progress);
-        patchAsset(projectId, assetId, { cloudflare: { progress } });
-      },
-      isCancelled: jobId ? cancelled : undefined,
-    });
-
-    console.log(`[cloudflare-publish] upload complete for asset ${assetId}; waiting for Cloudflare processing`);
-    patchAsset(projectId, assetId, {
-      cloudflare: { status: 'processing', progress: 100, uploadedAt: new Date().toISOString() },
-    });
     if (jobId) queue?.setProcessing(jobId, 'Waiting for Cloudflare Stream processing');
 
     // Heartbeat the queue job during the encode wait so the stale-job sweep
@@ -217,7 +244,18 @@ export async function runCloudflareUpload(
     const heartbeat = jobId ? setInterval(() => queue?.heartbeat(jobId), 60_000) : null;
     let ready;
     try {
-      ready = await waitForCloudflareVideoReady(prepared.uid, { isCancelled: jobId ? cancelled : undefined });
+      ready = await waitForCloudflareVideoReady(prepared.uid, {
+        isCancelled: jobId ? cancelled : undefined,
+        onProgress: (state) => {
+          if (!jobId) return;
+          const detail = state.cfState === 'inprogress' && state.pctComplete != null
+            ? `Cloudflare encoding ${Math.round(state.pctComplete)}%`
+            : state.cfState === 'queued'
+              ? 'Queued for Cloudflare encoding'
+              : 'Waiting for Cloudflare Stream processing';
+          queue?.setProcessing(jobId, detail);
+        },
+      });
     } finally {
       if (heartbeat) clearInterval(heartbeat);
     }

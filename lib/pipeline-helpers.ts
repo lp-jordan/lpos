@@ -125,7 +125,7 @@ export function overallBadgeClass(status: PipelineEntry['overallStatus']): strin
   return 'tt-overall-badge--active';
 }
 
-export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:leaderpass', 'transcript', 'transcript_es', 'promotion']);
+export const RETRYABLE_STAGES: Set<PipelineStageType> = new Set(['upload:frameio', 'upload:cloudflare', 'upload:leaderpass', 'transcript', 'transcript_es', 'promotion']);
 // upload:sardius is intentionally excluded — retry via the sidebar Reset button
 
 export function isActive(entry: PipelineEntry): boolean {
