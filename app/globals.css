@@ -20955,3 +20955,24 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .shl-name { font-weight: 600; font-size: 0.88rem; color: var(--text-strong); display: block; }
 .shl-meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 3px; font-size: 0.72rem; color: var(--muted-soft); }
 .shl-cap { font-size: 0.66rem; padding: 1px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); }
+.shm-items-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.shm-add { border: 0; background: none; color: var(--accent); font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; padding: 2px 4px; }
+.shm-title-input {
+  background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text); font: inherit; font-size: 0.86rem;
+  padding: 2px 6px; margin-left: -6px; outline: none; width: 100%;
+}
+.shm-title-input::placeholder { color: var(--text); opacity: 1; }
+.shm-title-input:hover { border-color: var(--line); }
+.shm-title-input:focus { border-color: var(--accent); background: var(--surface-inset); }
+.shm-title-input:focus::placeholder { color: var(--muted-soft); }
+.shm-reset { border: 0; background: none; color: var(--accent); font: inherit; font-size: inherit; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.shm-picker { display: flex; flex-direction: column; gap: 8px; }
+.shm-picker-list { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.shm-pick {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid transparent; border-radius: 8px;
+  background: none; color: var(--text); font: inherit; padding: 4px 6px; cursor: pointer;
+}
+.shm-pick:hover:not(:disabled) { background: var(--surface-inset); }
+.shm-pick.is-on { border-color: rgba(219,175,95,0.5); background: var(--accent-soft); }
+.shm-pick:disabled { opacity: 0.5; cursor: default; }
+.shm-check { width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--line-strong); display: grid; place-items: center; font-size: 0.7rem; color: var(--accent); flex: none; }

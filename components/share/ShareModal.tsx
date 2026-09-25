@@ -13,7 +13,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import type { ShareCaps, ShareLink, ShareAudience } from '@/lib/store/share-links-db';
-import type { ShareView } from '@/lib/services/share-links';
+import type { ShareView, ShareViewItem } from '@/lib/services/share-links';
+import { AddVideosPicker } from './AddVideosPicker';
 
 // Internal isn't a switch here: choosing "LP Staff Only" under Who is what
 // makes a share internal (the store keeps caps.internal in step with it).
@@ -58,6 +59,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
   const [view, setView]   = useState<ShareView | null>(null);
   const [emailDraft, setEmailDraft] = useState('');
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [picking, setPicking] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/share-links/${shareId}`);
@@ -95,6 +97,22 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     await fetch(`/api/share-links/${shareId}`, { method: 'DELETE' });
     onChanged?.();
     onClose();
+  }
+
+  async function addItems(list: Array<{ assetId: string; projectId: string }>) {
+    await fetch(`/api/share-links/${shareId}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: list }) });
+    setPicking(false);
+    await load();
+    onChanged?.();
+  }
+
+  /** A typed title overrides the automatic one; clearing it goes back to automatic. */
+  async function setTitle(i: ShareViewItem, value: string) {
+    const next = value.trim() && value.trim() !== i.autoTitle ? value.trim() : null;
+    if (next === i.clientTitle) return;
+    await fetch(`/api/share-links/${shareId}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId: i.assetId, projectId: i.projectId, clientTitle: next }) });
+    await load();
+    onChanged?.();
   }
 
   async function removeItem(assetId: string) {
@@ -174,22 +192,40 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
               </div>
             )}
 
-            <div className="shm-label">{items.length} video{items.length === 1 ? '' : 's'}{share.passId ? ' · from the pass' : ''}</div>
-            <div className="shm-items">
-              {items.map((i) => (
-                <div key={i.assetId} className="shm-item">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={i.thumbnailUrl} alt="" className="shm-thumb" />
-                  <span className="shm-item-text">
-                    <span>{i.title}</span>
-                    {i.title !== i.lposName && <span className="shm-item-sub">{i.lposName}</span>}
-                  </span>
-                  {!share.passId && (
-                    <button type="button" className="shm-mini shm-mini--ghost" aria-label={`Remove ${i.title}`} onClick={() => void removeItem(i.assetId)}>×</button>
-                  )}
-                </div>
-              ))}
+            <div className="shm-items-head">
+              <span className="shm-label">{items.length} video{items.length === 1 ? '' : 's'}</span>
+              <button type="button" className="shm-add" onClick={() => setPicking((v) => !v)}>{picking ? 'Close' : '+ Add videos'}</button>
             </div>
+            {picking ? (
+              <AddVideosPicker existing={new Set(items.map((i) => i.assetId))} onAdd={addItems} onClose={() => setPicking(false)} />
+            ) : (
+              <div className="shm-items">
+                {items.map((i) => (
+                  <div key={i.assetId} className="shm-item">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={i.thumbnailUrl} alt="" className="shm-thumb" />
+                    <span className="shm-item-text">
+                      <input
+                        key={`${i.assetId}:${i.title}`}
+                        className="shm-title-input"
+                        defaultValue={i.clientTitle ?? ''}
+                        placeholder={i.autoTitle}
+                        aria-label={`Title for ${i.lposName}`}
+                        onBlur={(e) => void setTitle(i, e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                      />
+                      <span className="shm-item-sub">
+                        {i.titleSource === 'manual' ? (
+                          <>Custom title · <button type="button" className="shm-reset" onClick={() => void setTitle(i, '')}>use {i.autoTitle === i.lposName ? 'file name' : 'Platform title'}</button></>
+                        ) : i.titleSource === 'platform' ? 'Platform title' : 'File name'}
+                        {i.lposName !== i.title && <> · {i.lposName}</>}
+                      </span>
+                    </span>
+                    <button type="button" className="shm-mini shm-mini--ghost" aria-label={`Remove ${i.title}`} onClick={() => void removeItem(i.assetId)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="modal-actions shm-actions">
               {confirmRevoke ? (

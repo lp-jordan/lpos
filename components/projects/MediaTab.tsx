@@ -11,6 +11,7 @@ import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModa
 // with tabs for Review Links / Deliveries. Single toolbar button entry.
 import { ShareModal, createShare } from '@/components/share/ShareModal';
 import { ProjectSharesModal } from '@/components/share/ProjectSharesModal';
+import { AddToShareModal } from '@/components/share/AddToShareModal';
 import { MoveAssetsModal } from '@/components/projects/MoveAssetsModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -532,6 +533,7 @@ export function MediaTab({
   // managingShareId opens one share's modal (right after "Share…" creates it).
   const [showHub,          setShowHub]          = useState(false);
   const [managingShareId,  setManagingShareId]  = useState<string | null>(null);
+  const [addToShareAssets, setAddToShareAssets] = useState<MediaAsset[] | null>(null);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
@@ -1340,6 +1342,16 @@ const { openMenu } = useContextMenu();
           void shareAssets(chosen);
         },
       },
+      {
+        type: 'item' as const,
+        label: 'Add to share…',
+        icon: <IconLink />,
+        onClick: () => {
+          setAddToShareAssets(selectedIds.has(asset.assetId) && selectedIds.size > 1
+            ? assets.filter((a) => selectedIds.has(a.assetId))
+            : [asset]);
+        },
+      },
       { type: 'separator' as const },
       {
         type: 'item' as const,
@@ -1823,6 +1835,13 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
+              onClick={() => setAddToShareAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
+            >
+              Add to share…
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
               onClick={() => {
                 const selected = assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid);
                 if (selected.length) setThumbnailBatchAssets(selected);
@@ -1983,6 +2002,17 @@ const { openMenu } = useContextMenu();
       {/* Shares — the unified Share system (replaces review links, deliveries, Link Hubs) */}
       {showHub && <ProjectSharesModal projectId={projectId} onClose={() => setShowHub(false)} />}
       {managingShareId && <ShareModal shareId={managingShareId} onClose={() => setManagingShareId(null)} />}
+      {addToShareAssets && (
+        <AddToShareModal
+          items={addToShareAssets.map((a) => ({ assetId: a.assetId, projectId }))}
+          onClose={() => setAddToShareAssets(null)}
+          onAdded={(s) => {
+            toast({ id: `share-add:${s.id}:${Date.now()}`, kind: 'publish', tone: 'success', title: 'Added to share', body: `${addToShareAssets.length} video${addToShareAssets.length === 1 ? '' : 's'} → ${s.name}` });
+            setAddToShareAssets(null);
+            setSelectedIds(new Set());
+          }}
+        />
+      )}
 
       {/* Detail panel */}
       <MediaDetailPanel

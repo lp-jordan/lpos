@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, requireRole } from '@/lib/services/api-auth';
 import { createShareLink, getShareLinkForPass, type CreateShareInput } from '@/lib/store/share-links-db';
 import { getPass } from '@/lib/store/platform-pass-store';
-import { listShareSummaries } from '@/lib/services/share-links';
+import { listShareSummaries, passShareItems } from '@/lib/services/share-links';
 
 export async function GET(req: NextRequest) {
   const deny = await requireRole(req, 'user');
@@ -29,10 +29,13 @@ export async function POST(req: NextRequest) {
   if (body.passId) {
     const pass = getPass(body.passId);
     if (!pass) return NextResponse.json({ error: 'Pass not found' }, { status: 404 });
-    // One share per pass — sharing an already-shared pass returns the existing link.
+    // Sharing a pass again reopens its share rather than minting a second link.
     const existing = getShareLinkForPass(body.passId);
     if (existing) return NextResponse.json({ share: existing });
     body.name = body.name?.trim() || pass.title;
+    // A pass is only a shortcut for filling the list: its videos, in board
+    // order, sectioned by category, titled live from their tiles.
+    body.items = passShareItems(body.passId);
   } else if (!body.items?.length) {
     return NextResponse.json({ error: 'Pick at least one video to share.' }, { status: 400 });
   }

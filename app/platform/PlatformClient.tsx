@@ -28,8 +28,8 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
-  // Shares: pass-backed ones light up their pass card; the rest are one-off
-  // shares made from the Media tab, listed under "Other shares".
+  // Shares: every share is the same kind of thing; ones started from a pass
+  // also light up that pass's card.
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [managing, setManaging] = useState<string | null>(null);
   const loadShares = useCallback(async () => {
@@ -38,7 +38,6 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
   }, []);
   useEffect(() => { void loadShares(); }, [loadShares]);
   const sharedPassIds = new Set(shares.filter((x) => x.passId).map((x) => x.passId));
-  const otherShares = shares.filter((x) => !x.passId);
 
   async function createPass() {
     if (!title.trim() || busy) return;
@@ -100,11 +99,11 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
         })}
       </div>
 
-      {otherShares.length > 0 && (
+      {shares.length > 0 && (
         <div style={{ marginTop: 44, animation: 'pfFadeIn .6s ease both', animationDelay: '.12s' }}>
-          <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-soft)' }}>Other shares</h2>
+          <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-soft)' }}>Shares</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {otherShares.map((x) => (
+            {shares.map((x) => (
               <div key={x.id} className="shl-row" role="button" tabIndex={0}
                 onClick={() => setManaging(x.id)}
                 onKeyDown={(e) => { if (e.key === 'Enter') setManaging(x.id); }}>

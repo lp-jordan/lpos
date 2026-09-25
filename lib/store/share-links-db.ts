@@ -6,16 +6,12 @@
  * each video's newest cut. Every link
  * renders in the same viewer; the switches only add or remove pieces of it.
  *
- * A share is either:
- *   - pass-backed (`pass_id` set): its videos, order, categories and client-facing
- *     titles come live from the Platform pass tree, so the pass IS the share and
- *     nobody curates the same videos twice; or
- *   - ad-hoc (`pass_id` null): an explicit, ordered list in share_link_items.
- * For pass-backed shares, share_link_items still holds per-video state (the
- * per-video reshare token) but not membership.
- *
- * Every change is live — there is no publish/deliver step. What used to be
- * "Deliver" is just switches: Download on, Comments off, Lock cuts on.
+ * Every share is one kind of thing: an ordered list of videos, which can come
+ * from any project. A video's display title is, in order: a manual title typed
+ * on the share → its Platform tile title (live, so renaming the tile renames it
+ * in every share) → the LPOS asset name. Sharing from a Platform pass is only a
+ * shortcut that fills the list from the pass (in order, sectioned by category);
+ * `pass_id` records that origin and is not a second kind of share.
  *
  * Backed by its own share-links.sqlite at the DATA_DIR root — auto-included in
  * the nightly R2 backup + WAL checkpointing via the globalThis singleton
@@ -71,7 +67,12 @@ export interface ShareLinkItem {
   assetId:           string;
   projectId:         string;
   position:          number;
+  /** Manual display title — wins over the Platform tile title and the asset name. */
   clientTitle:       string | null;
+  /** Optional heading the video sits under (a pass category when shared from a pass). */
+  section:           string | null;
+  /** The tile to take the title from, when added from a pass (else looked up by asset). */
+  titleTileId:       string | null;
   /** Stable per-video public link token (one-click reshare). */
   videoToken:        string;
 }
@@ -84,7 +85,7 @@ interface ShareRow {
 
 interface ItemRow {
   share_id: string; asset_id: string; project_id: string; position: number;
-  client_title: string | null; pinned_version_id: string | null; pinned_version_number: number | null;
+  client_title: string | null; section: string | null; title_tile_id: string | null;
   video_token: string; in_list: number;
 }
 
@@ -130,6 +131,9 @@ function initSchema(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_sl_items_token ON share_link_items(video_token);
   `);
+  for (const col of ['section TEXT', 'title_tile_id TEXT']) {
+    try { db.exec(`ALTER TABLE share_link_items ADD COLUMN ${col}`); } catch { /* already there */ }
+  }
 }
 
 export function getShareLinksDb(): DatabaseSync {
@@ -190,6 +194,8 @@ function rowToItem(row: ItemRow): ShareLinkItem {
     projectId:           row.project_id,
     position:            row.position,
     clientTitle:         row.client_title,
+    section:             row.section ?? null,
+    titleTileId:         row.title_tile_id ?? null,
     videoToken:          row.video_token,
   };
 }
@@ -226,7 +232,7 @@ export function getShareLinkForPass(passId: string): ShareLink | null {
   return row ? rowToShare(row, emailsFor(db, row.id)) : null;
 }
 
-/** Ad-hoc list members, in order. Empty for pass-backed shares. */
+/** The share's videos, in order. */
 export function listShareItems(shareId: string): ShareLinkItem[] {
   const rows = getShareLinksDb()
     .prepare('SELECT * FROM share_link_items WHERE share_id = ? AND in_list = 1 ORDER BY position, rowid')
@@ -251,6 +257,14 @@ export function getShareItemByVideoToken(videoToken: string): { share: ShareLink
 
 // ── writes ────────────────────────────────────────────────────────────────────
 
+export interface NewShareItem {
+  assetId:      string;
+  projectId:    string;
+  clientTitle?: string | null;
+  section?:     string | null;
+  titleTileId?: string | null;
+}
+
 export interface CreateShareInput {
   name:      string;
   passId?:   string | null;
@@ -258,7 +272,7 @@ export interface CreateShareInput {
   caps?:     Partial<ShareCaps>;
   audience?: ShareAudience;
   emails?:   string[];
-  items?:    Array<{ assetId: string; projectId: string; clientTitle?: string | null }>;
+  items?:    NewShareItem[];
   createdBy?: string | null;
 }
 
@@ -280,9 +294,7 @@ export function createShareLink(input: CreateShareInput): ShareLink {
     for (const email of normaliseEmails(input.emails ?? [])) {
       db.prepare('INSERT OR IGNORE INTO share_link_emails (share_id, email) VALUES (?, ?)').run(id, email);
     }
-    if (!input.passId) {
-      (input.items ?? []).forEach((it, i) => upsertItemRow(db, id, it.assetId, it.projectId, { position: i, clientTitle: it.clientTitle ?? null, inList: true }));
-    }
+    (input.items ?? []).forEach((it, i) => upsertItemRow(db, id, it, { position: i, inList: true }));
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -318,13 +330,13 @@ export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | 
   return getShareLink(id);
 }
 
-/** Append videos to an ad-hoc share (skips ones already in it). */
-export function addShareItems(shareId: string, items: Array<{ assetId: string; projectId: string; clientTitle?: string | null }>): void {
+/** Append videos to a share (skips ones already in it). */
+export function addShareItems(shareId: string, items: NewShareItem[]): void {
   const db = getShareLinksDb();
   const max = (db.prepare('SELECT COALESCE(MAX(position), -1) AS m FROM share_link_items WHERE share_id = ? AND in_list = 1').get(shareId) as { m: number }).m;
   let pos = max + 1;
   for (const it of items) {
-    upsertItemRow(db, shareId, it.assetId, it.projectId, { position: pos++, clientTitle: it.clientTitle ?? null, inList: true, onlyIfNew: true });
+    upsertItemRow(db, shareId, it, { position: pos++, inList: true });
   }
   touch(db, shareId);
 }
@@ -341,12 +353,6 @@ export function setShareItemTitle(shareId: string, assetId: string, clientTitle:
   touch(db, shareId);
 }
 
-/** Ensure per-video state exists (e.g. to mint a reshare token for a pass-backed video). */
-export function ensureShareItemState(shareId: string, assetId: string, projectId: string): ShareLinkItem {
-  const db = getShareLinksDb();
-  upsertItemRow(db, shareId, assetId, projectId, { inList: false, onlyIfNew: true });
-  return getShareItemState(shareId).get(assetId)!;
-}
 
 export function revokeShareLink(id: string): void {
   const now = new Date().toISOString();
@@ -363,21 +369,23 @@ function normaliseEmails(emails: string[]): string[] {
   return [...new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => e.includes('@')))];
 }
 
-function upsertItemRow(
-  db: DatabaseSync, shareId: string, assetId: string, projectId: string,
-  opts: { position?: number; clientTitle?: string | null; inList: boolean; onlyIfNew?: boolean },
-): void {
-  const existing = db.prepare('SELECT in_list FROM share_link_items WHERE share_id = ? AND asset_id = ?').get(shareId, assetId) as { in_list: number } | undefined;
+function upsertItemRow(db: DatabaseSync, shareId: string, it: NewShareItem, opts: { position: number; inList: boolean }): void {
+  const existing = db.prepare('SELECT in_list FROM share_link_items WHERE share_id = ? AND asset_id = ?').get(shareId, it.assetId) as { in_list: number } | undefined;
   if (existing) {
+    // Re-adding a removed video brings it back (same token) at the end of the list.
     if (opts.inList && existing.in_list === 0) {
-      db.prepare('UPDATE share_link_items SET in_list = 1, position = ? WHERE share_id = ? AND asset_id = ?').run(opts.position ?? 0, shareId, assetId);
+      db.prepare(
+        `UPDATE share_link_items
+            SET in_list = 1, position = ?,
+                section = COALESCE(?, section), title_tile_id = COALESCE(?, title_tile_id)
+          WHERE share_id = ? AND asset_id = ?`,
+      ).run(opts.position, it.section ?? null, it.titleTileId ?? null, shareId, it.assetId);
     }
-    if (opts.onlyIfNew) return;
     return;
   }
   const videoToken = newToken(db, 'SELECT 1 FROM share_link_items WHERE video_token = ?');
   db.prepare(
-    `INSERT INTO share_link_items (share_id, asset_id, project_id, position, client_title, video_token, in_list)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(shareId, assetId, projectId, opts.position ?? 0, opts.clientTitle ?? null, videoToken, opts.inList ? 1 : 0);
+    `INSERT INTO share_link_items (share_id, asset_id, project_id, position, client_title, section, title_tile_id, video_token, in_list)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(shareId, it.assetId, it.projectId, opts.position, it.clientTitle ?? null, it.section ?? null, it.titleTileId ?? null, videoToken, opts.inList ? 1 : 0);
 }

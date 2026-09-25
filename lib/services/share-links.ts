@@ -1,27 +1,38 @@
 /**
  * Share view model — resolves a ShareLink into exactly what the viewer renders.
  *
- * Pass-backed shares read their videos, order, categories and client titles live
- * from the Platform pass tree (the pass IS the share). Ad-hoc shares read their
- * explicit list. Either way each video gets its per-video reshare token, and
- * always plays its newest cut.
+ * Every share is an ordered list of videos (any project). Each video plays its
+ * newest cut and gets a display title, in order of precedence:
+ *   1. a manual title typed on the share
+ *   2. its Platform tile title — live, so renaming the tile renames it here
+ *   3. the LPOS asset name
+ * Consecutive videos with the same `section` are grouped under that heading.
  */
 import { getAsset } from '@/lib/store/media-registry';
-import { getPass, getPassTree } from '@/lib/store/platform-pass-store';
+import { findTilesForAsset, getPass, getPassTree, getTile } from '@/lib/store/platform-pass-store';
+import { getProjectStore } from '@/lib/services/container';
+import { listCanonicalMediaAssets } from '@/lib/store/canonical-asset-store';
 import {
-  ensureShareItemState,
-  getShareItemState,
+  addShareItems,
   listShareItems,
   listShareLinks,
+  type NewShareItem,
   type ShareCaps,
   type ShareLink,
+  type ShareLinkItem,
 } from '@/lib/store/share-links-db';
+
+export type ShareTitleSource = 'manual' | 'platform' | 'lpos';
 
 export interface ShareViewItem {
   assetId:       string;
   projectId:     string;
-  /** Client-facing title (pass tile title, or the share's override, or the asset name). */
+  /** What the viewer shows. */
   title:         string;
+  titleSource:   ShareTitleSource;
+  /** The title this video would have without a manual override. */
+  autoTitle:     string;
+  clientTitle:   string | null;
   /** LPOS asset name — shown to staff only. */
   lposName:      string;
   duration:      number | null;
@@ -42,39 +53,64 @@ export interface ShareView {
   groups: ShareViewGroup[];
 }
 
-function buildItem(share: ShareLink, assetId: string, projectId: string, title: string | null): ShareViewItem | null {
-  const asset = getAsset(projectId, assetId);
+/** The Platform title for a video: the tile it was added from if that tile still shows it, else its most recently edited tile. */
+function platformTitle(assetId: string, titleTileId: string | null): string | null {
+  if (titleTileId) {
+    const tile = getTile(titleTileId);
+    if (tile?.mediaAssetId === assetId && tile.title.trim()) return tile.title.trim();
+  }
+  const tile = findTilesForAsset(assetId).find((t) => t.title.trim());
+  return tile ? tile.title.trim() : null;
+}
+
+function buildItem(it: ShareLinkItem): ShareViewItem | null {
+  const asset = getAsset(it.projectId, it.assetId);
   if (!asset) return null;
-  const state  = ensureShareItemState(share.id, assetId, projectId);
+  const lposName  = asset.name || asset.originalFilename;
+  const fromTile  = platformTitle(it.assetId, it.titleTileId);
+  const autoTitle = fromTile ?? lposName;
   return {
-    assetId,
-    projectId,
-    title:           (title ?? state.clientTitle ?? asset.name) || asset.originalFilename,
-    lposName:        asset.name || asset.originalFilename,
-    duration:        asset.duration,
-    thumbnailUrl:    `/api/projects/${projectId}/media/${assetId}/thumbnail`,
-    videoToken:      state.videoToken,
-    stream:          asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
-    downloadable:    !!asset.filePath,
+    assetId:      it.assetId,
+    projectId:    it.projectId,
+    title:        it.clientTitle ?? autoTitle,
+    titleSource:  it.clientTitle ? 'manual' : fromTile ? 'platform' : 'lpos',
+    autoTitle,
+    clientTitle:  it.clientTitle,
+    lposName,
+    duration:     asset.duration,
+    thumbnailUrl: `/api/projects/${it.projectId}/media/${it.assetId}/thumbnail`,
+    videoToken:   it.videoToken,
+    stream:       asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
+    downloadable: !!asset.filePath,
   };
+}
+
+/** A pass's linked videos, in board order, sectioned by category — the starting list for a share made from a pass. */
+export function passShareItems(passId: string): NewShareItem[] {
+  const tree = getPassTree(passId);
+  return (tree?.categories ?? []).flatMap((cat) => cat.tiles
+    .filter((t) => t.mediaKind === 'video' && t.mediaAssetId && t.mediaProjectId)
+    .map((t) => ({ assetId: t.mediaAssetId!, projectId: t.mediaProjectId!, section: cat.title, titleTileId: t.id })));
+}
+
+/** Shares made while pass shares read the pass live have no list of their own — give them one, once. */
+function itemsFor(share: ShareLink): ShareLinkItem[] {
+  let items = listShareItems(share.id);
+  if (!items.length && share.passId) {
+    addShareItems(share.id, passShareItems(share.passId));
+    items = listShareItems(share.id);
+  }
+  return items;
 }
 
 export function resolveShareView(share: ShareLink): ShareView {
   const groups: ShareViewGroup[] = [];
-  if (share.passId) {
-    const tree = getPassTree(share.passId);
-    for (const cat of tree?.categories ?? []) {
-      const items = cat.tiles
-        .filter((t) => t.mediaKind === 'video' && t.mediaAssetId && t.mediaProjectId)
-        .map((t) => buildItem(share, t.mediaAssetId!, t.mediaProjectId!, t.title || null))
-        .filter((x): x is ShareViewItem => !!x);
-      if (items.length) groups.push({ title: cat.title, items });
-    }
-  } else {
-    const items = listShareItems(share.id)
-      .map((it) => buildItem(share, it.assetId, it.projectId, it.clientTitle))
-      .filter((x): x is ShareViewItem => !!x);
-    groups.push({ title: null, items });
+  for (const it of itemsFor(share)) {
+    const item = buildItem(it);
+    if (!item) continue;
+    const last = groups[groups.length - 1];
+    if (last && last.title === it.section) last.items.push(item);
+    else groups.push({ title: it.section, items: [item] });
   }
   return {
     share: { id: share.id, token: share.token, name: share.name, passId: share.passId, caps: share.caps, audience: share.audience },
@@ -100,25 +136,51 @@ export function listShareSummaries(filter?: { projectId?: string; passId?: strin
   const out: ShareSummary[] = [];
   for (const s of listShareLinks()) {
     if (filter?.passId && s.passId !== filter.passId) continue;
-    let refs: Array<{ assetId: string; projectId: string }>;
-    if (s.passId) {
-      const tree = getPassTree(s.passId);
-      refs = (tree?.categories ?? []).flatMap((c) => c.tiles)
-        .filter((t) => t.mediaKind === 'video' && t.mediaAssetId && t.mediaProjectId)
-        .map((t) => ({ assetId: t.mediaAssetId!, projectId: t.mediaProjectId! }));
-    } else {
-      refs = listShareItems(s.id).map((i) => ({ assetId: i.assetId, projectId: i.projectId }));
-    }
-    const projectIds = [...new Set(refs.map((r) => r.projectId))];
+    const items = itemsFor(s);
+    const projectIds = [...new Set(items.map((r) => r.projectId))];
     if (filter?.projectId && !projectIds.includes(filter.projectId)) continue;
     out.push({
       id: s.id, token: s.token, name: s.name, passId: s.passId,
       passTitle: s.passId ? getPass(s.passId)?.title ?? null : null,
       caps: s.caps, audience: s.audience, emails: s.emails,
-      videoCount: refs.length, projectIds, updatedAt: s.updatedAt,
+      videoCount: items.length, projectIds, updatedAt: s.updatedAt,
     });
   }
   return out;
 }
 
-export { getShareItemState };
+export interface ShareAssetOption {
+  assetId:      string;
+  projectId:    string;
+  projectName:  string;
+  clientName:   string;
+  name:         string;
+  /** Platform tile title, when the video is on a tile — what the share will show. */
+  platformTitle: string | null;
+  duration:     number | null;
+  thumbnailUrl: string;
+}
+
+/** Videos that can go in a share, across every active project. `q` matches name, tile title, project or client. */
+export function listShareableAssets(q: string, limit = 200): ShareAssetOption[] {
+  const needle = q.trim().toLowerCase();
+  const out: ShareAssetOption[] = [];
+  for (const project of getProjectStore().getAll()) {
+    if (project.archived) continue;
+    for (const asset of listCanonicalMediaAssets(project.projectId)) {
+      if (!asset.frameio.assetId && !asset.filePath) continue;
+      const tileTitle = platformTitle(asset.assetId, null);
+      const hay = `${asset.name} ${tileTitle ?? ''} ${project.name} ${project.clientName ?? ''}`.toLowerCase();
+      if (needle && !hay.includes(needle)) continue;
+      out.push({
+        assetId: asset.assetId, projectId: project.projectId,
+        projectName: project.name, clientName: project.clientName ?? '',
+        name: asset.name || asset.originalFilename, platformTitle: tileTitle,
+        duration: asset.duration,
+        thumbnailUrl: `/api/projects/${project.projectId}/media/${asset.assetId}/thumbnail`,
+      });
+    }
+  }
+  out.sort((a, b) => a.clientName.localeCompare(b.clientName) || a.projectName.localeCompare(b.projectName) || a.name.localeCompare(b.name));
+  return out.slice(0, limit);
+}

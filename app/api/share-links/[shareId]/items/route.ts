@@ -3,8 +3,9 @@
  * PATCH  /api/share-links/:shareId/items  → { assetId, projectId, clientTitle? }
  * DELETE /api/share-links/:shareId/items  → remove { assetId }
  *
- * Membership edits apply to ad-hoc shares only; a pass-backed share's videos
- * are edited on the Platform pass itself.
+ * Every share is one editable list, whether it started from a pass or not.
+ * clientTitle: a string sets a manual title; null goes back to the automatic
+ * one (Platform tile title, else the LPOS asset name).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/services/api-auth';
@@ -18,7 +19,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const { shareId } = await params;
   const share = getShareLink(shareId);
   if (!share) return NextResponse.json({ error: 'Share not found' }, { status: 404 });
-  if (share.passId) return NextResponse.json({ error: 'Add videos to this share from its Platform pass.' }, { status: 400 });
   const { items } = await req.json() as { items?: Array<{ assetId: string; projectId: string; clientTitle?: string | null }> };
   if (!items?.length) return NextResponse.json({ error: 'No videos given' }, { status: 400 });
   addShareItems(shareId, items);
