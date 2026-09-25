@@ -91,6 +91,7 @@ export function AppShell({
   const isSignIn = pathname === '/signin';
   const isInternalReview = pathname.startsWith('/internal-review');
   const isSilent = pathname.startsWith('/silent-');
+  const isShare = pathname === '/s' || pathname.startsWith('/s/') || pathname.startsWith('/v/');
 
   const isGuest = currentUser?.isGuest ?? false;
 
@@ -100,6 +101,23 @@ export function AppShell({
   // nobody is watching, so this branch renders the child bare.
   if (isSilent) {
     return <div className="app-silent">{children}</div>;
+  }
+
+  // Share links render the client-facing viewer: its own header (logo, home,
+  // title), no LPOS nav — exactly what a client sees, so staff preview it 1:1.
+  if (isShare) {
+    return (
+      <ToastProvider>
+        <ContextMenuProvider>
+          <VersionConfirmProvider>
+            <div className="app-share">
+              <RestartCountdownBanner />
+              {children}
+            </div>
+          </VersionConfirmProvider>
+        </ContextMenuProvider>
+      </ToastProvider>
+    );
   }
 
   // Internal Review is a focused, full-bleed black/gold environment: no NavBar

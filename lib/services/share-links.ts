@@ -35,7 +35,8 @@ export interface ShareViewItem {
   /** True when a delivered share is locked to an older cut than the latest. */
   updateAvailable: boolean;
   videoToken:    string;
-  playable:      boolean;
+  /** Where the player streams from: Frame.io/Cloudflare, the local file, or nowhere yet. */
+  stream:        'frameio' | 'local' | null;
   downloadable:  boolean;
 }
 
@@ -74,7 +75,7 @@ function buildItem(share: ShareLink, assetId: string, projectId: string, title: 
     latestVersion:   latest,
     updateAvailable: !!(pinned && latest && latest.number > pinned.number),
     videoToken:      state.videoToken,
-    playable:        !!(asset.frameio.assetId || asset.filePath),
+    stream:          asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
     downloadable:    !!asset.filePath,
   };
 }
