@@ -45,7 +45,8 @@ export interface ShareCaps {
 export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'download', 'reshare', 'transcripts', 'internal'];
 
 export const SHARE_PRESETS: Record<'review' | 'internal', { caps: ShareCaps }> = {
-  review:   { caps: { comments: true, download: false, reshare: true,  transcripts: true, internal: false } },
+  // New shares start with comments + transcript on and everything else off.
+  review:   { caps: { comments: true, download: false, reshare: false, transcripts: true, internal: false } },
   internal: { caps: { comments: true, download: false, reshare: false, transcripts: true, internal: true  } },
 };
 

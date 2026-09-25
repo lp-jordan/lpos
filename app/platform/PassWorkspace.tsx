@@ -306,7 +306,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
             style={passShare ? { ...exportBtn, borderColor: 'var(--accent)', color: 'var(--accent)' } : { ...exportBtn, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#1a1408' }}
             title={passShare ? 'Switches, who can open it, videos' : 'Create a share link for this pass and copy it'}
           >
-            {passShare ? 'Shared ▸' : (shareCopied ? 'Link copied' : 'Share')}
+            {passShare ? 'Shared ▸' : (shareCopied ? 'Link copied' : 'New Share')}
           </button>
           <button onClick={() => router.push(`/platform/${tree.slug}/prep`)} style={exportBtn} title="Match tiles to the pass map and generate titles + descriptions">Run prep ▸</button>
           <button onClick={() => router.push(`/platform/${tree.slug}/handoff`)} style={exportBtn} title="Copy/paste titles + descriptions into LeaderPass admin">Handoff ▸</button>

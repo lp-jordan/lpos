@@ -42,7 +42,7 @@ export function ProjectSharesModal({ projectId, onClose }: Readonly<{ projectId:
       <div className="modal-box shl-box" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Shares">
         <div className="modal-header"><h2 className="modal-title">Shares</h2></div>
         {shares === null ? <p className="modal-body-text">Loading…</p>
-          : shares.length === 0 ? <p className="modal-body-text">Nothing shared yet. Select videos and choose Share.</p>
+          : shares.length === 0 ? <p className="modal-body-text">Nothing shared yet. Select videos and choose New Share.</p>
           : shares.map((s) => (
             <div key={s.id} className="shl-row" role="button" tabIndex={0}
               onClick={() => setManaging(s.id)}

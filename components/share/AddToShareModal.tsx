@@ -47,7 +47,7 @@ export function AddToShareModal({ items, onClose, onAdded }: Readonly<Props>) {
         <input className="modal-input" autoFocus placeholder="Search shares" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search shares" />
         <div className="shm-picker-list">
           {shares === null ? <p className="modal-body-text">Loading…</p>
-            : filtered.length === 0 ? <p className="modal-body-text">{shares.length ? 'No shares match.' : 'No shares yet — use Share… to make one.'}</p>
+            : filtered.length === 0 ? <p className="modal-body-text">{shares.length ? 'No shares match.' : 'No shares yet — use New Share… to make one.'}</p>
             : filtered.map((s) => (
               <button key={s.id} type="button" className="shl-row" disabled={!!busy} onClick={() => void add(s)}>
                 <span>
