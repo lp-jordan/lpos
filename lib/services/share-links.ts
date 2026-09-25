@@ -3,20 +3,16 @@
  *
  * Pass-backed shares read their videos, order, categories and client titles live
  * from the Platform pass tree (the pass IS the share). Ad-hoc shares read their
- * explicit list. Either way each video gets its per-video reshare token and, for
- * shares with Lock cuts on, the version it is held on. Locking is lazy and
- * live: a video with no pin yet is pinned to its current cut the first time
- * the share is read, so videos added to a locked share lock as they arrive.
+ * explicit list. Either way each video gets its per-video reshare token, and
+ * always plays its newest cut.
  */
 import { getAsset } from '@/lib/store/media-registry';
-import { listAssetVersionsWithFrameioFileId } from '@/lib/store/canonical-asset-store';
 import { getPass, getPassTree } from '@/lib/store/platform-pass-store';
 import {
   ensureShareItemState,
   getShareItemState,
   listShareItems,
   listShareLinks,
-  setShareItemPin,
   type ShareCaps,
   type ShareLink,
 } from '@/lib/store/share-links-db';
@@ -30,11 +26,6 @@ export interface ShareViewItem {
   lposName:      string;
   duration:      number | null;
   thumbnailUrl:  string;
-  /** The version the viewer should play: the pin when Lock cuts is on, else latest. */
-  version:       { id: string; number: number } | null;
-  latestVersion: { id: string; number: number } | null;
-  /** True when a locked video is held on an older cut than the latest. */
-  updateAvailable: boolean;
   videoToken:    string;
   /** Where the player streams from: Frame.io/Cloudflare, the local file, or nowhere yet. */
   stream:        'frameio' | 'local' | null;
@@ -51,24 +42,10 @@ export interface ShareView {
   groups: ShareViewGroup[];
 }
 
-function latestVersionOf(assetId: string): { id: string; number: number } | null {
-  const v = listAssetVersionsWithFrameioFileId(assetId)[0];
-  return v ? { id: v.assetVersionId, number: v.versionNumber } : null;
-}
-
 function buildItem(share: ShareLink, assetId: string, projectId: string, title: string | null): ShareViewItem | null {
   const asset = getAsset(projectId, assetId);
   if (!asset) return null;
   const state  = ensureShareItemState(share.id, assetId, projectId);
-  const latest = latestVersionOf(assetId);
-  let pinned = share.caps.locked && state.pinnedVersionId && state.pinnedVersionNumber != null
-    ? { id: state.pinnedVersionId, number: state.pinnedVersionNumber }
-    : null;
-  if (share.caps.locked && !pinned && latest) {
-    setShareItemPin(share.id, assetId, projectId, { versionId: latest.id, versionNumber: latest.number });
-    pinned = latest;
-  }
-  const version = pinned ?? latest;
   return {
     assetId,
     projectId,
@@ -76,9 +53,6 @@ function buildItem(share: ShareLink, assetId: string, projectId: string, title: 
     lposName:        asset.name || asset.originalFilename,
     duration:        asset.duration,
     thumbnailUrl:    `/api/projects/${projectId}/media/${assetId}/thumbnail`,
-    version,
-    latestVersion:   latest,
-    updateAvailable: !!(pinned && latest && latest.number > pinned.number),
     videoToken:      state.videoToken,
     stream:          asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
     downloadable:    !!asset.filePath,
@@ -106,12 +80,6 @@ export function resolveShareView(share: ShareLink): ShareView {
     share: { id: share.id, token: share.token, name: share.name, passId: share.passId, caps: share.caps, audience: share.audience },
     groups,
   };
-}
-
-/** Move one locked video up to its latest cut. */
-export function bumpSharePin(share: ShareLink, assetId: string, projectId: string): void {
-  const latest = latestVersionOf(assetId);
-  if (latest) setShareItemPin(share.id, assetId, projectId, { versionId: latest.id, versionNumber: latest.number });
 }
 
 export interface ShareSummary {

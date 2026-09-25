@@ -12,7 +12,7 @@ import type { ShareSummary } from '@/lib/services/share-links';
 import { ShareModal, shareUrl } from './ShareModal';
 
 const CAP_SHORT: Array<[keyof ShareSummary['caps'], string]> = [
-  ['comments', 'Comments'], ['versions', 'Versions'], ['download', 'Download'], ['reshare', 'Reshare'], ['transcripts', 'Transcripts'],
+  ['comments', 'Comments'], ['download', 'Download'], ['reshare', 'Reshare'], ['transcripts', 'Transcripts'],
 ];
 
 export function ProjectSharesModal({ projectId, onClose }: Readonly<{ projectId: string; onClose: () => void }>) {

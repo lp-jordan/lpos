@@ -6,8 +6,8 @@
  *
  * The layout is fixed: header · library · player · side panel. A share's
  * switches only add or remove pieces:
- *   comments    → Comments tab (the same AssetComments system as the media page)
- *   versions    → version picker / pills
+ *   comments    → Comments tab (the same AssetComments system as the media page),
+ *                 on the newest cut — shares always play each video's newest cut
  *   download    → Download buttons + Download all
  *   reshare     → copy-link icon + right-click "Copy video link"
  *   transcripts → Transcript tab
@@ -85,8 +85,6 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   const items = useMemo(() => view?.groups.flatMap((g) => g.items) ?? [], [view]);
   const item: ShareViewItem | null = items.find((i) => i.assetId === assetId) ?? items[0] ?? null;
   const caps = view?.share.caps;
-  const locked = !!caps?.locked;
-  const pinnedId = locked ? item?.version?.id ?? null : null;
 
   // Staff see internal threads unless previewing as a client; an Internal share
   // shows them to everyone (only staff can open it) and posts new ones internal.
@@ -96,7 +94,6 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
     frameioAssetId:  null,
     audience:        caps?.internal || !clientView ? 'all' : 'client',
     postVisibility:  caps?.internal ? 'internal' : null,
-    lockedVersionId: pinnedId,
   });
 
   const commentsOn    = !!caps?.comments;
@@ -106,14 +103,9 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
       : sideTab === 'transcript' && transcriptsOn ? 'transcript'
       : commentsOn ? 'comments' : transcriptsOn ? 'transcript' : null;
 
-  // Player follows the version the comment thread is on: an older cut plays
-  // from its own Frame.io file, the latest from Cloudflare.
-  const playVersionId = pinnedId ?? (caps?.versions ? ac.selectedVersionId : null);
-  const playingOld = !!playVersionId && !!item?.latestVersion && playVersionId !== item.latestVersion.id;
   const src = !item ? ''
     : item.stream === 'local' ? `/api/projects/${item.projectId}/media/${item.assetId}/stream`
-    : `/api/projects/${item.projectId}/media/${item.assetId}/frameio-stream${playingOld ? `?version=${encodeURIComponent(playVersionId!)}` : ''}`;
-  const shownVersion = (caps?.versions && ac.selectedVersion?.versionNumber) || item?.version?.number || null;
+    : `/api/projects/${item.projectId}/media/${item.assetId}/frameio-stream`;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   async function copy(text: string, label: string) {
@@ -204,8 +196,6 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                         <span className="shv-row-title">{i.title}</span>
                         <span className="shv-row-meta">
                           {fmtDuration(i.duration)}
-                          {caps.versions && i.version && <span className="shv-pill">v{i.version.number}</span>}
-                          {!clientView && i.updateAvailable && <span className="shv-pill shv-pill--gold">v{i.latestVersion?.number} available</span>}
                         </span>
                       </span>
                     </button>
@@ -227,7 +217,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
               <div className="shv-player" onContextMenu={(e) => onVideoContext(e, item)}>
                 {item.stream ? (
                   <MediaPlayer
-                    key={`${item.assetId}:${playVersionId ?? 'latest'}`}
+                    key={item.assetId}
                     variant="compact"
                     src={src}
                     assetId={item.assetId}
@@ -244,7 +234,6 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
               </div>
               <div className="shv-under">
                 <h1 className="shv-title">{item.title}</h1>
-                {caps.versions && shownVersion && <span className="shv-pill">v{shownVersion}</span>}
                 <span className="shv-grow" />
                 {caps.reshare && (
                   <button type="button" className="shv-icon-btn" onClick={() => void copy(videoUrl(item), 'Video link copied')} title="Copy video link" aria-label="Copy video link"><IconLink /></button>
@@ -273,7 +262,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                   onSeek={(t) => setSeekTarget(t)}
                   getCurrentTime={() => timeRef.current}
                   canModerate={!clientView}
-                  showVersionSelect={caps.versions && !locked}
+                  showVersionSelect={false}
                   showInternalTag={!clientView}
                   composePlaceholder={caps.internal ? 'Add an internal comment…' : 'Add a comment…'}
                 />

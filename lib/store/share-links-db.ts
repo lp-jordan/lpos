@@ -2,7 +2,8 @@
  * Share links store — the unified Share system (review + delivery + hub + internal).
  *
  * One Share = a set of videos + who can open it + a set of capability switches
- * (comments, versions, download, reshare, transcripts, internal). Every link
+ * (comments, download, reshare, transcripts, internal). Shares always show
+ * each video's newest cut. Every link
  * renders in the same viewer; the switches only add or remove pieces of it.
  *
  * A share is either:
@@ -11,7 +12,7 @@
  *     nobody curates the same videos twice; or
  *   - ad-hoc (`pass_id` null): an explicit, ordered list in share_link_items.
  * For pass-backed shares, share_link_items still holds per-video state (the
- * per-video reshare token and locked-cut pins) but not membership.
+ * per-video reshare token) but not membership.
  *
  * Every change is live — there is no publish/deliver step. What used to be
  * "Deliver" is just switches: Download on, Comments off, Lock cuts on.
@@ -38,21 +39,18 @@ export type ShareAudience = 'link' | 'email' | 'staff';
 
 export interface ShareCaps {
   comments:    boolean;
-  versions:    boolean;
   download:    boolean;
   reshare:     boolean;
   transcripts: boolean;
   /** Staff-only share: LPOS sign-in required, internal comments visible. Driven by audience 'staff'. */
   internal:    boolean;
-  /** Keep every video on the cut it was on when this was switched on (new uploads don't replace it). */
-  locked:      boolean;
 }
 
-export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'versions', 'download', 'reshare', 'transcripts', 'internal', 'locked'];
+export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'download', 'reshare', 'transcripts', 'internal'];
 
 export const SHARE_PRESETS: Record<'review' | 'internal', { caps: ShareCaps }> = {
-  review:   { caps: { comments: true, versions: true, download: false, reshare: true,  transcripts: true, internal: false, locked: false } },
-  internal: { caps: { comments: true, versions: true, download: false, reshare: false, transcripts: true, internal: true,  locked: false } },
+  review:   { caps: { comments: true, download: false, reshare: true,  transcripts: true, internal: false } },
+  internal: { caps: { comments: true, download: false, reshare: false, transcripts: true, internal: true  } },
 };
 
 export interface ShareLink {
@@ -74,9 +72,6 @@ export interface ShareLinkItem {
   projectId:         string;
   position:          number;
   clientTitle:       string | null;
-  /** Set while the share's Lock cuts switch is on: the cut this video is held on. */
-  pinnedVersionId:   string | null;
-  pinnedVersionNumber: number | null;
   /** Stable per-video public link token (one-click reshare). */
   videoToken:        string;
 }
@@ -163,14 +158,13 @@ function newToken(db: DatabaseSync, sql: string): string {
 
 // ── mappers ───────────────────────────────────────────────────────────────────
 
-// `stage` is a retired column: rows written while "Deliver" existed carry
-// stage='delivered', which meant exactly what Lock cuts means now.
-function parseCaps(raw: string, stage: string): ShareCaps {
+// The `stage` and pinned_version_* columns are retired (from the Deliver / Lock
+// cuts era); shares now always show each video's newest cut.
+function parseCaps(raw: string): ShareCaps {
   let parsed: Partial<ShareCaps> = {};
   try { parsed = JSON.parse(raw) as Partial<ShareCaps>; } catch { /* default all off */ }
   const caps = {} as ShareCaps;
   for (const k of SHARE_CAP_KEYS) caps[k] = !!parsed[k];
-  if (stage === 'delivered') caps.locked = true;
   return caps;
 }
 
@@ -180,7 +174,7 @@ function rowToShare(row: ShareRow, emails: string[]): ShareLink {
     token:     row.token,
     name:      row.name,
     passId:    row.pass_id,
-    caps:      parseCaps(row.caps, row.stage),
+    caps:      parseCaps(row.caps),
     audience:  row.audience === 'email' || row.audience === 'staff' ? row.audience : 'link',
     emails,
     createdBy: row.created_by,
@@ -196,8 +190,6 @@ function rowToItem(row: ItemRow): ShareLinkItem {
     projectId:           row.project_id,
     position:            row.position,
     clientTitle:         row.client_title,
-    pinnedVersionId:     row.pinned_version_id,
-    pinnedVersionNumber: row.pinned_version_number,
     videoToken:          row.video_token,
   };
 }
@@ -317,10 +309,6 @@ export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | 
   if (patch.audience) caps.internal = patch.audience === 'staff';
   db.prepare("UPDATE share_links SET name = ?, caps = ?, audience = ?, stage = 'review', updated_at = ? WHERE id = ?")
     .run(patch.name?.trim() || current.name, JSON.stringify(caps), audience, new Date().toISOString(), id);
-  // Unlocking releases every pin, so the next lock holds whatever is current then.
-  if (patch.caps?.locked === false) {
-    db.prepare('UPDATE share_link_items SET pinned_version_id = NULL, pinned_version_number = NULL WHERE share_id = ?').run(id);
-  }
   if (patch.emails) {
     db.prepare('DELETE FROM share_link_emails WHERE share_id = ?').run(id);
     for (const email of normaliseEmails(patch.emails)) {
@@ -358,14 +346,6 @@ export function ensureShareItemState(shareId: string, assetId: string, projectId
   const db = getShareLinksDb();
   upsertItemRow(db, shareId, assetId, projectId, { inList: false, onlyIfNew: true });
   return getShareItemState(shareId).get(assetId)!;
-}
-
-export function setShareItemPin(shareId: string, assetId: string, projectId: string, pin: { versionId: string; versionNumber: number } | null): void {
-  const db = getShareLinksDb();
-  ensureShareItemState(shareId, assetId, projectId);
-  db.prepare('UPDATE share_link_items SET pinned_version_id = ?, pinned_version_number = ? WHERE share_id = ? AND asset_id = ?')
-    .run(pin?.versionId ?? null, pin?.versionNumber ?? null, shareId, assetId);
-  touch(db, shareId);
 }
 
 export function revokeShareLink(id: string): void {

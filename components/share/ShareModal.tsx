@@ -19,11 +19,9 @@ import type { ShareView } from '@/lib/services/share-links';
 // makes a share internal (the store keeps caps.internal in step with it).
 const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
   ['comments', 'Comments'],
-  ['versions', 'Versions'],
   ['download', 'Download'],
   ['reshare', 'Reshare'],
   ['transcripts', 'Transcript'],
-  ['locked', 'Lock cuts'],
 ];
 
 export function shareUrl(token: string): string {
@@ -99,12 +97,8 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     onClose();
   }
 
-  async function itemAction(assetId: string, projectId: string, action: 'remove' | 'bump') {
-    if (action === 'remove') {
-      await fetch(`/api/share-links/${shareId}/items`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId }) });
-    } else {
-      await fetch(`/api/share-links/${shareId}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId, projectId, bump: true }) });
-    }
+  async function removeItem(assetId: string) {
+    await fetch(`/api/share-links/${shareId}/items`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId }) });
     await load();
     onChanged?.();
   }
@@ -190,12 +184,8 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                     <span>{i.title}</span>
                     {i.title !== i.lposName && <span className="shm-item-sub">{i.lposName}</span>}
                   </span>
-                  {share.caps.locked && i.version && <span className="shv-pill" title="Locked on this cut">v{i.version.number}</span>}
-                  {i.updateAvailable && (
-                    <button type="button" className="shm-mini" onClick={() => void itemAction(i.assetId, i.projectId, 'bump')}>Update to v{i.latestVersion?.number}</button>
-                  )}
                   {!share.passId && (
-                    <button type="button" className="shm-mini shm-mini--ghost" aria-label={`Remove ${i.title}`} onClick={() => void itemAction(i.assetId, i.projectId, 'remove')}>×</button>
+                    <button type="button" className="shm-mini shm-mini--ghost" aria-label={`Remove ${i.title}`} onClick={() => void removeItem(i.assetId)}>×</button>
                   )}
                 </div>
               ))}
