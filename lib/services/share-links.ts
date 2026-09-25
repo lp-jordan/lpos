@@ -132,13 +132,14 @@ export interface ShareSummary {
   updatedAt: string;
 }
 
-export function listShareSummaries(filter?: { projectId?: string; passId?: string }): ShareSummary[] {
+export function listShareSummaries(filter?: { projectId?: string; passId?: string; assetId?: string }): ShareSummary[] {
   const out: ShareSummary[] = [];
   for (const s of listShareLinks()) {
     if (filter?.passId && s.passId !== filter.passId) continue;
     const items = itemsFor(s);
     const projectIds = [...new Set(items.map((r) => r.projectId))];
     if (filter?.projectId && !projectIds.includes(filter.projectId)) continue;
+    if (filter?.assetId && !items.some((r) => r.assetId === filter.assetId)) continue;
     out.push({
       id: s.id, token: s.token, name: s.name, passId: s.passId,
       passTitle: s.passId ? getPass(s.passId)?.title ?? null : null,

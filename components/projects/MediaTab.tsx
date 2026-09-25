@@ -7,8 +7,7 @@ import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
 import { SardiusPushModal } from '@/components/media/SardiusPushModal';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
-// Cleanup pass: SharesPanel + DeliveryPanel collapsed into one DeliverablesHub
-// with tabs for Review Links / Deliveries. Single toolbar button entry.
+// The unified Share system replaces review links, delivery links and Link Hubs.
 import { ShareModal, createShare } from '@/components/share/ShareModal';
 import { ProjectSharesModal } from '@/components/share/ProjectSharesModal';
 import { AddToShareModal } from '@/components/share/AddToShareModal';

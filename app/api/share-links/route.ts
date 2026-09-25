@@ -1,9 +1,8 @@
 /**
- * GET  /api/share-links?projectId=&passId=  → share summaries (optionally filtered)
+ * GET  /api/share-links?projectId=&passId=&assetId=  → share summaries (optionally filtered)
  * POST /api/share-links                     → create { name, passId?, preset?, caps?, audience?, emails?, items? }
  *
- * The unified Share system (see lib/store/share-links-db.ts). Distinct from
- * /api/shares, which lists legacy Frame.io share links.
+ * The unified Share system (see lib/store/share-links-db.ts).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, requireRole } from '@/lib/services/api-auth';
@@ -16,7 +15,7 @@ export async function GET(req: NextRequest) {
   if (deny) return deny;
   const sp = new URL(req.url).searchParams;
   return NextResponse.json({
-    shares: listShareSummaries({ projectId: sp.get('projectId') ?? undefined, passId: sp.get('passId') ?? undefined }),
+    shares: listShareSummaries({ projectId: sp.get('projectId') ?? undefined, passId: sp.get('passId') ?? undefined, assetId: sp.get('assetId') ?? undefined }),
   });
 }
 

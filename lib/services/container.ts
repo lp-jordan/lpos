@@ -43,7 +43,6 @@ import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
 import { TaskHandoffStore } from '@/lib/store/task-handoff-store';
 import { TaskReviewCheckinStore } from '@/lib/store/task-review-checkin-store';
-import { DeliveryNotificationStore } from '@/lib/store/delivery-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
@@ -99,7 +98,6 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_taskReviewCheckinStore: TaskReviewCheckinStore | undefined;
   // eslint-disable-next-line no-var
-  var __lpos_deliveryNotificationStore: DeliveryNotificationStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_projectNoteStore: ProjectNoteStore | undefined;
   // eslint-disable-next-line no-var
@@ -161,7 +159,6 @@ let taskCategoryStore: TaskCategoryStore | null = null;
 let taskNotificationStore: TaskNotificationStore | null = null;
 let taskHandoffStore: TaskHandoffStore | null = null;
 let taskReviewCheckinStore: TaskReviewCheckinStore | null = null;
-let deliveryNotificationStore: DeliveryNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
 let presentationService: PresentationService | null = null;
@@ -586,13 +583,7 @@ export function getTaskReviewCheckinStore(): TaskReviewCheckinStore {
   return taskReviewCheckinStore;
 }
 
-export function getDeliveryNotificationStore(): DeliveryNotificationStore {
-  if (globalThis.__lpos_deliveryNotificationStore) return globalThis.__lpos_deliveryNotificationStore;
-  if (deliveryNotificationStore) return deliveryNotificationStore;
-  deliveryNotificationStore = new DeliveryNotificationStore();
-  globalThis.__lpos_deliveryNotificationStore = deliveryNotificationStore;
-  return deliveryNotificationStore;
-}
+
 
 export function getIo(): import('socket.io').Server | undefined {
   return globalThis.__lpos_io;

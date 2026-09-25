@@ -3,7 +3,13 @@
 import { useRef, useState } from 'react';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { cloudflareStreamEmbedUrl } from '@/lib/models/media-asset';
-import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
+
+/** A share link that includes this video (the unified Share system). */
+export interface AssetShareLink {
+  shareId:  string;
+  shareUrl: string;
+  name:     string;
+}
 
 /**
  * Compact distribution bar for the media detail sidebar. An icon action-rail
@@ -131,7 +137,7 @@ export function MediaDistributionBar({
               type="button"
               className={`mdb-rail-btn mdb-review-links-btn${reviewLinksOpen ? ' mdb-review-links-btn--active is-open' : ''}`}
               onClick={() => onToggleReviewLinks?.()}
-              title={`${shareLinks.length} review link${shareLinks.length !== 1 ? 's' : ''}`}
+              title={`${shareLinks.length} share${shareLinks.length !== 1 ? 's' : ''}`}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>

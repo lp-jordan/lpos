@@ -67,68 +67,6 @@ export async function sendSlackTaskDm(input: {
   await postDm(slackUserId, text);
 }
 
-/**
- * Send a delivery trouble report as a Slack DM. Used by the delivery
- * notification service when a recipient clicks "Having trouble?" on a
- * delivery link's public download page.
- */
-export async function sendSlackDeliveryTroubleDm(input: {
-  email:        string;
-  projectName:  string;
-  clientName:   string | null;
-  description:  string | null;
-  queueSummary: string | null;
-  userAgent:    string | null;
-  /** Short, readable URL to the delivery panel for this project. */
-  href:         string | null;
-}): Promise<void> {
-  if (!TOKEN) return;
-
-  const slackUserId = await lookupSlackUserId(input.email);
-  if (!slackUserId) return;
-
-  const title = input.clientName
-    ? `*"${input.projectName}"* — ${input.clientName}`
-    : `*"${input.projectName}"*`;
-
-  const lines: string[] = [
-    ':rotating_light: *Delivery trouble report*',
-    title,
-  ];
-  if (input.description) lines.push(`Recipient says: "${input.description}"`);
-  if (input.queueSummary) lines.push(`Queue: ${input.queueSummary}`);
-  if (input.userAgent)    lines.push(`Browser: ${input.userAgent}`);
-  if (input.href)         lines.push(`<${input.href}|Open delivery panel →>`);
-
-  await postDm(slackUserId, lines.join('\n'));
-}
-
-export async function sendSlackDeliveryExpiredDm(input: {
-  email:       string;
-  projectName: string;
-  clientName:  string | null;
-  label:       string | null;
-  href:        string | null;
-}): Promise<void> {
-  if (!TOKEN) return;
-
-  const slackUserId = await lookupSlackUserId(input.email);
-  if (!slackUserId) return;
-
-  const title = input.clientName
-    ? `*"${input.projectName}"* — ${input.clientName}`
-    : `*"${input.projectName}"*`;
-
-  const lines: string[] = [
-    ':timer_clock: *Delivery link expired*',
-    title,
-  ];
-  if (input.label) lines.push(`Label: ${input.label}`);
-  if (input.href)  lines.push(`<${input.href}|Open delivery panel →>`);
-
-  await postDm(slackUserId, lines.join('\n'));
-}
-
 export async function sendSlackColdStorageReviewDm(input: {
   email: string;
   pendingCount: number;

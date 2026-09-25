@@ -615,160 +615,15 @@ export async function addFileToVersionStack(
   console.log(`[frameio-v4] file ${fileId} moved into version stack ${stackId}`);
 }
 
-// ── Share links ───────────────────────────────────────────────────────────────
+// ── File helpers ──────────────────────────────────────────────────────────────
 
-// ── Share link types ──────────────────────────────────────────────────────────
 
-export interface FrameIOShare {
-  id:                  string;
-  name:                string;
-  shareUrl:            string;
-  createdAt:           string;    // ISO string
-  fileCount:           number | null;  // from local store; null = not tracked by LPOS
-  downloading_enabled: boolean | null;
-  commenting_enabled:    boolean | null;
-  access:              'public' | 'private' | null;
-}
 
-export interface FrameIOShareFile {
-  id:   string;   // Frame.io file ID
-  name: string;
-}
 
-// ── Share link helpers ────────────────────────────────────────────────────────
-
-/**
- * Create a Frame.io share presentation for one or more files.
- * Returns the share URL (short_url preferred, falls back to constructed URL).
- *
- * POST /v4/accounts/{id}/projects/{projectId}/shares
- * POST /v4/accounts/{id}/shares/{shareId}/files  (attach file IDs)
- */
-export async function createShareLink(
-  fileIds:   string[],
-  shareName: string,
-  settings?: Pick<ShareSettings, 'downloading_enabled'>,
-): Promise<FrameIOShare> {
-  const { accountId, projectId } = await discover();
-
-  // Work from a mutable copy so we can drop stale IDs on retry.
-  const activeIds = [...fileIds];
-
-  // Frame.io rejects the entire share creation if any asset_id is not found,
-  // and names the offending ID in the error detail. Retry after stripping it.
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (activeIds.length === 0) {
-      throw new Error('Frame.io createShareLink: all provided asset IDs were rejected as not found on Frame.io.');
-    }
-
-    let shareRes: Response;
-    try {
-      shareRes = await fioFetch(
-        `${BASE_V4}/accounts/${accountId}/projects/${projectId}/shares`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            data: {
-              type:                'asset',
-              access:              'public',
-              name:                shareName,
-              asset_ids:           activeIds,
-              downloading_enabled: settings?.downloading_enabled ?? true,
-            },
-          }),
-        },
-      );
-    } catch (err) {
-      // "Assets: <uuid> not found." — strip the bad ID and retry.
-      const uuidMatch = /Assets:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+not found/i
-        .exec((err as Error).message);
-      if (uuidMatch) {
-        const badId = uuidMatch[1];
-        const idx = activeIds.indexOf(badId);
-        if (idx !== -1) {
-          console.warn(`[frameio] createShareLink: skipping asset ${badId} — not found on Frame.io`);
-          activeIds.splice(idx, 1);
-          continue;
-        }
-      }
-      throw err;
-    }
-
-    const shareBody = await shareRes.json() as {
-      data?: {
-        id: string; name?: string; short_url?: string; url?: string; link?: string;
-        inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
-        access?: 'public' | 'private';
-      };
-    };
-    const share = shareBody.data;
-
-    if (!share?.id) {
-      throw new Error(
-        `Frame.io createShareLink: no share id returned. Got: ${JSON.stringify(shareBody)}`,
-      );
-    }
-
-    const shareUrl = share.short_url ?? share.url ?? share.link ?? `https://app.frame.io/r/${share.id}`;
-
-    return {
-      id:                  share.id,
-      name:                share.name ?? shareName,
-      shareUrl,
-      createdAt:           share.inserted_at ?? new Date().toISOString(),
-      fileCount:           activeIds.length,
-      downloading_enabled: share.downloading_enabled ?? true,
-      commenting_enabled:    share.commenting_enabled ?? null,
-      access:              share.access ?? 'public',
-    };
-  }
-}
-
-/**
- * List all share presentations for the discovered Frame.io project.
- * GET /v4/accounts/{id}/projects/{projectId}/shares
- */
-export async function listShares(): Promise<FrameIOShare[]> {
-  const { accountId, projectId } = await discover();
-  const res  = await fioFetch(`${BASE_V4}/accounts/${accountId}/projects/${projectId}/shares`);
-  const body = await res.json() as {
-    data?: {
-      id: string; name?: string; short_url?: string; url?: string; link?: string;
-      inserted_at?: string; downloading_enabled?: boolean; commenting_enabled?: boolean;
-      access?: 'public' | 'private';
-    }[];
-  };
-
-  return (body.data ?? []).map((s) => ({
-    id:                  s.id,
-    name:                s.name ?? `Share ${s.id.slice(0, 6)}`,
-    shareUrl:            s.short_url ?? s.url ?? s.link ?? `https://app.frame.io/r/${s.id}`,
-    createdAt:           s.inserted_at ?? '',
-    fileCount:           null,  // enriched by route handlers that have local store access
-    downloading_enabled: s.downloading_enabled ?? null,
-    commenting_enabled:    s.commenting_enabled ?? null,
-    access:              s.access ?? null,
-  }));
-}
 
 // NOTE: The Frame.io V4 API provides no endpoint to list assets in a share.
 // Asset membership is tracked locally via lib/store/share-assets-store.ts.
 
-/**
- * Add assets to an existing share — one request per asset (API is singular).
- * POST /v4/accounts/{id}/shares/{shareId}/assets
- * Body: { data: { asset_id: "uuid" } }
- */
-export async function addFilesToShare(shareId: string, fileIds: string[]): Promise<void> {
-  const { accountId } = await discover();
-  for (const fileId of fileIds) {
-    await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}/assets`, {
-      method: 'POST',
-      body:   JSON.stringify({ data: { asset_id: fileId } }),
-    });
-  }
-}
 
 /**
  * Rename a file/asset in Frame.io.
@@ -791,99 +646,10 @@ export async function deleteFrameioFile(fileId: string): Promise<void> {
   await fioFetch(`${BASE_V4}/accounts/${accountId}/files/${fileId}`, { method: 'DELETE' });
 }
 
-/**
- * Remove a single asset from a share.
- * DELETE /v4/accounts/{id}/shares/{shareId}/assets/{assetId}
- */
-export async function removeFileFromShare(shareId: string, fileId: string): Promise<void> {
-  const { accountId } = await discover();
-  await fioFetch(
-    `${BASE_V4}/accounts/${accountId}/shares/${shareId}/assets/${fileId}`,
-    { method: 'DELETE' },
-  );
-}
 
-export interface ShareSettings {
-  name?:                string;
-  downloading_enabled?: boolean;
-  /** ISO 8601 timestamp; pass `null` to clear an existing expiration. */
-  expiration?:          string | null;
-}
 
-/**
- * Update one or more settings on an existing share.
- * PATCH /v4/accounts/{id}/shares/{shareId}
- *
- * Returns the share fields Frame.io echoes back so callers can verify the
- * change actually landed. If Frame.io 200s the request but the returned
- * `name` (or `downloading_enabled` / `expiration`) doesn't match what we
- * asked for, we throw — silently-accepted-but-not-applied was the failure
- * mode behind a stale-rename bug we had to fix.
- */
-export async function updateShareSettings(
-  shareId: string,
-  settings: ShareSettings,
-): Promise<{ id: string; name: string | null; downloading_enabled: boolean | null; expiration: string | null }> {
-  const { accountId } = await discover();
-  console.log('[frameio] PATCH share', shareId, 'with', JSON.stringify(settings));
-  const res = await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}`, {
-    method: 'PATCH',
-    body:   JSON.stringify({ data: settings }),
-  });
-  const body = await res.json().catch(() => null) as {
-    data?: {
-      id: string;
-      name?: string | null;
-      downloading_enabled?: boolean | null;
-      expiration?: string | null;
-    };
-  } | null;
-  console.log('[frameio] PATCH share response:', JSON.stringify(body));
 
-  const returned = body?.data;
-  if (!returned?.id) {
-    throw new Error(`Frame.io PATCH share ${shareId} returned no data envelope: ${JSON.stringify(body)}`);
-  }
 
-  // Verify each field we asked to update is actually what Frame.io echoes back.
-  // If Frame.io silently ignored a field, we'd otherwise show the user a
-  // "saved!" UI while the share page kept its old name.
-  if (settings.name !== undefined && returned.name !== settings.name) {
-    throw new Error(
-      `Frame.io accepted PATCH but name didn't apply (sent="${settings.name}", returned="${returned.name ?? '<null>'}")`,
-    );
-  }
-  if (settings.downloading_enabled !== undefined && returned.downloading_enabled !== settings.downloading_enabled) {
-    console.warn(`[frameio] PATCH share ${shareId}: downloading_enabled drift (sent=${settings.downloading_enabled}, returned=${returned.downloading_enabled})`);
-  }
-  if (settings.expiration !== undefined && returned.expiration !== settings.expiration) {
-    console.warn(`[frameio] PATCH share ${shareId}: expiration drift (sent=${settings.expiration}, returned=${returned.expiration})`);
-  }
-
-  return {
-    id: returned.id,
-    name: returned.name ?? null,
-    downloading_enabled: returned.downloading_enabled ?? null,
-    expiration: returned.expiration ?? null,
-  };
-}
-
-/**
- * Rename an existing share.
- * @deprecated Use updateShareSettings({ name }) instead.
- */
-export async function renameShare(shareId: string, name: string): Promise<void> {
-  await updateShareSettings(shareId, { name });
-}
-
-/**
- * Permanently delete a share (the link becomes invalid).
- * DELETE /v4/accounts/{id}/shares/{shareId}
- */
-export async function deleteShare(shareId: string): Promise<void> {
-  const { accountId } = await discover();
-  await fioFetch(`${BASE_V4}/accounts/${accountId}/shares/${shareId}`, { method: 'DELETE' });
-}
 
 // ── Comments ──────────────────────────────────────────────────────────────────
 

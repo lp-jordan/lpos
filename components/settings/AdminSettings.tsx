@@ -20,7 +20,6 @@ import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConf
 import { AiUsageCard } from '@/components/settings/AiUsageCard';
 import { StorageSettingsClient } from '@/components/settings/StorageSettingsClient';
 import { ColdStorageSection } from '@/components/settings/ColdStorageSection';
-import { DeliveryStorageSection } from '@/components/settings/DeliveryStorageSection';
 import { DriveSettingsClient } from '@/components/settings/DriveSettingsClient';
 import { SettingsTabs, type SettingsSection } from '@/components/settings/SettingsTabs';
 
@@ -78,7 +77,6 @@ export function AdminSettings({ role }: { role: string }) {
         <>
           <StorageSettingsClient />
           <StorageMapCard />
-          <DeliveryStorageSection />
           <ColdStorageSection />
         </>
       ),

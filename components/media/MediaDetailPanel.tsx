@@ -19,8 +19,7 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
-import type { AssetShareLink } from '@/lib/store/asset-share-links-store';
-import { DeliverableModal } from '@/components/projects/DeliverableModal';
+import type { AssetShareLink } from './MediaDistributionBar';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
 import { DomainRestrictionsModal } from '@/components/media/DomainRestrictionsModal';
 
@@ -208,10 +207,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [fioUploading, setFioUploading]       = useState(false);
   const [fioError, setFioError]               = useState<string | null>(null);
   const [copiedShareId, setCopiedShareId]     = useState<string | null>(null);
-  // Phase E: shareGenerating + shareError dropped — DeliverableModal owns those.
-  const [showDeliverableModal, setShowDeliverableModal] = useState(false);
   const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
-  const [deletingShareId,   setDeletingShareId]   = useState<string | null>(null);
 
   // Poll while uploading
   const pollFio = useCallback(async () => {
@@ -340,46 +336,23 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     setTimeout(() => setCfEmbedCopied(false), 2000);
   }
 
-  // Phase E: reads from the new /deliverables endpoint and shape-maps to the
-  // legacy AssetShareLink shape so the existing dropdown JSX keeps working.
-  // The downstream-display fields we use are shareId, shareUrl, name, createdAt —
-  // all present in both shapes.
+  // Every share that includes this video — the link icon's dropdown copies one.
   const fetchShareLinks = useCallback(async (assetId: string) => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/media/${assetId}/deliverables`);
+      const res = await fetch(`/api/share-links?assetId=${encodeURIComponent(assetId)}`);
       if (!res.ok) return;
-      const data = await res.json() as {
-        deliverables: Array<{ deliverableId: string; name: string; shortUrl: string; createdAt: string }>;
-      };
-      setExistingShareLinks(data.deliverables.map((d) => ({
-        shareId: d.deliverableId,
-        shareUrl: d.shortUrl,
-        name: d.name,
-        createdAt: d.createdAt,
+      const data = await res.json() as { shares: Array<{ id: string; name: string; token: string }> };
+      setExistingShareLinks(data.shares.map((s) => ({
+        shareId:  s.id,
+        shareUrl: `${window.location.origin}/s/${s.token}`,
+        name:     s.name,
       })));
     } catch { /* ignore */ }
-  }, [projectId]);
+  }, []);
 
   useEffect(() => {
     if (asset?.assetId) void fetchShareLinks(asset.assetId);
   }, [asset?.assetId, fetchShareLinks]);
-
-  // Phase E: shareId here is actually a deliverableId (we reshaped the response
-  // upstream). Deleting goes through the unified /deliverables endpoint, which
-  // also deletes the underlying Frame.io share so the link stops resolving.
-  async function handleDeleteShareLink(shareId: string) {
-    if (!asset) return;
-    setDeletingShareId(shareId);
-    try {
-      const res = await fetch(
-        `/api/projects/${projectId}/deliverables/${shareId}`,
-        { method: 'DELETE' },
-      );
-      if (res.ok) setExistingShareLinks((prev) => prev.filter((l) => l.shareId !== shareId));
-    } catch { /* ignore */ } finally {
-      setDeletingShareId(null);
-    }
-  }
 
   // ── Comments ───────────────────────────────────────────────────────────────
   // The comment thread (state, reads, writes, version cycler) lives in the
@@ -639,7 +612,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                               type="button"
                               className={`mad-action-btn mad-review-links-btn${reviewLinksOpen ? ' mad-review-links-btn--active' : ''}`}
                               onClick={() => setReviewLinksOpen(o => !o)}
-                              title={`${existingShareLinks.length} review link${existingShareLinks.length !== 1 ? 's' : ''}`}
+                              title={`${existingShareLinks.length} share${existingShareLinks.length !== 1 ? 's' : ''}`}
                             >
                               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
@@ -1017,28 +990,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           </>
         )}
       </aside>
-
-      {/* Phase E: shared deliverable modal for the per-asset "New review link" entry point */}
-      {showDeliverableModal && asset && (
-        <DeliverableModal
-          projectId={projectId}
-          availableAssets={[{
-            assetId: asset.assetId,
-            name: asset.name,
-            hasFrameio: Boolean(asset.frameio.assetId || asset.frameio.stackId),
-          }]}
-          initiallySelectedAssetIds={[asset.assetId]}
-          defaultName={`Review — ${asset.name}`}
-          onClose={() => setShowDeliverableModal(false)}
-          onCreated={() => {
-            // Refetch the asset's share link list so the new one appears in
-            // the dropdown without waiting for a panel close+reopen. The
-            // legacy mirror in deliverable-publish.ts writes asset_share_links
-            // so this fetch will see the new row.
-            void fetchShareLinks(asset.assetId);
-          }}
-        />
-      )}
 
       {/* Per-asset custom thumbnail uploader — reuses the batch modal with a 1-item assetIds array.
           The endpoint POSTs the image to Cloudflare Images and patches asset.cloudflare.posterUrl,

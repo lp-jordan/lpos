@@ -354,6 +354,29 @@ export function setShareItemTitle(shareId: string, assetId: string, clientTitle:
 }
 
 
+/** An asset moved projects, or merged into another asset: its share entries follow it. */
+export function repointShareItemsForAsset(fromAssetId: string, toAssetId: string, toProjectId: string): void {
+  const db = getShareLinksDb();
+  if (fromAssetId === toAssetId) {
+    db.prepare('UPDATE share_link_items SET project_id = ? WHERE asset_id = ?').run(toProjectId, fromAssetId);
+    return;
+  }
+  // Merge: where a share already has the destination, the moving asset's entry just leaves the list.
+  db.prepare(
+    `UPDATE share_link_items SET in_list = 0
+      WHERE asset_id = ? AND share_id IN (SELECT share_id FROM share_link_items WHERE asset_id = ?)`,
+  ).run(fromAssetId, toAssetId);
+  db.prepare(
+    `UPDATE share_link_items SET asset_id = ?, project_id = ?
+      WHERE asset_id = ? AND share_id NOT IN (SELECT share_id FROM share_link_items WHERE asset_id = ?)`,
+  ).run(toAssetId, toProjectId, fromAssetId, toAssetId);
+}
+
+/** A deleted asset leaves every share (its per-video links stop working). */
+export function removeAssetFromAllShares(assetId: string): void {
+  getShareLinksDb().prepare('UPDATE share_link_items SET in_list = 0 WHERE asset_id = ?').run(assetId);
+}
+
 export function revokeShareLink(id: string): void {
   const now = new Date().toISOString();
   getShareLinksDb().prepare('UPDATE share_links SET revoked_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
