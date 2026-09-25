@@ -13,10 +13,14 @@ const SLOW_POLL_MS = 30_000;
 // The ready-wait fails on a STALL, not on total elapsed time: the clock resets
 // whenever Cloudflare reports forward progress (pctComplete or a state change).
 // A fixed wall-clock cap (formerly 20 min) killed healthy 6h+ live-event encodes.
+// CF reports pctComplete in coarse steps (e.g. 9/22 = 40.9%) and can sit at
+// inprogress/0% for hours on multi-hour sources, so the window also scales with
+// the source duration: max(45 min, 1.5 × duration).
 const DEFAULT_READY_STALL_MS = 45 * 60 * 1000;
+const STALL_PER_SOURCE_SECOND_MS = 1_500;
 // Absolute backstop so a video wedged in a progress-reporting loop can't hold a
 // queue slot forever.
-const DEFAULT_READY_MAX_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_READY_MAX_MS = 48 * 60 * 60 * 1000;
 const DEFAULT_UPLOAD_RETRIES = 5;
 
 interface CloudflareConfig {
@@ -47,6 +51,8 @@ export interface CloudflareVideoState {
   pctComplete: number | null;
   /** Cloudflare's reason text when `cfState === 'error'`. */
   errorReason: string | null;
+  /** Source duration in seconds once CF has probed it, else null. */
+  durationSec: number | null;
 }
 
 /** Cloudflare states meaning every source byte has been received (encode queued, running, or done). */
@@ -496,6 +502,7 @@ type CloudflareVideoResult = {
   thumbnail?: string;
   created?: string;
   readyToStream?: boolean;
+  duration?: number;
   status?: { state?: string; pctComplete?: string | number; errorReasonCode?: string; errorReasonText?: string };
   playback?: {
     hls?: string;
@@ -551,6 +558,7 @@ export async function getCloudflareVideoState(uid: string): Promise<CloudflareVi
     errorReason: cfState === 'error'
       ? (result.status?.errorReasonText || result.status?.errorReasonCode || 'unknown error')
       : null,
+    durationSec: typeof result.duration === 'number' && result.duration > 0 ? result.duration : null,
   };
 }
 
@@ -567,7 +575,7 @@ export async function waitForCloudflareVideoReady(
     onProgress?: (state: CloudflareVideoState) => void;
   },
 ): Promise<CloudflareVideoState> {
-  const stallMs = options?.stallMs ?? DEFAULT_READY_STALL_MS;
+  const baseStallMs = options?.stallMs ?? DEFAULT_READY_STALL_MS;
   const maxMs = options?.maxMs ?? DEFAULT_READY_MAX_MS;
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
@@ -586,6 +594,7 @@ export async function waitForCloudflareVideoReady(
       throw new Error(`Cloudflare Stream failed to process the video: ${state.errorReason}`);
     }
 
+    const stallMs = Math.max(baseStallMs, (state.durationSec ?? 0) * STALL_PER_SOURCE_SECOND_MS);
     const signature = `${state.cfState}:${state.pctComplete ?? ''}`;
     if (signature !== lastSignature) {
       lastSignature = signature;

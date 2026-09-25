@@ -1510,6 +1510,26 @@ export function listCloudflareUidsForAsset(assetId: string): string[] {
   return rows.map((r) => r.uid).filter((u): u is string => !!u);
 }
 
+/**
+ * Cloudflare UIDs recorded against the asset's CURRENT version only (newest
+ * attempt first). Used to adopt an already-uploaded copy on retry — must not
+ * reach back into prior versions, whose videos are a different file.
+ */
+export function listCloudflareUidsForCurrentVersion(assetId: string): string[] {
+  const version = getLatestVersionForAsset(assetId);
+  if (!version) return [];
+  const db = getCanonicalAssetDb();
+  const rows = db.prepare(`
+    SELECT provider_asset_id AS uid
+    FROM distribution_records
+    WHERE asset_version_id = ?
+      AND provider = 'cloudflare'
+      AND provider_asset_id IS NOT NULL
+    ORDER BY attempt_number DESC
+  `).all(version.asset_version_id) as Array<{ uid: string | null }>;
+  return [...new Set(rows.map((r) => r.uid).filter((u): u is string => !!u))];
+}
+
 export interface AssetByCloudflareUidResult {
   assetId: string;
   projectId: string;

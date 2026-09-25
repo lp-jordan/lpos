@@ -376,6 +376,39 @@ export async function initServices(io: SocketIOServer): Promise<void> {
       if (resetCount > 0) {
         console.warn(`[startup] reset ${resetCount} stale Cloudflare upload(s) — re-push from the Media tab`);
       }
+
+      // Auto-upload encodes interrupted mid-wait: the bytes are already on
+      // Cloudflare, only our poll died with the process. Resume the ready-wait
+      // on the existing copy (adopt-only — never starts a fresh upload).
+      // (Dynamic import: cloudflare-publish imports this module.)
+      const toResume: Array<{ projectId: string; assetId: string }> = [];
+      for (const project of projects) {
+        for (const asset of listCanonicalMediaAssets(project.projectId)) {
+          // Also heal assets that failed on a ready-wait timeout/stall — their
+          // bytes always landed, so adopting the existing copy is safe.
+          const interruptedWait = asset.cloudflare.status === 'processing' && asset.leaderpass.status !== 'preparing';
+          const failedWait = asset.cloudflare.status === 'failed'
+            && /^Cloudflare Stream processing (timed out|stalled|exceeded)/.test(asset.cloudflare.lastError ?? '');
+          if (!interruptedWait && !failedWait) continue;
+          patchAsset(project.projectId, asset.assetId, {
+            cloudflare: { status: 'failed', lastError: 'Encode wait interrupted by restart — resuming.' },
+          });
+          toResume.push({ projectId: project.projectId, assetId: asset.assetId });
+        }
+      }
+      if (toResume.length > 0) {
+        console.warn(`[startup] resuming ${toResume.length} interrupted Cloudflare encode wait(s)`);
+        void Promise.all([import('./cloudflare-publish'), import('./cloudflare-stream')])
+          .then(([{ triggerCloudflareUpload }, { getDefaultAllowedOrigins }]) => {
+            for (const r of toResume) {
+              triggerCloudflareUpload(r.projectId, r.assetId, {
+                allowedOrigins: getDefaultAllowedOrigins(),
+                adoptOnly: true,
+              });
+            }
+          })
+          .catch((err) => console.warn('[startup] cloudflare encode resume failed:', err));
+      }
     } catch (err) {
       console.warn('[startup] cloudflare stale-upload scan failed:', err);
     }

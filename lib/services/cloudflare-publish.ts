@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import type { ActivityActor } from '@/lib/models/activity';
 import { getAsset, patchAsset } from '@/lib/store/media-registry';
-import { getLatestDistributionInfoForAsset, listCloudflareUidsForAsset } from '@/lib/store/canonical-asset-store';
+import { getLatestDistributionInfoForAsset, listCloudflareUidsForAsset, listCloudflareUidsForCurrentVersion } from '@/lib/store/canonical-asset-store';
 import { recordOrphan, markOrphanPurged } from '@/lib/store/cloudflare-orphan-store';
 import { getUploadQueueService } from '@/lib/services/container';
 import { probeMediaInfo } from '@/lib/services/media-probe';
@@ -89,6 +89,47 @@ export interface CloudflareUploadOptions {
   allowedOrigins?: string[] | null;
   /** Reserved for activity-timeline attribution once events are wired. */
   actor?: ActivityActor;
+  /**
+   * Only resume an existing Cloudflare copy (adopt); never start a fresh upload.
+   * Used by the boot resume of encodes interrupted by a restart.
+   */
+  adoptOnly?: boolean;
+}
+
+interface AdoptPick { uid: string; siblings: string[]; }
+
+/**
+ * Among every CF video recorded for the asset's current version, pick the one to
+ * resume: ready > furthest-along inprogress > queued. Only copies whose bytes all
+ * landed qualify. `siblings` are the other still-existing copies of the same
+ * version (duplicates from earlier attempts), to delete once the pick is ready.
+ */
+async function pickAdoptableCloudflareUid(assetId: string, currentUid: string | null): Promise<AdoptPick | null> {
+  const uids = new Set(listCloudflareUidsForCurrentVersion(assetId));
+  if (currentUid) uids.add(currentUid);
+  const rank = (s: { cfState: string | null; pctComplete: number | null }) =>
+    s.cfState === 'ready' ? 1000 : s.cfState === 'inprogress' ? 100 + (s.pctComplete ?? 0) : s.cfState === 'queued' ? 1 : -1;
+
+  const found: Array<{ uid: string; score: number; created: string | null }> = [];
+  for (const uid of uids) {
+    try {
+      const st = await getCloudflareVideoState(uid);
+      if (st.cfState && CF_BYTES_RECEIVED_STATES.has(st.cfState)) {
+        found.push({ uid, score: rank(st), created: st.uploadedAt });
+      } else if (st.cfState !== 'error') {
+        found.push({ uid, score: -1, created: st.uploadedAt }); // exists but not adoptable
+      }
+    } catch {
+      // 404 / unreachable — not a candidate
+    }
+  }
+  const adoptable = found.filter((f) => f.score >= 0);
+  if (adoptable.length === 0) return null;
+  // Highest score wins; ties go to the OLDER copy (it has been encoding longer).
+  adoptable.sort((a, b) => b.score - a.score || (a.created ?? '').localeCompare(b.created ?? ''));
+  const pick = adoptable[0].uid;
+  // Siblings include non-adoptable leftovers too (e.g. a partial pendingupload).
+  return { uid: pick, siblings: found.filter((f) => f.uid !== pick).map((f) => f.uid) };
 }
 
 export function canUploadToCloudflare(): boolean {
@@ -174,16 +215,21 @@ export async function runCloudflareUpload(
   // re-send the whole file — for a 25 GB live event that's hours of transfer
   // thrown away while the original encode was fine. If CF has every byte
   // (queued / inprogress / ready) we skip straight to the ready-wait on that uid.
+  // Earlier attempts may have left several copies (e.g. the pre-fix timeout
+  // retries re-uploaded the whole file); the best one is picked, the rest are
+  // deleted once it's ready.
   let adoptUid: string | null = null;
-  if (asset.cloudflare.status === 'failed' && asset.cloudflare.uid) {
-    try {
-      const existing = await getCloudflareVideoState(asset.cloudflare.uid);
-      if (existing.cfState && CF_BYTES_RECEIVED_STATES.has(existing.cfState)) {
-        adoptUid = asset.cloudflare.uid;
-      }
-    } catch {
-      // Gone from CF / unreachable — fall through to a fresh upload.
+  let adoptSiblings: string[] = [];
+  if (asset.cloudflare.status === 'failed') {
+    const pick = await pickAdoptableCloudflareUid(assetId, asset.cloudflare.uid ?? null);
+    if (pick) {
+      adoptUid = pick.uid;
+      adoptSiblings = pick.siblings;
     }
+  }
+  if (!adoptUid && options?.adoptOnly) {
+    console.warn(`[cloudflare-publish] adopt-only resume for asset ${assetId}: no Cloudflare copy with all bytes received; leaving as failed`);
+    return;
   }
 
   // Register a queue job so this upload shows as a "Cloudflare" stage in the
@@ -204,6 +250,9 @@ export async function runCloudflareUpload(
   try {
     if (adoptUid) {
       prepared = { uid: adoptUid, uploadUrl: asset.cloudflare.uploadUrl ?? '' };
+      if (adoptUid !== asset.cloudflare.uid) {
+        patchAsset(projectId, assetId, { cloudflare: { uid: adoptUid } });
+      }
       console.log(`[cloudflare-publish] adopting existing Cloudflare upload uid=${adoptUid} for asset ${assetId} (bytes already received; skipping re-upload)`);
     } else {
       prepared = await createCloudflareTusUpload(asset);
@@ -364,6 +413,20 @@ export async function runCloudflareUpload(
         } catch (recordErr) {
           console.error(`[cloudflare-publish] failed to record orphan uid=${oldCloudflareUid}:`, recordErr);
         }
+      }
+    }
+
+    // Adopted: delete the duplicate same-version copies from earlier attempts.
+    for (const dupUid of adoptSiblings) {
+      if (dupUid === ready.uid || dupUid === oldCloudflareUid) continue;
+      try {
+        await deleteCloudflareVideo(dupUid);
+        console.log(`[cloudflare-publish] deleted duplicate Cloudflare copy uid=${dupUid} for asset ${assetId}`);
+      } catch (err) {
+        const e = err instanceof Error ? err.message : String(err);
+        try {
+          recordOrphan({ uid: dupUid, assetId, projectId, reason: 'delete_failed', attempts: 1, lastError: `duplicate: ${e}` });
+        } catch { /* best effort */ }
       }
     }
 
