@@ -24,6 +24,8 @@ export type MediaCommentSource = 'lpos' | 'frameio';
  * dashboard's TS surface; the underlying SQLite column names are snake_case
  * — see `MediaCommentRow` below for the on-disk shape.
  */
+export type MediaCommentVisibility = 'internal' | null;
+
 export interface MediaComment {
   commentId:           string;
   projectId:           string;
@@ -47,6 +49,8 @@ export interface MediaComment {
   createdAt:           string;
   updatedAt:           string;
   deletedAt:           string | null;
+  /** null = everyone; 'internal' = staff-only (never shown to clients, never mirrored). */
+  visibility:          MediaCommentVisibility;
 }
 
 /**
@@ -77,6 +81,7 @@ export interface MediaCommentRow {
   created_at:            string;
   updated_at:            string;
   deleted_at:            string | null;
+  visibility:            string | null;
 }
 
 /**
@@ -104,6 +109,7 @@ export interface MediaCommentInsert {
   frameioCommentId?:    string | null;
   frameioFileId?:       string | null;
   completed?:           boolean;
+  visibility?:          MediaCommentVisibility;
   /** Override the timestamp — used by the backfill script to preserve historical inserted_at values. */
   createdAtOverride?:   string;
 }
@@ -180,5 +186,6 @@ export function rowToMediaComment(row: MediaCommentRow): MediaComment {
     createdAt:           row.created_at,
     updatedAt:           row.updated_at,
     deletedAt:           row.deleted_at,
+    visibility:          row.visibility === 'internal' ? 'internal' : null,
   };
 }

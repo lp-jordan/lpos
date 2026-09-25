@@ -69,7 +69,7 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
        author_user_id, author_external_name, author_external_email, author_avatar_url,
        source, frameio_comment_id, frameio_file_id,
        completed, completed_at, completed_by_user_id,
-       created_at, updated_at, deleted_at
+       created_at, updated_at, deleted_at, visibility
      ) VALUES (
        ?, ?, ?, ?,
        ?, ?,
@@ -77,7 +77,7 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
        ?, ?, ?, ?,
        ?, ?, ?,
        ?, NULL, NULL,
-       ?, ?, NULL
+       ?, ?, NULL, ?
      )`,
   ).run(
     commentId, input.projectId, input.assetId, input.assetVersionId,
@@ -86,7 +86,7 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
     input.authorUserId ?? null, input.authorExternalName ?? null, input.authorExternalEmail ?? null, input.authorAvatarUrl ?? null,
     input.source, input.frameioCommentId ?? null, input.frameioFileId ?? null,
     input.completed ? 1 : 0,
-    now, now,
+    now, now, input.visibility ?? null,
   );
 
   const row = db.prepare('SELECT * FROM media_comments WHERE comment_id = ?').get(commentId) as MediaCommentRow;
@@ -461,6 +461,8 @@ export interface ThreadedMediaComment {
    *  this as a small `!` indicator with a hover tooltip. Replies don't get
    *  mirrored (§11 #2) so they're never flagged here. */
   mirrorAbandoned?: boolean;
+  /** Staff-only thread (visibility='internal'). Replies inherit their root's visibility. */
+  internal?: boolean;
   replies: Array<{
     id:           string;
     frameioCommentId: string | null;
@@ -599,6 +601,7 @@ function buildThreadedResult(rows: MediaCommentRow[], abandoned: Set<string>): T
       completed:       root.completed === 1,
       assetVersionId:  root.asset_version_id,
       mirrorAbandoned: abandoned.has(root.comment_id),
+      internal:        root.visibility === 'internal',
       replies:         replyOut,
     });
   }

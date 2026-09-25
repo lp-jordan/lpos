@@ -1309,6 +1309,16 @@ function runMigrations(db: DatabaseSync): void {
     console.warn('[core-db v30] calendar_day_overrides create skipped:', (err as Error).message);
   }
 
+  // v32: Comment visibility for the unified Share system. NULL = visible to
+  // everyone (every comment that existed before this column, plus anything a
+  // client or Frame.io reviewer leaves). 'internal' = staff-only: hidden from
+  // client-audience reads and never mirrored out to Frame.io.
+  try {
+    db.exec(`ALTER TABLE media_comments ADD COLUMN visibility TEXT`);
+  } catch {
+    // Column already exists
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.
