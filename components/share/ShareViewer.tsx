@@ -145,12 +145,40 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   if (error) {
     return (
       <div className="shv-root">
-        <Header name={null} internal={false} right={null} />
+        <Header name={null} internal={false} right={null} home={source.kind === 'share'} />
         <div className="shv-empty">{error}</div>
       </div>
     );
   }
-  if (!view || !caps) return <div className="shv-root"><Header name={null} internal={false} right={null} /></div>;
+  if (!view || !caps) return <div className="shv-root"><Header name={null} internal={false} right={null} home={source.kind === 'share'} /></div>;
+
+  // A single-video link (/v/) is playback only — logo, the video's title, the
+  // player — whatever the parent share's switches are. The client's own share
+  // link keeps comments, downloads and the rest; what they forward stays simple.
+  if (source.kind === 'video') {
+    return (
+      <div className="shv-root">
+        <Header name={item?.title ?? null} internal={false} right={null} home={false} />
+        <main className="shv-solo">
+          {item?.stream ? (
+            <div className="shv-player">
+              <MediaPlayer
+                key={item.assetId}
+                variant="compact"
+                src={src}
+                assetId={item.assetId}
+                projectId={item.projectId}
+                frameioAssetId={null}
+                comments={[]}
+              />
+            </div>
+          ) : (
+            <div className="shv-empty">This video isn’t available to play yet.</div>
+          )}
+        </main>
+      </div>
+    );
+  }
 
   const showLib = items.length > 1;
   const cols = ['shv-body', showLib ? '' : 'shv-body--nolib', activeTab ? '' : 'shv-body--noside'].filter(Boolean).join(' ');
@@ -277,12 +305,12 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   );
 }
 
-function Header({ name, internal, right }: Readonly<{ name: string | null; internal: boolean; right: React.ReactNode }>) {
+function Header({ name, internal, right, home = true }: Readonly<{ name: string | null; internal: boolean; right: React.ReactNode; home?: boolean }>) {
   return (
     <header className="shv-head">
       <div className="shv-head-left">
         <span className="shv-home-slot">
-          <Link href="/s" className="shv-icon-btn shv-homebtn" title="All shares" aria-label="All shares"><IconHome /></Link>
+          {home && <Link href="/s" className="shv-icon-btn shv-homebtn" title="All shares" aria-label="All shares"><IconHome /></Link>}
         </span>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="shv-logo" src="/share/leaderpass-logo.png" alt="LeaderPass" />
