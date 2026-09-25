@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PlatformPass, PassStatus } from '@/lib/store/platform-pass-store';
 import { resolveBrand } from '@/lib/platform/tile-background';
+import { ShareModal, shareUrl } from '@/components/share/ShareModal';
+import type { ShareSummary } from '@/lib/services/share-links';
 
 const STATUS_LABEL: Record<PassStatus, string> = {
   draft: 'Draft', composed: 'Composed', linked: 'Linked',
@@ -26,6 +28,17 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  // Shares: pass-backed ones light up their pass card; the rest are one-off
+  // shares made from the Media tab, listed under "Other shares".
+  const [shares, setShares] = useState<ShareSummary[]>([]);
+  const [managing, setManaging] = useState<string | null>(null);
+  const loadShares = useCallback(async () => {
+    const res = await fetch('/api/share-links');
+    if (res.ok) setShares(((await res.json()) as { shares?: ShareSummary[] }).shares ?? []);
+  }, []);
+  useEffect(() => { void loadShares(); }, [loadShares]);
+  const sharedPassIds = new Set(shares.filter((x) => x.passId).map((x) => x.passId));
+  const otherShares = shares.filter((x) => !x.passId);
 
   async function createPass() {
     if (!title.trim() || busy) return;
@@ -75,6 +88,7 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: brand.swatch }} />
                 <span style={{ fontSize: 11, color: 'var(--muted-soft)' }}>{brand.name}</span>
+                {sharedPassIds.has(p.id) && <span title="Shared" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />}
                 <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: statusColor(p.status) }}>{STATUS_LABEL[p.status]}</span>
               </div>
               <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)', letterSpacing: '-0.01em', lineHeight: 1.25 }}>{p.title}</div>
@@ -85,6 +99,34 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
           );
         })}
       </div>
+
+      {otherShares.length > 0 && (
+        <div style={{ marginTop: 44, animation: 'pfFadeIn .6s ease both', animationDelay: '.12s' }}>
+          <h2 style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-soft)' }}>Other shares</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {otherShares.map((x) => (
+              <div key={x.id} className="shl-row" role="button" tabIndex={0}
+                onClick={() => setManaging(x.id)}
+                onKeyDown={(e) => { if (e.key === 'Enter') setManaging(x.id); }}>
+                <span>
+                  <span className="shl-name">{x.name}</span>
+                  <span className="shl-meta">
+                    {x.videoCount} video{x.videoCount === 1 ? '' : 's'}
+                    {x.caps.internal && <span className="shv-pill shv-pill--internal">Internal</span>}
+                    {x.stage === 'delivered' && <span className="shv-pill">Delivered</span>}
+                  </span>
+                </span>
+                <button type="button" className="shm-icon" title="Copy link" aria-label="Copy link"
+                  onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(shareUrl(x.token)).catch(() => {}); }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
+                </button>
+                <a className="shm-open" href={`/s/${x.token}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Open</a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {managing && <ShareModal shareId={managing} onClose={() => { setManaging(null); void loadShares(); }} onChanged={() => void loadShares()} />}
 
       {passes.length === 0 && !creating && (
         <div style={{ marginTop: 40, padding: '48px 24px', textAlign: 'center', color: 'var(--muted-soft)', border: '1px dashed var(--line)', borderRadius: 14 }}>
