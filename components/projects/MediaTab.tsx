@@ -562,6 +562,10 @@ export function MediaTab({
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
   const [addToHubAssets,      setAddToHubAssets]      = useState<MediaAsset[] | null>(null);
   const [nasActive, setNasActive] = useState(false);
+  // One-shot NAS-mode opt-out of the Cloudflare Stream auto-upload. Applies to
+  // the very next drop (every file in it), then re-arms itself OFF so CF
+  // auto-upload resumes without the operator having to remember to switch back.
+  const [skipCfNextUpload, setSkipCfNextUpload] = useState(false);
   // CF settings state removed with the gear button (cleanup pass).
   const { requestVersionConfirmation, startBatch, endBatch, isBatchCancelled } = useVersionConfirm();
   const currentUser = useCurrentUser();
@@ -1061,6 +1065,7 @@ const { openMenu } = useContextMenu();
     if (!currentUser?.nasIngestAccess) return;
     const next = !nasActive;
     setNasActive(next);
+    if (!next) setSkipCfNextUpload(false);
     fetch('/api/me', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1077,6 +1082,16 @@ const { openMenu } = useContextMenu();
         label: nasActive ? 'Disable NAS ingest mode' : 'Enable NAS ingest mode',
         onClick: () => { void toggleNasIngestActive(); },
       },
+      ...(nasActive ? [
+        { type: 'separator' as const },
+        {
+          type: 'item' as const,
+          label: skipCfNextUpload
+            ? 'Cancel: skip Cloudflare for next upload'
+            : 'Skip Cloudflare for next upload',
+          onClick: () => setSkipCfNextUpload((v) => !v),
+        },
+      ] : []),
     ]);
   }
 
@@ -1144,7 +1159,7 @@ const { openMenu } = useContextMenu();
 
   async function nasIngestFromPath(
     sourcePath: string,
-    opts?: { replaceAssetId?: string; forceNewAsset?: boolean },
+    opts?: { replaceAssetId?: string; forceNewAsset?: boolean; skipCloudflare?: boolean },
   ): Promise<void> {
     setUploadError(null);
     try {
@@ -1172,9 +1187,9 @@ const { openMenu } = useContextMenu();
           data.currentVersionNumber ?? data.existingAsset.frameio.version ?? 1,
         );
         if (decision === 'version') {
-          await nasIngestFromPath(sourcePath, { replaceAssetId: data.existingAsset.assetId });
+          await nasIngestFromPath(sourcePath, { replaceAssetId: data.existingAsset.assetId, skipCloudflare: opts?.skipCloudflare });
         } else if (decision === 'separate') {
-          await nasIngestFromPath(sourcePath, { forceNewAsset: true });
+          await nasIngestFromPath(sourcePath, { forceNewAsset: true, skipCloudflare: opts?.skipCloudflare });
         }
         return;
       }
@@ -1205,7 +1220,10 @@ const { openMenu } = useContextMenu();
 
       if (paths.length) {
         if (nasActive) {
-          for (const p of paths) void nasIngestFromPath(p);
+          // Consume the one-shot CF opt-out: this drop gets it, the next doesn't.
+          const skipCloudflare = skipCfNextUpload;
+          if (skipCloudflare) setSkipCfNextUpload(false);
+          for (const p of paths) void nasIngestFromPath(p, skipCloudflare ? { skipCloudflare } : undefined);
         } else {
           void registerPaths(paths);
         }
@@ -1673,6 +1691,15 @@ const { openMenu } = useContextMenu();
                   background: 'var(--color-accent, #4a9eff)', color: '#fff',
                   borderRadius: '3px', padding: '0.1rem 0.35rem',
                 }}>NAS</span>
+              )}
+              {nasActive && skipCfNextUpload && (
+                <span style={{
+                  position: 'absolute', top: '0.5rem', right: '2.9rem',
+                  fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  background: 'var(--color-warning, #d97706)', color: '#fff',
+                  borderRadius: '3px', padding: '0.1rem 0.35rem',
+                }} title="The next drop will not auto-upload to Cloudflare Stream">No CF · next drop</span>
               )}
             </>
           )}

@@ -43,6 +43,8 @@ export interface FinalizeInput {
    *  an editpanel-rendered upload. Persisted to editorial_links via the registry
    *  layer. Phase 5c.1 (2026-06-02). */
   editpanelRender?: EditpanelRenderInfo | null;
+  /** Skip the chained Cloudflare Stream auto-upload for this asset only. */
+  skipCloudflare?: boolean;
 }
 
 export type FinalizeResult =
@@ -53,7 +55,7 @@ export type FinalizeResult =
 export async function finalizeUploadedAsset(input: FinalizeInput): Promise<FinalizeResult> {
   const {
     projectId, project, filename, tempPath, mediaDir,
-    preComputedHash, replaceAssetId, forceNewAsset, jobId, actor, editpanelRender,
+    preComputedHash, replaceAssetId, forceNewAsset, jobId, actor, editpanelRender, skipCloudflare,
   } = input;
 
   const ingestQueue = getIngestQueue();
@@ -171,6 +173,7 @@ export async function finalizeUploadedAsset(input: FinalizeInput): Promise<Final
     clientId: project.clientName || null,
     priorFrameioFileId,
     priorFrameioStackId,
+    skipCloudflare,
   });
 
   return { outcome: 'registered', asset, stableDest };

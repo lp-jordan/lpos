@@ -54,6 +54,9 @@ interface FrameIOUploadContext {
   priorFrameioFileId?: string | null;
   /** Existing Frame.io version stack ID. When set, the new file is moved into this stack. */
   priorFrameioStackId?: string | null;
+  /** One-shot operator opt-out (NAS mode "Skip Cloudflare for next upload").
+   *  Frame.io still runs; only the chained Cloudflare Stream auto-upload is skipped. */
+  skipCloudflare?: boolean;
 }
 
 export function triggerFrameIOUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): void {
@@ -75,6 +78,10 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
   // the same file isn't uploading to both at once); the cloudflare-publish guard
   // prevents a duplicate in-flight CF upload.
   const fireCloudflare = () => {
+    if (context?.skipCloudflare) {
+      console.log(`[frameio] skipping Cloudflare auto-upload for "${asset.name}" (operator opted out for this upload)`);
+      return;
+    }
     if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
       triggerCloudflareUpload(projectId, assetId, { allowedOrigins: getDefaultAllowedOrigins() });
     } else {
