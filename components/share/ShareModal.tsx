@@ -2,7 +2,8 @@
 
 /**
  * ShareModal — manage one share: its link, switches, who can open it, its
- * videos, Deliver and Revoke. The same modal is opened from the Platform pass
+ * videos and Revoke. Every change is live — no save or deliver step. The same
+ * modal is opened from the Platform pass
  * page, the Media tab and the project's Shares list.
  *
  * Also exports the client helpers that create shares, so every entry point
@@ -22,6 +23,7 @@ const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
   ['download', 'Download'],
   ['reshare', 'Reshare'],
   ['transcripts', 'Transcript'],
+  ['locked', 'Lock cuts'],
 ];
 
 export function shareUrl(token: string): string {
@@ -57,7 +59,6 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
   const [share, setShare] = useState<ShareLink | null>(null);
   const [view, setView]   = useState<ShareView | null>(null);
   const [emailDraft, setEmailDraft] = useState('');
-  const [busy, setBusy]   = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
 
   const load = useCallback(async () => {
@@ -76,7 +77,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[]; stage: 'review' | 'delivered' }>) {
+  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[] }>) {
     const res = await fetch(`/api/share-links/${shareId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
@@ -90,21 +91,6 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     if (!share) return;
     const ok = await copyText(shareUrl(share.token));
     toast({ id: `share-copy:${share.id}`, kind: 'publish', tone: ok ? 'success' : 'error', title: ok ? 'Link copied' : 'Copy failed', body: shareUrl(share.token).replace(/^https?:\/\//, '') });
-  }
-
-  async function deliver() {
-    setBusy(true);
-    await fetch(`/api/share-links/${shareId}/deliver`, { method: 'POST' });
-    setBusy(false);
-    await load();
-    onChanged?.();
-    toast({ id: `share-deliver:${shareId}`, kind: 'publish', tone: 'success', title: 'Marked delivered', body: 'Cuts locked, downloads on. Same link.' });
-  }
-
-  async function reopen() {
-    setBusy(true);
-    await patch({ stage: 'review', caps: { comments: true, download: false } });
-    setBusy(false);
   }
 
   async function revoke() {
@@ -204,7 +190,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                     <span>{i.title}</span>
                     {i.title !== i.lposName && <span className="shm-item-sub">{i.lposName}</span>}
                   </span>
-                  {share.stage === 'delivered' && i.version && <span className="shv-pill">v{i.version.number}</span>}
+                  {share.caps.locked && i.version && <span className="shv-pill" title="Locked on this cut">v{i.version.number}</span>}
                   {i.updateAvailable && (
                     <button type="button" className="shm-mini" onClick={() => void itemAction(i.assetId, i.projectId, 'bump')}>Update to v{i.latestVersion?.number}</button>
                   )}
@@ -226,14 +212,6 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                 <>
                   <button type="button" className="modal-btn-ghost" onClick={() => setConfirmRevoke(true)}>Revoke</button>
                   <span style={{ flex: 1 }} />
-                  {share.stage === 'review' && !share.caps.internal && (
-                    <button type="button" className="modal-btn-secondary" disabled={busy} onClick={() => void deliver()}
-                      title="Lock every video to its current cut, turn downloads on and close comments. Same link.">Mark delivered</button>
-                  )}
-                  {share.stage === 'delivered' && (
-                    <button type="button" className="modal-btn-ghost" disabled={busy} onClick={() => void reopen()}
-                      title="Back to review: comments on, videos follow the latest cut again">Reopen for review</button>
-                  )}
                   <button type="button" className="modal-btn-primary" onClick={onClose}>Close</button>
                 </>
               )}

@@ -53,7 +53,6 @@ export function ProjectSharesModal({ projectId, onClose }: Readonly<{ projectId:
                   {s.videoCount} video{s.videoCount === 1 ? '' : 's'}
                   {s.passTitle && <span className="shl-cap">Pass</span>}
                   {s.caps.internal && <span className="shv-pill shv-pill--internal">LP Staff Only</span>}
-                  {s.stage === 'delivered' && <span className="shv-pill">Delivered</span>}
                   {CAP_SHORT.filter(([k]) => s.caps[k]).map(([k, l]) => <span key={k} className="shl-cap">{l}</span>)}
                 </span>
               </span>

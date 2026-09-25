@@ -85,8 +85,8 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   const items = useMemo(() => view?.groups.flatMap((g) => g.items) ?? [], [view]);
   const item: ShareViewItem | null = items.find((i) => i.assetId === assetId) ?? items[0] ?? null;
   const caps = view?.share.caps;
-  const delivered = view?.share.stage === 'delivered';
-  const pinnedId = delivered ? item?.version?.id ?? null : null;
+  const locked = !!caps?.locked;
+  const pinnedId = locked ? item?.version?.id ?? null : null;
 
   // Staff see internal threads unless previewing as a client; an Internal share
   // shows them to everyone (only staff can open it) and posts new ones internal.
@@ -99,7 +99,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
     lockedVersionId: pinnedId,
   });
 
-  const commentsOn    = !!caps?.comments && !delivered;
+  const commentsOn    = !!caps?.comments;
   const transcriptsOn = !!caps?.transcripts;
   const activeTab: 'comments' | 'transcript' | null =
     sideTab === 'comments' && commentsOn ? 'comments'
@@ -273,7 +273,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                   onSeek={(t) => setSeekTarget(t)}
                   getCurrentTime={() => timeRef.current}
                   canModerate={!clientView}
-                  showVersionSelect={caps.versions && !delivered}
+                  showVersionSelect={caps.versions && !locked}
                   showInternalTag={!clientView}
                   composePlaceholder={caps.internal ? 'Add an internal comment…' : 'Add a comment…'}
                 />

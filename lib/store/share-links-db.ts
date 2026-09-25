@@ -11,7 +11,10 @@
  *     nobody curates the same videos twice; or
  *   - ad-hoc (`pass_id` null): an explicit, ordered list in share_link_items.
  * For pass-backed shares, share_link_items still holds per-video state (the
- * per-video reshare token and delivered-version pins) but not membership.
+ * per-video reshare token and locked-cut pins) but not membership.
+ *
+ * Every change is live — there is no publish/deliver step. What used to be
+ * "Deliver" is just switches: Download on, Comments off, Lock cuts on.
  *
  * Backed by its own share-links.sqlite at the DATA_DIR root — auto-included in
  * the nightly R2 backup + WAL checkpointing via the globalThis singleton
@@ -31,7 +34,6 @@ declare global {
   var __lpos_share_links_db: DatabaseSync | undefined;
 }
 
-export type ShareStage = 'review' | 'delivered';
 export type ShareAudience = 'link' | 'email' | 'staff';
 
 export interface ShareCaps {
@@ -40,16 +42,17 @@ export interface ShareCaps {
   download:    boolean;
   reshare:     boolean;
   transcripts: boolean;
-  /** Staff-only share: LPOS sign-in required, internal comments visible. */
+  /** Staff-only share: LPOS sign-in required, internal comments visible. Driven by audience 'staff'. */
   internal:    boolean;
+  /** Keep every video on the cut it was on when this was switched on (new uploads don't replace it). */
+  locked:      boolean;
 }
 
-export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'versions', 'download', 'reshare', 'transcripts', 'internal'];
+export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'versions', 'download', 'reshare', 'transcripts', 'internal', 'locked'];
 
-export const SHARE_PRESETS: Record<'review' | 'delivered' | 'internal', { stage: ShareStage; caps: ShareCaps }> = {
-  review:    { stage: 'review',    caps: { comments: true,  versions: true, download: false, reshare: true,  transcripts: true, internal: false } },
-  delivered: { stage: 'delivered', caps: { comments: false, versions: true, download: true,  reshare: true,  transcripts: true, internal: false } },
-  internal:  { stage: 'review',    caps: { comments: true,  versions: true, download: false, reshare: false, transcripts: true, internal: true  } },
+export const SHARE_PRESETS: Record<'review' | 'internal', { caps: ShareCaps }> = {
+  review:   { caps: { comments: true, versions: true, download: false, reshare: true,  transcripts: true, internal: false, locked: false } },
+  internal: { caps: { comments: true, versions: true, download: false, reshare: false, transcripts: true, internal: true,  locked: false } },
 };
 
 export interface ShareLink {
@@ -57,7 +60,6 @@ export interface ShareLink {
   token:      string;
   name:       string;
   passId:     string | null;
-  stage:      ShareStage;
   caps:       ShareCaps;
   audience:   ShareAudience;
   emails:     string[];
@@ -72,7 +74,7 @@ export interface ShareLinkItem {
   projectId:         string;
   position:          number;
   clientTitle:       string | null;
-  /** Delivered shares lock each video to the version that was current at delivery. */
+  /** Set while the share's Lock cuts switch is on: the cut this video is held on. */
   pinnedVersionId:   string | null;
   pinnedVersionNumber: number | null;
   /** Stable per-video public link token (one-click reshare). */
@@ -161,11 +163,14 @@ function newToken(db: DatabaseSync, sql: string): string {
 
 // ── mappers ───────────────────────────────────────────────────────────────────
 
-function parseCaps(raw: string): ShareCaps {
+// `stage` is a retired column: rows written while "Deliver" existed carry
+// stage='delivered', which meant exactly what Lock cuts means now.
+function parseCaps(raw: string, stage: string): ShareCaps {
   let parsed: Partial<ShareCaps> = {};
   try { parsed = JSON.parse(raw) as Partial<ShareCaps>; } catch { /* default all off */ }
   const caps = {} as ShareCaps;
   for (const k of SHARE_CAP_KEYS) caps[k] = !!parsed[k];
+  if (stage === 'delivered') caps.locked = true;
   return caps;
 }
 
@@ -175,8 +180,7 @@ function rowToShare(row: ShareRow, emails: string[]): ShareLink {
     token:     row.token,
     name:      row.name,
     passId:    row.pass_id,
-    stage:     row.stage === 'delivered' ? 'delivered' : 'review',
-    caps:      parseCaps(row.caps),
+    caps:      parseCaps(row.caps, row.stage),
     audience:  row.audience === 'email' || row.audience === 'staff' ? row.audience : 'link',
     emails,
     createdBy: row.created_by,
@@ -279,7 +283,7 @@ export function createShareLink(input: CreateShareInput): ShareLink {
     db.prepare(
       `INSERT INTO share_links (id, token, name, pass_id, stage, caps, audience, created_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, token, input.name.trim() || 'Untitled share', input.passId ?? null, preset.stage, JSON.stringify(caps), audience,
+    ).run(id, token, input.name.trim() || 'Untitled share', input.passId ?? null, 'review', JSON.stringify(caps), audience,
       input.createdBy ?? null, now, now);
     for (const email of normaliseEmails(input.emails ?? [])) {
       db.prepare('INSERT OR IGNORE INTO share_link_emails (share_id, email) VALUES (?, ?)').run(id, email);
@@ -300,7 +304,6 @@ export interface ShareLinkPatch {
   caps?:     Partial<ShareCaps>;
   audience?: ShareAudience;
   emails?:   string[];
-  stage?:    ShareStage;
 }
 
 export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | null {
@@ -312,8 +315,12 @@ export function updateShareLink(id: string, patch: ShareLinkPatch): ShareLink | 
   // Internal and staff-only are the same thing seen from two controls — keep them in step.
   if (patch.caps && 'internal' in patch.caps) audience = caps.internal ? 'staff' : (audience === 'staff' ? 'link' : audience);
   if (patch.audience) caps.internal = patch.audience === 'staff';
-  db.prepare('UPDATE share_links SET name = ?, caps = ?, audience = ?, stage = ?, updated_at = ? WHERE id = ?')
-    .run(patch.name?.trim() || current.name, JSON.stringify(caps), audience, patch.stage ?? current.stage, new Date().toISOString(), id);
+  db.prepare("UPDATE share_links SET name = ?, caps = ?, audience = ?, stage = 'review', updated_at = ? WHERE id = ?")
+    .run(patch.name?.trim() || current.name, JSON.stringify(caps), audience, new Date().toISOString(), id);
+  // Unlocking releases every pin, so the next lock holds whatever is current then.
+  if (patch.caps?.locked === false) {
+    db.prepare('UPDATE share_link_items SET pinned_version_id = NULL, pinned_version_number = NULL WHERE share_id = ?').run(id);
+  }
   if (patch.emails) {
     db.prepare('DELETE FROM share_link_emails WHERE share_id = ?').run(id);
     for (const email of normaliseEmails(patch.emails)) {

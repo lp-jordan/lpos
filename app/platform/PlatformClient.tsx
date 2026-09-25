@@ -113,7 +113,6 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
                   <span className="shl-meta">
                     {x.videoCount} video{x.videoCount === 1 ? '' : 's'}
                     {x.caps.internal && <span className="shv-pill shv-pill--internal">LP Staff Only</span>}
-                    {x.stage === 'delivered' && <span className="shv-pill">Delivered</span>}
                   </span>
                 </span>
                 <button type="button" className="shm-icon" title="Copy link" aria-label="Copy link"

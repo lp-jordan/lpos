@@ -304,7 +304,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
           <button
             onClick={() => void sharePass()}
             style={passShare ? { ...exportBtn, borderColor: 'var(--accent)', color: 'var(--accent)' } : { ...exportBtn, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#1a1408' }}
-            title={passShare ? 'Switches, who can open it, Deliver' : 'Create a share link for this pass and copy it'}
+            title={passShare ? 'Switches, who can open it, videos' : 'Create a share link for this pass and copy it'}
           >
             {passShare ? 'Shared ▸' : (shareCopied ? 'Link copied' : 'Share')}
           </button>

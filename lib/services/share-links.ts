@@ -4,7 +4,9 @@
  * Pass-backed shares read their videos, order, categories and client titles live
  * from the Platform pass tree (the pass IS the share). Ad-hoc shares read their
  * explicit list. Either way each video gets its per-video reshare token and, for
- * delivered shares, the version it was locked to.
+ * shares with Lock cuts on, the version it is held on. Locking is lazy and
+ * live: a video with no pin yet is pinned to its current cut the first time
+ * the share is read, so videos added to a locked share lock as they arrive.
  */
 import { getAsset } from '@/lib/store/media-registry';
 import { listAssetVersionsWithFrameioFileId } from '@/lib/store/canonical-asset-store';
@@ -15,7 +17,6 @@ import {
   listShareItems,
   listShareLinks,
   setShareItemPin,
-  updateShareLink,
   type ShareCaps,
   type ShareLink,
 } from '@/lib/store/share-links-db';
@@ -29,10 +30,10 @@ export interface ShareViewItem {
   lposName:      string;
   duration:      number | null;
   thumbnailUrl:  string;
-  /** The version the viewer should play: the pin on a delivered share, else latest. */
+  /** The version the viewer should play: the pin when Lock cuts is on, else latest. */
   version:       { id: string; number: number } | null;
   latestVersion: { id: string; number: number } | null;
-  /** True when a delivered share is locked to an older cut than the latest. */
+  /** True when a locked video is held on an older cut than the latest. */
   updateAvailable: boolean;
   videoToken:    string;
   /** Where the player streams from: Frame.io/Cloudflare, the local file, or nowhere yet. */
@@ -46,7 +47,7 @@ export interface ShareViewGroup {
 }
 
 export interface ShareView {
-  share:  Pick<ShareLink, 'id' | 'token' | 'name' | 'passId' | 'stage' | 'caps' | 'audience'>;
+  share:  Pick<ShareLink, 'id' | 'token' | 'name' | 'passId' | 'caps' | 'audience'>;
   groups: ShareViewGroup[];
 }
 
@@ -60,9 +61,13 @@ function buildItem(share: ShareLink, assetId: string, projectId: string, title: 
   if (!asset) return null;
   const state  = ensureShareItemState(share.id, assetId, projectId);
   const latest = latestVersionOf(assetId);
-  const pinned = share.stage === 'delivered' && state.pinnedVersionId && state.pinnedVersionNumber != null
+  let pinned = share.caps.locked && state.pinnedVersionId && state.pinnedVersionNumber != null
     ? { id: state.pinnedVersionId, number: state.pinnedVersionNumber }
     : null;
+  if (share.caps.locked && !pinned && latest) {
+    setShareItemPin(share.id, assetId, projectId, { versionId: latest.id, versionNumber: latest.number });
+    pinned = latest;
+  }
   const version = pinned ?? latest;
   return {
     assetId,
@@ -98,24 +103,12 @@ export function resolveShareView(share: ShareLink): ShareView {
     groups.push({ title: null, items });
   }
   return {
-    share: { id: share.id, token: share.token, name: share.name, passId: share.passId, stage: share.stage, caps: share.caps, audience: share.audience },
+    share: { id: share.id, token: share.token, name: share.name, passId: share.passId, caps: share.caps, audience: share.audience },
     groups,
   };
 }
 
-/** Deliver: lock every video to its current latest version, turn downloads on, close comments. Same URL. */
-export function deliverShare(share: ShareLink): ShareLink | null {
-  const view = resolveShareView({ ...share, stage: 'review' });
-  for (const g of view.groups) {
-    for (const it of g.items) {
-      if (it.latestVersion) setShareItemPin(share.id, it.assetId, it.projectId, { versionId: it.latestVersion.id, versionNumber: it.latestVersion.number });
-    }
-  }
-  const caps: Partial<ShareCaps> = { download: true, comments: false, versions: true };
-  return updateShareLink(share.id, { stage: 'delivered', caps });
-}
-
-/** Bump one delivered video to its latest version. */
+/** Move one locked video up to its latest cut. */
 export function bumpSharePin(share: ShareLink, assetId: string, projectId: string): void {
   const latest = latestVersionOf(assetId);
   if (latest) setShareItemPin(share.id, assetId, projectId, { versionId: latest.id, versionNumber: latest.number });
@@ -127,7 +120,6 @@ export interface ShareSummary {
   name:      string;
   passId:    string | null;
   passTitle: string | null;
-  stage:     ShareLink['stage'];
   caps:      ShareCaps;
   audience:  ShareLink['audience'];
   emails:    string[];
@@ -154,7 +146,7 @@ export function listShareSummaries(filter?: { projectId?: string; passId?: strin
     out.push({
       id: s.id, token: s.token, name: s.name, passId: s.passId,
       passTitle: s.passId ? getPass(s.passId)?.title ?? null : null,
-      stage: s.stage, caps: s.caps, audience: s.audience, emails: s.emails,
+      caps: s.caps, audience: s.audience, emails: s.emails,
       videoCount: refs.length, projectIds, updatedAt: s.updatedAt,
     });
   }

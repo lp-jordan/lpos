@@ -38,7 +38,6 @@ export function ShareHome() {
                 <span className="shv-row-meta">
                   {s.videoCount} video{s.videoCount === 1 ? '' : 's'}
                   {s.caps.internal && <span className="shv-pill shv-pill--internal">LP Staff Only</span>}
-                  {s.stage === 'delivered' && <span className="shv-pill">Delivered</span>}
                 </span>
               </Link>
             ))}
