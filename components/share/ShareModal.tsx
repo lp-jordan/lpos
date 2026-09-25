@@ -14,13 +14,14 @@ import { useToast } from '@/contexts/ToastContext';
 import type { ShareCaps, ShareLink, ShareAudience } from '@/lib/store/share-links-db';
 import type { ShareView } from '@/lib/services/share-links';
 
-const CAP_LABELS: Array<[keyof ShareCaps, string]> = [
+// Internal isn't a switch here: choosing "LP Staff Only" under Who is what
+// makes a share internal (the store keeps caps.internal in step with it).
+const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
   ['comments', 'Comments'],
   ['versions', 'Versions'],
   ['download', 'Download'],
   ['reshare', 'Reshare'],
-  ['transcripts', 'Transcripts'],
-  ['internal', 'Internal'],
+  ['transcripts', 'Transcript'],
 ];
 
 export function shareUrl(token: string): string {
@@ -75,7 +76,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[] }>) {
+  async function patch(body: Partial<{ name: string; caps: Partial<ShareCaps>; audience: ShareAudience; emails: string[]; stage: 'review' | 'delivered' }>) {
     const res = await fetch(`/api/share-links/${shareId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
@@ -97,7 +98,13 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
     setBusy(false);
     await load();
     onChanged?.();
-    toast({ id: `share-deliver:${shareId}`, kind: 'publish', tone: 'success', title: 'Delivered', body: 'Versions locked, downloads on. Same link.' });
+    toast({ id: `share-deliver:${shareId}`, kind: 'publish', tone: 'success', title: 'Marked delivered', body: 'Cuts locked, downloads on. Same link.' });
+  }
+
+  async function reopen() {
+    setBusy(true);
+    await patch({ stage: 'review', caps: { comments: true, download: false } });
+    setBusy(false);
   }
 
   async function revoke() {
@@ -149,23 +156,24 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
               <a className="shm-open" href={`/s/${share.token}`} target="_blank" rel="noreferrer">Open</a>
             </div>
 
-            <div className="shm-chips">
+            <div className="shm-toggles">
               {CAP_LABELS.map(([k, label]) => (
                 <button
                   key={k}
                   type="button"
-                  className={`shm-chip${share.caps[k] ? ' is-on' : ''}${k === 'internal' ? ' shm-chip--internal' : ''}`}
-                  aria-pressed={share.caps[k]}
+                  role="switch"
+                  className={`shm-toggle${share.caps[k] ? ' is-on' : ''}`}
+                  aria-checked={share.caps[k]}
                   onClick={() => void patch({ caps: { [k]: !share.caps[k] } })}
                 >
-                  <span className="shm-dot" />{label}
+                  <span className="shm-switch" aria-hidden="true" />{label}
                 </button>
               ))}
             </div>
 
             <div className="shm-label">Who</div>
             <div className="shm-seg" role="radiogroup" aria-label="Who can open this share">
-              {([['link', 'Anyone with the link'], ['email', 'Specific people'], ['staff', 'LPOS staff only']] as const).map(([k, label]) => (
+              {([['link', 'Anyone with the link'], ['email', 'Specific people'], ['staff', 'LP Staff Only']] as const).map(([k, label]) => (
                 <button key={k} type="button" role="radio" aria-checked={audience === k}
                   className={audience === k ? 'is-on' : ''} onClick={() => void patch({ audience: k })}>{label}</button>
               ))}
@@ -219,9 +227,14 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                   <button type="button" className="modal-btn-ghost" onClick={() => setConfirmRevoke(true)}>Revoke</button>
                   <span style={{ flex: 1 }} />
                   {share.stage === 'review' && !share.caps.internal && (
-                    <button type="button" className="modal-btn-secondary" disabled={busy} onClick={() => void deliver()}>Deliver</button>
+                    <button type="button" className="modal-btn-secondary" disabled={busy} onClick={() => void deliver()}
+                      title="Lock every video to its current cut, turn downloads on and close comments. Same link.">Mark delivered</button>
                   )}
-                  <button type="button" className="modal-btn-primary" onClick={onClose}>Done</button>
+                  {share.stage === 'delivered' && (
+                    <button type="button" className="modal-btn-ghost" disabled={busy} onClick={() => void reopen()}
+                      title="Back to review: comments on, videos follow the latest cut again">Reopen for review</button>
+                  )}
+                  <button type="button" className="modal-btn-primary" onClick={onClose}>Close</button>
                 </>
               )}
             </div>

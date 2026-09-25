@@ -300,7 +300,7 @@ function Header({ name, internal, right }: Readonly<{ name: string | null; inter
       </div>
       <div className="shv-head-center">
         {name && <span className="shv-name">{name}</span>}
-        {internal && <span className="shv-pill shv-pill--internal">Internal</span>}
+        {internal && <span className="shv-pill shv-pill--internal">LP Staff Only</span>}
       </div>
       <div className="shv-head-right">{right}</div>
     </header>
