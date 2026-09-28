@@ -2,6 +2,7 @@ import { redirect, notFound } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getPass, getPassBySlug } from '@/lib/store/platform-pass-store';
+import { PASS_PREP_UI_ENABLED } from '@/lib/platform/pass-prep-ui';
 import { PassPrepReview } from './PassPrepReview';
 
 export default async function PassPrepPage({ params }: { params: Promise<{ passId: string }> }) {
@@ -11,6 +12,7 @@ export default async function PassPrepPage({ params }: { params: Promise<{ passI
 
   const { passId } = await params; // id or slug
   if (!getPass(passId) && !getPassBySlug(passId)) notFound();
+  if (!PASS_PREP_UI_ENABLED) redirect(`/platform/${passId}`);
 
   return <PassPrepReview passIdOrSlug={passId} />;
 }

@@ -9,6 +9,7 @@ import {
 } from '@/lib/platform/tile-background';
 import { MediaPicker, type MediaSelection } from './MediaPicker';
 import { exportPassTiles } from '@/lib/platform/export-tiles';
+import { PASS_PREP_UI_ENABLED } from '@/lib/platform/pass-prep-ui';
 
 const ARCHETYPES: TileArchetype[] = ['gradient', 'geometric', 'duotone', 'hero'];
 const GRAINS: GrainLevel[] = ['none', 'subtle', 'film'];
@@ -251,14 +252,20 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
           <button onClick={() => setShowTitles((s) => !s)} style={{ ...chip, ...(showTitles ? chipOn : {}) }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: showTitles ? 'var(--accent)' : 'var(--muted-soft)' }} /> Platform text
           </button>
-          <button onClick={() => setSheetOpen(true)} style={{ ...chip, ...(tree.sheetId ? chipOn : {}) }}
-            title={tree.sheetId ? `Pass map connected: ${tree.sheetTabTitle}` : 'Connect a Google Sheet pass map'}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: tree.sheetId ? 'var(--accent)' : 'var(--muted-soft)' }} />
-            {tree.sheetId ? `Pass map: ${tree.sheetTabTitle}` : 'Connect pass map'}
-          </button>
+          {PASS_PREP_UI_ENABLED && (
+            <button onClick={() => setSheetOpen(true)} style={{ ...chip, ...(tree.sheetId ? chipOn : {}) }}
+              title={tree.sheetId ? `Pass map connected: ${tree.sheetTabTitle}` : 'Connect a Google Sheet pass map'}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: tree.sheetId ? 'var(--accent)' : 'var(--muted-soft)' }} />
+              {tree.sheetId ? `Pass map: ${tree.sheetTabTitle}` : 'Connect pass map'}
+            </button>
+          )}
           <div style={{ flex: 1 }} />
-          <button onClick={() => router.push(`/platform/${tree.slug}/prep`)} style={exportBtn} title="Match tiles to the pass map and generate titles + descriptions">Run prep ▸</button>
-          <button onClick={() => router.push(`/platform/${tree.slug}/handoff`)} style={exportBtn} title="Copy/paste titles + descriptions into LeaderPass admin">Handoff ▸</button>
+          {PASS_PREP_UI_ENABLED && (
+            <>
+              <button onClick={() => router.push(`/platform/${tree.slug}/prep`)} style={exportBtn} title="Match tiles to the pass map and generate titles + descriptions">Run prep ▸</button>
+              <button onClick={() => router.push(`/platform/${tree.slug}/handoff`)} style={exportBtn} title="Copy/paste titles + descriptions into LeaderPass admin">Handoff ▸</button>
+            </>
+          )}
           <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
       </div>
@@ -372,7 +379,7 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
       )}
 
       {/* Pass-map (Google Sheet) connect modal */}
-      {sheetOpen && (
+      {PASS_PREP_UI_ENABLED && sheetOpen && (
         <SheetModal
           pass={tree}
           onConnected={(pass) => setTree((p) => p && { ...p, ...pass })}
