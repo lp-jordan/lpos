@@ -276,7 +276,7 @@ export function ShareModal({ shareId, projectId = null, onClose, onChanged }: Re
                       <button type="button" className="shm-restore" onClick={() => void setTitle(i, '')} title="Use this name again">{i.autoTitle}</button>
                     )}
                     {share.caps.download && i.download?.state === 'failed' && (
-                      <span className="shm-item-warn">Download unavailable · {i.download.error ?? 'file missing'}</span>
+                      <span className="shm-item-warn">Download unavailable - {i.download.error ?? 'file missing'}</span>
                     )}
                   </span>
                   <button type="button" className="shm-remove" aria-label={`Remove ${i.title}`} title="Remove from share" onClick={() => void removeItem(i.assetId)}>×</button>

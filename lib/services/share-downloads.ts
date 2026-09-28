@@ -223,9 +223,10 @@ async function pass(): Promise<void> {
 
 /** Why a file can't be read: usually its drive isn't mounted on this machine. */
 const MISSING_PREFIX = 'MISSING:';
+const DRIVE_DISCONNECTED = 'Source drive disconnected';
 function missingFileReason(filePath: string | null): string {
   const vol = filePath?.match(/^\/Volumes\/([^/]+)\//)?.[1];
-  if (vol && !fs.existsSync(`/Volumes/${vol}`)) return `${MISSING_PREFIX}Drive "${vol}" isn't connected`;
+  if (vol && !fs.existsSync(`/Volumes/${vol}`)) return `${MISSING_PREFIX}${DRIVE_DISCONNECTED}`;
   return `${MISSING_PREFIX}The file isn't on disk`;
 }
 
@@ -342,7 +343,9 @@ export function downloadStatusFor(assetId: string): AssetDownloadStatus {
     original: ready(o) ? { size: o!.size ?? 0, ext: o!.ext ?? '' } : null,
     web: ready(w) ? { size: w!.size ?? 0 } : null,
     transcripts: TRANSCRIPT_KINDS.filter((k) => ready(by.get(k))) as Array<'srt' | 'vtt' | 'txt'>,
-    error: failed?.error?.replace(MISSING_PREFIX, '') ?? null,
+    // Rows written before the wording change still read `Drive "X" isn't connected`.
+    error: failed?.error?.startsWith(`${MISSING_PREFIX}Drive "`) ? DRIVE_DISCONNECTED
+      : failed?.error?.replace(MISSING_PREFIX, '') ?? null,
     progress: Math.round(((o?.progress ?? 0) + (w?.progress ?? 0)) / 2),
   };
 }
