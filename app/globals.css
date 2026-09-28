@@ -18963,6 +18963,10 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .mad-comment-source--internal { color: #9fb2d3; background: rgba(127,147,181,0.16); }
 
 .shv-main { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Player + title row fit the window's height too (wide-but-short windows);
+   150px ≈ sticky header + main padding + title row. Mirrors LP Share. */
+.shv-main { align-items: center; }
+.shv-main > * { width: min(100%, calc((100dvh - 150px) * 16 / 9)); }
 .shv-player { border-radius: 10px; overflow: hidden; background: #000; }
 .shv-under { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .shv-title { margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-strong); }
