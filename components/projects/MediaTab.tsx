@@ -2000,7 +2000,7 @@ const { openMenu } = useContextMenu();
 
       {/* Shares — the unified Share system (replaces review links, deliveries, Link Hubs) */}
       {showHub && <ProjectSharesModal projectId={projectId} onClose={() => setShowHub(false)} />}
-      {managingShareId && <ShareModal shareId={managingShareId} onClose={() => setManagingShareId(null)} />}
+      {managingShareId && <ShareModal shareId={managingShareId} projectId={projectId} onClose={() => setManagingShareId(null)} />}
       {addToShareAssets && (
         <AddToShareModal
           items={addToShareAssets.map((a) => ({ assetId: a.assetId, projectId }))}

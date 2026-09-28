@@ -49,8 +49,17 @@ export async function createShare(input:
 
 interface Props {
   shareId: string;
+  /** The project the window was opened from — the Add-videos picker starts there. */
+  projectId?: string | null;
   onClose: () => void;
   onChanged?: () => void;
+}
+
+/** The project most of the share's videos come from (where Add videos opens by default). */
+function mostCommonProject(ids: string[]): string | null {
+  const n = new Map<string, number>();
+  for (const id of ids) n.set(id, (n.get(id) ?? 0) + 1);
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
 function fmtGB(n: number): string {
@@ -58,7 +67,7 @@ function fmtGB(n: number): string {
   return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
 }
 
-export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
+export function ShareModal({ shareId, projectId = null, onClose, onChanged }: Readonly<Props>) {
   const { toast } = useToast();
   const [share, setShare] = useState<ShareLink | null>(null);
   const [view, setView]   = useState<ShareView | null>(null);
@@ -137,7 +146,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box shm-box" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Share">
+      <div className={`modal-box shm-box${picking ? ' shm-box--picking' : ''}`} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Share">
         {!share ? (
           <p className="modal-body-text">Loading…</p>
         ) : (
@@ -159,6 +168,14 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
               <a className="shm-open" href={`/s/${share.token}`} target="_blank" rel="noreferrer">Open</a>
             </div>
 
+            {picking ? (
+              <AddVideosPicker
+                existing={new Set(items.map((i) => i.assetId))}
+                startProjectId={projectId ?? mostCommonProject(items.map((i) => i.projectId))}
+                onAdd={addItems}
+                onClose={() => setPicking(false)}
+              />
+            ) : (<>
             <div className="shm-toggles">
               {CAP_LABELS.map(([k, label]) => (
                 <button
@@ -226,11 +243,9 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
 
             <div className="shm-items-head">
               <span className="shm-label">{items.length} video{items.length === 1 ? '' : 's'}</span>
-              <button type="button" className="shm-add" onClick={() => setPicking((v) => !v)}>{picking ? 'Close' : '+ Add videos'}</button>
+              <button type="button" className="shm-add" onClick={() => setPicking(true)}>+ Add videos</button>
             </div>
-            {picking ? (
-              <AddVideosPicker existing={new Set(items.map((i) => i.assetId))} onAdd={addItems} onClose={() => setPicking(false)} />
-            ) : (
+            {(
               <div className="shm-items">
                 {items.map((i) => (
                   <div key={i.assetId} className="shm-item">
@@ -274,6 +289,7 @@ export function ShareModal({ shareId, onClose, onChanged }: Readonly<Props>) {
                 </>
               )}
             </div>
+            </>)}
           </>
         )}
       </div>

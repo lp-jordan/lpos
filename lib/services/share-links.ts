@@ -162,6 +162,8 @@ export interface ShareAssetOption {
   platformTitle: string | null;
   duration:     number | null;
   thumbnailUrl: string;
+  /** Playable on Cloudflare yet — the picker flags ones still processing. */
+  cfReady:      boolean;
 }
 
 /** Videos that can go in a share, across every active project. `q` matches name, tile title, project or client. */
@@ -181,9 +183,63 @@ export function listShareableAssets(q: string, limit = 200): ShareAssetOption[] 
         name: asset.name || asset.originalFilename, platformTitle: tileTitle,
         duration: asset.duration,
         thumbnailUrl: `/api/projects/${project.projectId}/media/${asset.assetId}/thumbnail`,
+        cfReady: asset.cloudflare?.status === 'ready',
       });
     }
   }
   out.sort((a, b) => a.clientName.localeCompare(b.clientName) || a.projectName.localeCompare(b.projectName) || a.name.localeCompare(b.name));
   return out.slice(0, limit);
+}
+
+// ── Browse (the Add-videos picker: clients → projects → videos) ───────────────
+
+export interface BrowseClient  { clientName: string; projectCount: number; videoCount: number; latest: string }
+export interface BrowseProject { projectId: string; name: string; clientName: string; videoCount: number; latest: string }
+
+function shareableAssetsOf(projectId: string) {
+  return listCanonicalMediaAssets(projectId).filter((a) => a.frameio.assetId || a.filePath);
+}
+
+/** Clients, newest activity first — the Projects page's order. */
+export function browseClients(latestByProject: Map<string, string>): BrowseClient[] {
+  const by = new Map<string, BrowseClient>();
+  for (const p of getProjectStore().getAll()) {
+    if (p.archived) continue;
+    const c = by.get(p.clientName) ?? { clientName: p.clientName, projectCount: 0, videoCount: 0, latest: '' };
+    c.projectCount += 1;
+    c.videoCount += shareableAssetsOf(p.projectId).length;
+    const ts = latestByProject.get(p.projectId) ?? p.updatedAt ?? '';
+    if (ts > c.latest) c.latest = ts;
+    by.set(p.clientName, c);
+  }
+  return [...by.values()].sort((a, b) => b.latest.localeCompare(a.latest));
+}
+
+export function browseProjects(clientName: string, latestByProject: Map<string, string>): BrowseProject[] {
+  return getProjectStore().getAll()
+    .filter((p) => !p.archived && p.clientName === clientName)
+    .map((p) => ({
+      projectId: p.projectId, name: p.name, clientName: p.clientName,
+      videoCount: shareableAssetsOf(p.projectId).length,
+      latest: latestByProject.get(p.projectId) ?? p.updatedAt ?? '',
+    }))
+    .sort((a, b) => b.latest.localeCompare(a.latest));
+}
+
+export function browseVideos(projectId: string): { project: BrowseProject | null; videos: ShareAssetOption[] } {
+  const project = getProjectStore().getAll().find((p) => p.projectId === projectId);
+  if (!project) return { project: null, videos: [] };
+  const videos = shareableAssetsOf(projectId).map((asset) => ({
+    assetId: asset.assetId, projectId,
+    projectName: project.name, clientName: project.clientName ?? '',
+    name: asset.name || asset.originalFilename,
+    platformTitle: platformTitle(asset.assetId, null),
+    duration: asset.duration,
+    thumbnailUrl: `/api/projects/${projectId}/media/${asset.assetId}/thumbnail`,
+    cfReady: asset.cloudflare?.status === 'ready',
+  }));
+  return {
+    project: { projectId, name: project.name, clientName: project.clientName, videoCount: videos.length, latest: project.updatedAt ?? '' },
+    videos,
+  };
 }

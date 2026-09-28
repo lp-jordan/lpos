@@ -35,7 +35,7 @@ export function ProjectSharesModal({ projectId, onClose }: Readonly<{ projectId:
     } catch { /* ignore */ }
   }
 
-  if (managing) return <ShareModal shareId={managing} onClose={() => { setManaging(null); void load(); }} onChanged={() => void load()} />;
+  if (managing) return <ShareModal shareId={managing} projectId={projectId} onClose={() => { setManaging(null); void load(); }} onChanged={() => void load()} />;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
