@@ -7,12 +7,11 @@ import { cloudflareStreamEmbedUrl } from '@/lib/models/media-asset';
 /**
  * Compact distribution bar for the media detail sidebar. An icon action-rail
  * (Copy stream URL, Replace thumbnail, Security — each a single click straight
- * to its action/modal; Frame.io link) with a right-justified roll-up health dot:
+ * to its action/modal; Cloudflare link-out) with a right-justified roll-up health dot:
  *   red    — something failed
  *   yellow — something is in progress or stale (CF reflects an older version)
  *   green  — everything settled
- * Hovering the dot reveals a per-platform breakdown (Frame.io · Cloudflare ·
- * Transcription). Control LOGIC stays in MediaDetailPanel (modals, push, copy).
+ * Hovering the dot reveals a per-platform breakdown (Cloudflare · Transcription). Control LOGIC stays in MediaDetailPanel (modals, push, copy).
  */
 
 const HOVER_CLOSE_MS = 160;  // grace so moving icon → health popover doesn't dismiss
@@ -34,12 +33,11 @@ interface Props {
   onCopyStreamUrl:     (embedSrc: string) => void;
   onReplaceThumbnail:  () => void;
   onSecurity:          () => void;
-  frameioLink:         string | null;
 }
 
 export function MediaDistributionBar({
   asset, isViewingOldVersion, streamUrlCopied,
-  onCopyStreamUrl, onReplaceThumbnail, onSecurity, frameioLink,
+  onCopyStreamUrl, onReplaceThumbnail, onSecurity,
 }: Readonly<Props>) {
   const [openItem, setOpenItem] = useState<string | null>(null);
   const openTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,19 +74,6 @@ export function MediaDistributionBar({
     : cfReady                   ? 'Ready'
     : 'Not uploaded';
 
-  const fio = asset.frameio.status;
-  const fioTone: Tone =
-    fio === 'in_review' || fio === 'approved' ? 'ready'
-    : fio === 'uploading' ? 'processing'
-    : fio === 'rejected' || fio === 'needs_changes' ? 'stale'
-    : 'idle';
-  const fioLabel =
-    fio === 'none' ? 'Not uploaded'
-    : fio === 'uploading' ? 'Uploading'
-    : fio === 'rejected' ? 'Rejected'
-    : fio === 'needs_changes' ? 'Changes requested'
-    : 'Ready';
-
   const tx = asset.transcription.status;
   const txTone: Tone =
     tx === 'done' ? 'ready' : tx === 'failed' ? 'failed'
@@ -96,7 +81,7 @@ export function MediaDistributionBar({
   const txLabel = tx === 'done' ? 'Done' : tx === 'processing' ? 'Transcribing' : tx === 'queued' ? 'Queued' : 'None';
 
   // Roll-up health: red beats yellow beats green.
-  const tones = [fioTone, cfTone, txTone];
+  const tones = [cfTone, txTone];
   const overall: 'red' | 'yellow' | 'green' =
     tones.some((t) => t === 'failed')                     ? 'red'
     : tones.some((t) => t === 'processing' || t === 'stale') ? 'yellow'
@@ -158,33 +143,14 @@ export function MediaDistributionBar({
           </div>
         )}
 
-        {frameioLink && cfWatchUrl ? (
-          // Both destinations available → a tiny menu to pick Frame.io or Cloudflare.
-          <div className="mdb-rail-item" onMouseLeave={scheduleClose}>
-            <button
-              type="button"
-              className={`mdb-rail-btn${openItem === 'linkout' ? ' is-open' : ''}`}
-              onClick={() => toggle('linkout')}
-              aria-label="Open asset externally"
-              title="Open asset — Frame.io or Cloudflare"
-            >
-              {linkOutIcon}
-            </button>
-            {openItem === 'linkout' && (
-              <div className="mdb-pop mdb-linkout-pop" role="menu" aria-label="Open asset externally" onMouseEnter={clearTimers}>
-                <a className="mdb-pop-btn" href={frameioLink} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setOpenItem(null)}>Open in Frame.io</a>
-                <a className="mdb-pop-btn" href={cfWatchUrl} target="_blank" rel="noreferrer" role="menuitem" onClick={() => setOpenItem(null)}>Open in Cloudflare</a>
-              </div>
-            )}
-          </div>
-        ) : (frameioLink || cfWatchUrl) && (
+        {cfWatchUrl && (
           <a
             className="mdb-rail-btn"
-            href={(frameioLink ?? cfWatchUrl)!}
+            href={cfWatchUrl}
             target="_blank"
             rel="noreferrer"
-            aria-label={frameioLink ? 'Open in Frame.io' : 'Open in Cloudflare'}
-            title={frameioLink ? 'Open in Frame.io' : 'Open in Cloudflare'}
+            aria-label="Open in Cloudflare"
+            title="Open in Cloudflare"
           >
             {linkOutIcon}
           </a>
@@ -197,7 +163,6 @@ export function MediaDistributionBar({
           </button>
           {openItem === 'health' && (
             <div className="mdb-pop mdb-health-pop" role="dialog" aria-label="Distribution status">
-              <div className="mdb-health-row"><span className={`mdb-dot mdb-dot--${toneDot(fioTone)}`} /><span className="mdb-health-name">Frame.io</span><span className="mdb-health-state">{fioLabel}</span></div>
               <div className="mdb-health-row"><span className={`mdb-dot mdb-dot--${toneDot(cfTone)}`} /><span className="mdb-health-name">Cloudflare</span><span className="mdb-health-state">{cfLabel}</span></div>
               <div className="mdb-health-row"><span className={`mdb-dot mdb-dot--${toneDot(txTone)}`} /><span className="mdb-health-name">Transcription</span><span className="mdb-health-state">{txLabel}</span></div>
             </div>

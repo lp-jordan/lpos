@@ -7,7 +7,6 @@
  * Mirrors the ScriptEditorPanel pattern — always in DOM, shown/hidden via CSS.
  *
  * Sections:
- *   • Frame.io — review iframe OR upload button (if not yet uploaded)
  *   • Transcription — status badge, re-transcribe button
  *   • Cloudflare Stream — push button (UI only, wiring pending)
  *   • Metadata — editable name / description with PATCH save
@@ -209,30 +208,10 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
-  // ── Frame.io ───────────────────────────────────────────────────────────────
-  const [fioUploading, setFioUploading]       = useState(false);
-  const [fioError, setFioError]               = useState<string | null>(null);
+  // ── Share links ────────────────────────────────────────────────────────────
   const [copiedShareId, setCopiedShareId]     = useState<string | null>(null);
   const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
   const [managingShareId, setManagingShareId] = useState<string | null>(null);
-
-  // Poll while uploading
-  const pollFio = useCallback(async () => {
-    if (!asset || asset.frameio.status !== 'uploading') return;
-    try {
-      const res  = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio`);
-      const data = await res.json() as { frameio?: { status: string } };
-      if (data.frameio?.status !== 'uploading') {
-        onUpdated();
-      }
-    } catch { /* ignore */ }
-  }, [asset, projectId, onUpdated]);
-
-  useEffect(() => {
-    if (!asset || asset.frameio.status !== 'uploading') return;
-    const id = setInterval(() => { void pollFio(); }, 3000);
-    return () => clearInterval(id);
-  }, [asset, pollFio]);
 
   const pollLeaderPass = useCallback(async () => {
     if (!asset) return;
@@ -263,25 +242,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     const id = setInterval(() => { void pollLeaderPass(); }, 3000);
     return () => clearInterval(id);
   }, [asset, pollLeaderPass]);
-
-  async function handleUploadToFrameIO() {
-    if (!asset) return;
-    setFioError(null);
-    setFioUploading(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio`, { method: 'POST' });
-      if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        setFioError(d.error ?? 'Failed to start upload');
-        return;
-      }
-      onUpdated();
-    } catch {
-      setFioError('Network error — could not start upload');
-    } finally {
-      setFioUploading(false);
-    }
-  }
 
   const [lpPublishing, setLpPublishing] = useState(false);
   const [lpError, setLpError] = useState<string | null>(null);
@@ -397,10 +357,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     await fetch(`/api/projects/${projectId}/media/${asset.assetId}/transcribe-es`, { method: 'POST' });
     onUpdated();
   }
-
-  // ── Determine live frameio status (asset may be stale while polling) ───────
-  const fioStatus  = asset?.frameio.status ?? 'none';
-  const isUploading = fioStatus === 'uploading' || fioUploading;
 
   // ── Version selection (drives both the comment thread and the player) ──────
   // Only the latest version is on Cloudflare; older versions play from their
@@ -584,7 +540,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         onCopyStreamUrl={handleCopyEmbedUrl}
                         onReplaceThumbnail={() => setShowThumbModal(true)}
                         onSecurity={() => setShowDomainsModal(true)}
-                        frameioLink={asset.frameio.playerUrl ?? asset.frameio.reviewLink ?? null}
                       />
                     </>
                   );
@@ -618,43 +573,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 return null;
               })()}
 
-              {/* ── Frame.io upload / error (only shown when actionable) ── */}
-              {(fioStatus === 'none' || isUploading || fioError) && (
-                <div className="mad-section">
-                  {/* Upload button */}
-                  {fioStatus === 'none' && !isUploading && (
-                    <button
-                      type="button"
-                      className="mad-action-btn mad-action-btn--primary"
-                      onClick={handleUploadToFrameIO}
-                      disabled={!asset.filePath}
-                      title={!asset.filePath ? 'No local file path — cannot upload' : undefined}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                        <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                      </svg>
-                      Upload to Frame.io
-                    </button>
-                  )}
-
-                  {/* Uploading state */}
-                  {isUploading && (
-                    <div className="mad-uploading-row">
-                      <span className="mad-spinner" aria-hidden="true" />
-                      <span className="mad-uploading-label">Uploading to Frame.io…</span>
-                    </div>
-                  )}
-
-                  {/* Errors */}
-                  {fioError && <p className="mad-error">{fioError}</p>}
-                  {!fioError && asset.frameio.lastError && fioStatus === 'none' && (
-                    <p className="mad-error">Last attempt failed: {asset.frameio.lastError}</p>
-                  )}
-                </div>
-              )}
-
-              {/* ── Comments (LPOS-owned; Frame.io optional) ── */}
+              {/* ── Comments ── */}
               <AssetCommentsSection
                 ac={ac}
                 onSeek={(t) => setSidebarSeekTarget(t)}

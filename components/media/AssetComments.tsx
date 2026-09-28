@@ -360,7 +360,7 @@ export function AssetCommentsSection({
           <div className="mad-version-banner">
             <span className="mad-version-banner-label">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              Viewing v{ac.selectedVersion?.versionNumber} · Frame.io
+              Viewing v{ac.selectedVersion?.versionNumber} · older version
             </span>
             <button
               type="button"
@@ -389,22 +389,10 @@ export function AssetCommentsSection({
                     : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{(c.authorName || '?')[0]}</div>
                   }
                   <span className="mad-comment-author">
-                    {c.authorName || (c.fromFrame ? 'Frame.io' : 'Unknown')}
+                    {c.authorName || 'Unknown'}
                   </span>
-                  {c.fromFrame && (
-                    <span className="mad-comment-source" title="Left via Frame.io">Frame.io</span>
-                  )}
                   {showInternalTag && c.internal && (
                     <span className="mad-comment-source mad-comment-source--internal" title="Staff only — never shown to clients">Internal</span>
-                  )}
-                  {c.mirrorAbandoned && (
-                    <span
-                      className="mad-comment-mirror-warn"
-                      title="Couldn't sync to Frame.io — clients viewing the review link won't see this comment."
-                      aria-label="Mirror to Frame.io failed"
-                    >
-                      !
-                    </span>
                   )}
                   {/* Timecode + date collapse when the name needs the room: the
                       date wraps out of sight first, then the timecode (the
@@ -513,7 +501,7 @@ export function AssetCommentsSection({
                             ? <img src={r.authorAvatar} alt="" className="mad-comment-avatar" />
                             : <div className="mad-comment-avatar mad-comment-avatar--placeholder">{(r.authorName || '?')[0]}</div>
                           }
-                          <span className="mad-comment-author">{r.authorName || 'Frame.io'}</span>
+                          <span className="mad-comment-author">{r.authorName || 'Unknown'}</span>
                           <span className="mad-comment-date">{formatCommentDate(r.createdAt)}</span>
                         </div>
                         <p className="mad-comment-text">{r.text}</p>

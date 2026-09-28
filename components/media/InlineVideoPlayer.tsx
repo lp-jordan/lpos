@@ -122,7 +122,7 @@ export function InlineVideoPlayer({
         />
         {unavailable ? (
           <div className="ivp-error-overlay">
-            <span>Preview unavailable — Frame.io may still be processing</span>
+            <span>Preview unavailable — the video may still be processing</span>
             {onTheaterOpen && <button
               type="button"
               className="ivp-theater-btn"
@@ -171,7 +171,7 @@ export function InlineVideoPlayer({
             />
             {duration > 0 && timedComments.map(c => {
               const pct = ((c.timestamp ?? 0) / duration) * 100;
-              const tip = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Frame.io'}: ${c.text}`;
+              const tip = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName || 'Unknown'}: ${c.text}`;
               if (c.duration && c.duration > 0) {
                 return (
                   <button
