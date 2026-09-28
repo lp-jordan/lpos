@@ -41,6 +41,24 @@ function openDatabases(): Array<{ name: string; db: DatabaseSync }> {
 }
 
 /**
+ * Run a checkpoint that may block (TRUNCATE/RESTART/FULL) with a SHORT busy
+ * timeout. Litestream (continuous backup to R2) keeps a read lock on each DB so
+ * nothing is folded away before it has been replicated; with the stores' normal
+ * 5 s busy timeout a TRUNCATE would wait 5 s per database — ~45 s on shutdown,
+ * far past the LPOS Server app's 8 s SIGKILL. When the wait is cut short SQLite
+ * still checkpoints every frame it can without blocking (same as PASSIVE), and
+ * Litestream already holds the rest, so nothing is at risk.
+ */
+const SHUTDOWN_BUSY_TIMEOUT_MS = 200;
+function checkpointWithShortWait(db: DatabaseSync, mode: CheckpointMode): void {
+  if (mode === 'PASSIVE') { db.exec('PRAGMA wal_checkpoint(PASSIVE);'); return; }
+  const prev = (db.prepare('PRAGMA busy_timeout').get() as { timeout?: number } | undefined)?.timeout ?? 5000;
+  db.exec(`PRAGMA busy_timeout = ${SHUTDOWN_BUSY_TIMEOUT_MS};`);
+  try { db.exec(`PRAGMA wal_checkpoint(${mode});`); }
+  finally { try { db.exec(`PRAGMA busy_timeout = ${prev};`); } catch { /* closing anyway */ } }
+}
+
+/**
  * Fold each database's WAL into its main file. PASSIVE (default) never blocks on
  * other activity; TRUNCATE also shrinks the WAL file (use on shutdown). Errors
  * are captured per-DB, never thrown — a checkpoint failure must not crash the app.
@@ -49,7 +67,7 @@ export function checkpointAllDatabases(mode: CheckpointMode = 'PASSIVE'): Checkp
   const outcomes: CheckpointOutcome[] = [];
   for (const { name, db } of openDatabases()) {
     try {
-      db.exec(`PRAGMA wal_checkpoint(${mode});`);
+      checkpointWithShortWait(db, mode);
       outcomes.push({ name, ok: true });
     } catch (err) {
       outcomes.push({ name, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -63,7 +81,7 @@ export function closeAllDatabases(): CheckpointOutcome[] {
   const outcomes: CheckpointOutcome[] = [];
   for (const { name, db } of openDatabases()) {
     try {
-      try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* still try to close */ }
+      try { checkpointWithShortWait(db, 'TRUNCATE'); } catch { /* still try to close */ }
       db.close();
       outcomes.push({ name, ok: true });
     } catch (err) {
