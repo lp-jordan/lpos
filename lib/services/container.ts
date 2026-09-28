@@ -362,9 +362,9 @@ export async function initServices(io: SocketIOServer): Promise<void> {
       for (const project of projects) {
         const assets = listCanonicalMediaAssets(project.projectId);
         for (const asset of assets) {
-          const stuck =
-            asset.cloudflare.status === 'uploading' ||
-            (asset.cloudflare.status === 'processing' && asset.leaderpass.status === 'preparing');
+          // Only a mid-transfer upload is lost. A 'processing' one (incl. a
+          // LeaderPass push) already has its bytes on Cloudflare and is resumed below.
+          const stuck = asset.cloudflare.status === 'uploading';
           if (!stuck) continue;
           patchAsset(project.projectId, asset.assetId, {
             cloudflare: { status: 'failed', progress: 0, lastError: 'Upload interrupted — server was restarted. Re-push to retry.' },
@@ -387,12 +387,15 @@ export async function initServices(io: SocketIOServer): Promise<void> {
         for (const asset of listCanonicalMediaAssets(project.projectId)) {
           // Also heal assets that failed on a ready-wait timeout/stall — their
           // bytes always landed, so adopting the existing copy is safe.
-          const interruptedWait = asset.cloudflare.status === 'processing' && asset.leaderpass.status !== 'preparing';
+          const interruptedWait = asset.cloudflare.status === 'processing';
           const failedWait = asset.cloudflare.status === 'failed'
             && /^Cloudflare Stream processing (timed out|stalled|exceeded)/.test(asset.cloudflare.lastError ?? '');
           if (!interruptedWait && !failedWait) continue;
           patchAsset(project.projectId, asset.assetId, {
             cloudflare: { status: 'failed', lastError: 'Encode wait interrupted by restart — resuming.' },
+            // A LeaderPass push's worker died with the process; release its
+            // 'preparing' lock so the adopt-only resume can finish the encode.
+            ...(asset.leaderpass.status === 'preparing' ? { leaderpass: { status: 'none' as const, lastError: null } } : {}),
           });
           toResume.push({ projectId: project.projectId, assetId: asset.assetId });
         }

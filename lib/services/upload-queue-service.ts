@@ -7,7 +7,7 @@ import {
 } from '@/lib/store/job-record-store';
 
 const UPLOAD_TIMEOUT_MS     = 3 * 60_000;   // 3 min idle while actively uploading bytes → auto-fail
-const PROCESSING_TIMEOUT_MS = 25 * 60_000;  // 25 min ceiling for Cloudflare encode wait (poll caps at 20 min + buffer)
+const PROCESSING_TIMEOUT_MS = 25 * 60_000;  // 25 min without a heartbeat while waiting on a provider encode
 const TIMEOUT_SWEEP_MS      = 30_000;       // check every 30s
 const TERMINAL_STATUSES     = new Set(['done', 'failed', 'cancelled']);
 
@@ -96,12 +96,23 @@ export class UploadQueueService {
    * Refreshes `updatedAt` without changing status. Use this from long-running
    * external waits (e.g. the Cloudflare ready-poll loop) so the timeout sweep
    * doesn't auto-fail a job that's actually making progress on the remote side.
+   * Broadcasts so the pipeline tracker (which copies `updatedAt` only on queue
+   * change) sees the refresh too — otherwise its stall tick auto-fails a
+   * multi-hour encode ~20 min after the last state change.
    */
   heartbeat(jobId: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
     if (TERMINAL_STATUSES.has(job.status)) return;
     job.updatedAt = new Date().toISOString();
+    this.broadcast();
+  }
+
+  /** True while the job is non-terminal and its worker has heartbeated/progressed recently. */
+  isJobActive(jobId: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job || TERMINAL_STATUSES.has(job.status)) return false;
+    return Date.now() - Date.parse(job.updatedAt) < 3 * 60_000;
   }
 
   complete(jobId: string): void {

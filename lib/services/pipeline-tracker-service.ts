@@ -635,7 +635,15 @@ export class PipelineTrackerService {
                 alive = true;
               }
               break;
-            // upload:* services don't have liveness signals yet — fall through
+            case 'upload:frameio':
+            case 'upload:cloudflare':
+            case 'upload:leaderpass':
+            case 'upload:sardius':
+            case 'upload:delivery':
+              // Long provider waits (a multi-hour Cloudflare encode) heartbeat
+              // the queue job without changing state.
+              if (this.uploadService?.isJobActive(stage.jobId)) alive = true;
+              break;
           }
           if (alive) {
             console.warn(`[pipeline-tracker] vetoed auto-fail for ${stage.type} ${stage.jobId} — worker still alive (heartbeat refreshed)`);
