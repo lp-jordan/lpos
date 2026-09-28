@@ -7,7 +7,6 @@ LPOS is the primary product and deployment unit for the operational pipeline.
 - pipeline services and operator workflows
 - asset/version state and canonical storage
 - transcription runtime and runtime dependency validation
-- Pass Prep core generation flow
 - publish flows, storage contracts, and runtime diagnostics
 - ATEM bridge bootstrap and health checks
 

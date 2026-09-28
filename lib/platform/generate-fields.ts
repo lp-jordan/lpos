@@ -1,15 +1,13 @@
 /**
  * Single-video title/description generation from a transcript.
  *
- * Reuses the provider-routed transport in `generate-plan.ts` (`callModel`) and
- * `inferAiProvider` from `core.ts`, without the course-plan/tree wrapper. Used by
- * the Pass Prep enrichment route and the per-tile regenerate actions.
+ * Uses the provider-routed transport in `ai-model.ts`. Used by the platform
+ * Pass Prep route and the per-tile regenerate actions.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { inferAiProvider, type AiProvider } from './core';
-import { callModel } from './generate-plan';
+import { callModel, inferAiProvider, type AiProvider } from './ai-model';
 
 export class GenerateFieldError extends Error {}
 
@@ -30,7 +28,7 @@ export function sampleTranscript(text: string): string {
   return `${head}\n\n[… middle of transcript trimmed …]\n\n${tail}`;
 }
 
-const ASSET_DIR = path.join(process.cwd(), 'lib', 'passprep', 'assets');
+const ASSET_DIR = path.join(process.cwd(), 'lib', 'platform', 'prompts');
 
 // Cached asset reader — style files are editable without a redeploy (cache is
 // per-process, so a server restart picks up edits).

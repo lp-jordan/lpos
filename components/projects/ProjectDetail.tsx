@@ -3,12 +3,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Project } from '@/lib/models/project';
-import { Asset } from '@/lib/models/asset';
 import { io } from 'socket.io-client';
 import { MediaTab } from '@/components/projects/MediaTab';
 import { PhotosTab } from '@/components/projects/PhotosTab';
 import { ScriptsTab } from '@/components/projects/ScriptsTab';
-import { PassPrepTab } from '@/components/projects/PassPrepTab';
 import { ClientAssetsTab } from '@/components/projects/ClientAssetsTab';
 import { AssetsTab } from '@/components/projects/AssetsTab';
 import { LeaderPassAiToggle } from '@/components/projects/LeaderPassAiToggle';
@@ -27,7 +25,7 @@ function formatTranscriptLabel(filename: string): string {
   return filename.replace(/\.[^.]+$/, '');
 }
 
-type Tab = 'scripts' | 'media' | 'photos' | 'transcripts' | 'assets' | 'passPrep' | 'clientAssets';
+type Tab = 'scripts' | 'media' | 'photos' | 'transcripts' | 'assets' | 'clientAssets';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'clientAssets', label: 'Client Uploads' },
@@ -36,7 +34,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'photos',       label: 'Photos' },
   { id: 'transcripts',  label: 'Transcripts' },
   { id: 'assets',       label: 'Assets' },
-  { id: 'passPrep',     label: 'Pass Prep' },
 ];
 
 function isTab(value: string | null): value is Tab {
@@ -54,7 +51,6 @@ function IconLink() {
 
 interface Props {
   project: Project;
-  assets: Asset[];
   isAdmin?: boolean;
 }
 
@@ -68,7 +64,7 @@ function Checkbox({ checked }: Readonly<{ checked: boolean }>) {
   );
 }
 
-export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Props>) {
+export function ProjectDetail({ project, isAdmin = false }: Readonly<Props>) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openMenu } = useContextMenu();
@@ -77,17 +73,9 @@ export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Pro
     const fromUrl = searchParams.get('tab');
     return isTab(fromUrl) ? fromUrl : 'media';
   });
-  const [passPrepTranscripts, setPassPrepTranscripts] = useState<string[]>([]);
   const [selectedTranscriptJobId, setSelectedTranscriptJobId] = useState<string | null>(null);
   const [sentScriptAssetIds, setSentScriptAssetIds] = useState<Set<string>>(new Set());
   const deepLinkedAssetId = searchParams.get('assetId');
-
-  const workbooks = assets.filter((asset) => asset.type === 'workbook');
-
-  function sendToPassPrep(jobId: string) {
-    setPassPrepTranscripts((prev) => prev.includes(jobId) ? prev : [...prev, jobId]);
-    setTab('passPrep');
-  }
 
   function handleGoToTranscript(jobId: string) {
     setSelectedTranscriptJobId(jobId);
@@ -209,22 +197,12 @@ export function ProjectDetail({ project, assets, isAdmin = false }: Readonly<Pro
           projectId={project.projectId}
           clientName={project.clientName}
           projectName={project.name}
-          passPrepIds={passPrepTranscripts}
-          onSendToPassPrep={sendToPassPrep}
           selectedJobId={selectedTranscriptJobId}
           onClearSelectedJobId={() => setSelectedTranscriptJobId(null)}
         />
       )}
 
       {tab === 'assets' && <AssetsTab projectId={project.projectId} projectName={project.name} sentScriptIds={sentScriptAssetIds} onSendToScripts={handleSendToScripts} />}
-
-      {tab === 'passPrep' && (
-        <PassPrepTab
-          workbooks={workbooks}
-          projectId={project.projectId}
-          queuedJobIds={passPrepTranscripts}
-        />
-      )}
 
       {tab === 'clientAssets' && (
         <ClientAssetsTab
@@ -241,16 +219,12 @@ function TranscriptsTab({
   projectId,
   clientName,
   projectName,
-  passPrepIds,
-  onSendToPassPrep,
   selectedJobId,
   onClearSelectedJobId,
 }: {
   projectId: string;
   clientName: string;
   projectName: string;
-  passPrepIds: string[];
-  onSendToPassPrep: (jobId: string) => void;
   selectedJobId?: string | null;
   onClearSelectedJobId?: () => void;
 }) {
@@ -525,13 +499,6 @@ function TranscriptsTab({
           disabled: !entry.assetId,
           onClick: () => router.push(projectHref(clientName, projectId, 'media')),
         },
-        {
-          type: 'item' as const,
-          label: passPrepIds.includes(entry.jobId) ? '✓ In Pass Prep' : '→ Pass Prep',
-          icon: <TrPassPrepIcon />,
-          disabled: passPrepIds.includes(entry.jobId),
-          onClick: () => onSendToPassPrep(entry.jobId),
-        },
         { type: 'separator' as const },
       ] : []),
       {
@@ -755,14 +722,6 @@ function TranscriptsTab({
                     Timecoded
                   </a>
                 )}
-                <button
-                  type="button"
-                  className={`proj-file-action proj-file-action--primary${passPrepIds.includes(entry.jobId) ? ' sent' : ''}`}
-                  onClick={() => onSendToPassPrep(entry.jobId)}
-                  disabled={passPrepIds.includes(entry.jobId)}
-                >
-                  {passPrepIds.includes(entry.jobId) ? '✓ In Pass Prep' : '→ Pass Prep'}
-                </button>
               </div>
             </div>
           ))}
@@ -835,14 +794,6 @@ function TrMediaIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-    </svg>
-  );
-}
-
-function TrPassPrepIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
     </svg>
   );
 }

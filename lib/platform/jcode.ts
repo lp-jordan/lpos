@@ -11,7 +11,7 @@
  * we do NOT cross-reverse — a client's assets and sheet are assumed to share one
  * ordering, so exact match after upper-casing is the correct join.
  *
- * Extracted and hardened from `core.ts`'s original inline regex
+ * Hardened from the original inline regex
  * (`/\b\d+[a-z]\b/i`, which only handled digit-then-letter). Hardening:
  *  - Strip a trailing file extension first, so `A1.mp4` → `A1` and the `.mp4`
  *    tail can't be misread as the letter-major code `P4`.

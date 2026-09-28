@@ -14,7 +14,7 @@
 
 import type { PassTree, PlatformTile, TileTitleSource } from '@/lib/store/platform-pass-store';
 import type { PassMapRow } from '@/lib/services/google-sheets-client';
-import { parseJCode } from '@/lib/passprep/jcode';
+import { parseJCode } from '@/lib/platform/jcode';
 
 export type ReconcileState =
   | 'matched'            // code found in sheet, title applied/proposed

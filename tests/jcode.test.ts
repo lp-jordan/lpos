@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJCode, hasJCode, normalizeJCode } from '../lib/passprep/jcode';
+import { parseJCode, hasJCode, normalizeJCode } from '../lib/platform/jcode';
 
 test('parseJCode: real letter-major export filenames (dominant convention)', () => {
   // Verified against Bryan Brown asset names + pass-map J-CODE column.

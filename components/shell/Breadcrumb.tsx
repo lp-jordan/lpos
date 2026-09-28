@@ -18,7 +18,6 @@ const ROOT_LABELS: Record<string, string> = {
 const PROJECT_SUB_LABELS: Record<string, string> = {
   delivery:    'Delivery',
   editorial:   'Editorial',
-  'pass-prep': 'Pass Prep',
   scripts:     'Scripts',
   shoot:       'Shoot',
   transcripts: 'Transcripts',

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sampleTranscript, cleanDescription } from '../lib/passprep/generate-fields';
+import { sampleTranscript, cleanDescription } from '../lib/platform/generate-fields';
 
 test('sampleTranscript: short transcript is returned whole', () => {
   const short = 'A short lesson transcript that easily fits the budget.';

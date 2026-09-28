@@ -19,7 +19,6 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { ServiceRegistry } from './registry';
 import { SlateService } from './slate-service';
 import { TranscripterService } from './transcripter-service';
-import { PassPrepService } from './passprep-service';
 import { UploadQueueService } from './upload-queue-service';
 import { IngestQueueService } from './ingest-queue-service';
 import { CameraControlService } from './camera-control-service';
@@ -144,7 +143,6 @@ declare global {
 let registry: ServiceRegistry | null = null;
 let slateService: SlateService | null = null;
 let transcripterService: TranscripterService | null = null;
-let passPrepService: PassPrepService | null = null;
 let uploadQueueService: UploadQueueService | null = null;
 let ingestQueueService: IngestQueueService | null = null;
 let cameraControlService: CameraControlService | null = null;
@@ -256,8 +254,6 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     }
   });
 
-  passPrepService = new PassPrepService(io, registry);
-
   uploadQueueService = new UploadQueueService(io);
   globalThis.__lpos_uploadQueueService = uploadQueueService;
   uploadQueueService.start();
@@ -343,7 +339,6 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   await Promise.all([
     slateService?.start()          ?? Promise.resolve(),
     transcripterService.start(),
-    passPrepService.start(),
     cameraControlService?.start()  ?? Promise.resolve(),
     amaranService?.start()         ?? Promise.resolve(),
     wledService?.start()           ?? Promise.resolve(),
@@ -403,7 +398,6 @@ export async function stopServices(): Promise<void> {
   await Promise.all([
     slateService?.stop(),
     transcripterService?.stop(),
-    passPrepService?.stop(),
     cameraControlService?.stop(),
     amaranService?.stop(),
     activityMonitorService?.stop(),
@@ -436,11 +430,6 @@ export function getTranscripterService(): TranscripterService {
 export function getSlateService(): SlateService {
   if (!slateService) throw new Error('Services not initialized');
   return slateService;
-}
-
-export function getPassPrepService(): PassPrepService {
-  if (!passPrepService) throw new Error('Services not initialized');
-  return passPrepService;
 }
 
 export function getUploadQueueService(): UploadQueueService {
