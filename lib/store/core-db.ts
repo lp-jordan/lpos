@@ -1328,6 +1328,18 @@ function runMigrations(db: DatabaseSync): void {
   for (const col of ['share_id TEXT', 'share_comment_id TEXT', 'author_guest_id TEXT']) {
     try { db.exec(`ALTER TABLE media_comments ADD COLUMN ${col}`); } catch { /* already exists */ }
   }
+  // v34: LP Share review sessions in the bell. One rolling comment_notifications
+  // row per (recipient, share, commenter) that keeps updating while the client
+  // keeps commenting; 30 min of quiet starts a new one (share-notifications.ts).
+  for (const col of ['share_id TEXT', 'share_token TEXT', 'share_name TEXT', 'session_key TEXT', 'comment_count INTEGER', 'asset_ids TEXT']) {
+    try { db.exec(`ALTER TABLE comment_notifications ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_comment_notifs_session ON comment_notifications(user_id, session_key) WHERE session_key IS NOT NULL`);
+  } catch (err) {
+    console.warn('[core-db v34] comment_notifications session index skipped:', (err as Error).message);
+  }
+
   try {
     db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_comments_share_comment ON media_comments(share_comment_id) WHERE share_comment_id IS NOT NULL`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_media_comments_share ON media_comments(share_id, asset_id) WHERE share_id IS NOT NULL`);

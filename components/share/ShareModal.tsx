@@ -26,18 +26,8 @@ const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
   ['transcripts', 'Transcript'],
 ];
 
-declare global { interface Window { __LPOS_SHARE_ORIGIN?: string } }
-
-/** The link clients get: LP Share once it's connected, else LPOS's own staff viewer. */
-export function shareUrl(token: string): string {
-  return `${window.__LPOS_SHARE_ORIGIN || window.location.origin}/s/${token}`;
-}
-
-/** Where "Open" goes: through /share-auth (arrive with a staff pass) once LP Share is connected. */
-export function shareOpenHref(token: string): string {
-  if (typeof window !== 'undefined' && window.__LPOS_SHARE_ORIGIN) return `/share-auth?next=${encodeURIComponent(`/s/${token}`)}`;
-  return `/s/${token}`;
-}
+import { shareOpenHref, shareUrl } from './share-link-urls';
+export { shareOpenHref, shareUrl };
 
 async function copyText(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }

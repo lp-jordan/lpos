@@ -10,6 +10,7 @@ import type { NotificationRecord } from '@/contexts/ToastContext';
 import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notification';
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
 import type { CommentNotification } from '@/lib/models/comment-notification';
+import { shareOpenHref } from '@/components/share/share-link-urls';
 
 type NotifTab = 'tasks' | 'prospects' | 'pipeline' | 'comments';
 
@@ -103,6 +104,26 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
 }
 
 function CommentNotifItem({ notif, onClick }: { notif: CommentNotification; onClick: () => void }) {
+  if (notif.type === 'share_activity') {
+    const n = notif.commentCount ?? 1;
+    const v = notif.assetCount ?? 1;
+    return (
+      <button
+        type="button"
+        className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+        onClick={onClick}
+        role="menuitem"
+      >
+        <div className="notif-task-type">Share review</div>
+        <div className="notif-task-title">{notif.shareName ?? 'Share'}</div>
+        <div className="notif-task-from">
+          {notif.fromName ?? 'A client'} left {n === 1 ? 'a comment' : `${n} comments`}{v > 1 ? ` on ${v} videos` : ` on ${notif.assetName}`}
+        </div>
+        {notif.snippet && <div className="notif-task-from">&ldquo;{notif.snippet}&rdquo;</div>}
+        <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -272,7 +293,12 @@ export function NotifBell() {
                       key={notif.notifId}
                       notif={notif}
                       onClick={() => {
-                        router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
+                        // A share review opens the share itself (as staff), at the first video commented on.
+                        if (notif.type === 'share_activity' && notif.shareToken) {
+                          window.open(shareOpenHref(notif.shareToken, notif.assetId), '_blank', 'noopener');
+                        } else {
+                          router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
+                        }
                         setOpen(false);
                       }}
                     />

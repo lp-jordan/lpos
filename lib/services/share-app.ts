@@ -31,7 +31,8 @@ import {
   softDeleteMediaCommentById,
   updateMediaCommentTextById,
 } from '@/lib/store/media-comment-store';
-import { getShareLinksDb, listShareItems, listShareLinks, type ShareCaps, type ShareLink } from '@/lib/store/share-links-db';
+import { getShareLink, getShareLinksDb, listShareItems, listShareLinks, type ShareCaps, type ShareLink } from '@/lib/store/share-links-db';
+import { notifyShareActivity } from '@/lib/services/comment-notification-service';
 import { resolveShareView } from '@/lib/services/share-links';
 import { downloadStatusFor, readyDownloadFile } from '@/lib/services/share-downloads';
 import { applyVideoSettings, cloudflareFrameThumbnailUrl, getVideoDetails } from '@/lib/services/cloudflare-stream';
@@ -285,6 +286,24 @@ function applyChange(ch: CommentChange): string | null {
       authorGuestId: c.guest_id,
       createdAtOverride: c.created_at,
     });
+    // A client comment → the rolling "reviewing" item in everyone's bell.
+    if (!staffUser && c.author_kind !== 'staff') {
+      const share = getShareLink(c.share_id);
+      const asset = getAsset(item.projectId, c.asset_id);
+      void notifyShareActivity({
+        sessionKey: `${c.share_id}:${c.guest_id || c.email || c.author_name}`,
+        shareId: c.share_id,
+        shareToken: share?.token ?? '',
+        shareName: share?.name ?? 'a share',
+        projectId: item.projectId,
+        assetId: c.asset_id,
+        assetName: asset?.name || asset?.originalFilename || 'a video',
+        commentId: row.commentId,
+        fromName: c.author_name,
+        snippet: c.text.slice(0, 140),
+        at: c.created_at,
+      }).catch((err) => console.warn('[share-app] notify failed:', (err as Error).message));
+    }
     return row.commentId;
   }
 
