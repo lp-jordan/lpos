@@ -1,4 +1,5 @@
-import { getCoreDb, withTransaction } from '@/lib/store/core-db';
+import { repointShareItemsForAsset } from '@/lib/store/share-links-db';
+import { withTransaction } from '@/lib/store/core-db';
 import { getCanonicalAssetDb } from '@/lib/store/canonical-asset-db';
 import {
   findMoveCollision,
@@ -13,12 +14,8 @@ import {
  *     (asset_versions / media_files / distribution_records / editorial_links)
  *     reference asset_id, not project_id, so they follow the move implicitly.
  *
- *   - core.sqlite: `asset_share_links.project_id` UPDATE. Legacy table whose
- *     PK is (project_id, asset_id, share_id), so we update in place rather
- *     than insert+delete. `deliverable_assets` rows on the OLD project's
- *     deliverables are DROPPED (deliverables are project-scoped; we never
- *     auto-add to a target-project deliverable because the user usually
- *     wants to assemble a fresh delivery from the new project's UI).
+ *   - share-links.sqlite: share entries for the asset follow it to the new
+ *     project (shares are cross-project, so the video stays in every share).
  *
  * Activity history (activity_events) is intentionally LEFT ALONE: historical
  * events stay at the source project, so the asset's pre-move story remains
@@ -71,13 +68,12 @@ export interface AssetMoveResult {
 }
 
 /**
- * Plain move of a single asset: flip its project_id (canonical DB) + repoint
- * legacy share links and drop old-project deliverable memberships (core DB).
+ * Plain move of a single asset: flip its project_id (canonical DB) and repoint
+ * its share entries.
  * Factored out so the 'rename' resolution can reuse it before renaming.
  */
 function performPlainMove(assetId: string, fromProjectId: string, toProjectId: string, now: string): void {
   const canonicalDb = getCanonicalAssetDb();
-  const coreDb = getCoreDb();
 
   withTransaction(canonicalDb, () => {
     canonicalDb
@@ -85,24 +81,7 @@ function performPlainMove(assetId: string, fromProjectId: string, toProjectId: s
       .run(toProjectId, now, assetId);
   });
 
-  // `asset_share_links` PK is (project_id, asset_id, share_id), so updating
-  // project_id in place is safe as long as the same share_id doesn't exist in
-  // the target project (it won't — share_ids are UUIDs).
-  withTransaction(coreDb, () => {
-    coreDb
-      .prepare('UPDATE asset_share_links SET project_id = ? WHERE asset_id = ? AND project_id = ?')
-      .run(toProjectId, assetId, fromProjectId);
-
-    coreDb
-      .prepare(
-        `DELETE FROM deliverable_assets
-         WHERE asset_id = ?
-           AND deliverable_id IN (
-             SELECT deliverable_id FROM deliverables WHERE project_id = ?
-           )`,
-      )
-      .run(assetId, fromProjectId);
-  });
+  repointShareItemsForAsset(assetId, assetId, toProjectId);
 }
 
 /**
@@ -123,7 +102,6 @@ function mergeAssetAsNewVersions(
   now: string,
 ): { asVersion: number } {
   const canonicalDb = getCanonicalAssetDb();
-  const coreDb = getCoreDb();
   let firstNewVersion = 1;
 
   withTransaction(canonicalDb, () => {
@@ -161,14 +139,8 @@ function mergeAssetAsNewVersions(
     canonicalDb.prepare('DELETE FROM assets WHERE asset_id = ?').run(movingAssetId);
   });
 
-  withTransaction(coreDb, () => {
-    // Share links follow the content onto the destination asset in the target project.
-    coreDb
-      .prepare('UPDATE asset_share_links SET project_id = ?, asset_id = ? WHERE asset_id = ?')
-      .run(toProjectId, destAssetId, movingAssetId);
-    // The moving asset ceases to exist — drop all its deliverable memberships.
-    coreDb.prepare('DELETE FROM deliverable_assets WHERE asset_id = ?').run(movingAssetId);
-  });
+  // Share entries follow the content onto the destination asset.
+  repointShareItemsForAsset(movingAssetId, destAssetId, toProjectId);
 
   return { asVersion: firstNewVersion };
 }

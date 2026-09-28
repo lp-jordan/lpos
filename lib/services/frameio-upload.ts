@@ -22,18 +22,7 @@ import {
   uploadAsset,
   createVersionStack,
   addFileToVersionStack,
-  addFilesToShare,
-  removeFileFromShare,
 }                                                  from '@/lib/services/frameio';
-import {
-  getAllShareAssets,
-  addShareAssets,
-  removeShareAsset,
-}                                                  from '@/lib/store/share-assets-store';
-import {
-  findDeliverablesContainingAsset,
-  updateDeliverableAssetFrameio,
-}                                                  from '@/lib/store/deliverable-store';
 import {
   compressForFrameIO,
   cancelCompress,
@@ -218,34 +207,7 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
         stackId = null;
       }
     } else if (context?.priorFrameioFileId) {
-      // First version replacement — migrate existing shares BEFORE creating the
-      // version stack. Once createVersionStack runs, Frame.io considers the prior
-      // file ID a stack entry rather than a standalone file; calling
-      // removeFileFromShare on a stacked ID removes the entire stack entry from the
-      // share (taking the newly-added v2 with it). Doing the swap while both files
-      // are still standalone ensures a clean add + remove.
-      try {
-        const allShareAssets = getAllShareAssets(projectId);
-        const affectedShares = Object.entries(allShareAssets)
-          .filter(([, fileIds]) => fileIds.includes(context.priorFrameioFileId!))
-          .map(([shareId]) => shareId);
-
-        for (const shareId of affectedShares) {
-          await addFilesToShare(shareId, [result.frameioAssetId]);
-          await removeFileFromShare(shareId, context.priorFrameioFileId!);
-          addShareAssets(projectId, shareId, [result.frameioAssetId]);
-          removeShareAsset(projectId, shareId, context.priorFrameioFileId!);
-        }
-
-        if (affectedShares.length > 0) {
-          console.log(`[frameio] migrated ${affectedShares.length} share(s) from file ${context.priorFrameioFileId} to ${result.frameioAssetId}`);
-        }
-      } catch (err) {
-        console.warn('[frameio] share migration failed (non-fatal):', (err as Error).message);
-      }
-
-      // Create the version stack after share migration so the prior file ID is
-      // still standalone when it is removed from the shares above.
+      // First version replacement — group v1 and v2 into a Frame.io version stack.
       try {
         const stackResult = await createVersionStack(folderId, context.priorFrameioFileId, result.frameioAssetId);
         stackId      = stackResult.stackId;
@@ -253,30 +215,6 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
       } catch (err) {
         console.warn('[frameio] could not create version stack (non-fatal):', (err as Error).message);
       }
-    }
-
-    // Phase E auto-promote: update every deliverable_assets row referencing
-    // this asset so they record the current Frame.io stack/file IDs. The
-    // upstream share migration (file_id swap) above already kept Frame.io's
-    // share asset_ids accurate; this just keeps OUR DB in lockstep so the
-    // panel's "v2 available" detection works and future delete/restate
-    // operations have the correct IDs.
-    try {
-      const affected = findDeliverablesContainingAsset(assetId);
-      for (const { deliverable, asset: existing } of affected) {
-        updateDeliverableAssetFrameio(deliverable.deliverableId, assetId, {
-          frameioStackId: stackId,
-          frameioFileId: result.frameioAssetId,
-        });
-        // Only emit when something actually changes; chatty logs hide real signal.
-        if (existing.frameioStackId !== stackId || existing.frameioFileId !== result.frameioAssetId) {
-          console.log(
-            `[frameio] deliverable ${deliverable.deliverableId} (${deliverable.name}) updated → stack=${stackId ?? 'none'}, file=${result.frameioAssetId}`,
-          );
-        }
-      }
-    } catch (err) {
-      console.warn('[frameio] deliverable auto-promote update failed (non-fatal):', (err as Error).message);
     }
 
     patchAsset(projectId, assetId, {

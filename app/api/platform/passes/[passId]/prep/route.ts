@@ -7,9 +7,9 @@ import { getAsset } from '@/lib/store/media-registry';
 import { readPassMapTab } from '@/lib/services/google-sheets-client';
 import { reconcile, resolveTileCode, type ReconcileRow } from '@/lib/platform/pass-map-projection';
 import { getTranscriptTextByAsset } from '@/lib/transcripts/store';
-import { parseJCode } from '@/lib/passprep/jcode';
-import { inferAiProvider } from '@/lib/passprep/core';
-import { generateTitleFromTranscript, generateDescriptionFromTranscript } from '@/lib/passprep/generate-fields';
+import { parseJCode } from '@/lib/platform/jcode';
+import { inferAiProvider } from '@/lib/platform/ai-model';
+import { generateTitleFromTranscript, generateDescriptionFromTranscript } from '@/lib/platform/generate-fields';
 
 async function requireSession() {
   const cookieStore = await cookies();

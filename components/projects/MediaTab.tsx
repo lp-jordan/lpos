@@ -7,12 +7,11 @@ import { ConfirmModal } from '@/components/shared/ConfirmModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
 import { SardiusPushModal } from '@/components/media/SardiusPushModal';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
-// Cleanup pass: SharesPanel + DeliveryPanel collapsed into one DeliverablesHub
-// with tabs for Review Links / Deliveries. Single toolbar button entry.
-import { DeliverablesHub } from '@/components/projects/DeliverablesHub';
-import { DeliverableModal } from '@/components/projects/DeliverableModal';
+// The unified Share system replaces review links, delivery links and Link Hubs.
+import { ShareModal, createShare } from '@/components/share/ShareModal';
+import { ProjectSharesModal } from '@/components/share/ProjectSharesModal';
+import { AddToShareModal } from '@/components/share/AddToShareModal';
 import { MoveAssetsModal } from '@/components/projects/MoveAssetsModal';
-import { AddToLinkHubModal } from '@/components/link-hubs/AddToLinkHubModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
@@ -240,22 +239,10 @@ const IconDownload = () => (
     <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
   </svg>
 );
-const IconDelivery = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
-    <line x1="12" y1="15" x2="12" y2="3"/>
-  </svg>
-);
 const IconMove = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
     <polyline points="9 22 9 12 15 12 15 22"/>
-  </svg>
-);
-const IconReviewLink = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
-    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
   </svg>
 );
 
@@ -541,18 +528,11 @@ export function MediaTab({
   const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [renamingId,      setRenamingId]      = useState<string | null>(null);
-  // Cleanup pass: one unified hub. showHub doubles for both the prior
-  // showSharesPanel and showDeliveryPanel states. deliveryPending still
-  // exists because the bulk-bar "Send delivery" path needs to seed the
-  // delivery create modal; the hub auto-switches to the Deliveries tab when
-  // pendingDeliveryCreate is set.
+  // Unified Share system: showHub opens the project's Shares list;
+  // managingShareId opens one share's modal (right after "Share…" creates it).
   const [showHub,          setShowHub]          = useState(false);
-  const [deliveryPending,  setDeliveryPending]  = useState<MediaAsset[] | null>(null);
-  // Phase E: replaced shareResult/shareWorking/shareError/shareCopied (the old
-  // legacy POST-and-show-modal flow) with a single boolean — DeliverableModal
-  // handles its own creation, error, and success-with-copy states.
-  const [showDeliverableModal, setShowDeliverableModal] = useState(false);
-  const [reviewLinkAsset,      setReviewLinkAsset]      = useState<MediaAsset | null>(null);
+  const [managingShareId,  setManagingShareId]  = useState<string | null>(null);
+  const [addToShareAssets, setAddToShareAssets] = useState<MediaAsset[] | null>(null);
   const [publishWorking,  setPublishWorking]  = useState(false);
   const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
@@ -560,7 +540,6 @@ export function MediaTab({
   const [spanishWorking,      setSpanishWorking]      = useState(false);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
-  const [addToHubAssets,      setAddToHubAssets]      = useState<MediaAsset[] | null>(null);
   const [nasActive, setNasActive] = useState(false);
   // One-shot opt-out of the Cloudflare Stream auto-upload (upload-zone right-click).
   // Applies to the very next upload batch (every file in it, any upload path),
@@ -1352,20 +1331,25 @@ const { openMenu } = useContextMenu();
       },
       {
         type: 'item' as const,
-        label: 'Create Delivery',
-        icon: <IconDelivery />,
-        disabled: !asset.filePath,
+        label: 'New Share…',
+        icon: <IconLink />,
         onClick: () => {
-          setDeliveryPending([asset]);
-          setShowHub(true);
-          setSelectedAsset(null);
+          // Right-clicking inside a multi-selection shares the whole selection.
+          const chosen = selectedIds.has(asset.assetId) && selectedIds.size > 1
+            ? assets.filter((a) => selectedIds.has(a.assetId))
+            : [asset];
+          void shareAssets(chosen);
         },
       },
       {
         type: 'item' as const,
-        label: 'Create Review Link',
-        icon: <IconReviewLink />,
-        onClick: () => setReviewLinkAsset(asset),
+        label: 'Add to share…',
+        icon: <IconLink />,
+        onClick: () => {
+          setAddToShareAssets(selectedIds.has(asset.assetId) && selectedIds.size > 1
+            ? assets.filter((a) => selectedIds.has(a.assetId))
+            : [asset]);
+        },
       },
       { type: 'separator' as const },
       {
@@ -1401,22 +1385,6 @@ const { openMenu } = useContextMenu();
             ? [...selectedIds]
             : [asset.assetId];
           setShowMoveModal({ assetIds: ids });
-        },
-      },
-      {
-        type: 'item' as const,
-        label: 'Add to Link Hub…',
-        icon: (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-          </svg>
-        ),
-        onClick: () => {
-          const chosen = selectedIds.has(asset.assetId) && selectedIds.size > 1
-            ? assets.filter((a) => selectedIds.has(a.assetId))
-            : [asset];
-          setAddToHubAssets(chosen);
         },
       },
       { type: 'separator' as const },
@@ -1563,9 +1531,21 @@ const { openMenu } = useContextMenu();
     await fetchAssets();
   }
 
-  function handleBulkShare() {
-    if (!selectedIds.size) return;
-    setShowDeliverableModal(true);
+  // One click: create a review share from these videos, copy its link, open it
+  // for switches/audience. Name defaults to the video (or "N videos — date").
+  async function shareAssets(chosen: MediaAsset[]) {
+    if (!chosen.length) return;
+    const name = chosen.length === 1
+      ? (chosen[0].name || chosen[0].originalFilename)
+      : `${chosen.length} videos — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    try {
+      const share = await createShare({ name, items: chosen.map((a) => ({ assetId: a.assetId, projectId })) });
+      toast({ id: `share-create:${share.id}`, kind: 'publish', tone: 'success', title: 'Share link copied', body: share.name });
+      setSelectedIds(new Set());
+      setManagingShareId(share.id);
+    } catch (err) {
+      toast({ id: `share-create-err:${Date.now()}`, kind: 'publish', tone: 'error', title: 'Could not share', body: (err as Error).message });
+    }
   }
 
 
@@ -1794,13 +1774,13 @@ const { openMenu } = useContextMenu();
                 type="button"
                 className={`ma-shares-btn${showHub ? ' ma-shares-btn--active' : ''}`}
                 onClick={() => { setShowHub((v) => !v); if (!showHub) setSelectedAsset(null); }}
-                title="Review links + deliveries"
+                title="Every share that includes this project’s videos"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
                   <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
                 </svg>
-                Deliverables
+                Shares
               </button>
               <div className="m-view-toggle">
                 <button className={`m-view-btn${viewMode === 'list' ? ' active' : ''}`} type="button"
@@ -1843,40 +1823,20 @@ const { openMenu } = useContextMenu();
             <button
               type="button"
               className="ma-selection-action"
-              onClick={handleBulkShare}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-              </svg>
-              Create Review Link
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => {
-                const selected = assets.filter((a) => selectedIds.has(a.assetId));
-                setDeliveryPending(selected);
-                setShowHub(true);
-                setSelectedAsset(null);
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              Create Delivery
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => setAddToHubAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
+              onClick={() => void shareAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
               </svg>
-              Add to Link Hub
+              New Share
+            </button>
+            <button
+              type="button"
+              className="ma-selection-action"
+              onClick={() => setAddToShareAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
+            >
+              Add to share…
             </button>
             <button
               type="button"
@@ -2038,21 +1998,17 @@ const { openMenu } = useContextMenu();
         />
       )}
 
-      {addToHubAssets && (
-        <AddToLinkHubModal
-          assets={addToHubAssets.map((a) => ({ assetId: a.assetId, name: a.name }))}
-          projectId={projectId}
-          onClose={() => setAddToHubAssets(null)}
-          onAdded={(added, hubName) => {
-            setAddToHubAssets(null);
+      {/* Shares — the unified Share system (replaces review links, deliveries, Link Hubs) */}
+      {showHub && <ProjectSharesModal projectId={projectId} onClose={() => setShowHub(false)} />}
+      {managingShareId && <ShareModal shareId={managingShareId} projectId={projectId} onClose={() => setManagingShareId(null)} />}
+      {addToShareAssets && (
+        <AddToShareModal
+          items={addToShareAssets.map((a) => ({ assetId: a.assetId, projectId }))}
+          onClose={() => setAddToShareAssets(null)}
+          onAdded={(s) => {
+            toast({ id: `share-add:${s.id}:${Date.now()}`, kind: 'publish', tone: 'success', title: 'Added to share', body: `${addToShareAssets.length} video${addToShareAssets.length === 1 ? '' : 's'} → ${s.name}` });
+            setAddToShareAssets(null);
             setSelectedIds(new Set());
-            toast({
-              id: `link-hub-add:${Date.now()}`,
-              kind: 'publish',
-              tone: 'info',
-              title: 'Added to Link Hub',
-              body: `${added} video${added === 1 ? '' : 's'} → ${hubName}`,
-            });
           }}
         />
       )}
@@ -2065,58 +2021,6 @@ const { openMenu } = useContextMenu();
         onUpdated={fetchAssets}
         onGoToTranscript={onGoToTranscript}
       />
-
-      {/* Unified Deliverables hub (Review Links + Deliveries tabs) */}
-      <DeliverablesHub
-        projectId={projectId}
-        assets={assets}
-        open={showHub}
-        onClose={() => setShowHub(false)}
-        pendingDeliveryCreate={deliveryPending}
-        onPendingDeliveryConsumed={() => setDeliveryPending(null)}
-      />
-
-      {/* Single-asset review link (right-click context menu) */}
-      {reviewLinkAsset && (
-        <DeliverableModal
-          projectId={projectId}
-          availableAssets={[{
-            assetId: reviewLinkAsset.assetId,
-            name: reviewLinkAsset.name,
-            hasFrameio: Boolean(reviewLinkAsset.frameio.assetId || reviewLinkAsset.frameio.stackId),
-          }]}
-          initiallySelectedAssetIds={[reviewLinkAsset.assetId]}
-          defaultName={reviewLinkAsset.name}
-          onClose={() => setReviewLinkAsset(null)}
-          onCreated={() => { setReviewLinkAsset(null); void fetchAssets(); }}
-        />
-      )}
-
-      {/* Phase E: new shared DeliverableModal for the bulk "Create Review Link" path */}
-      {showDeliverableModal && (
-        <DeliverableModal
-          projectId={projectId}
-          availableAssets={assets
-            .filter((a) => selectedIds.has(a.assetId))
-            .map((a) => ({
-              assetId: a.assetId,
-              name: a.name,
-              hasFrameio: Boolean(a.frameio.assetId || a.frameio.stackId),
-            }))}
-          initiallySelectedAssetIds={[...selectedIds]}
-          defaultName={
-            selectedIds.size === 1
-              ? (assets.find((a) => selectedIds.has(a.assetId))?.name ?? '')
-              : `${selectedIds.size} clips — ${new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
-          }
-          onClose={() => setShowDeliverableModal(false)}
-          onCreated={() => {
-            // Refresh assets so any new frameio state shows up; the SharesPanel
-            // will refresh on next open (legacy mirror keeps it in sync for now).
-            void fetchAssets();
-          }}
-        />
-      )}
 
       {/* Bulk delete confirm */}
       {confirmBulkDelete && (

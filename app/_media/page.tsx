@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useProjects } from '@/hooks/useProjects';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 import { MediaDetailPanel } from '@/components/media/MediaDetailPanel';
-import { GlobalSharesManager } from '@/components/media/GlobalSharesManager';
 import type { Project } from '@/lib/models/project';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { FRAMEIO_STATUS_LABEL, LEADERPASS_STATUS_LABEL } from '@/lib/models/media-asset';
@@ -378,7 +377,7 @@ function ProjectAccordion({
 export default function MediaPage() {
   const { projects, loading } = useProjects();
 
-  const [tab,          setTab]          = useState<'projects' | 'shares'>('projects');
+  const [tab,          setTab]          = useState<'projects'>('projects');
   const [search,       setSearch]       = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [sortBy,       setSortBy]       = useState<'name' | 'client' | 'updated'>('updated');
@@ -437,24 +436,7 @@ export default function MediaPage() {
         >
           Projects
         </button>
-        <button
-          type="button"
-          className={`gm-tab${tab === 'shares' ? ' gm-tab--active' : ''}`}
-          onClick={() => setTab('shares')}
-        >
-          Share Links
-        </button>
       </div>
-
-      {tab === 'shares' && (
-        <GlobalSharesManager
-          projects={projects.map((p: Project) => ({
-            projectId:   p.projectId,
-            projectName: p.name,
-            clientName:  p.clientName ?? '',
-          }))}
-        />
-      )}
 
       {tab === 'projects' && <>
       {/* Toolbar */}

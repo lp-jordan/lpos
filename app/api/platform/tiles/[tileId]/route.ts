@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { APP_SESSION_COOKIE, verifySessionToken } from '@/lib/services/session-auth';
 import { getTile, updateTile, regenerateTile, deleteTile, type TilePatch } from '@/lib/store/platform-pass-store';
 import { getTranscriptTextByAsset } from '@/lib/transcripts/store';
-import { generateTitleFromTranscript, generateDescriptionFromTranscript } from '@/lib/passprep/generate-fields';
+import { generateTitleFromTranscript, generateDescriptionFromTranscript } from '@/lib/platform/generate-fields';
 
 async function requireSession() {
   const cookieStore = await cookies();

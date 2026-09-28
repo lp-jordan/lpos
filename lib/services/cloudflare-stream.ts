@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { withRetry } from '@/lib/utils/retry';
+import { shareAppOrigin } from '@/lib/services/share-app-config';
 
 const TUS_VERSION = '1.0.0';
 const DEFAULT_CHUNK_BYTES = Number(process.env.CLOUDFLARE_STREAM_CHUNK_BYTES ?? 32 * 1024 * 1024);
@@ -107,8 +108,16 @@ function normalizeOrigin(raw: string): string {
 
 export function getDefaultAllowedOrigins(): string[] {
   const env = process.env.CLOUDFLARE_STREAM_ALLOWED_ORIGINS?.trim();
-  const list = env ? env.split(',') : DEFAULT_ALLOWED_ORIGINS;
-  return list.map(normalizeOrigin).filter(Boolean);
+  const list = (env ? env.split(',') : DEFAULT_ALLOWED_ORIGINS).map(normalizeOrigin).filter(Boolean);
+  // LP Share (the public share app) must be able to play every video, from the
+  // first upload on — and this list also REPLACES allowedOrigins on a LeaderPass
+  // publish, so leaving it out would strip a host the share sync had added.
+  // Taken from the share_app.origin admin setting; a local dev LP Share is never
+  // written to Cloudflare.
+  const share = shareAppOrigin();
+  const shareHost = share ? normalizeOrigin(share) : '';
+  if (shareHost && !/^(localhost|127\.0\.0\.1)(:|$)/.test(shareHost) && !list.includes(shareHost)) list.push(shareHost);
+  return list;
 }
 
 /**

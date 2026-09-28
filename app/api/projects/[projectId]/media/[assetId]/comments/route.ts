@@ -2,8 +2,12 @@
  * GET  /api/projects/[projectId]/media/[assetId]/comments
  *   → Fetch all comments for this asset (LPOS-owned; Frame.io optional)
  *
+ *   ?audience=client hides staff-only (visibility='internal') threads — used by
+ *   the Share viewer when a share isn't marked Internal.
+ *
  * POST /api/projects/[projectId]/media/[assetId]/comments
- *   → Post a new comment { text, timestamp?, duration?, parentId? }
+ *   → Post a new comment { text, timestamp?, duration?, parentId?, visibility? }
+ *   visibility:'internal' keeps the comment staff-only and never mirrors it to Frame.io.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -71,6 +75,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   // absent, defaults to the asset's current version (via Frame.io mapping if
   // present, else the LPOS-native current version).
   const requestedVersionId = new URL(req.url).searchParams.get('version');
+  const clientAudience     = new URL(req.url).searchParams.get('audience') === 'client';
   try {
     let resolvedProjectId:     string;
     let resolvedAssetId:       string;
@@ -122,7 +127,8 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     // the new value); external Frame.io reviewers keep their snapshot
     // (author_external_name + Frame.io avatar URL on the comment). canEdit +
     // fromFrame flags match today's contract so the renderer doesn't change.
-    const named = comments.map((c) => {
+    const visible = clientAudience ? comments.filter((c) => !c.internal) : comments;
+    const named = visible.map((c) => {
       const lookup = rowLookup.get(c.id);
       const lposUser = lookup?.authorUserId ? getUserById(lookup.authorUserId) : null;
       const authorName   = lposUser?.name ?? c.authorName;
@@ -171,6 +177,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     timestamp?: number | null;
     duration?:  number | null;
     parentId?:  string | null;
+    visibility?: 'internal' | null;
   };
   if (!body.text?.trim()) {
     return NextResponse.json({ error: 'text is required' }, { status: 400 });
@@ -204,11 +211,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         return NextResponse.json({ error: 'Parent comment not found' }, { status: 404 });
       }
 
+      // Replies inherit their thread's visibility so an internal thread stays internal.
       const reply = insertMediaComment({
         projectId:        mapping.projectId,
         assetId:          mapping.assetId,
         assetVersionId:   mapping.assetVersionId,
         parentCommentId:  parent.commentId,
+        visibility:       parent.visibility,
         body:             body.text.trim(),
         authorUserId:     lposUser?.id ?? null,
         source:           'lpos',
@@ -259,6 +268,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       assetId:          mapping.assetId,
       assetVersionId:   mapping.assetVersionId,
       parentCommentId:  null,
+      visibility:       body.visibility === 'internal' ? 'internal' : null,
       body:             body.text.trim(),
       timestampSeconds: body.timestamp ?? null,
       durationSeconds:  body.duration ?? null,
@@ -270,7 +280,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     // Only mirror outbound when the asset is actually on Frame.io — LPOS-only
     // assets keep comments local (nothing to mirror to). The mirror worker
     // also can't post without a Frame.io file id.
-    if (fileId) enqueueMediaCommentMirrorJob(comment.commentId, 'create');
+    // Internal (staff-only) comments never leave LPOS.
+    if (fileId && comment.visibility !== 'internal') enqueueMediaCommentMirrorJob(comment.commentId, 'create');
 
     const named = {
       id:              comment.commentId,
@@ -287,6 +298,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       replies:         [] as Array<unknown>,
       fromFrame:       false,
       mirrorAbandoned: false,
+      internal:        comment.visibility === 'internal',
       // The poster is the author, so the edit affordance applies immediately.
       // Without this the optimistic insert lacks canEdit and the Edit button
       // only appears a beat later when the background GET refresh restamps it.
@@ -323,7 +335,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     if (typeof body.completed === 'boolean') {
       // Any authenticated LPOS user can mark a comment complete/incomplete.
       setMediaCommentCompletedById(target.commentId, body.completed, session.userId);
-      enqueueMediaCommentMirrorJob(target.commentId, body.completed ? 'complete' : 'uncomplete');
+      if (target.visibility !== 'internal') {
+        enqueueMediaCommentMirrorJob(target.commentId, body.completed ? 'complete' : 'uncomplete');
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -335,7 +349,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       updateMediaCommentTextById(target.commentId, body.text.trim());
       // Replies never mirror outbound (locked §11 #2); only enqueue updates
       // for top-level comments.
-      if (!target.parentCommentId) {
+      if (!target.parentCommentId && target.visibility !== 'internal') {
         enqueueMediaCommentMirrorJob(target.commentId, 'update');
       }
       return NextResponse.json({ ok: true });
@@ -365,7 +379,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     // Replies never mirror outbound (locked §11 #2). And if the comment never
     // got a frameio_comment_id (mirror never landed), there's nothing on
     // Frame.io to delete — the worker handles that case gracefully.
-    if (!target.parentCommentId) {
+    if (!target.parentCommentId && target.visibility !== 'internal') {
       enqueueMediaCommentMirrorJob(target.commentId, 'delete');
     }
     return new NextResponse(null, { status: 204 });

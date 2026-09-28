@@ -78,25 +78,18 @@ const XIcon = () => (
 );
 
 function JobRow({
-  job, now, onCancel, onCancelDelivery,
+  job, now, onCancel,
 }: {
   job: UploadJob;
   now: number;
   onCancel: () => void;
-  onCancelDelivery: (projectId: string, token: string) => void;
 }) {
   const isActive = ACTIVE.has(job.status);
-  const isDelivery = job.provider === 'delivery';
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const detail = describeJob(job, now);
 
   function handleCancelClick(e: React.MouseEvent) {
     e.stopPropagation();
-    if (isDelivery) {
-      setConfirmingCancel(true);
-    } else {
-      onCancel();
-    }
+    onCancel();
   }
 
   return (
@@ -106,7 +99,7 @@ function JobRow({
           <span className="tt-job-name" title={job.filename}>{job.filename}</span>
           <span className="tt-job-phase">{phaseLabel(job.status, job.progress)}</span>
         </div>
-        {isActive && !confirmingCancel && (
+        {isActive && (
           <button
             type="button"
             className="tt-cancel-btn"
@@ -124,27 +117,6 @@ function JobRow({
           <div className="tt-progress-fill" style={{ width: `${job.progress}%` }} />
         </div>
       )}
-      {confirmingCancel && (
-        <div className="tt-confirmation">
-          <p className="tt-warning">Cancel the upload? The delivery link stays active with files already uploaded.</p>
-          <div className="tt-confirmation-actions">
-            <button
-              type="button"
-              className="tt-action-btn tt-action-btn--primary"
-              onClick={(e) => { e.stopPropagation(); onCancelDelivery(job.projectId, job.assetId); setConfirmingCancel(false); }}
-            >
-              Yes, cancel upload
-            </button>
-            <button
-              type="button"
-              className="tt-action-btn"
-              onClick={(e) => { e.stopPropagation(); setConfirmingCancel(false); }}
-            >
-              Keep going
-            </button>
-          </div>
-        </div>
-      )}
       {job.status === 'failed' && job.error && (
         <p className="tt-error">{job.error}</p>
       )}
@@ -156,9 +128,6 @@ export function UploadTray() {
   const { jobs: allJobs, cancel } = useUploadQueue();
   const [open, setOpen] = useState(false);
 
-  async function handleCancelDelivery(projectId: string, token: string) {
-    await fetch(`/api/projects/${projectId}/delivery/${token}/upload`, { method: 'DELETE' });
-  }
   const [visible, setVisible] = useState(false);
   const [cleared, setCleared] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
@@ -237,7 +206,7 @@ export function UploadTray() {
           <div className="tt-card-subtitle">Live job status. Publishes can run in parallel.</div>
           <div className="tt-jobs">
             {displayJobs.map((job) => (
-              <JobRow key={job.jobId} job={job} now={now} onCancel={() => cancel(job.jobId)} onCancelDelivery={handleCancelDelivery} />
+              <JobRow key={job.jobId} job={job} now={now} onCancel={() => cancel(job.jobId)} />
             ))}
           </div>
         </div>

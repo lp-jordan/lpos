@@ -9,6 +9,8 @@ import {
 } from '@/lib/platform/tile-background';
 import { MediaPicker, type MediaSelection } from './MediaPicker';
 import { exportPassTiles } from '@/lib/platform/export-tiles';
+import { ShareModal, createShare, shareUrl } from '@/components/share/ShareModal';
+import type { ShareSummary } from '@/lib/services/share-links';
 
 const ARCHETYPES: TileArchetype[] = ['gradient', 'geometric', 'duotone', 'hero'];
 const GRAINS: GrainLevel[] = ['none', 'subtle', 'film'];
@@ -37,6 +39,10 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
   const [over, setOver] = useState<Over>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // The pass IS the share: at most one share per pass, created with one click.
+  const [passShare, setPassShare] = useState<ShareSummary | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [editingTile, setEditingTile] = useState<string | null>(null);
   const [genFor, setGenFor] = useState<string | null>(null); // tile whose image is generating
@@ -53,6 +59,16 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
     setLoading(false);
   }, [passIdOrSlug]);
   useEffect(() => { load(); }, [load]);
+
+  const passId = tree?.id ?? null;
+  const loadPassShare = useCallback(async () => {
+    if (!passId) return;
+    const res = await fetch(`/api/share-links?passId=${encodeURIComponent(passId)}`);
+    if (!res.ok) return;
+    const data = await res.json() as { shares?: ShareSummary[] };
+    setPassShare(data.shares?.[0] ?? null);
+  }, [passId]);
+  useEffect(() => { void loadPassShare(); }, [loadPassShare]);
 
   // Reset the image-prompt editor whenever a different tile is opened, prefilling
   // from that tile's stored prompt (if it was generated before).
@@ -226,6 +242,22 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
 
   if (loading || !tree) return <div style={{ padding: 48, color: 'var(--muted)' }}>Loading pass…</div>;
 
+  async function copyShareLink(token: string) {
+    try { await navigator.clipboard.writeText(shareUrl(token)); } catch { /* ignore */ }
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 1600);
+  }
+
+  async function sharePass() {
+    if (!tree) return;
+    if (passShare) { setShareOpen(true); return; }
+    await createShare({ passId: tree.id });
+    await loadPassShare();
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 1600);
+    setShareOpen(true);
+  }
+
   const brand = resolveBrand(tree.brand, tree.brandConfig);
   const selectedTile: PlatformTile | null = selected
     ? tree.categories.flatMap((c) => c.tiles).find((t) => t.id === selected) ?? null : null;
@@ -257,11 +289,34 @@ export function PassWorkspace({ passIdOrSlug }: { passIdOrSlug: string }) {
             {tree.sheetId ? `Pass map: ${tree.sheetTabTitle}` : 'Connect pass map'}
           </button>
           <div style={{ flex: 1 }} />
+          {passShare && (
+            <button
+              onClick={() => void copyShareLink(passShare.token)}
+              style={{ ...exportBtn, padding: '8px 10px', display: 'inline-flex', alignItems: 'center' }}
+              title={shareCopied ? 'Link copied' : `Copy ${shareUrl(passShare.token).replace(/^https?:\/\//, '')}`}
+              aria-label="Copy share link"
+            >
+              {shareCopied ? '✓' : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
+              )}
+            </button>
+          )}
+          <button
+            onClick={() => void sharePass()}
+            style={passShare ? { ...exportBtn, borderColor: 'var(--accent)', color: 'var(--accent)' } : { ...exportBtn, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#1a1408' }}
+            title={passShare ? 'Switches, who can open it, videos' : 'Create a share link for this pass and copy it'}
+          >
+            {passShare ? 'Shared ▸' : (shareCopied ? 'Link copied' : 'New Share')}
+          </button>
           <button onClick={() => router.push(`/platform/${tree.slug}/prep`)} style={exportBtn} title="Match tiles to the pass map and generate titles + descriptions">Run prep ▸</button>
           <button onClick={() => router.push(`/platform/${tree.slug}/handoff`)} style={exportBtn} title="Copy/paste titles + descriptions into LeaderPass admin">Handoff ▸</button>
           <button onClick={doExport} disabled={exporting} style={{ ...exportBtn, opacity: exporting ? 0.6 : 1 }} title="Rasterise every tile to a labelled PNG and download a zip for LeaderPass admin">{exporting ? 'Exporting…' : 'Export ▸'}</button>
         </div>
       </div>
+
+      {shareOpen && passShare && (
+        <ShareModal shareId={passShare.id} onClose={() => { setShareOpen(false); void loadPassShare(); }} onChanged={() => void loadPassShare()} />
+      )}
 
       {/* Board */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0 60px' }}>

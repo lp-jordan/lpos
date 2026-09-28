@@ -15,7 +15,7 @@
 
 import { google, sheets_v4 } from 'googleapis';
 import { getGoogleAuth } from './drive-client';
-import { parseJCode } from '@/lib/passprep/jcode';
+import { parseJCode } from '@/lib/platform/jcode';
 
 // Column indices in the pass-map template.
 const COL = { PROGRAM: 0, PASS: 1, CATEGORY: 2, TITLE: 3, JCODE: 4, NOTES: 5 } as const;

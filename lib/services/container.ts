@@ -19,7 +19,6 @@ import type { Server as SocketIOServer } from 'socket.io';
 import { ServiceRegistry } from './registry';
 import { SlateService } from './slate-service';
 import { TranscripterService } from './transcripter-service';
-import { PassPrepService } from './passprep-service';
 import { UploadQueueService } from './upload-queue-service';
 import { IngestQueueService } from './ingest-queue-service';
 import { CameraControlService } from './camera-control-service';
@@ -43,7 +42,6 @@ import { TaskCategoryStore } from '@/lib/store/task-category-store';
 import { TaskNotificationStore } from '@/lib/store/task-notification-store';
 import { TaskHandoffStore } from '@/lib/store/task-handoff-store';
 import { TaskReviewCheckinStore } from '@/lib/store/task-review-checkin-store';
-import { DeliveryNotificationStore } from '@/lib/store/delivery-notification-store';
 import { ProjectNoteStore } from '@/lib/store/project-note-store';
 import { WishStore } from '@/lib/store/wish-store';
 import { patchAsset } from '@/lib/store/media-registry';
@@ -99,7 +97,6 @@ declare global {
   // eslint-disable-next-line no-var
   var __lpos_taskReviewCheckinStore: TaskReviewCheckinStore | undefined;
   // eslint-disable-next-line no-var
-  var __lpos_deliveryNotificationStore: DeliveryNotificationStore | undefined;
   // eslint-disable-next-line no-var
   var __lpos_projectNoteStore: ProjectNoteStore | undefined;
   // eslint-disable-next-line no-var
@@ -146,7 +143,6 @@ declare global {
 let registry: ServiceRegistry | null = null;
 let slateService: SlateService | null = null;
 let transcripterService: TranscripterService | null = null;
-let passPrepService: PassPrepService | null = null;
 let uploadQueueService: UploadQueueService | null = null;
 let ingestQueueService: IngestQueueService | null = null;
 let cameraControlService: CameraControlService | null = null;
@@ -161,7 +157,6 @@ let taskCategoryStore: TaskCategoryStore | null = null;
 let taskNotificationStore: TaskNotificationStore | null = null;
 let taskHandoffStore: TaskHandoffStore | null = null;
 let taskReviewCheckinStore: TaskReviewCheckinStore | null = null;
-let deliveryNotificationStore: DeliveryNotificationStore | null = null;
 let projectNoteStore: ProjectNoteStore | null = null;
 let wishStore: WishStore | null = null;
 let presentationService: PresentationService | null = null;
@@ -259,11 +254,18 @@ export async function initServices(io: SocketIOServer): Promise<void> {
     }
   });
 
-  passPrepService = new PassPrepService(io, registry);
-
   uploadQueueService = new UploadQueueService(io);
   globalThis.__lpos_uploadQueueService = uploadQueueService;
   uploadQueueService.start();
+
+  // Share downloads: keeps R2 holding exactly the files share clients can
+  // download (uploads, web-copy encodes, expiry, purge). Starts after the upload
+  // queue so its jobs show in the Upload Tray.
+  void import('@/lib/services/share-downloads').then((m) => m.ensureShareDownloadWorker());
+
+  // LP Share sync: pushes shares/comments to the public share app and pulls
+  // client comments back. Idle until the share_app.origin admin setting is set.
+  void import('@/lib/services/share-app').then((m) => m.ensureShareAppSync());
 
   ingestQueueService = new IngestQueueService(io);
   globalThis.__lpos_ingestQueueService = ingestQueueService;
@@ -341,7 +343,6 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   await Promise.all([
     slateService?.start()          ?? Promise.resolve(),
     transcripterService.start(),
-    passPrepService.start(),
     cameraControlService?.start()  ?? Promise.resolve(),
     amaranService?.start()         ?? Promise.resolve(),
     wledService?.start()           ?? Promise.resolve(),
@@ -434,7 +435,6 @@ export async function stopServices(): Promise<void> {
   await Promise.all([
     slateService?.stop(),
     transcripterService?.stop(),
-    passPrepService?.stop(),
     cameraControlService?.stop(),
     amaranService?.stop(),
     activityMonitorService?.stop(),
@@ -467,11 +467,6 @@ export function getTranscripterService(): TranscripterService {
 export function getSlateService(): SlateService {
   if (!slateService) throw new Error('Services not initialized');
   return slateService;
-}
-
-export function getPassPrepService(): PassPrepService {
-  if (!passPrepService) throw new Error('Services not initialized');
-  return passPrepService;
 }
 
 export function getUploadQueueService(): UploadQueueService {
@@ -619,13 +614,7 @@ export function getTaskReviewCheckinStore(): TaskReviewCheckinStore {
   return taskReviewCheckinStore;
 }
 
-export function getDeliveryNotificationStore(): DeliveryNotificationStore {
-  if (globalThis.__lpos_deliveryNotificationStore) return globalThis.__lpos_deliveryNotificationStore;
-  if (deliveryNotificationStore) return deliveryNotificationStore;
-  deliveryNotificationStore = new DeliveryNotificationStore();
-  globalThis.__lpos_deliveryNotificationStore = deliveryNotificationStore;
-  return deliveryNotificationStore;
-}
+
 
 export function getIo(): import('socket.io').Server | undefined {
   return globalThis.__lpos_io;

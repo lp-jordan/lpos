@@ -5,22 +5,21 @@ import { useRouter } from 'next/navigation';
 import { useToast } from '@/contexts/ToastContext';
 import { useTaskNotifications } from '@/hooks/useTaskNotifications';
 import { useProspectNotifications } from '@/hooks/useProspectNotifications';
-import { useDeliveryNotifications } from '@/hooks/useDeliveryNotifications';
 import { useCommentNotifications } from '@/hooks/useCommentNotifications';
 import type { NotificationRecord } from '@/contexts/ToastContext';
 import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notification';
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
-import type { DeliveryNotification } from '@/lib/models/delivery-notification';
 import type { CommentNotification } from '@/lib/models/comment-notification';
+import { shareOpenHref } from '@/components/share/share-link-urls';
 
-type NotifTab = 'tasks' | 'prospects' | 'deliveries' | 'pipeline' | 'comments';
+type NotifTab = 'tasks' | 'prospects' | 'pipeline' | 'comments';
 
 const TAB_STORAGE_KEY = 'lpos-notif-tab';
 
 function getInitialTab(): NotifTab {
   if (typeof window === 'undefined') return 'tasks';
   const stored = localStorage.getItem(TAB_STORAGE_KEY);
-  if (stored === 'tasks' || stored === 'prospects' || stored === 'deliveries' || stored === 'pipeline' || stored === 'comments') {
+  if (stored === 'tasks' || stored === 'prospects' || stored === 'pipeline' || stored === 'comments') {
     return stored;
   }
   return 'tasks';
@@ -84,32 +83,6 @@ function ProspectNotifItem({ notif, onClick }: { notif: ProspectNotification; on
   );
 }
 
-function DeliveryNotifItem({ notif, onClick }: { notif: DeliveryNotification; onClick: () => void }) {
-  const title = notif.clientName
-    ? `${notif.projectName} — ${notif.clientName}`
-    : notif.projectName;
-  return (
-    <button
-      type="button"
-      className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
-      onClick={onClick}
-      role="menuitem"
-    >
-      <div className="notif-task-type">
-        {notif.type === 'delivery_expired' ? 'Delivery link expired' : 'Delivery trouble report'}
-      </div>
-      <div className="notif-task-title">{title}</div>
-      {notif.description && (
-        <div className="notif-task-from">&ldquo;{notif.description}&rdquo;</div>
-      )}
-      {notif.queueSummary && (
-        <div className="notif-task-from">{notif.queueSummary}</div>
-      )}
-      <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
-    </button>
-  );
-}
-
 function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: () => void }) {
   return (
     <button
@@ -131,6 +104,26 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
 }
 
 function CommentNotifItem({ notif, onClick }: { notif: CommentNotification; onClick: () => void }) {
+  if (notif.type === 'share_activity') {
+    const n = notif.commentCount ?? 1;
+    const v = notif.assetCount ?? 1;
+    return (
+      <button
+        type="button"
+        className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+        onClick={onClick}
+        role="menuitem"
+      >
+        <div className="notif-task-type">Share review</div>
+        <div className="notif-task-title">{notif.shareName ?? 'Share'}</div>
+        <div className="notif-task-from">
+          {notif.fromName ?? 'A client'} left {n === 1 ? 'a comment' : `${n} comments`}{v > 1 ? ` on ${v} videos` : ` on ${notif.assetName}`}
+        </div>
+        {notif.snippet && <div className="notif-task-from">&ldquo;{notif.snippet}&rdquo;</div>}
+        <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -151,10 +144,9 @@ function CommentNotifItem({ notif, onClick }: { notif: CommentNotification; onCl
   );
 }
 
-const TAB_ORDER: NotifTab[] = ['pipeline', 'deliveries', 'tasks', 'comments', 'prospects'];
+const TAB_ORDER: NotifTab[] = ['pipeline', 'tasks', 'comments', 'prospects'];
 const TAB_LABEL: Record<NotifTab, string> = {
   pipeline: 'Pipeline',
-  deliveries: 'Deliveries',
   tasks: 'Tasks',
   comments: 'Comments',
   prospects: 'People',
@@ -168,15 +160,13 @@ export function NotifBell() {
   const { notifications: pipelineNotifs, unreadCount: pipelineUnread, markAllRead: markPipelineRead } = useToast();
   const { notifications: taskNotifs,     unreadCount: taskUnread,     markAllRead: markTasksRead     } = useTaskNotifications();
   const { notifications: prospectNotifs, unreadCount: prospectUnread, markAllRead: markProspectsRead } = useProspectNotifications();
-  const { notifications: deliveryNotifs, unreadCount: deliveryUnread, markAllRead: markDeliveriesRead } = useDeliveryNotifications();
   const { notifications: commentNotifs,  unreadCount: commentUnread,  markAllRead: markCommentsRead   } = useCommentNotifications();
 
-  const totalUnread = pipelineUnread + taskUnread + prospectUnread + deliveryUnread + commentUnread;
+  const totalUnread = pipelineUnread + taskUnread + prospectUnread + commentUnread;
 
   const unreadByTab: Record<NotifTab, number> = {
     tasks: taskUnread,
     prospects: prospectUnread,
-    deliveries: deliveryUnread,
     pipeline: pipelineUnread,
     comments: commentUnread,
   };
@@ -184,7 +174,6 @@ export function NotifBell() {
   function markTabRead(tab: NotifTab) {
     if (tab === 'tasks') markTasksRead();
     else if (tab === 'prospects') markProspectsRead();
-    else if (tab === 'deliveries') markDeliveriesRead();
     else if (tab === 'comments') markCommentsRead();
     else markPipelineRead();
   }
@@ -266,21 +255,6 @@ export function NotifBell() {
           </div>
 
           <div className="notif-panel-list" role="tabpanel">
-            {activeTab === 'deliveries' && (
-              deliveryNotifs.length === 0
-                ? <div className="notif-empty">No delivery notifications</div>
-                : deliveryNotifs.slice(0, 10).map((notif) => (
-                    <DeliveryNotifItem
-                      key={notif.notifId}
-                      notif={notif}
-                      onClick={() => {
-                        if (notif.href) router.push(notif.href);
-                        setOpen(false);
-                      }}
-                    />
-                  ))
-            )}
-
             {activeTab === 'tasks' && (
               taskNotifs.length === 0
                 ? <div className="notif-empty">No task notifications</div>
@@ -319,7 +293,12 @@ export function NotifBell() {
                       key={notif.notifId}
                       notif={notif}
                       onClick={() => {
-                        router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
+                        // A share review opens the share itself (as staff), at the first video commented on.
+                        if (notif.type === 'share_activity' && notif.shareToken) {
+                          window.open(shareOpenHref(notif.shareToken, notif.assetId), '_blank', 'noopener');
+                        } else {
+                          router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
+                        }
                         setOpen(false);
                       }}
                     />

@@ -1,0 +1,46 @@
+/**
+ * GET  /api/share-links?projectId=&passId=&assetId=  → share summaries (optionally filtered)
+ * POST /api/share-links                     → create { name, passId?, preset?, caps?, audience?, emails?, items? }
+ *
+ * The unified Share system (see lib/store/share-links-db.ts).
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import { getSession, requireRole } from '@/lib/services/api-auth';
+import { createShareLink, getShareLinkForPass, type CreateShareInput } from '@/lib/store/share-links-db';
+import { getPass } from '@/lib/store/platform-pass-store';
+import { listShareSummaries, passShareItems } from '@/lib/services/share-links';
+import { ensureShareDownloadWorker } from '@/lib/services/share-downloads';
+
+export async function GET(req: NextRequest) {
+  const deny = await requireRole(req, 'user');
+  if (deny) return deny;
+  ensureShareDownloadWorker();
+  const sp = new URL(req.url).searchParams;
+  return NextResponse.json({
+    shares: listShareSummaries({ projectId: sp.get('projectId') ?? undefined, passId: sp.get('passId') ?? undefined, assetId: sp.get('assetId') ?? undefined }),
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const deny = await requireRole(req, 'user');
+  if (deny) return deny;
+  const session = await getSession(req);
+  const body = await req.json() as CreateShareInput;
+
+  if (body.passId) {
+    const pass = getPass(body.passId);
+    if (!pass) return NextResponse.json({ error: 'Pass not found' }, { status: 404 });
+    // Sharing a pass again reopens its share rather than minting a second link.
+    const existing = getShareLinkForPass(body.passId);
+    if (existing) return NextResponse.json({ share: existing });
+    body.name = body.name?.trim() || pass.title;
+    // A pass is only a shortcut for filling the list: its videos, in board
+    // order, sectioned by category, titled live from their tiles.
+    body.items = passShareItems(body.passId);
+  } else if (!body.items?.length) {
+    return NextResponse.json({ error: 'Pick at least one video to share.' }, { status: 400 });
+  }
+
+  const share = createShareLink({ ...body, name: body.name ?? 'Untitled share', createdBy: session?.userId ?? null });
+  return NextResponse.json({ share }, { status: 201 });
+}

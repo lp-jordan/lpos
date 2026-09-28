@@ -1309,6 +1309,44 @@ function runMigrations(db: DatabaseSync): void {
     console.warn('[core-db v30] calendar_day_overrides create skipped:', (err as Error).message);
   }
 
+  // v32: Comment visibility for the unified Share system. NULL = visible to
+  // everyone (every comment that existed before this column, plus anything a
+  // client or Frame.io reviewer leaves). 'internal' = staff-only: hidden from
+  // client-audience reads and never mirrored out to Frame.io.
+  try {
+    db.exec(`ALTER TABLE media_comments ADD COLUMN visibility TEXT`);
+  } catch {
+    // Column already exists
+  }
+
+  // v33: LP Share (the public share app — docs/share-app-spec.md). A thread
+  // belongs to the share it was started in (share_id); a share only ever shows
+  // its own threads. share_comment_id = the comment's id in LP Share (set for
+  // comments clients made there); author_guest_id = the guest who wrote it, so
+  // they keep edit rights after the round trip. Share comments stay
+  // source='lpos' (they're LPOS-owned rows) and never mirror to Frame.io.
+  for (const col of ['share_id TEXT', 'share_comment_id TEXT', 'author_guest_id TEXT']) {
+    try { db.exec(`ALTER TABLE media_comments ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  // v34: LP Share review sessions in the bell. One rolling comment_notifications
+  // row per (recipient, share, commenter) that keeps updating while the client
+  // keeps commenting; 30 min of quiet starts a new one (share-notifications.ts).
+  for (const col of ['share_id TEXT', 'share_token TEXT', 'share_name TEXT', 'session_key TEXT', 'comment_count INTEGER', 'asset_ids TEXT']) {
+    try { db.exec(`ALTER TABLE comment_notifications ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_comment_notifs_session ON comment_notifications(user_id, session_key) WHERE session_key IS NOT NULL`);
+  } catch (err) {
+    console.warn('[core-db v34] comment_notifications session index skipped:', (err as Error).message);
+  }
+
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_comments_share_comment ON media_comments(share_comment_id) WHERE share_comment_id IS NOT NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_media_comments_share ON media_comments(share_id, asset_id) WHERE share_id IS NOT NULL`);
+  } catch (err) {
+    console.warn('[core-db v33] share comment indexes skipped:', (err as Error).message);
+  }
+
   // v10: Tasks system v2 (F3) — seed the task_categories table with the starter set.
   // Idempotent via count check: only seeds if the table is empty. After seeding, the
   // admin UI on /settings is the only path that mutates this list.

@@ -17,6 +17,8 @@ export function useCommentNotifications() {
   const [notifications, setNotifications] = useState<CommentNotification[]>([]);
   const [unreadCount,   setUnreadCount]   = useState(0);
   const fetchedRef = useRef(false);
+  const listRef = useRef<CommentNotification[]>([]);
+  listRef.current = notifications;
 
   useEffect(() => {
     if (fetchedRef.current) return;
@@ -34,9 +36,13 @@ export function useCommentNotifications() {
   useEffect(() => {
     const socket = getSocket();
 
+    // A share review session re-sends its one item on every new comment:
+    // replace it (and move it to the top) rather than adding a duplicate, and
+    // only count it as newly unread if it had been read.
     function onCommentNotif(notif: CommentNotification) {
-      setNotifications((prev) => [notif, ...prev].slice(0, 50));
-      setUnreadCount((c) => c + 1);
+      const existing = listRef.current.find((n) => n.notifId === notif.notifId);
+      if (!existing || existing.read) setUnreadCount((c) => c + 1);
+      setNotifications((prev) => [notif, ...prev.filter((n) => n.notifId !== notif.notifId)].slice(0, 50));
     }
 
     socket.on('comment:notification', onCommentNotif);

@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs';
 import { getAsset, patchAsset, removeAsset } from '@/lib/store/media-registry';
 import type { AssetPatch } from '@/lib/store/media-registry';
-import { getAllShareAssets, removeShareAsset } from '@/lib/store/share-assets-store';
-import { purgeAssetFromAllDeliverables } from '@/lib/store/deliverable-store';
+import { removeAssetFromAllShares } from '@/lib/store/share-links-db';
 import { resolveRequestActor } from '@/lib/services/activity-actor';
 import { recordActivity } from '@/lib/services/activity-monitor-service';
 import { deleteFrameioFile } from '@/lib/services/frameio';
@@ -111,16 +110,6 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     if (fioFileId) {
       // Best-effort: don't let a Frame.io error block local cleanup
       try { await deleteFrameioFile(fioFileId); } catch { /* log silently */ }
-
-      // Remove from any share membership records we track locally.
-      // Frame.io handles its own share membership server-side on file deletion,
-      // but we still need to keep our local mirror in sync.
-      const shareData = getAllShareAssets(projectId);
-      for (const [shareId, fileIds] of Object.entries(shareData)) {
-        if (fileIds.includes(fioFileId)) {
-          removeShareAsset(projectId, shareId, fioFileId);
-        }
-      }
     }
 
     // ── Cancel in-progress transcription and delete all completed transcripts
@@ -132,9 +121,9 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
     try { deleteTranscriptsByAsset(projectId, assetId); }
     catch (err) { console.warn(`[asset-delete] deleteTranscriptsByAsset failed for ${assetId}:`, err); }
 
-    // ── Remove from all review links ──────────────────────────────────────
-    try { purgeAssetFromAllDeliverables(assetId); }
-    catch (err) { console.warn(`[asset-delete] purgeAssetFromAllDeliverables failed for ${assetId}:`, err); }
+    // ── Remove from every share ───────────────────────────────────────────
+    try { removeAssetFromAllShares(assetId); }
+    catch (err) { console.warn(`[asset-delete] removeAssetFromAllShares failed for ${assetId}:`, err); }
 
     // ── Local registry + optional disk file ───────────────────────────────
     const removed = removeAsset(projectId, assetId);

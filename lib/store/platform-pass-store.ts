@@ -509,6 +509,21 @@ export function getTile(id: string): PlatformTile | null {
   return row ? toTile(row) : null;
 }
 
+/**
+ * Every tile whose video is this asset, most recently edited first. The Share
+ * system uses this to title a video by its client-facing tile name instead of
+ * its raw LPOS (J-code) asset name.
+ */
+export function findTilesForAsset(assetId: string): Array<PlatformTile & { passId: string }> {
+  const rows = getDb().prepare(
+    `SELECT t.*, c.pass_id AS tile_pass_id FROM platform_tiles t
+       JOIN platform_categories c ON c.id = t.category_id
+      WHERE t.media_asset_id = ? AND t.media_kind = 'video'
+      ORDER BY t.updated_at DESC`,
+  ).all(assetId) as Row[];
+  return rows.map((r) => ({ ...toTile(r), passId: r.tile_pass_id as string }));
+}
+
 function passIdForTile(tileId: string): string | null {
   const row = getDb().prepare(
     `SELECT c.pass_id AS pass_id FROM platform_tiles t JOIN platform_categories c ON c.id = t.category_id WHERE t.id = ?`,

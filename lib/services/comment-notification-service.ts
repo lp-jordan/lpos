@@ -2,6 +2,7 @@ import webpush from 'web-push';
 import type { CommentNotifType } from '@/lib/models/comment-notification';
 import { getCommentNotificationStore, getIo } from '@/lib/services/container';
 import { getCoreDb } from '@/lib/store/core-db';
+import { getAllUsers } from '@/lib/store/user-store';
 
 // ── VAPID init (shared config — same keys as task/prospect notifications) ──
 
@@ -36,6 +37,7 @@ function getPushSubs(userId: string): PushSubRow[] {
 
 const PUSH_LABEL: Record<CommentNotifType, string> = {
   reply: 'New reply to your comment',
+  share_activity: 'New comments on a share',
 };
 
 /**
@@ -91,4 +93,54 @@ export async function notifyCommentReply(input: {
       ),
     );
   }
+}
+
+/**
+ * A client commented on a share in LP Share. Every LPOS user gets ONE rolling
+ * bell item per review session (share + commenter): each further comment
+ * within 30 min of the last updates that item in place — counts, latest
+ * snippet, back to unread — instead of adding another. Browser push fires only
+ * when a session starts, so a reviewer working through ten videos is one ping.
+ * Called from the LP Share sync (lib/services/share-app.ts) for client-made
+ * comments only; staff commenting on LP Share never notify.
+ */
+export async function notifyShareActivity(input: {
+  sessionKey: string;
+  shareId:    string;
+  shareToken: string;
+  shareName:  string;
+  projectId:  string;
+  assetId:    string;
+  assetName:  string;
+  commentId:  string;
+  fromName:   string;
+  snippet:    string;
+  at:         string;
+}): Promise<void> {
+  const store = getCommentNotificationStore();
+  const io = getIo();
+  // Everyone with an LPOS login (the shared studio guest account excluded).
+  const recipients = getAllUsers().filter((u) => u.googleSub !== 'guest');
+
+  await Promise.allSettled(recipients.map(async (user) => {
+    const { notif, isNew } = store.upsertShareActivity({ ...input, userId: user.id });
+    io?.to(`user:${user.id}`).emit('comment:notification', notif);
+    if (!isNew || !vapidReady) return;
+    const payload = JSON.stringify({
+      title: PUSH_LABEL.share_activity,
+      body:  `${input.fromName} is commenting on ${input.shareName}`,
+      projectId: input.projectId,
+      assetId:   input.assetId,
+    });
+    await Promise.allSettled(getPushSubs(user.id).map((sub) =>
+      webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payload,
+      ).catch((err: unknown) => {
+        if ((err as { statusCode?: number }).statusCode === 410) {
+          getCoreDb().prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+        }
+      }),
+    ));
+  }));
 }

@@ -114,8 +114,12 @@ async function resolveStreamUrl(
   // Use the STORED hlsUrl (captured from the CF API at upload time, already
   // carrying the customer subdomain) rather than rebuilding from
   // CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN, which isn't reliably set in every env.
+  //
+  // LPOS_SKIP_CF_PLAYBACK=1 (dev instances only): a localhost origin is never in
+  // a video's allowedOrigins, so CF HLS always fails CORS there. Skip straight to
+  // the Frame.io / local-file sources, which play without a CORS check.
   const cf = asset?.cloudflare;
-  if (cf?.uid && cf.status === 'ready' && cf.hlsUrl) {
+  if (process.env.LPOS_SKIP_CF_PLAYBACK !== '1' && cf?.uid && cf.status === 'ready' && cf.hlsUrl) {
     urlCache.set(cacheKey, { url: cf.hlsUrl, expiresAt: Date.now() + CACHE_TTL_MS });
     return { kind: 'redirect', url: cf.hlsUrl };
   }
