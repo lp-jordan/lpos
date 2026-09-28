@@ -42,6 +42,11 @@ const IconLink = () => (
     <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
   </svg>
 );
+const IconCheck = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points="20 6 9 17 4 12"/>
+  </svg>
+);
 const IconDownload = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>
@@ -66,6 +71,8 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
   const [sideTab, setSideTab] = useState<'comments' | 'transcript'>('comments');
   const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const timeRef = useRef(0);
+  // Which copy icon just copied (its key) — it briefly becomes a checkmark.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const { openMenu } = useContextMenu();
   const { toast } = useToast();
 
@@ -125,6 +132,16 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
     }
   }
   const videoUrl = (i: ShareViewItem) => `${origin}/v/${i.videoToken}`;
+  /** Copy a video's link; the icon that was clicked confirms with a quick checkmark instead of a toast. */
+  async function copyVideoLink(i: ShareViewItem, key: string) {
+    try {
+      await navigator.clipboard.writeText(videoUrl(i));
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1500);
+    } catch {
+      toast({ id: `share-copy-err:${i.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: videoUrl(i) });
+    }
+  }
   const shareUrl = view ? `${origin}/s/${view.share.token}` : '';
   // Downloads come from R2 via a short-lived signed link (the route redirects);
   // nothing is served from LPOS's disk.
@@ -259,8 +276,10 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                     </button>
                     <span className="shv-row-actions">
                       {caps.reshare && (
-                        <button type="button" className="shv-icon-btn shv-row-copy" onClick={() => void copy(videoUrl(i), 'Video link copied')} title="Copy video link" aria-label="Copy video link">
-                          <IconLink />
+                        <button type="button" className={`shv-icon-btn shv-row-copy${copiedKey === `row:${i.assetId}` ? ' is-copied' : ''}`}
+                          onClick={() => void copyVideoLink(i, `row:${i.assetId}`)}
+                          title={copiedKey === `row:${i.assetId}` ? 'Copied' : 'Copy video link'} aria-label={copiedKey === `row:${i.assetId}` ? 'Copied' : 'Copy video link'}>
+                          {copiedKey === `row:${i.assetId}` ? <IconCheck /> : <IconLink />}
                         </button>
                       )}
                       {caps.download && <DownloadButton item={i} onOpen={openDownloadMenu} small />}
@@ -297,7 +316,11 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
                 <h1 className="shv-title">{item.title}</h1>
                 <span className="shv-grow" />
                 {caps.reshare && (
-                  <button type="button" className="shv-icon-btn" onClick={() => void copy(videoUrl(item), 'Video link copied')} title="Copy video link" aria-label="Copy video link"><IconLink /></button>
+                  <button type="button" className={`shv-icon-btn${copiedKey === `under:${item.assetId}` ? ' is-copied' : ''}`}
+                    onClick={() => void copyVideoLink(item, `under:${item.assetId}`)}
+                    title={copiedKey === `under:${item.assetId}` ? 'Copied' : 'Copy video link'} aria-label={copiedKey === `under:${item.assetId}` ? 'Copied' : 'Copy video link'}>
+                    {copiedKey === `under:${item.assetId}` ? <IconCheck /> : <IconLink />}
+                  </button>
                 )}
                 {caps.download && <DownloadButton item={item} onOpen={openDownloadMenu} />}
               </div>

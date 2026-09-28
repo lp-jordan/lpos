@@ -166,6 +166,10 @@ async function pass(): Promise<void> {
     const asset = getAsset(w.projectId, w.assetId);
     if (!versionId || !asset?.filePath) continue;
     latestOf.set(w.assetId, versionId);
+    // A file that was missing (drive unplugged) is back → try again.
+    if (fs.existsSync(asset.filePath)) {
+      db.prepare(`UPDATE share_download_files SET status = 'pending', error = NULL WHERE asset_version_id = ? AND status = 'failed' AND error LIKE '${MISSING_PREFIX}%'`).run(versionId);
+    }
     insert.run(versionId, 'original', w.assetId, w.projectId, iso, iso);
     insert.run(versionId, 'web', w.assetId, w.projectId, iso, iso);
     const tx = asset.transcription?.status === 'done' ? asset.transcription.jobId : null;
@@ -217,6 +221,14 @@ async function pass(): Promise<void> {
 
 // ── Making one file ──────────────────────────────────────────────────────────
 
+/** Why a file can't be read: usually its drive isn't mounted on this machine. */
+const MISSING_PREFIX = 'MISSING:';
+function missingFileReason(filePath: string | null): string {
+  const vol = filePath?.match(/^\/Volumes\/([^/]+)\//)?.[1];
+  if (vol && !fs.existsSync(`/Volumes/${vol}`)) return `${MISSING_PREFIX}Drive "${vol}" isn't connected`;
+  return `${MISSING_PREFIX}The file isn't on disk`;
+}
+
 /** Structural slice of UploadQueueService — optional (not running in UI-only dev). */
 interface Queue {
   add(projectId: string, assetId: string, filename: string, provider: 'delivery'): string;
@@ -241,7 +253,7 @@ async function makeFile(r: FileRow): Promise<void> {
   };
   const asset = getAsset(r.project_id, r.asset_id);
   if (!asset?.filePath || !fs.existsSync(asset.filePath)) {
-    set({ status: 'failed', error: 'The file is not on disk' });
+    set({ status: 'failed', error: missingFileReason(asset?.filePath ?? null) });
     return;
   }
   const base = `${SHARE_DOWNLOADS_PREFIX}/${r.asset_id}/${r.asset_version_id}`;
@@ -330,7 +342,7 @@ export function downloadStatusFor(assetId: string): AssetDownloadStatus {
     original: ready(o) ? { size: o!.size ?? 0, ext: o!.ext ?? '' } : null,
     web: ready(w) ? { size: w!.size ?? 0 } : null,
     transcripts: TRANSCRIPT_KINDS.filter((k) => ready(by.get(k))) as Array<'srt' | 'vtt' | 'txt'>,
-    error: failed?.error ?? null,
+    error: failed?.error?.replace(MISSING_PREFIX, '') ?? null,
     progress: Math.round(((o?.progress ?? 0) + (w?.progress ?? 0)) / 2),
   };
 }

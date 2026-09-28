@@ -6,13 +6,15 @@
  * All clients → a client's projects → a project's videos, with a breadcrumb to
  * back out and search across everything. Opens in the project you're working in.
  *
- * Selections carry across projects and clients; videos already in the share
- * are marked and can't be picked again. A small red dot marks videos that
- * aren't ready on Cloudflare yet (they'll play once processing finishes).
+ * Live, like the rest of the share window: ticking a video adds it to the share
+ * immediately, unticking removes it. A small red dot marks videos
+ * that aren't ready on Cloudflare yet (they'll play once processing finishes).
+ * List or cards view, remembered per browser (shared with the share window).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { BrowseClient, BrowseProject, ShareAssetOption } from '@/lib/services/share-links';
+import { ViewToggle, useViewMode } from './ViewToggle';
 
 type Level =
   | { kind: 'clients' }
@@ -23,7 +25,8 @@ interface Props {
   existing:        Set<string>;
   /** Where to open: the project you came from, or the one most of the share's videos come from. */
   startProjectId?: string | null;
-  onAdd:           (items: Array<{ assetId: string; projectId: string }>) => Promise<void>;
+  /** Called the moment videos are ticked (adds) or unticked (removes) — the share changes right away. */
+  onChange:        (adds: Array<{ assetId: string; projectId: string }>, removes: string[]) => Promise<void>;
   onClose:         () => void;
 }
 
@@ -33,15 +36,17 @@ function fmtDuration(s: number | null): string {
   return `${m}:${String(x).padStart(2, '0')}`;
 }
 
-export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Readonly<Props>) {
+export function AddVideosPicker({ existing, startProjectId, onChange, onClose }: Readonly<Props>) {
   const [level, setLevel] = useState<Level | null>(startProjectId ? null : { kind: 'clients' });
   const [clients, setClients] = useState<BrowseClient[] | null>(null);
   const [projects, setProjects] = useState<BrowseProject[] | null>(null);
   const [videos, setVideos] = useState<ShareAssetOption[] | null>(null);
   const [q, setQ] = useState('');
   const [results, setResults] = useState<ShareAssetOption[] | null>(null);
-  const [picked, setPicked] = useState<Map<string, ShareAssetOption>>(new Map());
-  const [busy, setBusy] = useState(false);
+  // What's in the share, updated optimistically as you tick (the parent reloads behind it).
+  const [inShare, setInShare] = useState<Set<string>>(() => new Set(existing));
+  useEffect(() => { setInShare(new Set(existing)); }, [existing]);
+  const [viewMode, setViewMode] = useViewMode('lpos:share:picker-view');
 
   // Open inside the starting project (and know its client for the breadcrumb).
   useEffect(() => {
@@ -85,31 +90,24 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
     return () => clearTimeout(t);
   }, [q]);
 
-  function toggle(a: ShareAssetOption) {
-    if (existing.has(a.assetId)) return;
-    setPicked((prev) => {
-      const next = new Map(prev);
-      if (next.has(a.assetId)) next.delete(a.assetId); else next.set(a.assetId, a);
+  function setTicked(list: ShareAssetOption[], on: boolean) {
+    const changed = list.filter((a) => inShare.has(a.assetId) !== on);
+    if (!changed.length) return;
+    setInShare((prev) => {
+      const next = new Set(prev);
+      for (const a of changed) { if (on) next.add(a.assetId); else next.delete(a.assetId); }
       return next;
     });
+    void onChange(
+      on ? changed.map((a) => ({ assetId: a.assetId, projectId: a.projectId })) : [],
+      on ? [] : changed.map((a) => a.assetId),
+    );
   }
+  const toggle = (a: ShareAssetOption) => setTicked([a], !inShare.has(a.assetId));
 
   const shown = results ?? (level?.kind === 'videos' ? videos : null);
-  const selectable = useMemo(() => (shown ?? []).filter((a) => !existing.has(a.assetId)), [shown, existing]);
-  const allPicked = selectable.length > 0 && selectable.every((a) => picked.has(a.assetId));
-  function toggleAll() {
-    setPicked((prev) => {
-      const next = new Map(prev);
-      for (const a of selectable) { if (allPicked) next.delete(a.assetId); else next.set(a.assetId, a); }
-      return next;
-    });
-  }
-
-  async function add() {
-    setBusy(true);
-    await onAdd([...picked.values()].map((a) => ({ assetId: a.assetId, projectId: a.projectId })));
-    setBusy(false);
-  }
+  const allTicked = !!shown?.length && shown.every((a) => inShare.has(a.assetId));
+  const toggleAll = () => setTicked(shown ?? [], !allTicked);
 
   const crumbs: Array<{ label: string; go?: () => void }> = [{ label: 'All clients', go: level?.kind !== 'clients' || results ? () => { setQ(''); setLevel({ kind: 'clients' }); } : undefined }];
   if (level && level.kind !== 'clients') crumbs.push({ label: level.client, go: level.kind === 'videos' || results ? () => { setQ(''); setLevel({ kind: 'projects', client: level.client }); } : undefined });
@@ -126,8 +124,11 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
             </span>
           ))}
         </nav>
+        <span className="shp-tools">
+        <ViewToggle mode={viewMode} onChange={setViewMode} />
         <input className="shp-search" placeholder="Search all videos" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search all videos"
           onKeyDown={(e) => { if (e.key === 'Escape' && q) { e.stopPropagation(); setQ(''); } }} />
+        </span>
       </div>
 
       <div className="shp-body">
@@ -135,25 +136,27 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
           <>
             <div className="shp-bar">
               <span className="shp-count">{results ? `${results.length} result${results.length === 1 ? '' : 's'}` : `${shown.length} video${shown.length === 1 ? '' : 's'}`}</span>
-              {selectable.length > 0 && <button type="button" className="shp-link" onClick={toggleAll}>{allPicked ? 'Clear these' : 'Select all'}</button>}
+              {!!shown.length && <button type="button" className="shp-link" onClick={toggleAll}>{allTicked ? 'Remove all' : 'Add all'}</button>}
             </div>
             {shown.length === 0 ? <p className="shp-empty">{results ? 'No videos match.' : 'No videos in this project.'}</p> : (
-              <div className="shp-videos">
+              <div className={viewMode === 'cards' ? 'shp-videos' : 'shp-vlist'}>
                 {shown.map((a) => {
-                  const inShare = existing.has(a.assetId);
-                  const on = picked.has(a.assetId);
+                  const on = inShare.has(a.assetId);
                   return (
-                    <button key={a.assetId} type="button" className={`shp-video${on ? ' is-on' : ''}${inShare ? ' is-in' : ''}`}
-                      onClick={() => toggle(a)} disabled={inShare} aria-pressed={on}>
+                    <button key={a.assetId} type="button" className={`shp-video${on ? ' is-on' : ''}`}
+                      onClick={() => toggle(a)} aria-pressed={on} title={on ? 'In share — click to remove' : 'Click to add'}>
                       <span className="shp-thumb">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.thumbnailUrl} alt="" loading="lazy" />
-                        <span className="shp-check" aria-hidden="true">{on || inShare ? '✓' : ''}</span>
+                        <span className="shp-check" aria-hidden="true">{on ? '✓' : ''}</span>
                         {!a.cfReady && <span className="shp-notready" title="Not ready on Cloudflare yet — it will play once processing finishes" aria-label="Not ready on Cloudflare yet" />}
                         {a.duration ? <span className="shp-dur">{fmtDuration(a.duration)}</span> : null}
                       </span>
-                      <span className="shp-vtitle">{a.platformTitle ?? a.name}</span>
-                      <span className="shp-vsub">{inShare ? 'In share' : results ? `${a.clientName} · ${a.projectName}` : a.platformTitle ? a.name : ''}</span>
+                      <span className="shp-vtext">
+                        <span className="shp-vtitle">{a.platformTitle ?? a.name}</span>
+                        <span className="shp-vsub">{results ? `${a.clientName} · ${a.projectName}` : a.platformTitle ? a.name : ''}</span>
+                      </span>
+                      {viewMode === 'list' && a.duration ? <span className="shp-vdur">{fmtDuration(a.duration)}</span> : null}
                     </button>
                   );
                 })}
@@ -162,7 +165,7 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
           </>
         ) : level?.kind === 'clients' ? (
           !clients ? <p className="shp-empty">Loading…</p> : (
-            <div className="shp-cards">
+            <div className={viewMode === 'cards' ? 'shp-cards' : 'shp-clist'}>
               {clients.map((c) => (
                 <button key={c.clientName} type="button" className="shp-card" onClick={() => setLevel({ kind: 'projects', client: c.clientName })}>
                   <span className="shp-initial">{c.clientName.charAt(0).toUpperCase()}</span>
@@ -176,7 +179,7 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
           )
         ) : level?.kind === 'projects' ? (
           !projects ? <p className="shp-empty">Loading…</p> : projects.length === 0 ? <p className="shp-empty">No projects.</p> : (
-            <div className="shp-cards">
+            <div className={viewMode === 'cards' ? 'shp-cards' : 'shp-clist'}>
               {projects.map((p) => (
                 <button key={p.projectId} type="button" className="shp-card" onClick={() => openProject(p)} disabled={!p.videoCount}>
                   <span className="shp-initial">{p.name.charAt(0).toUpperCase()}</span>
@@ -192,13 +195,9 @@ export function AddVideosPicker({ existing, startProjectId, onAdd, onClose }: Re
       </div>
 
       <div className="shp-foot">
-        <span className="shp-count">{picked.size ? `${picked.size} selected` : 'Pick videos from any project'}</span>
-        {picked.size > 0 && <button type="button" className="shp-link" onClick={() => setPicked(new Map())}>Clear</button>}
+        <span className="shp-count">{inShare.size} video{inShare.size === 1 ? '' : 's'} in this share</span>
         <span style={{ flex: 1 }} />
-        <button type="button" className="modal-btn-ghost" onClick={onClose}>Cancel</button>
-        <button type="button" className="modal-btn-primary" disabled={!picked.size || busy} onClick={() => void add()}>
-          {picked.size ? `Add ${picked.size} video${picked.size === 1 ? '' : 's'}` : 'Add videos'}
-        </button>
+        <button type="button" className="modal-btn-primary" onClick={onClose}>Done</button>
       </div>
     </div>
   );
