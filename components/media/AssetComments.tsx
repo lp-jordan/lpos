@@ -406,26 +406,32 @@ export function AssetCommentsSection({
                       !
                     </span>
                   )}
-                  {c.timestamp !== null && (() => {
-                    const label = `${formatTimecode(c.timestamp)}${c.duration ? ` → ${formatTimecode(c.timestamp + c.duration)}` : ''}`;
-                    return (
-                      <button
-                        type="button"
-                        className="mad-comment-time mad-comment-time--seek"
-                        title="Jump to this timestamp"
-                        onClick={() => {
-                          // Seek the sidebar player in place. Don't auto-open
-                          // theater — let the user decide when to do that
-                          // (avoids two players playing at once).
-                          onSeek(c.timestamp!);
-                        }}
-                      >
-                        {label}
-                        <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft: 3, opacity: 0.7 }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                      </button>
-                    );
-                  })()}
-                  <span className="mad-comment-date">{formatCommentDate(c.createdAt)}</span>
+                  {/* Timecode + date collapse when the name needs the room: the
+                      date wraps out of sight first, then the timecode (the
+                      zero-width spacer lets the timecode wrap too). */}
+                  <div className="mad-comment-meta">
+                    <span className="mad-comment-meta-spacer" aria-hidden="true" />
+                    {c.timestamp !== null && (() => {
+                      const label = `${formatTimecode(c.timestamp)}${c.duration ? ` → ${formatTimecode(c.timestamp + c.duration)}` : ''}`;
+                      return (
+                        <button
+                          type="button"
+                          className="mad-comment-time mad-comment-time--seek"
+                          title="Jump to this timestamp"
+                          onClick={() => {
+                            // Seek the sidebar player in place. Don't auto-open
+                            // theater — let the user decide when to do that
+                            // (avoids two players playing at once).
+                            onSeek(c.timestamp!);
+                          }}
+                        >
+                          {label}
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft: 3, opacity: 0.7 }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        </button>
+                      );
+                    })()}
+                    <span className="mad-comment-date">{formatCommentDate(c.createdAt)}</span>
+                  </div>
                   {/* Complete / cross-off toggle */}
                   {canModerate && (
                     <button

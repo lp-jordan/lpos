@@ -4309,8 +4309,23 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .mad-comment--done { opacity: 0.55; }
 .mad-comment-header {
   display: flex; align-items: center; gap: 0.4rem;
-  margin-bottom: 0.3rem; flex-wrap: wrap;
+  margin-bottom: 0.3rem; flex-wrap: nowrap; min-width: 0;
 }
+.mad-comment-header > * { flex-shrink: 0; }
+/* Name keeps its natural width (ellipsis only if it alone overflows); the meta
+ * group gets whatever is left. Items that don't fit wrap onto a clipped second
+ * line, so they vanish whole — date first, then timecode. */
+.mad-comment-header > .mad-comment-author {
+  flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mad-comment-meta {
+  flex: 1 1 0; min-width: 0; height: 1.3rem; overflow: hidden;
+  display: flex; flex-wrap: wrap; align-items: center;
+}
+.mad-comment-meta-spacer { width: 0; height: 1.3rem; }
+.mad-comment-meta .mad-comment-time { white-space: nowrap; }
+.mad-comment-meta .mad-comment-date { white-space: nowrap; line-height: 1.3rem; padding-left: 0.4rem; }
 .mad-comment-avatar {
   width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
 }
