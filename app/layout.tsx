@@ -8,6 +8,7 @@ import { getUserById, toUserSummary } from '@/lib/store/user-store';
 import { hasProspectsAccess } from '@/lib/store/prospect-access-store';
 import { hasEditpanelAccess } from '@/lib/store/editpanel-access-store';
 import { getAppVersion } from '@/lib/version';
+import { shareAppOrigin } from '@/lib/services/share-app-config';
 
 export const metadata: Metadata = {
   title: 'LPOS Dashboard',
@@ -36,6 +37,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="en">
       <body>
+        {/* Share links point at LP Share (the public app) once it's connected. */}
+        <script dangerouslySetInnerHTML={{ __html: `window.__LPOS_SHARE_ORIGIN=${JSON.stringify(shareAppOrigin() ?? '')};` }} />
         <ServiceWorkerRegistrar />
         <AppShell currentUser={currentUser} hasProspects={hasProspects} epDownload={epDownload} isAdmin={isAdmin} version={version}>{children}</AppShell>
       </body>

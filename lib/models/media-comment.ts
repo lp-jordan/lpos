@@ -51,6 +51,12 @@ export interface MediaComment {
   deletedAt:           string | null;
   /** null = everyone; 'internal' = staff-only (never shown to clients, never mirrored). */
   visibility:          MediaCommentVisibility;
+  /** LP Share thread scope: the share the thread started in (null = not a share thread). */
+  shareId:             string | null;
+  /** This comment's id in LP Share, when a client made it there. */
+  shareCommentId:      string | null;
+  /** The LP Share guest who wrote it (keeps their edit rights). */
+  authorGuestId:       string | null;
 }
 
 /**
@@ -82,6 +88,9 @@ export interface MediaCommentRow {
   updated_at:            string;
   deleted_at:            string | null;
   visibility:            string | null;
+  share_id:              string | null;
+  share_comment_id:      string | null;
+  author_guest_id:       string | null;
 }
 
 /**
@@ -110,6 +119,10 @@ export interface MediaCommentInsert {
   frameioFileId?:       string | null;
   completed?:           boolean;
   visibility?:          MediaCommentVisibility;
+  /** LP Share thread scope; a reply inherits its parent's when omitted. */
+  shareId?:             string | null;
+  shareCommentId?:      string | null;
+  authorGuestId?:       string | null;
   /** Override the timestamp — used by the backfill script to preserve historical inserted_at values. */
   createdAtOverride?:   string;
 }
@@ -187,5 +200,8 @@ export function rowToMediaComment(row: MediaCommentRow): MediaComment {
     updatedAt:           row.updated_at,
     deletedAt:           row.deleted_at,
     visibility:          row.visibility === 'internal' ? 'internal' : null,
+    shareId:             row.share_id ?? null,
+    shareCommentId:      row.share_comment_id ?? null,
+    authorGuestId:       row.author_guest_id ?? null,
   };
 }

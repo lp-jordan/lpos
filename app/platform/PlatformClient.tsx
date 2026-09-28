@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PlatformPass, PassStatus } from '@/lib/store/platform-pass-store';
 import { resolveBrand } from '@/lib/platform/tile-background';
-import { ShareModal, shareUrl } from '@/components/share/ShareModal';
+import { ShareModal, shareOpenHref, shareUrl } from '@/components/share/ShareModal';
 import type { ShareSummary } from '@/lib/services/share-links';
 
 const STATUS_LABEL: Record<PassStatus, string> = {
@@ -118,7 +118,7 @@ export function PlatformClient({ initialPasses }: { initialPasses: PlatformPass[
                   onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(shareUrl(x.token)).catch(() => {}); }}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
                 </button>
-                <a className="shm-open" href={`/s/${x.token}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Open</a>
+                <a className="shm-open" href={shareOpenHref(x.token)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Open</a>
               </div>
             ))}
           </div>

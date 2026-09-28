@@ -55,10 +55,13 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
   const now               = input.createdAtOverride ?? new Date().toISOString();
 
   let threadRootId: string = commentId;
+  let shareId = input.shareId ?? null;
   if (input.parentCommentId) {
-    const parent = db.prepare('SELECT thread_root_id FROM media_comments WHERE comment_id = ?')
-      .get(input.parentCommentId) as { thread_root_id: string } | undefined;
+    const parent = db.prepare('SELECT thread_root_id, share_id FROM media_comments WHERE comment_id = ?')
+      .get(input.parentCommentId) as { thread_root_id: string; share_id: string | null } | undefined;
     threadRootId = parent?.thread_root_id ?? input.parentCommentId;
+    // A reply stays in its thread's share (a staff reply from LPOS reaches the client).
+    if (input.shareId === undefined) shareId = parent?.share_id ?? null;
   }
 
   db.prepare(
@@ -69,7 +72,8 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
        author_user_id, author_external_name, author_external_email, author_avatar_url,
        source, frameio_comment_id, frameio_file_id,
        completed, completed_at, completed_by_user_id,
-       created_at, updated_at, deleted_at, visibility
+       created_at, updated_at, deleted_at, visibility,
+       share_id, share_comment_id, author_guest_id
      ) VALUES (
        ?, ?, ?, ?,
        ?, ?,
@@ -77,7 +81,8 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
        ?, ?, ?, ?,
        ?, ?, ?,
        ?, NULL, NULL,
-       ?, ?, NULL, ?
+       ?, ?, NULL, ?,
+       ?, ?, ?
      )`,
   ).run(
     commentId, input.projectId, input.assetId, input.assetVersionId,
@@ -87,6 +92,7 @@ export function insertMediaComment(input: MediaCommentInsert): MediaComment {
     input.source, input.frameioCommentId ?? null, input.frameioFileId ?? null,
     input.completed ? 1 : 0,
     now, now, input.visibility ?? null,
+    shareId, input.shareCommentId ?? null, input.authorGuestId ?? null,
   );
 
   const row = db.prepare('SELECT * FROM media_comments WHERE comment_id = ?').get(commentId) as MediaCommentRow;
@@ -267,8 +273,13 @@ export function getMediaCommentByEitherId(maybeId: string): MediaComment | null 
 export function enqueueMediaCommentMirrorJob(
   commentId: string,
   action:    MediaCommentMirrorAction,
-): MediaCommentMirrorJob {
+): MediaCommentMirrorJob | null {
   const db = getCoreDb();
+
+  // LP Share threads live in LPOS + LP Share only — never mirrored to Frame.io.
+  const scope = db.prepare('SELECT share_id FROM media_comments WHERE comment_id = ?')
+    .get(commentId) as { share_id: string | null } | undefined;
+  if (scope?.share_id) return null;
 
   const existing = db.prepare(
     `SELECT * FROM media_comment_mirror_jobs

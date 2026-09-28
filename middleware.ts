@@ -17,6 +17,7 @@ function hasMachineToken(req: NextRequest): boolean {
 function isPublicPath(pathname: string): boolean {
   if (pathname === '/signin') return true;
   if (pathname === '/guest-pin') return true;
+  if (pathname === '/share-auth') return true;   // LP Share staff pass: checks the session itself so `next` survives sign-in
   if (pathname.startsWith('/api/auth/')) return true;
   if (pathname.startsWith('/api/webhooks/')) return true; // inbound webhooks self-authenticate (Frame.io HMAC signature, Drive channel token) — they can't carry a session cookie
   if (pathname.startsWith('/api/ep/')) return true;  // machine-to-machine auth via X-EP-Secret

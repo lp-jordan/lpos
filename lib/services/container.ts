@@ -263,6 +263,10 @@ export async function initServices(io: SocketIOServer): Promise<void> {
   // queue so its jobs show in the Upload Tray.
   void import('@/lib/services/share-downloads').then((m) => m.ensureShareDownloadWorker());
 
+  // LP Share sync: pushes shares/comments to the public share app and pulls
+  // client comments back. Idle until the share_app.origin admin setting is set.
+  void import('@/lib/services/share-app').then((m) => m.ensureShareAppSync());
+
   ingestQueueService = new IngestQueueService(io);
   globalThis.__lpos_ingestQueueService = ingestQueueService;
   ingestQueueService.start();

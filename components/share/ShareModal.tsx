@@ -26,8 +26,17 @@ const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
   ['transcripts', 'Transcript'],
 ];
 
+declare global { interface Window { __LPOS_SHARE_ORIGIN?: string } }
+
+/** The link clients get: LP Share once it's connected, else LPOS's own staff viewer. */
 export function shareUrl(token: string): string {
-  return `${window.location.origin}/s/${token}`;
+  return `${window.__LPOS_SHARE_ORIGIN || window.location.origin}/s/${token}`;
+}
+
+/** Where "Open" goes: through /share-auth (arrive with a staff pass) once LP Share is connected. */
+export function shareOpenHref(token: string): string {
+  if (typeof window !== 'undefined' && window.__LPOS_SHARE_ORIGIN) return `/share-auth?next=${encodeURIComponent(`/s/${token}`)}`;
+  return `/s/${token}`;
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -177,7 +186,7 @@ export function ShareModal({ shareId, projectId = null, onClose, onChanged }: Re
                 <button type="button" className="shm-icon" onClick={() => void copy()} title="Copy link" aria-label="Copy link">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
                 </button>
-                <a className="shm-open" href={`/s/${share.token}`} target="_blank" rel="noreferrer">Open</a>
+                <a className="shm-open" href={shareOpenHref(share.token)} target="_blank" rel="noreferrer">Open</a>
               </div>
             </div>
 

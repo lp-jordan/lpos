@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import type { ShareSummary } from '@/lib/services/share-links';
-import { ShareModal, shareUrl } from './ShareModal';
+import { ShareModal, shareOpenHref, shareUrl } from './ShareModal';
 
 const CAP_SHORT: Array<[keyof ShareSummary['caps'], string]> = [
   ['comments', 'Comments'], ['download', 'Download'], ['reshare', 'Reshare'], ['transcripts', 'Transcripts'],
@@ -60,7 +60,7 @@ export function ProjectSharesModal({ projectId, onClose }: Readonly<{ projectId:
                 onClick={(e) => { e.stopPropagation(); void copy(s); }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
               </button>
-              <a className="shm-open" href={`/s/${s.token}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Open</a>
+              <a className="shm-open" href={shareOpenHref(s.token)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Open</a>
             </div>
           ))}
         <div className="modal-actions"><button type="button" className="modal-btn-primary" onClick={onClose}>Done</button></div>
