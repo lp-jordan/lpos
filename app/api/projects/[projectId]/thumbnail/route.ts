@@ -4,7 +4,10 @@
  * Returns a 307 redirect to the Frame.io CDN thumbnail for the first uploaded
  * asset in the project. Used by project cards on the projects page.
  *
- * 404 when: Frame.io not connected, no uploaded assets, or thumbnail unavailable.
+ * Falls back to the first asset's Cloudflare Stream thumbnail when no asset is on
+ * Frame.io (e.g. automatic Frame.io upload switched off) or Frame.io is disconnected.
+ *
+ * 404 when neither source has a thumbnail.
  * Results are cached in memory for 30 minutes to avoid hammering the Frame.io API
  * on every page load.
  */
@@ -22,12 +25,15 @@ const CACHE_MS = 30 * 60 * 1000; // 30 minutes
 export async function GET(_req: NextRequest, { params }: Params) {
   const { projectId } = await params;
 
-  if (!isConnected()) return new NextResponse(null, { status: 404 });
+  const assets  = readRegistry(projectId);
+  const cloudflareFallback = () => {
+    const url = assets.find((a) => a.cloudflare?.status === 'ready' && a.cloudflare.thumbnailUrl)?.cloudflare?.thumbnailUrl;
+    return url ? NextResponse.redirect(url, { status: 307 }) : new NextResponse(null, { status: 404 });
+  };
 
   // Find first asset that has been uploaded to Frame.io
-  const assets  = readRegistry(projectId);
-  const frameioAssetId = assets.find((a) => a.frameio?.assetId)?.frameio?.assetId ?? null;
-  if (!frameioAssetId) return new NextResponse(null, { status: 404 });
+  const frameioAssetId = isConnected() ? assets.find((a) => a.frameio?.assetId)?.frameio?.assetId ?? null : null;
+  if (!frameioAssetId) return cloudflareFallback();
 
   // Cache hit
   const cached = cache.get(frameioAssetId);

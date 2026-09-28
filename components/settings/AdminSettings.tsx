@@ -17,6 +17,7 @@ import { NasIngestPanel } from '@/components/settings/NasIngestPanel';
 import { StorageMapCard } from '@/components/settings/StorageMapCard';
 import { EpTokensPanel } from '@/components/settings/EpTokensPanel';
 import { TranscriptionConfigCard } from '@/components/settings/TranscriptionConfigCard';
+import { FrameioConfigCard } from '@/components/settings/FrameioConfigCard';
 import { AiUsageCard } from '@/components/settings/AiUsageCard';
 import { StorageSettingsClient } from '@/components/settings/StorageSettingsClient';
 import { ColdStorageSection } from '@/components/settings/ColdStorageSection';
@@ -116,6 +117,7 @@ export function AdminSettings({ role }: { role: string }) {
       content: (
         <>
           <TranscriptionConfigCard />
+          <FrameioConfigCard />
           <CloudflareLibraryPanel />
           <CloudflareOrphansPanel />
           <SilentPagesPanel />

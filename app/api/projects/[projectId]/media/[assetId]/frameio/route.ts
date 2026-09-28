@@ -43,7 +43,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
 
   // Reset error state and trigger upload via shared service
   patchAsset(projectId, assetId, { frameio: { status: 'none', lastError: null } });
-  triggerFrameIOUpload(projectId, assetId, { actor });
+  triggerFrameIOUpload(projectId, assetId, { actor, manual: true });
 
   return NextResponse.json({ ok: true, status: 'uploading' });
 }

@@ -97,6 +97,15 @@ export const SETTING_KEYS = {
    * yet, the next monitor tick warms it. Admin-tunable without a restart.
    */
   CATCHUP_WARM_TIME: 'catchup.warm_time',
+
+  // ── Frame.io ──────────────────────────────────────────────────────────────
+  /**
+   * Master switch for the automatic Frame.io upload on ingest (new files and
+   * register-in-place). When false, ingest skips Frame.io entirely — the asset
+   * stays frameio 'none' and goes straight to the Cloudflare auto-upload. The
+   * manual "Upload to Frame.io" action and pipeline Retry still work.
+   */
+  FRAMEIO_AUTO_UPLOAD: 'frameio.auto_upload',
 } as const;
 
 /**
@@ -130,4 +139,6 @@ export const SETTING_DEFAULTS = {
   [SETTING_KEYS.CATCHUP_AI_ENABLED]: true,
   [SETTING_KEYS.CATCHUP_HEADLINE_MODEL]: 'claude-haiku-4-5',
   [SETTING_KEYS.CATCHUP_WARM_TIME]: '05:30',
+
+  [SETTING_KEYS.FRAMEIO_AUTO_UPLOAD]: true,
 } as const;

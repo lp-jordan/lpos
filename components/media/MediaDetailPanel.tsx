@@ -544,10 +544,12 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                    1. Frame.io uploaded → LPOS proxies the CDN stream so the
                       browser never makes a cross-origin request to Frame.io.
                       Works from any machine on the LAN.
-                   2. Not on Frame.io → fall back to local NAS stream (host only). ── */}
+                   2. Neither on Frame.io nor Cloudflare → local NAS stream (host only).
+                   The frameio-stream route resolves Cloudflare first, so an asset that
+                   skipped Frame.io (auto upload off) still plays CF HLS. ── */}
               {(() => {
                 const audio = isAudioFile(asset.originalFilename ?? asset.name);
-                if (asset.frameio.assetId) {
+                if (asset.frameio.assetId || asset.cloudflare?.uid) {
                   // When viewing an older version, request it explicitly so the
                   // route serves that version's Frame.io file (the latest's CF
                   // video is the only one on Cloudflare). Latest → no param → CF.

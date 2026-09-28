@@ -82,7 +82,8 @@ function buildItem(it: ShareLinkItem, withDownloads: boolean): ShareViewItem | n
     duration:     asset.duration,
     thumbnailUrl: `/api/projects/${it.projectId}/media/${it.assetId}/thumbnail`,
     videoToken:   it.videoToken,
-    stream:       asset.frameio.assetId ? 'frameio' : asset.filePath ? 'local' : null,
+    // 'frameio' = the frameio-stream route (Cloudflare first, then Frame.io, then disk).
+    stream:       asset.frameio.assetId || asset.cloudflare?.uid ? 'frameio' : asset.filePath ? 'local' : null,
     download:     withDownloads ? downloadStatusFor(it.assetId) : null,
   };
 }

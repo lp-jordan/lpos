@@ -8,6 +8,8 @@
  *   - the frameio API route    (on manual trigger)
  *
  * Silently skips if Frame.io is not connected or asset has no file path.
+ * Automatic (ingest) uploads also skip Frame.io while the admin setting
+ * `frameio.auto_upload` is off — the asset goes to Cloudflare only.
  * Reports progress to UploadQueueService → broadcast to UploadTray UI.
  */
 
@@ -31,6 +33,7 @@ import {
 import { triggerCloudflareUpload }                 from '@/lib/services/cloudflare-publish';
 import { getDefaultAllowedOrigins }                from '@/lib/services/cloudflare-stream';
 import { isVideoFile }                             from '@/lib/utils/media-kind';
+import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
 
 function getQueue() {
   try { return getUploadQueueService(); } catch { return null; }
@@ -46,6 +49,14 @@ interface FrameIOUploadContext {
   /** One-shot operator opt-out (NAS mode "Skip Cloudflare for next upload").
    *  Frame.io still runs; only the chained Cloudflare Stream auto-upload is skipped. */
   skipCloudflare?: boolean;
+  /** Operator asked for this asset specifically (Upload to Frame.io / pipeline Retry):
+   *  runs even when automatic Frame.io upload is switched off. */
+  manual?: boolean;
+}
+
+/** Admin switch (Settings → Media → Frame.io). Default on. */
+export function isFrameioAutoUploadEnabled(): boolean {
+  return getSetting<boolean>(SETTING_KEYS.FRAMEIO_AUTO_UPLOAD, SETTING_DEFAULTS[SETTING_KEYS.FRAMEIO_AUTO_UPLOAD]);
 }
 
 export function triggerFrameIOUpload(projectId: string, assetId: string, context?: FrameIOUploadContext): void {
@@ -71,12 +82,22 @@ async function runUpload(projectId: string, assetId: string, context?: FrameIOUp
       console.log(`[frameio] skipping Cloudflare auto-upload for "${asset.name}" (operator opted out for this upload)`);
       return;
     }
+    // A manual Frame.io send for an asset that's already on Cloudflare (the usual
+    // case while auto Frame.io is off) mustn't re-send the same file to CF.
+    if (context?.manual && asset.cloudflare.status !== 'none' && asset.cloudflare.status !== 'failed') return;
     if (isVideoFile(asset.mimeType, asset.originalFilename ?? asset.name)) {
       triggerCloudflareUpload(projectId, assetId, { allowedOrigins: getDefaultAllowedOrigins() });
     } else {
       console.log(`[frameio] skipping Cloudflare auto-upload for non-video asset "${asset.name}"`);
     }
   };
+
+  // Automatic Frame.io upload switched off — skip Frame.io, still get CF.
+  if (!context?.manual && !isFrameioAutoUploadEnabled()) {
+    console.log(`[frameio-upload] automatic Frame.io upload is off — uploading "${asset.name}" to Cloudflare only`);
+    fireCloudflare();
+    return;
+  }
 
   // Frame.io disconnected — skip the Frame.io attempt, but still get CF.
   if (!isConnected()) {

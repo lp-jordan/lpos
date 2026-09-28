@@ -731,7 +731,7 @@ export class PipelineTrackerService {
     switch (stageType) {
       case 'upload:frameio':
         patchAsset(entry.projectId, entry.assetId!, { frameio: { status: 'none', lastError: null } });
-        triggerFrameIOUpload(entry.projectId, entry.assetId!);
+        triggerFrameIOUpload(entry.projectId, entry.assetId!, { manual: true });
         break;
       case 'upload:cloudflare':
         // Leave cloudflare.status = 'failed' so runCloudflareUpload can adopt the

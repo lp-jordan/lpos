@@ -77,6 +77,14 @@ export class MediaCommentMirrorService {
       return;
     }
 
+    // Made on an asset that isn't on Frame.io (e.g. automatic Frame.io upload
+    // off): no create was ever queued, so there's nothing to update/complete —
+    // succeed instead of retrying "deferring…" for hours.
+    if (job.action !== 'create' && !comment.frameioCommentId && !comment.frameioFileId) {
+      markMirrorJobSucceeded(job.jobId);
+      return;
+    }
+
     try {
       switch (job.action) {
         case 'create': {
