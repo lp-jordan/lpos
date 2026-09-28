@@ -12,8 +12,9 @@
  *   3. Purge — R2 files no share wants are deleted after a 3-day grace (from
  *      Download off / video removed / share revoked). A superseded cut goes 3
  *      days after the new cut's files are ready.
- *   4. Work — missing files are made one at a time: original → web → transcripts,
- *      mirrored into the Upload Tray when the upload queue is running.
+ *   4. Work — missing files are made one at a time: original → web → transcripts.
+ *      Progress shows as ONE pipeline job per share ("3 of 8 uploaded"), not a
+ *      job per file, when the upload queue is running.
  *
  * Runs wherever the LPOS server runs (the machine with the files); uploads are
  * outbound only.
@@ -50,10 +51,16 @@ interface FileRow {
 
 declare global {
   // eslint-disable-next-line no-var
-  var __lpos_share_downloads: { timer: ReturnType<typeof setInterval> | null; busy: boolean; again: boolean; proc: ChildProcess | null } | undefined;
+  var __lpos_share_downloads: {
+    timer: ReturnType<typeof setInterval> | null; busy: boolean; again: boolean; proc: ChildProcess | null;
+    batches: Map<string, Batch>; queue: Queue | null; lastSync: number;
+    /** Latest want-list snapshot from a pass, so progress callbacks can sync without re-reading shares. */
+    lastWant: { offering: Map<string, OfferingShare>; latestOf: Map<string, string> } | null;
+  } | undefined;
 }
 function state() {
-  globalThis.__lpos_share_downloads ??= { timer: null, busy: false, again: false, proc: null };
+  globalThis.__lpos_share_downloads ??= { timer: null, busy: false, again: false, proc: null, batches: new Map(), queue: null, lastSync: 0, lastWant: null };
+  globalThis.__lpos_share_downloads.batches ??= new Map();   // survives HMR of an older shape
   return globalThis.__lpos_share_downloads;
 }
 
@@ -76,15 +83,18 @@ export function kickShareDownloads(): void {
 // ── Want-list ────────────────────────────────────────────────────────────────
 
 interface Wanted { assetId: string; projectId: string }
+/** A share with Download on and the videos it offers — drives its pipeline job. */
+interface OfferingShare { id: string; name: string; projectId: string; assetIds: string[] }
 
-function wantedAndGrace(now: number): { wanted: Map<string, Wanted>; grace: Set<string> } {
+function wantedAndGrace(now: number): { wanted: Map<string, Wanted>; grace: Set<string>; offering: Map<string, OfferingShare> } {
   const db = getShareLinksDb();
-  const shares = db.prepare('SELECT id, caps, revoked_at, downloads_off_at FROM share_links').all() as Array<{ id: string; caps: string; revoked_at: string | null; downloads_off_at: string | null }>;
+  const shares = db.prepare('SELECT id, name, caps, revoked_at, downloads_off_at FROM share_links').all() as Array<{ id: string; name: string; caps: string; revoked_at: string | null; downloads_off_at: string | null }>;
   const items = db.prepare('SELECT share_id, asset_id, project_id, in_list, removed_at FROM share_link_items').all() as Array<{ share_id: string; asset_id: string; project_id: string; in_list: number; removed_at: string | null }>;
   const recent = (iso: string | null) => !!iso && now - new Date(iso).getTime() < DOWNLOAD_GRACE_MS;
 
   const wanted = new Map<string, Wanted>();
   const grace = new Set<string>();
+  const offering = new Map<string, OfferingShare>();
   const byId = new Map(shares.map((s) => [s.id, s]));
   for (const it of items) {
     const s = byId.get(it.share_id);
@@ -92,11 +102,17 @@ function wantedAndGrace(now: number): { wanted: Map<string, Wanted>; grace: Set<
     let download = false;
     try { download = !!(JSON.parse(s.caps) as { download?: boolean }).download; } catch { /* off */ }
     const live = !s.revoked_at && download;
-    if (live && it.in_list) { wanted.set(it.asset_id, { assetId: it.asset_id, projectId: it.project_id }); continue; }
+    if (live && it.in_list) {
+      wanted.set(it.asset_id, { assetId: it.asset_id, projectId: it.project_id });
+      const o = offering.get(s.id) ?? { id: s.id, name: s.name, projectId: it.project_id, assetIds: [] };
+      o.assetIds.push(it.asset_id);
+      offering.set(s.id, o);
+      continue;
+    }
     // Recently stopped being offered → keep files through the grace period.
     if (recent(s.revoked_at) || (!download && recent(s.downloads_off_at)) || (!it.in_list && recent(it.removed_at))) grace.add(it.asset_id);
   }
-  return { wanted, grace };
+  return { wanted, grace, offering };
 }
 
 function latestVersionId(assetId: string): string | null {
@@ -153,7 +169,7 @@ async function pass(): Promise<void> {
     console.log(`[share-downloads] downloads expired for share ${s.id}`);
   }
 
-  const { wanted, grace } = wantedAndGrace(now);
+  const { wanted, grace, offering } = wantedAndGrace(now);
 
   // 2. Make sure every wanted video's newest cut has its rows.
   const insert = db.prepare(
@@ -202,8 +218,12 @@ async function pass(): Promise<void> {
     }
   }
 
-  // 4. Make the next missing file (one per pass; the loop repeats while there's work).
   if (!isShareR2Configured()) return;
+  state().lastWant = { offering, latestOf };
+  state().queue = await uploadQueue();
+  syncBatches(true);
+
+  // 4. Make the next missing file (one per pass; the loop repeats while there's work).
   const next = db.prepare(
     `SELECT * FROM share_download_files WHERE status = 'pending'
       ORDER BY CASE kind WHEN 'original' THEN 0 WHEN 'web' THEN 1 ELSE 2 END, created_at LIMIT 1`,
@@ -237,6 +257,8 @@ interface Queue {
   heartbeat(jobId: string): void;
   complete(jobId: string): void;
   fail(jobId: string, error: string): void;
+  cancel(jobId: string): void;
+  isCancelled(jobId: string): boolean;
 }
 async function uploadQueue(): Promise<Queue | null> {
   try {
@@ -258,12 +280,9 @@ async function makeFile(r: FileRow): Promise<void> {
     return;
   }
   const base = `${SHARE_DOWNLOADS_PREFIX}/${r.asset_id}/${r.asset_version_id}`;
-  const label = asset.name || asset.originalFilename;
-  const queue = r.kind === 'original' || r.kind === 'web' ? await uploadQueue() : null;
-  const jobId = queue?.add(r.project_id, r.asset_id, `${label} — ${r.kind === 'web' ? 'web copy' : 'original'} for download`, 'delivery') ?? null;
-  const progress = (pct: number, detail?: string) => {
+  const progress = (pct: number) => {
     set({ progress: pct });
-    if (jobId) queue!.setProgress(jobId, pct, detail);
+    syncBatches();
   };
   set({ status: 'working', progress: 0, error: null });
 
@@ -272,22 +291,23 @@ async function makeFile(r: FileRow): Promise<void> {
       const ext = path.extname(asset.filePath).toLowerCase() || '.mp4';
       const key = `${base}/original${ext}`;
       const size = fs.statSync(asset.filePath).size;
-      await uploadFileToR2(key, asset.filePath, mimeForExt(ext), (loaded) => progress(Math.min(99, Math.round((loaded / Math.max(1, size)) * 100)), 'Uploading original'));
+      await uploadFileToR2(key, asset.filePath, mimeForExt(ext), (loaded) => progress(Math.min(99, Math.round((loaded / Math.max(1, size)) * 100))));
       set({ status: 'ready', progress: 100, r2_key: key, ext, size, ready_at: new Date().toISOString() });
     } else if (r.kind === 'web') {
       const tmp = path.join(os.tmpdir(), `lpos-share-web-${r.asset_version_id}.mp4`);
-      const beat = jobId ? setInterval(() => queue!.heartbeat(jobId), 60_000) : null;
-      progress(5, 'Encoding web copy');
+      // Encoding reports no progress — keep the share jobs from timing out meanwhile.
+      const beat = setInterval(heartbeatBatches, 60_000);
+      progress(5);
       try {
         await encodeWebCopy(asset.filePath, tmp, (p) => { state().proc = p; });
       } finally {
         state().proc = null;
-        if (beat) clearInterval(beat);
+        clearInterval(beat);
       }
       const key = `${base}/web.mp4`;
       const size = fs.statSync(tmp).size;
       try {
-        await uploadFileToR2(key, tmp, 'video/mp4', (loaded) => progress(50 + Math.min(49, Math.round((loaded / Math.max(1, size)) * 50)), 'Uploading web copy'));
+        await uploadFileToR2(key, tmp, 'video/mp4', (loaded) => progress(50 + Math.min(49, Math.round((loaded / Math.max(1, size)) * 50))));
       } finally {
         fs.rmSync(tmp, { force: true });
       }
@@ -300,12 +320,86 @@ async function makeFile(r: FileRow): Promise<void> {
       await uploadFileToR2(key, src, mimeForExt(`.${r.kind}`));
       set({ status: 'ready', progress: 100, r2_key: key, ext: `.${r.kind}`, size: fs.statSync(src).size, ready_at: new Date().toISOString() });
     }
-    if (jobId) queue!.complete(jobId);
   } catch (err) {
     const message = (err as Error).message;
     console.warn(`[share-downloads] ${r.kind} for ${r.asset_id} failed:`, message);
     set({ status: 'failed', error: message.slice(0, 500) });
-    if (jobId) queue!.fail(jobId, message);
+  }
+  syncBatches(true);
+}
+
+// ── One pipeline job per share ───────────────────────────────────────────────
+
+/**
+ * A share's pipeline job covers the videos that needed files when Download was
+ * switched on (plus any added while it runs). A video counts as uploaded once
+ * its original + web copy are in R2; the job finishes when every video is done.
+ */
+interface Batch { jobId: string; versions: Set<string>; dismissed: boolean }
+
+function heartbeatBatches(): void {
+  const { queue, batches } = state();
+  if (queue) for (const b of batches.values()) if (!b.dismissed) queue.heartbeat(b.jobId);
+}
+
+function syncBatches(force = false): void {
+  const st = state();
+  const { queue, lastWant } = st;
+  if (!queue || !lastWant) return;
+  const now = Date.now();
+  if (!force && now - st.lastSync < 1000) return;   // byte-progress callbacks fire per chunk
+  st.lastSync = now;
+
+  const db = getShareLinksDb();
+  // A superseded cut isn't a failure — its video moved on to a newer version.
+  const rowsOf = db.prepare("SELECT status, progress FROM share_download_files WHERE asset_version_id = ? AND kind IN ('original','web') AND NOT (status = 'failed' AND error = 'Superseded')");
+  const { offering, latestOf } = lastWant;
+
+  for (const [shareId, b] of st.batches) {
+    if (!offering.has(shareId)) {
+      // Download switched off / share revoked mid-run.
+      if (!b.dismissed) queue.cancel(b.jobId);
+      st.batches.delete(shareId);
+    }
+  }
+
+  for (const share of offering.values()) {
+    const versions = share.assetIds.map((a) => latestOf.get(a)).filter((v): v is string => !!v);
+    const info = new Map(versions.map((v) => [v, rowsOf.all(v) as Array<{ status: FileRow['status']; progress: number }>]));
+    const open = versions.filter((v) => info.get(v)!.some((r) => r.status === 'pending' || r.status === 'working'));
+
+    let b = st.batches.get(share.id);
+    if (!b) {
+      if (!open.length) continue;
+      const jobId = queue.add(share.projectId, '', `${share.name} — downloads`, 'delivery');
+      b = { jobId, versions: new Set(), dismissed: false };
+      st.batches.set(share.id, b);
+    }
+    for (const v of open) b.versions.add(v);
+    if (b.dismissed) {
+      // Cancelled from the pipeline: stay quiet until this work is done, then allow a fresh job.
+      if (!open.length) st.batches.delete(share.id);
+      continue;
+    }
+    if (queue.isCancelled(b.jobId)) { b.dismissed = true; continue; }
+
+    let done = 0, failed = 0, pctSum = 0;
+    for (const v of b.versions) {
+      const rows = info.get(v) ?? (rowsOf.all(v) as Array<{ status: FileRow['status']; progress: number }>);
+      const finished = rows.every((r) => r.status === 'ready' || r.status === 'failed');
+      if (finished) done++;
+      if (rows.some((r) => r.status === 'failed')) failed++;
+      pctSum += finished ? 100 : rows.reduce((n, r) => n + (r.status === 'ready' ? 100 : r.progress), 0) / Math.max(1, rows.length);
+    }
+    const total = b.versions.size;
+    const uploaded = done - failed;
+    if (done === total) {
+      if (failed) queue.fail(b.jobId, `${uploaded} of ${total} uploaded · ${failed} couldn't be prepared`);
+      else queue.complete(b.jobId);
+      st.batches.delete(share.id);
+    } else {
+      queue.setProgress(b.jobId, Math.min(99, Math.round(pctSum / total)), `${uploaded} of ${total} uploaded`);
+    }
   }
 }
 
