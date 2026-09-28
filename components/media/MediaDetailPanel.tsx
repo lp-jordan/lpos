@@ -19,7 +19,7 @@ import type { ErrorInfo, ReactNode } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import type { MediaAsset } from '@/lib/models/media-asset';
 import { cloudflarePosterPreviewUrl } from '@/lib/models/media-asset';
-import type { AssetShareLink } from './MediaDistributionBar';
+import { ShareModal } from '@/components/share/ShareModal';
 import { BatchSetThumbnailModal } from '@/components/media/BatchSetThumbnailModal';
 import { DomainRestrictionsModal } from '@/components/media/DomainRestrictionsModal';
 
@@ -131,6 +131,13 @@ function TitleRenameInput({ initial, onCommit, onCancel }: { initial: string; on
   );
 }
 
+/** A share that includes this video (the unified Share system). */
+interface AssetShareLink {
+  shareId:  string;
+  shareUrl: string;
+  name:     string;
+}
+
 export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToTranscript }: Readonly<Props>) {
   const open = asset !== null;
   // Latest playhead time reported by the compact MediaPlayer (via onCurrentTimeChange).
@@ -145,7 +152,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [theaterSeekTarget,          setTheaterSeekTarget]          = useState<number | null>(null);
   const [sidebarSeekTarget,          setSidebarSeekTarget]          = useState<number | null>(null);
   const [advancedOpen,               setAdvancedOpen]               = useState(false);
-  const [reviewLinksOpen,            setReviewLinksOpen]            = useState(false);
 
   function openTheater(src: string, currentTime = 0) {
     setTheaterSrc(src);
@@ -208,6 +214,7 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const [fioError, setFioError]               = useState<string | null>(null);
   const [copiedShareId, setCopiedShareId]     = useState<string | null>(null);
   const [existingShareLinks, setExistingShareLinks] = useState<AssetShareLink[]>([]);
+  const [managingShareId, setManagingShareId] = useState<string | null>(null);
 
   // Poll while uploading
   const pollFio = useCallback(async () => {
@@ -324,19 +331,32 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
     }
   }
 
+  // Every copy button in the panel confirms with the same gold checkmark
+  // (1.5s); a toast appears only when the clipboard write fails.
+  async function copyToClipboard(url: string, onCopied: () => void) {
+    try {
+      await navigator.clipboard.writeText(url);
+      onCopied();
+    } catch {
+      toast({ id: 'copy-failed', kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard.' });
+    }
+  }
+
   function handleCopyLink(url: string, shareId: string) {
-    navigator.clipboard.writeText(url).catch(() => {});
-    setCopiedShareId(shareId);
-    setTimeout(() => setCopiedShareId((cur) => (cur === shareId ? null : cur)), 2000);
+    void copyToClipboard(url, () => {
+      setCopiedShareId(shareId);
+      setTimeout(() => setCopiedShareId((cur) => (cur === shareId ? null : cur)), 1500);
+    });
   }
 
   function handleCopyEmbedUrl(url: string) {
-    navigator.clipboard.writeText(url).catch(() => {});
-    setCfEmbedCopied(true);
-    setTimeout(() => setCfEmbedCopied(false), 2000);
+    void copyToClipboard(url, () => {
+      setCfEmbedCopied(true);
+      setTimeout(() => setCfEmbedCopied(false), 1500);
+    });
   }
 
-  // Every share that includes this video — the link icon's dropdown copies one.
+  // Every share that includes this video — listed in the Shares section.
   const fetchShareLinks = useCallback(async (assetId: string) => {
     try {
       const res = await fetch(`/api/share-links?assetId=${encodeURIComponent(assetId)}`);
@@ -492,32 +512,22 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
               </div>
               <button
                 type="button"
-                className={`mad-close-btn mad-copy-link-btn${assetLinkCopied ? ' mad-copy-link-btn--copied' : ''}`}
-                onClick={async () => {
-                  const url = `${window.location.origin}/projects/${projectId}?assetId=${asset.assetId}`;
-                  try {
-                    await navigator.clipboard.writeText(url);
-                    setAssetLinkCopied(true);
-                    setTimeout(() => setAssetLinkCopied(false), 1800);
-                    toast({ id: `copy-link:${asset.assetId}`, kind: 'publish', tone: 'success', title: 'Link copied', body: 'Share this URL with a teammate to open this asset.' });
-                  } catch {
-                    toast({ id: `copy-link-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard. Copy manually from the address bar.' });
-                  }
-                }}
-                aria-label={assetLinkCopied ? 'Link copied' : 'Copy link to this asset'}
-                title={assetLinkCopied ? 'Link copied' : 'Copy link to this asset'}
+                className={`mad-close-btn mad-copyable${assetLinkCopied ? ' is-copied' : ''}`}
+                onClick={() => void copyToClipboard(
+                  `${window.location.origin}/projects/${projectId}?assetId=${asset.assetId}`,
+                  () => { setAssetLinkCopied(true); setTimeout(() => setAssetLinkCopied(false), 1500); },
+                )}
+                aria-label={assetLinkCopied ? 'Link copied' : 'Copy link for a teammate'}
+                title={assetLinkCopied ? 'Copied' : 'Copy link for a teammate'}
               >
                 {assetLinkCopied ? (
-                  <>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <polyline points="20 6 9 17 4 12"/>
-                    </svg>
-                    <span className="mad-copy-link-label">Link copied</span>
-                  </>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
-                    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+                    <polyline points="15 17 20 12 15 7"/>
+                    <path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
                   </svg>
                 )}
               </button>
@@ -573,11 +583,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         onReplaceThumbnail={() => setShowThumbModal(true)}
                         onSecurity={() => setShowDomainsModal(true)}
                         frameioLink={asset.frameio.playerUrl ?? asset.frameio.reviewLink ?? null}
-                        shareLinks={existingShareLinks}
-                        reviewLinksOpen={reviewLinksOpen}
-                        onToggleReviewLinks={() => setReviewLinksOpen(o => !o)}
-                        onCopyLink={handleCopyLink}
-                        copiedShareId={copiedShareId}
                       />
                     </>
                   );
@@ -605,49 +610,6 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                         onTheaterOpen={t => openTheater(src, t)}
                         onCurrentTimeChange={t => { sidebarTimeRef.current = t; }}
                       />
-                      {existingShareLinks.length > 0 && (
-                        <div className="mad-video-theater-row">
-                          <div className="mad-review-links-wrap">
-                            <button
-                              type="button"
-                              className={`mad-action-btn mad-review-links-btn${reviewLinksOpen ? ' mad-review-links-btn--active' : ''}`}
-                              onClick={() => setReviewLinksOpen(o => !o)}
-                              title={`${existingShareLinks.length} share${existingShareLinks.length !== 1 ? 's' : ''}`}
-                            >
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
-                                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
-                              </svg>
-                              {existingShareLinks.length}
-                            </button>
-                            {reviewLinksOpen && (
-                              <>
-                                <div className="mad-review-links-backdrop" onClick={() => setReviewLinksOpen(false)} />
-                                <div className="mad-review-links-menu">
-                                  {existingShareLinks.map((link) => (
-                                    <div key={link.shareId} className="mad-review-links-item">
-                                      <span className="mad-review-links-name">{link.name}</span>
-                                      <button
-                                        type="button"
-                                        className="mad-icon-btn"
-                                        onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
-                                        title="Copy link"
-                                      >
-                                        {copiedShareId === link.shareId ? '✓' : (
-                                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                                          </svg>
-                                        )}
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      )}
                     </>
                   );
                 }
@@ -696,6 +658,49 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                 onSeek={(t) => setSidebarSeekTarget(t)}
                 getCurrentTime={() => sidebarTimeRef.current}
               />
+
+              {/* ── Shares that include this video (reference only; hidden when none) ── */}
+              {existingShareLinks.length > 0 && (
+                <div className="mad-section mad-shares">
+                  <span className="mad-section-title">Shares · {existingShareLinks.length}</span>
+                  <ul className="mad-shares-list">
+                    {existingShareLinks.map((link) => (
+                      <li key={link.shareId} className="mad-shares-row">
+                        <button
+                          type="button"
+                          className="mad-shares-name"
+                          onClick={() => setManagingShareId(link.shareId)}
+                          title="Open this share"
+                        >
+                          {link.name}
+                        </button>
+                        <button
+                          type="button"
+                          className={`mad-icon-btn mad-copyable${copiedShareId === link.shareId ? ' is-copied' : ''}`}
+                          onClick={() => handleCopyLink(link.shareUrl, link.shareId)}
+                          aria-label={copiedShareId === link.shareId ? 'Share link copied' : 'Copy share link'}
+                          title={copiedShareId === link.shareId ? 'Copied' : 'Copy share link'}
+                        >
+                          {copiedShareId === link.shareId ? (
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                          ) : (
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="mad-icon-btn"
+                          onClick={() => setManagingShareId(link.shareId)}
+                          aria-label="Open this share"
+                          title="Open this share"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* ── Advanced (collapsible) ── */}
               <div className="mad-section mad-advanced-section">
@@ -1002,6 +1007,18 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
           onClose={() => setShowThumbModal(false)}
           onDone={() => { setShowThumbModal(false); onUpdated(); }}
         />
+      )}
+
+      {/* Share window opened from the Shares section — above the sidebar. */}
+      {managingShareId && (
+        <div className="mad-share-modal-host">
+          <ShareModal
+            shareId={managingShareId}
+            projectId={projectId}
+            onClose={() => { setManagingShareId(null); if (asset) void fetchShareLinks(asset.assetId); }}
+            onChanged={() => { if (asset) void fetchShareLinks(asset.assetId); }}
+          />
+        </div>
       )}
 
       {/* Per-asset Cloudflare allowedOrigins editor. Reads current value from

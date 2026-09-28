@@ -3100,59 +3100,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
   color: var(--accent);
 }
 
-/* ── Review links dropdown ── */
-.mad-review-links-wrap {
-  position: relative;
-}
-.mad-review-links-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  font-size: 0.75rem;
-}
-.mad-review-links-btn--active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.mad-review-links-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 49;
-}
-.mad-review-links-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 50;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.32);
-  min-width: 180px;
-  max-width: 260px;
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-}
-.mad-review-links-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-}
-.mad-review-links-item:hover {
-  background: var(--surface-3);
-}
-.mad-review-links-name {
-  flex: 1;
-  font-size: 0.78rem;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ── InlineVideoPlayer ────────────────────────────────────────────────────── */
 .ivp-root {
   width: 100%;
@@ -3512,24 +3459,28 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 }
 .mad-close-btn:hover { color: var(--text); background: var(--surface-3); }
 
-/* Asset-link copy button — gains a "Link copied" label + green tint for ~1.8s
- * after a successful clipboard write, then reverts to the chain icon. */
-.mad-copy-link-btn {
-  gap: 5px;
-  padding: 2px 6px;
-  transition: color 0.15s, background 0.15s;
+/* Copy buttons in the media sidebar (teammate link, stream URL, share
+ * links) all confirm the same way: a gold checkmark that pops in for 1.5s. */
+.mad-copyable.is-copied,
+.mad-copyable.is-copied:hover { color: var(--accent); }
+.mad-copyable.is-copied svg { animation: madCopied 0.32s cubic-bezier(.2,.9,.3,1.3); }
+@keyframes madCopied { from { transform: scale(0.6); opacity: 0.2; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .mad-copyable.is-copied svg { animation: none; } }
+
+/* Shares that include this video — quiet list below Comments. */
+.mad-shares-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; }
+.mad-shares-row { display: flex; align-items: center; gap: 2px; padding: 2px 0; }
+.mad-shares-name {
+  flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 4px 0;
+  font: inherit; font-size: 0.8rem; color: var(--text); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.mad-copy-link-btn--copied,
-.mad-copy-link-btn--copied:hover {
-  color: var(--success, #4ade80);
-  background: rgba(74, 222, 128, 0.08);
-}
-.mad-copy-link-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
+.mad-shares-name:hover { color: var(--accent); }
+.mad-shares-row .mad-icon-btn { opacity: 0.55; }
+.mad-shares-row:hover .mad-icon-btn, .mad-shares-row .mad-icon-btn.is-copied { opacity: 1; }
+
+/* Share window opened from the sidebar must stack above .mad-panel (201). */
+.mad-share-modal-host > .modal-overlay { z-index: 300; }
 
 /* Body */
 .mad-body {
@@ -4578,23 +4529,7 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 /* Action rail: buttons centered, roll-up health dot pinned right (absolute so
    it doesn't pull the centered cluster off-axis). */
 .mdb-rail { position: relative; display: flex; gap: 6px; align-items: center; justify-content: center; }
-.mdb-rail-btn--ok { color: rgba(120, 205, 150, 1); background: rgba(120, 205, 150, 0.14); border-color: rgba(120, 205, 150, 0.4); }
 
-/* Copy confirmation — floating pill above the copy button. */
-.mdb-copied {
-  position: absolute; right: calc(100% + 6px); top: 50%; transform: translateY(-50%);
-  white-space: nowrap; pointer-events: none; z-index: 50;
-  font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
-  color: rgba(120, 205, 150, 1);
-  background: rgba(120, 205, 150, 0.16);
-  border: 1px solid rgba(120, 205, 150, 0.4);
-  padding: 2px 8px; border-radius: 10px;
-  animation: mdb-pop-in-left 120ms ease both;
-}
-@keyframes mdb-pop-in-left {
-  from { opacity: 0; transform: translate(3px, -50%); }
-  to   { opacity: 1; transform: translate(0, -50%); }
-}
 .mdb-rail-item { position: relative; display: inline-flex; }
 .mdb-rail-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -4607,8 +4542,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 }
 .mdb-rail-btn:hover, .mdb-rail-btn.is-open { background: rgba(255, 255, 255, 0.09); color: var(--text-primary); border-color: rgba(255, 255, 255, 0.18); }
 /* Review/share-links pill — lives in the rail but needs to fit icon + count. */
-.mdb-review-links-btn { width: auto; gap: 4px; padding: 0 9px; font-size: 0.72rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.mdb-review-links-btn--active { color: var(--accent); border-color: rgba(219, 175, 95, 0.5); background: rgba(219, 175, 95, 0.12); }
 
 .mdb-pop {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 42;
