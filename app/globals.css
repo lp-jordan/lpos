@@ -2847,33 +2847,6 @@ input[type="range"].lp-lighting-slider--cct::-moz-range-track {
 .ma-row--open  { border-color: var(--accent); background: rgba(219,175,95,0.05); }
 .ma-card--open { border-color: var(--accent); box-shadow: var(--shadow-sm); }
 
-/* ── Frame.io connect banner ────────────────────────────────────────────────── */
-.ma-fio-connect-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.6rem 0.9rem;
-  background: rgba(219,175,95,0.08);
-  border: 1px solid rgba(219,175,95,0.3);
-  border-radius: 6px;
-  font-size: 0.82rem;
-  color: var(--text-muted);
-}
-.ma-fio-connect-banner svg { flex-shrink: 0; color: var(--accent); }
-.ma-fio-connect-banner span { flex: 1; }
-.ma-fio-connect-btn {
-  flex-shrink: 0;
-  padding: 0.3rem 0.75rem;
-  background: var(--accent);
-  color: #000;
-  border-radius: 4px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.ma-fio-connect-btn:hover { opacity: 0.85; }
-
 /* ── MediaDetailPanel video player ─────────────────────────────────────────── */
 .mad-video-wrap {
   position: relative;

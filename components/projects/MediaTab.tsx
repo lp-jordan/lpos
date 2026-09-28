@@ -525,7 +525,6 @@ export function MediaTab({
   // the single right-clicked asset (when it's not part of an active selection)
   // or the full multi-select set (when it IS part of it) — desktop convention.
   const [showMoveModal,   setShowMoveModal]     = useState<{ assetIds: string[] } | null>(null);
-  const [fioConnected,    setFioConnected]    = useState<boolean | null>(null);
   const [selectedIds,     setSelectedIds]     = useState<Set<string>>(new Set());
   const [renamingId,      setRenamingId]      = useState<string | null>(null);
   // Unified Share system: showHub opens the project's Shares list;
@@ -586,15 +585,6 @@ const { openMenu } = useContextMenu();
   const activeIngestJobs = ingestJobs.filter(
     (j) => j.projectId === projectId && (j.status === 'queued' || j.status === 'ingesting'),
   );
-
-  // ── Frame.io connection status ─────────────────────────────────────────────
-
-  useEffect(() => {
-    fetch('/api/auth/frameio/status')
-      .then((r) => r.json() as Promise<{ connected: boolean }>)
-      .then((d) => setFioConnected(d.connected))
-      .catch(() => setFioConnected(false));
-  }, []);
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -1631,22 +1621,6 @@ const { openMenu } = useContextMenu();
   return (
     <>
       <div className="proj-tab-content page-stack" ref={contentRef}>
-
-        {/* Frame.io connection banner */}
-        {fioConnected === false && (
-          <div className="ma-fio-connect-banner">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <span>Frame.io is not connected — uploads will fail until you authenticate.</span>
-            <a
-              href="/api/auth/frameio/connect"
-              className="ma-fio-connect-btn"
-            >
-              Connect Frame.io
-            </a>
-          </div>
-        )}
 
         {/* Drop zone */}
         <div
