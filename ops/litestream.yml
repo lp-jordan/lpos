@@ -1,0 +1,103 @@
+# Litestream: continuous backup of every LPOS SQLite database to R2
+# (restore any DB to any point in time). Runs as the macOS login agent
+# ~/Library/LaunchAgents/com.leaderpass.lpos-litestream.plist via
+# `doppler run`, which supplies the R2_BACKUP_* and CLOUDFLARE_ACCOUNT_ID values.
+#
+# Restore (LPOS stopped), e.g. the activity log as of 13:32 ET on Sep 28:
+#   doppler run -- litestream restore -config ops/litestream.yml \
+#     -timestamp 2026-09-28T17:32:00Z -o /tmp/restored.sqlite \
+#     /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-activity.sqlite
+#
+# A NEW data/*.sqlite file must be added here to be protected (the nightly
+# BackupService still covers every file regardless).
+dbs:
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-core.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-core
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-activity.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-activity
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-canonical-assets.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-canonical-assets
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-drive-sync.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-drive-sync
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-ingest-queue.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-ingest-queue
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-llm-usage.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-llm-usage
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/lpos-photos.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/lpos-photos
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/platform.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/platform
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/share-links.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/share-links
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}
+  - path: /Users/lpos/lp-app-ecosystem/lpos-dashboard/data/link-hubs.sqlite
+    replica:
+      type: s3
+      bucket: ${R2_BACKUP_BUCKET}
+      path: litestream/link-hubs
+      endpoint: https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_BACKUP_ACCESS_KEY_ID}
+      secret-access-key: ${R2_BACKUP_SECRET_ACCESS_KEY}

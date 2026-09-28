@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.leaderpass.lpos-litestream</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/doppler</string>
+    <string>run</string>
+    <string>--project</string><string>lpos-leaderpass-com</string>
+    <string>--config</string><string>dev</string>
+    <string>--</string>
+    <string>/opt/homebrew/bin/litestream</string>
+    <string>replicate</string>
+    <string>-config</string>
+    <string>/Users/lpos/lp-app-ecosystem/lpos-dashboard/ops/litestream.yml</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/lpos/lp-app-ecosystem/lpos-dashboard</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/lpos</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/Users/lpos/Library/Logs/lpos-litestream.log</string>
+  <key>StandardErrorPath</key><string>/Users/lpos/Library/Logs/lpos-litestream.log</string>
+</dict>
+</plist>
