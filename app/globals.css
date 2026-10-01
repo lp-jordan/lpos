@@ -18990,17 +18990,17 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .shv-side-body .mad-section-head .mad-section-title { display: none; }
 
 /* ── Share modal (manage a share) ─────────────────────────────────────────── */
-.shm-box { max-width: 560px; display: flex; flex-direction: column; gap: 12px; }
+.shm-box { max-width: 600px; display: flex; flex-direction: column; gap: 12px; }
 .shm-name { font-size: 1.05rem; font-weight: 600; }
 .shm-link { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }
 .shm-url { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shm-icon { width: 30px; height: 28px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-3); color: var(--text); display: inline-grid; place-items: center; cursor: pointer; padding: 0; }
 .shm-icon:hover { border-color: var(--accent); }
 .shm-open { font-size: 0.8rem; font-weight: 600; color: var(--accent); text-decoration: none; padding: 4px 6px; }
-.shm-toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; }
+.shm-toggles { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 14px; }
 .shm-toggle { white-space: nowrap; }
 .shm-toggle {
-  display: flex; align-items: center; gap: 10px; border: 0; background: none; color: var(--muted-soft);
+  display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--muted-soft);
   font: inherit; font-size: 0.84rem; padding: 6px 0; cursor: pointer; text-align: left;
 }
 .shm-toggle.is-on { color: var(--text); }
