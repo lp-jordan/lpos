@@ -226,6 +226,63 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
     );
   }
 
+  const headerRight = (
+    <>
+      {caps.download && items.length > 1 && (
+        <button type="button" className="shv-btn shv-btn--gold" onClick={openDownloadAllMenu}
+          disabled={!items.some((i) => i.download?.state === 'ready')}><IconDownload /> Download all</button>
+      )}
+      {!caps.internal && (
+        <button
+          type="button"
+          className={`shv-icon-btn${clientView ? ' is-on' : ''}`}
+          onClick={() => setClientView((v) => !v)}
+          title={clientView ? 'Previewing as a client — click for staff view' : 'Preview as a client'}
+          aria-pressed={clientView}
+        ><IconEye /></button>
+      )}
+    </>
+  );
+
+  // Player off: a plain list of the videos with their download buttons (for
+  // videos deliberately kept off Cloudflare, so there's nothing to stream).
+  if (!caps.player) {
+    return (
+      <div className="shv-root">
+        <Header name={view.share.name} internal={caps.internal} right={headerRight} />
+        <main className="shv-list">
+          {view.groups.map((g, gi) => (
+            <div key={g.title ?? `g${gi}`} className="shv-group">
+              {g.title && <div className="shv-cat">{g.title}</div>}
+              {g.items.map((i) => (
+                <div key={i.assetId} className="shv-row-wrap" onContextMenu={(e) => onVideoContext(e, i)}>
+                  <div className={`shv-row shv-row--static${caps.reshare && caps.download ? ' shv-row--two' : !caps.reshare && !caps.download ? ' shv-row--none' : ''}`}>
+                    <img className="shv-thumb" src={i.thumbnailUrl} alt="" loading="lazy" />
+                    <span className="shv-row-text">
+                      <span className="shv-row-title">{i.title}</span>
+                      <span className="shv-row-meta">{fmtDuration(i.duration)}</span>
+                      {!clientView && i.title !== i.lposName && <span className="shv-staff-note">{i.lposName}</span>}
+                    </span>
+                  </div>
+                  <span className="shv-row-actions">
+                    {caps.reshare && (
+                      <button type="button" className={`shv-icon-btn shv-row-copy${copiedKey === `row:${i.assetId}` ? ' is-copied' : ''}`}
+                        onClick={() => void copyVideoLink(i, `row:${i.assetId}`)}
+                        title={copiedKey === `row:${i.assetId}` ? 'Copied' : 'Copy video link'} aria-label={copiedKey === `row:${i.assetId}` ? 'Copied' : 'Copy video link'}>
+                        {copiedKey === `row:${i.assetId}` ? <IconCheck /> : <IconLink />}
+                      </button>
+                    )}
+                    {caps.download && <DownloadButton item={i} onOpen={openDownloadMenu} />}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </main>
+      </div>
+    );
+  }
+
   const showLib = items.length > 1;
   const cols = ['shv-body', showLib ? '' : 'shv-body--nolib', activeTab ? '' : 'shv-body--noside'].filter(Boolean).join(' ');
 
@@ -234,23 +291,7 @@ export function ShareViewer({ source }: Readonly<{ source: Source }>) {
       <Header
         name={view.share.name}
         internal={caps.internal}
-        right={(
-          <>
-            {caps.download && items.length > 1 && (
-              <button type="button" className="shv-btn shv-btn--gold" onClick={openDownloadAllMenu}
-                disabled={!items.some((i) => i.download?.state === 'ready')}><IconDownload /> Download all</button>
-            )}
-            {!caps.internal && (
-              <button
-                type="button"
-                className={`shv-icon-btn${clientView ? ' is-on' : ''}`}
-                onClick={() => setClientView((v) => !v)}
-                title={clientView ? 'Previewing as a client — click for staff view' : 'Preview as a client'}
-                aria-pressed={clientView}
-              ><IconEye /></button>
-            )}
-          </>
-        )}
+        right={headerRight}
       />
 
       <div className={cols}>

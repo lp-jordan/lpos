@@ -20,6 +20,7 @@ import { ViewToggle, useViewMode } from './ViewToggle';
 // Internal isn't a switch here: choosing "LP Staff Only" under Who is what
 // makes a share internal (the store keeps caps.internal in step with it).
 const CAP_LABELS: Array<[Exclude<keyof ShareCaps, 'internal'>, string]> = [
+  ['player', 'Player'],
   ['comments', 'Comments'],
   ['download', 'Download'],
   ['reshare', 'Reshare'],

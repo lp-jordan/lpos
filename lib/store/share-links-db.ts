@@ -38,16 +38,20 @@ export interface ShareCaps {
   download:    boolean;
   reshare:     boolean;
   transcripts: boolean;
+  /** Video player. Off = a plain list of videos to download (for videos kept off Cloudflare). Defaults on. */
+  player:      boolean;
   /** Staff-only share: LPOS sign-in required, internal comments visible. Driven by audience 'staff'. */
   internal:    boolean;
 }
 
-export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'download', 'reshare', 'transcripts', 'internal'];
+export const SHARE_CAP_KEYS: Array<keyof ShareCaps> = ['comments', 'download', 'reshare', 'transcripts', 'player', 'internal'];
+/** Caps that default ON when missing from stored JSON (added after shares already existed). */
+const DEFAULT_ON_CAPS: Array<keyof ShareCaps> = ['player'];
 
 export const SHARE_PRESETS: Record<'review' | 'internal', { caps: ShareCaps }> = {
   // New shares start with comments + transcript on and everything else off.
-  review:   { caps: { comments: true, download: false, reshare: false, transcripts: true, internal: false } },
-  internal: { caps: { comments: true, download: false, reshare: false, transcripts: true, internal: true  } },
+  review:   { caps: { comments: true, download: false, reshare: false, transcripts: true, player: true, internal: false } },
+  internal: { caps: { comments: true, download: false, reshare: false, transcripts: true, player: true, internal: true  } },
 };
 
 export interface ShareLink {
@@ -198,7 +202,7 @@ function parseCaps(raw: string): ShareCaps {
   let parsed: Partial<ShareCaps> = {};
   try { parsed = JSON.parse(raw) as Partial<ShareCaps>; } catch { /* default all off */ }
   const caps = {} as ShareCaps;
-  for (const k of SHARE_CAP_KEYS) caps[k] = !!parsed[k];
+  for (const k of SHARE_CAP_KEYS) caps[k] = parsed[k] === undefined && DEFAULT_ON_CAPS.includes(k) ? true : !!parsed[k];
   return caps;
 }
 

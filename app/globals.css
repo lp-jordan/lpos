@@ -19062,6 +19062,15 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 /* Single-video link (/v/): just the player, sized to fit the window. */
 .shv-solo { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding: 20px 16px 32px; }
 .shv-solo .shv-player { width: min(100%, calc((100dvh - 120px) * 16 / 9)); }
+/* Player off: the share is just a list of videos to download. */
+.shv-list { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 24px 16px 32px; display: flex; flex-direction: column; gap: 4px; }
+.shv-list .shv-row { grid-template-columns: 120px minmax(0, 1fr); padding-top: 8px; padding-bottom: 8px; }
+.shv-list .shv-thumb { width: 120px; }
+.shv-list .shv-row-title { font-size: 0.92rem; }
+.shv-list .shv-row--two { padding-right: 84px; }
+.shv-list .shv-row-copy { opacity: 1; }
+.shv-row--static { cursor: default; }
+.shv-row--static:hover { background: none; }
 /* Per-video download + copy actions in the share library row */
 .shv-row--two { padding-right: 72px; }
 .shv-row--none { padding-right: 6px; }
