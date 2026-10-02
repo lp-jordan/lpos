@@ -4,7 +4,6 @@ import { getAsset } from '@/lib/store/media-registry';
 import {
   getMediaCommentByEitherId,
   setMediaCommentCompletedById,
-  enqueueMediaCommentMirrorJob,
 } from '@/lib/store/media-comment-store';
 
 type Ctx = { params: Promise<{ projectId: string; assetId: string; commentId: string }> };
@@ -12,25 +11,15 @@ type Ctx = { params: Promise<{ projectId: string; assetId: string; commentId: st
 /**
  * PATCH /api/ep/projects/:projectId/assets/:assetId/comments/:commentId
  *
- * Mark a comment complete (or reopen it) from editpanel. Wraps the local
- * write + outbound mirror enqueue so the editor's "Mark complete" action
- * in CommentPullReport flips state locally instantly and reflects to
- * Frame.io eventually-consistently. The editor's next Pull Comments
- * treats completed=true as resolved (marker removed).
+ * Mark a comment done (or reopen it) from EditPanel's comment pull report.
+ * Writes the LPOS comments system only — LPOS is the source of truth. LP Share
+ * picks the change up on its next sync tick (lib/services/share-app.ts
+ * pushComments), and EditPanel's next pull drops the marker.
  *
  * Body: { completed: boolean }
  *
- * Phase 2 of the local-comments refactor (docs/local-comments-refactor-spec.md):
- *   - Was: synchronous toggleCommentCompleted to Frame.io
- *   - Now: setMediaCommentCompletedById + enqueueMediaCommentMirrorJob,
- *          returns 200 immediately. Mirror worker pushes the change to
- *          Frame.io within seconds. If the mirror abandons (Frame.io down
- *          for 3+ hours), the editor never sees the completion in Frame.io
- *          — locally it's flipped, and the editpanel's next Pull will pick
- *          up the local state via the GET route.
- *
- * The `commentId` URL parameter is either the Frame.io comment id (used by
- * editpanel today) or the local comment_id. The store resolves either.
+ * `commentId` is the local comment_id. A legacy Frame.io comment id is still
+ * accepted so reports saved by older EditPanel builds keep working.
  */
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const auth = requireEpToken(req);
@@ -58,12 +47,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (!target) return NextResponse.json({ error: 'Comment not found' }, { status: 404 });
 
   try {
-    // Editpanel actions don't have an LPOS user session — pass null for
-    // completed_by_user_id. The mirror worker still pushes the completion
-    // to Frame.io; the audit trail says "EP action" by virtue of the
-    // EP-token auth on this route.
+    // EditPanel actions have no LPOS user session, so completed_by_user_id is
+    // null; the EP-token auth on this route is the audit trail.
     setMediaCommentCompletedById(target.commentId, body.completed, null);
-    enqueueMediaCommentMirrorJob(target.commentId, body.completed ? 'complete' : 'uncomplete');
     return NextResponse.json({ ok: true, commentId, completed: body.completed });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 502 });
