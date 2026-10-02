@@ -48,6 +48,16 @@ const THUMB_GRID_CAP = 60;   // hard ceiling on prefetched count (bounds load)
 const THUMB_GRID_MIN = 8;    // floor so short clips still get a few
 const THUMB_SETTLE_MS = 150; // pause-on-a-spot before fetching the exact frame
 
+// ── Theater/sidebar playback arbitration ─────────────────────────────────────
+// Opening theater mounts a second player while the sidebar (compact) player
+// stays alive underneath. The sidebar's async HLS load can finish AFTER theater
+// opens and its autoplay would then start a second audio track. While any
+// theater player is mounted, compact players are not allowed to play — theater
+// always wins (a naive "newest play() pauses the others" would pause theater).
+let theaterMounted = 0;
+const compactVideos = new Set<HTMLVideoElement>();
+const playbackSuppressed = (isTheater: boolean) => !isTheater && theaterMounted > 0;
+
 /** MM:SS:FF timecode at 24 fps */
 function fmtTc(s: number): string {
   if (!isFinite(s) || s < 0) return '00:00:00';
@@ -126,6 +136,21 @@ export function MediaPlayer({
   const [editingId,      setEditingId]     = useState<string | null>(null);
   const [editText,       setEditText]      = useState('');
   const [editSaving,     setEditSaving]    = useState(false);
+
+  // ── Theater/sidebar arbitration (see module note) ────────────────────────
+  // Theater registers itself and pauses every compact player; compact players
+  // register their <video> (re-keyed per asset) so theater can reach them.
+  useEffect(() => {
+    if (isTheater) {
+      theaterMounted++;
+      compactVideos.forEach((c) => c.pause());
+      return () => { theaterMounted--; };
+    }
+    const v = videoRef.current;
+    if (!v) return;
+    compactVideos.add(v);
+    return () => { compactVideos.delete(v); };
+  }, [isTheater, assetId]);
 
   // ── Stream URL ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -595,7 +620,11 @@ export function MediaPlayer({
           ref={videoRef}
           className="mp-video"
           preload="metadata"
-          onPlay={()  => setPlaying(true)}
+          onPlay={() => {
+            // Catches every play() path (autoplay, seek, URL recovery, keys).
+            if (playbackSuppressed(isTheater)) { videoRef.current?.pause(); return; }
+            setPlaying(true);
+          }}
           onPause={()  => setPlaying(false)}
           onTimeUpdate={() => { const t = videoRef.current?.currentTime ?? 0; setCurrentTime(t); onCurrentTimeChange?.(t); }}
           onProgress={handleProgress}
@@ -605,7 +634,7 @@ export function MediaPlayer({
             const w = v?.videoWidth ?? 0;
             const h = v?.videoHeight ?? 0;
             if (w > 0 && h > 0) setVideoAspect(w / h);
-            void v?.play();
+            if (!playbackSuppressed(isTheater)) void v?.play();
           }}
           onResize={() => {
             const v = videoRef.current;
