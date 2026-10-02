@@ -116,12 +116,14 @@ export async function PATCH(
 
     // Review check-in lifecycle: open one when an Editing task enters Review,
     // close it when it leaves. Only the edit dashboard (taskType 'editing') is
-    // watched. `prev` is non-null here (statusChanged requires it).
+    // watched. `prev` is non-null here (statusChanged requires it). While a
+    // handoff is pending, its monitor owns the nudging — don't open a second
+    // watcher; ReviewStaleMonitor's backfill opens one once the handoff completes.
     const reviewStore   = getTaskReviewCheckinStore();
     const wasInReview   = prev!.taskType === 'editing' && prev!.status === REVIEW_STATUS;
     const nowInReview   = updated.taskType === 'editing' && updated.status === REVIEW_STATUS;
     if (nowInReview && !wasInReview) {
-      reviewStore.create(taskId, reviewThresholdDays());
+      if (!handoffStore.getPendingForTask(taskId)) reviewStore.create(taskId, reviewThresholdDays());
     } else if (wasInReview && !nowInReview) {
       reviewStore.completeForTask(taskId, 'status_change');
     }

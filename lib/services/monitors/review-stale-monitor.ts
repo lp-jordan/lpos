@@ -14,12 +14,18 @@
  *      activity — a comment / Acknowledge only resets the clock (handled in the
  *      API layer). So a task that keeps sitting comes back here every threshold.
  *
+ *   3. Handoff takes over — while a task has a pending handoff, the
+ *      HandoffStaleMonitor owns the nudging. Backfill skips such tasks and a due
+ *      check-in is closed ('handoff') instead of firing, so the new owner is never
+ *      double-pinged. Once the handoff completes, the next backfill opens a fresh
+ *      check-in with a new clock.
+ *
  * The re-ping targets the task's current assignees (falling back to the creator
  * if somehow unassigned) — Review is a whole-task state, not a per-user handoff.
  */
 
 import type { Monitor } from '@/lib/services/monitor-registry';
-import { getTaskStore, getTaskReviewCheckinStore } from '@/lib/services/container';
+import { getTaskStore, getTaskReviewCheckinStore, getTaskHandoffStore } from '@/lib/services/container';
 import { notifyTaskEvent } from '@/lib/services/task-notification-service';
 import { getSetting, SETTING_KEYS, SETTING_DEFAULTS } from '@/lib/store/lpos-settings-store';
 import { REVIEW_STATUS } from '@/lib/models/task-review-checkin';
@@ -47,6 +53,7 @@ export class ReviewStaleMonitor implements Monitor {
   async tick(): Promise<void> {
     const taskStore    = getTaskStore();
     const checkinStore = getTaskReviewCheckinStore();
+    const handoffStore = getTaskHandoffStore();
 
     // Re-read threshold every tick so admin changes apply next cycle, no restart.
     const thresholdDays = getSetting<number>(
@@ -55,11 +62,13 @@ export class ReviewStaleMonitor implements Monitor {
     );
 
     // ── Backfill: open a check-in for any Editing task currently in Review
-    //    that isn't already watched. Cheap — the tasks table is small. ────────
+    //    that isn't already watched. Cheap — the tasks table is small. Tasks
+    //    with a pending handoff are left to the handoff monitor. ─────────────
     const pendingIds = checkinStore.pendingTaskIds();
     for (const task of taskStore.getAll()) {
       if (!isEditingReview(task.taskType, task.status)) continue;
       if (pendingIds.has(task.taskId)) continue;
+      if (handoffStore.getPendingForTask(task.taskId)) continue;
       checkinStore.create(task.taskId, thresholdDays);
     }
 
@@ -83,6 +92,14 @@ export class ReviewStaleMonitor implements Monitor {
       if (!isEditingReview(task.taskType, task.status)) {
         checkinStore.markCompleted(checkin.checkinId, 'status_change');
         console.log(`[review-stale-monitor] check-in ${checkin.checkinId} skipped — task no longer in Review (status '${task.status}')`);
+        continue;
+      }
+
+      // A pending handoff owns the nudging — close this check-in rather than
+      // double-ping the new owner. Backfill reopens one once the handoff completes.
+      if (handoffStore.getPendingForTask(checkin.taskId)) {
+        checkinStore.markCompleted(checkin.checkinId, 'handoff');
+        console.log(`[review-stale-monitor] check-in ${checkin.checkinId} closed — task has a pending handoff`);
         continue;
       }
 
