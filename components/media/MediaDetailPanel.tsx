@@ -371,6 +371,9 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
   const cfCurrentVer = asset?.frameio.version ?? 1;
   const cfIsActive   = lpStatus === 'preparing' || cfStatus === 'uploading' || cfStatus === 'processing';
   const cfIsPushable = !cfIsActive && (lpStatus === 'none' || lpStatus === 'failed' || cfStatus === 'failed' || cfIsStale);
+  // Already on Cloudflare at the current version — a push here is a re-push
+  // (fresh upload; the prior CF video is deleted once the new one is ready).
+  const cfIsRepush   = cfStatus === 'ready' && !!asset?.cloudflare.uid && !cfIsStale;
 
   return (
     <>
@@ -655,14 +658,19 @@ export function MediaDetailPanel({ asset, projectId, onClose, onUpdated, onGoToT
                           className="mad-action-btn mad-action-btn--primary"
                           onClick={() => void handlePushToLeaderPass()}
                           disabled={lpPublishing || !asset.filePath}
-                          title={!asset.filePath ? 'No local file — cannot upload' : undefined}
+                          title={!asset.filePath
+                            ? 'No local file — cannot upload'
+                            : cfIsRepush
+                              ? 'Uploads a fresh copy. The Cloudflare video ID changes and the old copy is deleted — anything embedding the old ID will need the new one.'
+                              : undefined}
                           style={{ marginTop: 8 }}
                         >
                           {lpPublishing
                             ? 'Queuing…'
                             : cfIsStale
                               ? `Push v${cfCurrentVer} to Cloudflare`
-                              : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare push' : 'Push to Cloudflare'}
+                              : (cfStatus === 'failed' || lpStatus === 'failed') ? 'Retry Cloudflare push'
+                              : cfIsRepush ? 'Re-Push to Cloudflare' : 'Push to Cloudflare'}
                         </button>
                       )}
                       {cfIsActive && (
