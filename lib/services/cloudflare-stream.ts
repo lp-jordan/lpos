@@ -125,6 +125,14 @@ export function getDefaultAllowedOrigins(): string[] {
  * thumbnail, independent of any custom uploaded poster. Returns null if the
  * account's customer subdomain isn't configured.
  */
+/** Deep link to a video's page in the Cloudflare dashboard (not the public
+ *  player, which our allowedOrigins whitelist blocks outside LPOS). Null when
+ *  the account ID isn't configured. */
+export function cloudflareDashboardVideoUrl(uid: string): string | null {
+  const { accountId } = readCloudflareEnv();
+  return accountId ? `https://dash.cloudflare.com/${accountId}/stream/videos/${encodeURIComponent(uid)}` : null;
+}
+
 export function cloudflareFrameThumbnailUrl(uid: string, timeSec: number, height = 320): string | null {
   const sub = process.env.CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN?.trim();
   if (!sub || !uid) return null;

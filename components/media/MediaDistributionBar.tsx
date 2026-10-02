@@ -7,7 +7,7 @@ import { cloudflareStreamEmbedUrl } from '@/lib/models/media-asset';
 /**
  * Compact distribution bar for the media detail sidebar. An icon action-rail
  * (Copy stream URL, Replace thumbnail, Security — each a single click straight
- * to its action/modal; Cloudflare link-out) with a right-justified roll-up health dot:
+ * to its action/modal; Cloudflare dashboard link-out) with a right-justified roll-up health dot:
  *   red    — something failed
  *   yellow — something is in progress or stale (CF reflects an older version)
  *   green  — everything settled
@@ -91,7 +91,9 @@ export function MediaDistributionBar({
   const showCfActions = cfReady && !isViewingOldVersion;
 
   // Quick way to check the asset in Cloudflare: its Stream watch page.
-  const cfWatchUrl = cf.uid ? `https://watch.cloudflarestream.com/${cf.uid}` : null;
+  // The public watch page is blocked by our allowedOrigins whitelist, so link to
+  // the video in the Cloudflare dashboard instead (server builds the URL).
+  const cfDashboardUrl = cf.uid ? `/api/cloudflare/dashboard/${encodeURIComponent(cf.uid)}` : null;
   const linkOutIcon = (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
   );
@@ -143,14 +145,14 @@ export function MediaDistributionBar({
           </div>
         )}
 
-        {cfWatchUrl && (
+        {cfDashboardUrl && (
           <a
             className="mdb-rail-btn"
-            href={cfWatchUrl}
+            href={cfDashboardUrl}
             target="_blank"
             rel="noreferrer"
             aria-label="Open in Cloudflare"
-            title="Open in Cloudflare"
+            title="Open in Cloudflare dashboard"
           >
             {linkOutIcon}
           </a>
