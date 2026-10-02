@@ -706,7 +706,7 @@ export function MediaPlayer({
             <div className="mp-scrub-head"     style={{ left: duration ? `${(currentTime / duration) * 100}%` : '0%' }} />
             {duration > 0 && timedComments.map(c => {
               const pct = ((c.timestamp ?? 0) / duration) * 100;
-              const tip = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName ?? 'Frame.io'}: ${c.text}`;
+              const tip = `${formatTimecode(c.timestamp ?? 0)}${c.duration ? ` → ${formatTimecode((c.timestamp ?? 0) + c.duration)}` : ''} — ${c.authorName ?? 'Reviewer'}: ${c.text}`;
               if (c.duration && c.duration > 0) {
                 return (
                   <button key={c.id} type="button"
@@ -866,9 +866,9 @@ export function MediaPlayer({
                     ? <img src={c.authorAvatar} alt="" className="mp-avatar" />
                     : <div className="mp-avatar mp-avatar--placeholder">{(c.authorName || '?')[0]}</div>
                   }
-                  <span className="mp-comment-author">{c.authorName ?? 'Frame.io'}</span>
+                  <span className="mp-comment-author">{c.authorName ?? 'Reviewer'}</span>
                   {(c as FrameIOComment & { mirrorAbandoned?: boolean }).mirrorAbandoned && (
-                    <span className="mad-comment-mirror-warn" title="Couldn't sync to Frame.io" aria-label="Mirror failed">!</span>
+                    <span className="mad-comment-mirror-warn" title="This comment didn't sync" aria-label="Sync failed">!</span>
                   )}
                   <button
                     type="button"
@@ -928,7 +928,7 @@ export function MediaPlayer({
                             ? <img src={r.authorAvatar} alt="" className="mp-avatar mp-avatar--sm" />
                             : <div className="mp-avatar mp-avatar--sm mp-avatar--placeholder">{(r.authorName || '?')[0]}</div>
                           }
-                          <span className="mp-reply-author">{r.authorName ?? 'Frame.io'}</span>
+                          <span className="mp-reply-author">{r.authorName ?? 'Reviewer'}</span>
                         </div>
                         <p className="mp-comment-text">{r.text}</p>
                       </div>

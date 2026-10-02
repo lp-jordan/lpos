@@ -202,7 +202,7 @@ const IconLink = () => (
     <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
   </svg>
 );
-const IconFrameIO = () => (
+const IconPush = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
     <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
@@ -1344,18 +1344,8 @@ const { openMenu } = useContextMenu();
       { type: 'separator' as const },
       {
         type: 'item' as const,
-        label: asset.frameio.status === 'none' ? 'Upload to Frame.io' : 'Frame.io Uploaded',
-        icon: <IconFrameIO />,
-        disabled: asset.frameio.status !== 'none' || !asset.filePath,
-        onClick: async () => {
-          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/frameio`, { method: 'POST' });
-          void fetchAssets();
-        },
-      },
-      {
-        type: 'item' as const,
         label: asset.leaderpass.status === 'none' ? 'Push to LeaderPass' : LEADERPASS_STATUS_LABEL[asset.leaderpass.status],
-        icon: <IconFrameIO />,
+        icon: <IconPush />,
         disabled: !asset.filePath || asset.leaderpass.status === 'preparing',
         onClick: async () => {
           await fetch(`/api/projects/${projectId}/media/${asset.assetId}/leaderpass`, { method: 'POST' });
@@ -1868,7 +1858,7 @@ const { openMenu } = useContextMenu();
               type="button"
               className="ma-selection-action"
               onClick={() => setShowMoveModal({ assetIds: [...selectedIds] })}
-              title="Reassign the selected assets to a different project (LPOS-side only — Frame.io stays put)"
+              title="Reassign the selected assets to a different project"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -2003,9 +1993,14 @@ const { openMenu } = useContextMenu();
           body={(() => {
             const n = selectedIds.size;
             const count = `${n} item${n === 1 ? '' : 's'}`;
+            // Only legacy assets still have a Frame.io copy — mention it only when one does.
+            const fioCount = assets.filter((a) => selectedIds.has(a.assetId) && a.frameio?.assetId).length;
+            const fioNote = confirmBulkDelete.deleteFile && fioCount > 0
+              ? ` ${fioCount} of them will also be permanently deleted from Frame.io.`
+              : '';
             return confirmBulkDelete.deleteFile
-              ? `Permanently delete ${count} from disk, remove from this project, and delete from Frame.io where applicable? This cannot be undone.`
-              : `Remove ${count} from this project? Files on disk and Frame.io are not affected.`;
+              ? `Permanently delete ${count} from disk and remove from this project?${fioNote} This cannot be undone.`
+              : `Remove ${count} from this project? Files on disk are not affected.`;
           })()}
           confirmLabel={bulkDeleteWorking ? (confirmBulkDelete.deleteFile ? 'Deleting…' : 'Removing…') : (confirmBulkDelete.deleteFile ? 'Delete Files' : 'Remove')}
           danger

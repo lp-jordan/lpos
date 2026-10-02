@@ -40,8 +40,7 @@ export function FrameioConfigCard() {
         <h2 className="storage-settings-section-title">Frame.io</h2>
         <p className="storage-settings-muted">
           Automatically upload every new video to Frame.io on ingest. When off, new media goes
-          straight to Cloudflare Stream and skips Frame.io; you can still send a single asset
-          with <strong>Upload to Frame.io</strong>. Files that are already on Frame.io are unaffected.
+          straight to Cloudflare Stream and skips Frame.io. Files that are already on Frame.io are unaffected.
         </p>
       </div>
       {error && (

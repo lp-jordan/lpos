@@ -286,19 +286,6 @@ export function MoveAssetsModal({
               </div>
             )}
 
-            {/* Warning — surfaced before confirm so editors aren't surprised. */}
-            <div
-              style={{
-                padding: '8px 12px', borderRadius: 4,
-                background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.35)',
-                color: '#f59e0b', fontSize: '0.78rem',
-              }}
-            >
-              Heads-up: the move is LPOS-side only. The Frame.io asset stays in {fromProjectName}'s
-              Frame.io project — review links / comment history won't follow. You can re-upload to
-              Frame.io from the target project if needed.
-            </div>
-
             {error && (
               <p style={{ color: '#e07070', fontSize: '0.85rem', margin: 0 }}>{error}</p>
             )}
