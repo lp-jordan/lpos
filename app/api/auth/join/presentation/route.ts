@@ -22,8 +22,12 @@ import {
   verifySessionToken,
 } from '@/lib/services/session-auth';
 import { getOrCreateGuestUser } from '@/lib/store/user-store';
+import { STUDIO_PRESENTATION_ENABLED } from '@/lib/feature-flags';
 
 export async function GET() {
+  // Parked: don't hand out credential-less guest sessions for a hidden feature.
+  if (!STUDIO_PRESENTATION_ENABLED) redirect('/');
+
   const cookieStore = await cookies();
   const existing = await verifySessionToken(cookieStore.get(APP_SESSION_COOKIE)?.value);
 

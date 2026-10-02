@@ -7,6 +7,7 @@ import { LightingPanel } from '@/components/slate/LightingPanel';
 import { PlaybackPanel } from '@/components/slate/PlaybackPanel';
 import { CameraPanel } from '@/components/slate/CameraPanel';
 import { PresentationPanel } from '@/components/studio/PresentationPanel';
+import { STUDIO_PRESENTATION_ENABLED } from '@/lib/feature-flags';
 import { SlateModal, ModalType } from '@/components/slate/SlateModal';
 import { NewProjectModal } from '@/components/shared/NewProjectModal';
 import { ConfirmModal } from '@/components/shared/ConfirmModal';
@@ -137,6 +138,7 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
   useEffect(() => {
     if (isGuest) return;
     const hash = window.location.hash.slice(1) as StudioTab;
+    if (hash === 'presentation' && !STUDIO_PRESENTATION_ENABLED) return;
     if (VALID_TABS.includes(hash)) setStudioTab(hash);
   }, []);
 
@@ -422,7 +424,9 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
                 <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
               </svg>
             )},
-          ] as { id: StudioTab; label: string; icon: React.ReactNode; soon?: boolean }[]).map((tab) => {
+          ] as { id: StudioTab; label: string; icon: React.ReactNode; soon?: boolean }[])
+            .filter((tab) => tab.id !== 'presentation' || STUDIO_PRESENTATION_ENABLED)
+            .map((tab) => {
             const guestLocked = isLightingGuest
               ? tab.id !== 'lighting'
               : isGuest && tab.id !== 'presentation';
@@ -977,7 +981,7 @@ export function SlatePageContent({ isGuest, isAdmin, guestAccess }: { isGuest: b
             />
           )}
 
-          {studioTab === 'presentation' && <PresentationPanel />}
+          {studioTab === 'presentation' && STUDIO_PRESENTATION_ENABLED && <PresentationPanel />}
 
         </section>
       </div>

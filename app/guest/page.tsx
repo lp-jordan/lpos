@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { BlockedMessage } from '@/components/guest/BlockedMessage';
+import { STUDIO_PRESENTATION_ENABLED } from '@/lib/feature-flags';
 
 export default async function GuestHomePage(props: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -17,14 +18,14 @@ export default async function GuestHomePage(props: {
       {blocked && <BlockedMessage />}
 
       <div className="home-tiles">
-        <Link href="/slate#presentation" className="home-tile">
+        {STUDIO_PRESENTATION_ENABLED && <Link href="/slate#presentation" className="home-tile">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
             <line x1="8" y1="21" x2="16" y2="21" />
             <line x1="12" y1="17" x2="12" y2="21" />
           </svg>
           <span className="home-tile-label">Presentation</span>
-        </Link>
+        </Link>}
 
         <Link href="/slate?guest_access=lighting#lighting" className="home-tile">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
