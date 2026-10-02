@@ -128,6 +128,12 @@ function initSchema(db: DatabaseSync): void {
   // Tabs are Passes: a platform pass maps to ONE chosen tab of the workbook.
   ensureColumn(db, 'platform_passes', 'sheet_tab_gid', `sheet_tab_gid INTEGER`);
   ensureColumn(db, 'platform_passes', 'sheet_tab_title', `sheet_tab_title TEXT`);
+  // Gallery organisation: a pass belongs to an LPOS client (by name — the same
+  // string key projects/tasks use, kept as plain text so this DB stays liftable),
+  // and can be pinned to the top of the gallery by any user (shared, not per-user).
+  ensureColumn(db, 'platform_passes', 'client_name', `client_name TEXT`);
+  ensureColumn(db, 'platform_passes', 'pinned_at', `pinned_at TEXT`);
+  ensureColumn(db, 'platform_passes', 'pinned_by', `pinned_by TEXT`);
 }
 
 function getDb(): DatabaseSync {
@@ -163,6 +169,11 @@ export interface PlatformPass {
   brand: string;
   brandConfig: BrandConfig | null;
   defaultProjectId: string | null;
+  /** Owning LPOS client (name key). Null on legacy passes until backfilled/set. */
+  clientName: string | null;
+  /** Set when pinned to the top of the gallery (shared across users). */
+  pinnedAt: string | null;
+  pinnedBy: string | null;
   /** Connected pass-map Google Sheet (Pass Prep). Null until connected. */
   sheetId: string | null;
   sheetUrl: string | null;
@@ -260,6 +271,9 @@ function toPass(r: Row): PlatformPass {
     brand: r.brand as string,
     brandConfig: parseBrandConfig(r.brand_config),
     defaultProjectId: (r.default_project_id as string) ?? null,
+    clientName: (r.client_name as string) ?? null,
+    pinnedAt: (r.pinned_at as string) ?? null,
+    pinnedBy: (r.pinned_by as string) ?? null,
     sheetId: (r.sheet_id as string) ?? null,
     sheetUrl: (r.sheet_url as string) ?? null,
     sheetConnectedAt: (r.sheet_connected_at as string) ?? null,
@@ -323,18 +337,19 @@ export function listPasses(): PlatformPass[] {
   return rows.map(toPass);
 }
 
-export function createPass(input: { title: string; brand?: string; source?: PassSource; createdBy?: string }): PlatformPass {
+export function createPass(input: { title: string; brand?: string; source?: PassSource; createdBy?: string; clientName?: string | null }): PlatformPass {
   const id = randomUUID();
   const now = new Date().toISOString();
   const title = input.title.trim() || 'Untitled pass';
   const brand = input.brand ?? DEFAULT_BRAND;
   const source = input.source ?? 'local';
   const slug = uniqueSlug(slugify(title));
+  const clientName = input.clientName?.trim() || null;
   getDb().prepare(
-    `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?)`,
-  ).run(id, title, slug, source, brand, input.createdBy ?? null, now, now);
-  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, sheetId: null, sheetUrl: null, sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, sheetTabGid: null, sheetTabTitle: null, createdAt: now, updatedAt: now };
+    `INSERT INTO platform_passes (id, title, slug, source, status, brand, brand_config, client_name, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'draft', ?, NULL, ?, ?, ?, ?)`,
+  ).run(id, title, slug, source, brand, clientName, input.createdBy ?? null, now, now);
+  return { id, title, slug, source, lpPassId: null, status: 'draft', brand, brandConfig: null, defaultProjectId: null, clientName, pinnedAt: null, pinnedBy: null, sheetId: null, sheetUrl: null, sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, sheetTabGid: null, sheetTabTitle: null, createdAt: now, updatedAt: now };
 }
 
 export function getPass(id: string): PlatformPass | null {
@@ -397,6 +412,24 @@ export function updatePass(id: string, patch: PassPatch): PlatformPass | null {
   const brandConfig = 'brandConfig' in patch ? patch.brandConfig : existing.brandConfig;
   getDb().prepare('UPDATE platform_passes SET title = ?, slug = ?, status = ?, brand = ?, brand_config = ?, updated_at = ? WHERE id = ?')
     .run(title, slug, status, brand, brandConfig ? JSON.stringify(brandConfig) : null, new Date().toISOString(), id);
+  return getPass(id);
+}
+
+/** Assign (or clear) the owning client. Organisational only — deliberately does
+ *  NOT bump updated_at, so filing a pass doesn't reshuffle the Recent sort. */
+export function setPassClient(id: string, clientName: string | null): PlatformPass | null {
+  getDb().prepare('UPDATE platform_passes SET client_name = ? WHERE id = ?').run(clientName?.trim() || null, id);
+  return getPass(id);
+}
+
+/** Pin/unpin a pass at the top of the gallery. Shared across users; does NOT
+ *  bump updated_at (pinning isn't work on the pass). */
+export function setPassPinned(id: string, pinned: boolean, userId: string | null): PlatformPass | null {
+  if (pinned) {
+    getDb().prepare('UPDATE platform_passes SET pinned_at = ?, pinned_by = ? WHERE id = ?').run(new Date().toISOString(), userId, id);
+  } else {
+    getDb().prepare('UPDATE platform_passes SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(id);
+  }
   return getPass(id);
 }
 
