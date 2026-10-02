@@ -48,6 +48,14 @@ function rowToNotif(row: NotifRow): CommentNotification {
       commentCount: row.comment_count ?? 1,
       assetCount:   Math.max(1, assetIdsOf(row).length),
     } : {}),
+    ...(row.type === 'share_open' ? {
+      shareId:     row.share_id ?? undefined,
+      shareToken:  row.share_token ?? undefined,
+      shareName:   row.share_name ?? undefined,
+      viewerCount: row.comment_count ?? 1,
+      viewerKind:  (row.snippet === 'email' ? 'email' : 'visitor') as 'email' | 'visitor',
+      snippet:     undefined,
+    } : {}),
   };
 }
 
@@ -170,6 +178,52 @@ export class CommentNotificationStore {
     );
     const row = db.prepare('SELECT * FROM comment_notifications WHERE notif_id = ?').get(notifId) as NotifRow;
     return { notif: rowToNotif(row), isNew: true };
+  }
+
+  /**
+   * Record someone's first open of a share in the recipient's rolling
+   * share_open item: fold into the share's item if it was touched within the
+   * window, else start a new one. comment_count holds the viewer count and
+   * snippet the latest viewer's kind ('email' | 'visitor').
+   */
+  upsertShareOpen(input: {
+    userId:     string;
+    shareId:    string;
+    shareToken: string;
+    shareName:  string;
+    viewer:     string;
+    viewerKind: 'email' | 'visitor';
+    at:         string;
+  }): { notif: CommentNotification; isNew: boolean } {
+    const db = getCoreDb();
+    const sessionKey = `open:${input.shareId}`;
+    const since = new Date(Date.parse(input.at) - SHARE_SESSION_WINDOW_MS).toISOString();
+    const open = db.prepare(
+      `SELECT notif_id FROM comment_notifications
+        WHERE user_id = ? AND session_key = ? AND created_at >= ?
+        ORDER BY created_at DESC LIMIT 1`,
+    ).get(input.userId, sessionKey, since) as { notif_id: string } | undefined;
+
+    let notifId: string;
+    if (open) {
+      notifId = open.notif_id;
+      db.prepare(
+        `UPDATE comment_notifications
+            SET comment_count = COALESCE(comment_count, 1) + 1, from_name = ?, snippet = ?,
+                share_name = ?, read = 0, created_at = ?
+          WHERE notif_id = ?`,
+      ).run(input.viewer, input.viewerKind, input.shareName, input.at, notifId);
+    } else {
+      notifId = randomUUID();
+      db.prepare(
+        `INSERT INTO comment_notifications
+           (notif_id, user_id, type, project_id, asset_id, asset_name, comment_id, from_user_id, from_name, snippet, read, created_at,
+            share_id, share_token, share_name, session_key, comment_count, asset_ids)
+         VALUES (?, ?, 'share_open', '', '', '', '', NULL, ?, ?, 0, ?, ?, ?, ?, ?, 1, NULL)`,
+      ).run(notifId, input.userId, input.viewer, input.viewerKind, input.at, input.shareId, input.shareToken, input.shareName, sessionKey);
+    }
+    const row = db.prepare('SELECT * FROM comment_notifications WHERE notif_id = ?').get(notifId) as NotifRow;
+    return { notif: rowToNotif(row), isNew: !open };
   }
 
   markRead(notifId: string): void {

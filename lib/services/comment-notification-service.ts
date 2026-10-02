@@ -38,6 +38,7 @@ function getPushSubs(userId: string): PushSubRow[] {
 const PUSH_LABEL: Record<CommentNotifType, string> = {
   reply: 'New reply to your comment',
   share_activity: 'New comments on a share',
+  share_open: 'A share was opened',
 };
 
 /**
@@ -132,6 +133,42 @@ export async function notifyShareActivity(input: {
       projectId: input.projectId,
       assetId:   input.assetId,
     });
+    await Promise.allSettled(getPushSubs(user.id).map((sub) =>
+      webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payload,
+      ).catch((err: unknown) => {
+        if ((err as { statusCode?: number }).statusCode === 410) {
+          getCoreDb().prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+        }
+      }),
+    ));
+  }));
+}
+
+/**
+ * Someone opened a share for the first time (a signed-in email or a visitor).
+ * Folds into one rolling bell item per share; browser push only when the item
+ * starts. Staff opens never reach here (LP Share doesn't record them).
+ */
+export async function notifyShareOpened(input: {
+  shareId:    string;
+  shareToken: string;
+  shareName:  string;
+  viewer:     string;
+  viewerKind: 'email' | 'visitor';
+  at:         string;
+}): Promise<void> {
+  const store = getCommentNotificationStore();
+  const io = getIo();
+  const recipients = getAllUsers().filter((u) => u.googleSub !== 'guest');
+  const who = input.viewerKind === 'email' ? input.viewer : input.viewer === 'A visitor' ? 'A visitor' : `${input.viewer} (visitor)`;
+
+  await Promise.allSettled(recipients.map(async (user) => {
+    const { notif, isNew } = store.upsertShareOpen({ ...input, userId: user.id });
+    io?.to(`user:${user.id}`).emit('comment:notification', notif);
+    if (!isNew || !vapidReady) return;
+    const payload = JSON.stringify({ title: PUSH_LABEL.share_open, body: `${who} opened ${input.shareName}` });
     await Promise.allSettled(getPushSubs(user.id).map((sub) =>
       webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },

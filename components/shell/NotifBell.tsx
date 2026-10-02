@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/contexts/ToastContext';
 import { useTaskNotifications } from '@/hooks/useTaskNotifications';
@@ -11,6 +12,7 @@ import type { TaskNotification, TaskNotifType } from '@/lib/models/task-notifica
 import type { ProspectNotification, ProspectNotifType } from '@/lib/models/prospect-notification';
 import type { CommentNotification } from '@/lib/models/comment-notification';
 import { shareOpenHref } from '@/components/share/share-link-urls';
+import { ShareModal } from '@/components/share/ShareModal';
 
 type NotifTab = 'tasks' | 'prospects' | 'pipeline' | 'comments';
 
@@ -104,6 +106,26 @@ function TaskNotifItem({ notif, onClick }: { notif: TaskNotification; onClick: (
 }
 
 function CommentNotifItem({ notif, onClick }: { notif: CommentNotification; onClick: () => void }) {
+  if (notif.type === 'share_open') {
+    const n = notif.viewerCount ?? 1;
+    const who = notif.viewerKind === 'email' ? notif.fromName ?? 'Someone'
+      : notif.fromName && notif.fromName !== 'A visitor' ? `${notif.fromName} (visitor)` : 'A visitor';
+    return (
+      <button
+        type="button"
+        className={`notif-task-item${notif.read ? ' notif-task-item--read' : ' notif-task-item--unread'}`}
+        onClick={onClick}
+        role="menuitem"
+      >
+        <div className="notif-task-type">Share opened</div>
+        <div className="notif-task-title">{notif.shareName ?? 'Share'}</div>
+        <div className="notif-task-from">
+          {n === 1 ? `${who} opened it for the first time` : `${n} people opened it for the first time (latest: ${who})`}
+        </div>
+        <div className="notif-task-time">{relativeTime(notif.createdAt)}</div>
+      </button>
+    );
+  }
   if (notif.type === 'share_activity') {
     const n = notif.commentCount ?? 1;
     const v = notif.assetCount ?? 1;
@@ -155,6 +177,7 @@ const TAB_LABEL: Record<NotifTab, string> = {
 export function NotifBell() {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<NotifTab>(getInitialTab);
+  const [analyticsShareId, setAnalyticsShareId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { notifications: pipelineNotifs, unreadCount: pipelineUnread, markAllRead: markPipelineRead } = useToast();
@@ -296,6 +319,9 @@ export function NotifBell() {
                         // A share review opens the share itself (as staff), at the first video commented on.
                         if (notif.type === 'share_activity' && notif.shareToken) {
                           window.open(shareOpenHref(notif.shareToken, notif.assetId), '_blank', 'noopener');
+                        } else if (notif.type === 'share_open' && notif.shareId) {
+                          // An open → that share's Analytics (who has opened it).
+                          setAnalyticsShareId(notif.shareId);
                         } else {
                           router.push(`/projects/${notif.projectId}?assetId=${notif.assetId}`);
                         }
@@ -330,6 +356,10 @@ export function NotifBell() {
             )}
           </div>
         </div>
+      )}
+      {analyticsShareId && createPortal(
+        <ShareModal shareId={analyticsShareId} initialView="analytics" onClose={() => setAnalyticsShareId(null)} />,
+        document.body,
       )}
     </div>
   );

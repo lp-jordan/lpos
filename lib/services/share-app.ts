@@ -4,7 +4,8 @@
  * LPOS only ever calls out; LP Share never calls LPOS. Every tick:
  *   1. pull  — GET  /api/lpos/changes   comments clients made on LP Share → media_comments
  *   2. ack   — POST /api/lpos/changes/ack  (LP Share records the LPOS ids)
- *   3. push  — POST /api/lpos/shares    every share whose payload changed (full replace)
+ *   3. visits — GET /api/lpos/activity  first-time opens of a share → bell
+ *   4. push  — POST /api/lpos/shares    every share whose payload changed (full replace)
  *              POST /api/lpos/comments  every shared asset whose share threads changed
  *              (assets touched by the pull are always re-pushed)
  * Pushes are change-detected by hashing the payload (share_app_pushed table),
@@ -32,7 +33,7 @@ import {
   updateMediaCommentTextById,
 } from '@/lib/store/media-comment-store';
 import { getShareLink, getShareLinksDb, listShareItems, listShareLinks, type ShareCaps, type ShareLink } from '@/lib/store/share-links-db';
-import { notifyShareActivity } from '@/lib/services/comment-notification-service';
+import { notifyShareActivity, notifyShareOpened } from '@/lib/services/comment-notification-service';
 import { resolveShareView } from '@/lib/services/share-links';
 import { downloadStatusFor, readyDownloadFile } from '@/lib/services/share-downloads';
 import { applyVideoSettings, cloudflareFrameThumbnailUrl, getVideoDetails } from '@/lib/services/cloudflare-stream';
@@ -41,6 +42,7 @@ import { loadTranscriptEditorPayload } from '@/lib/transcripts/editor-payload';
 export { SHARE_APP_ORIGIN_KEY, shareAppOrigin } from '@/lib/services/share-app-config';
 import { shareAppOrigin } from '@/lib/services/share-app-config';
 const CURSOR_KEY = 'share_app.pull_cursor';
+const ACTIVITY_CURSOR_KEY = 'share_app.activity_cursor';
 const TICK_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -335,6 +337,47 @@ async function pullChanges(): Promise<{ cursor: number; mapped: Array<{ share_co
   return { cursor: res.cursor, mapped, assets };
 }
 
+// ── Activity: who opened a share (Analytics panel + bell) ────────────────────
+
+/** Shape mirrors lp-share lib/activity.ts ShareActivitySummary. */
+export interface ShareActivity {
+  totals: {
+    visits: number; signedIn: number; visitors: number;
+    videoLinkOpens: number; downloads: number; comments: number;
+    firstAt: string | null; lastAt: string | null;
+  };
+  invited: Array<{ email: string; opened: boolean; visits: number; firstAt: string | null; lastAt: string | null }>;
+  viewers: Array<{
+    kind: 'visitor' | 'email'; label: string; email: string | null; name: string | null;
+    visits: number; videoLinkOpens: number; downloads: number; comments: number; firstAt: string; lastAt: string;
+  }>;
+  videos: Array<{ assetId: string; title: string; videoLinkOpens: number; downloads: number; comments: number }>;
+  recent: Array<{ kind: 'open' | 'video_open' | 'download'; at: string; viewerKind: 'visitor' | 'email'; viewer: string; assetTitle: string | null; fileKind: string | null }>;
+}
+
+/** One share's activity, read live from LP Share (it holds the events; staff visits are never recorded). */
+export async function fetchShareActivity(shareId: string): Promise<ShareActivity> {
+  const res = await call<{ activity: ShareActivity }>('GET', `/api/lpos/shares/${encodeURIComponent(shareId)}/activity`);
+  return res.activity;
+}
+
+interface FirstVisit { seq: number; share_id: string; viewer_kind: 'visitor' | 'email'; viewer: string; at: string }
+
+/** First-time opens since the last tick → the rolling "opened" item in everyone's bell. */
+async function pullFirstVisits(): Promise<void> {
+  const since = getSetting<number>(ACTIVITY_CURSOR_KEY, 0);
+  const res = await call<{ visits: FirstVisit[]; cursor: number }>('GET', `/api/lpos/activity?since=${since}`);
+  for (const v of res.visits) {
+    const share = getShareLink(v.share_id);
+    if (!share) continue;
+    void notifyShareOpened({
+      shareId: share.id, shareToken: share.token, shareName: share.name,
+      viewer: v.viewer, viewerKind: v.viewer_kind, at: v.at,
+    }).catch((err) => console.warn('[share-app] open notify failed:', (err as Error).message));
+  }
+  if (res.cursor !== since) setSetting(ACTIVITY_CURSOR_KEY, res.cursor);
+}
+
 // ── Push ──────────────────────────────────────────────────────────────────────
 
 async function pushShares(origin: string): Promise<void> {
@@ -383,7 +426,7 @@ export interface ShareAppSyncStatus { configured: boolean; lastOkAt: string | nu
 
 declare global {
   // eslint-disable-next-line no-var
-  var __lpos_share_app_sync: { timer: ReturnType<typeof setInterval>; running: boolean; status: ShareAppSyncStatus } | undefined;
+  var __lpos_share_app_sync: { timer: ReturnType<typeof setInterval>; running: boolean; status: ShareAppSyncStatus; activityError?: string | null } | undefined;
 }
 
 export async function syncShareAppOnce(): Promise<void> {
@@ -400,6 +443,12 @@ export async function syncShareAppOnce(): Promise<void> {
     if (pulled) {
       await call('POST', '/api/lpos/changes/ack', { cursor: pulled.cursor, mapped: pulled.mapped });
       setSetting(CURSOR_KEY, pulled.cursor);
+    }
+    // Isolated so an LP Share without the activity endpoint can't stall sync.
+    try { await pullFirstVisits(); if (state) state.activityError = null; } catch (err) {
+      const msg = (err as Error).message;
+      if (state && state.activityError !== msg) console.warn('[share-app] activity pull failed:', msg);
+      if (state) state.activityError = msg;
     }
     await pushShares(cfg.origin);
     await pushComments(cfg.origin, pulled?.assets ?? new Set());

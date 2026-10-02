@@ -4,7 +4,8 @@
  * ShareModal — manage one share: its link, switches, who can open it, its
  * videos and Revoke. Every change is live — no save or deliver step. The same
  * modal is opened from the Platform pass
- * page, the Media tab and the project's Shares list.
+ * page, the Media tab, the project's Shares list and the bell ("Share opened"
+ * items open it straight on Analytics).
  *
  * Also exports the client helpers that create shares, so every entry point
  * creates them the same way (one click → link copied → this modal opens).
@@ -15,6 +16,7 @@ import { useToast } from '@/contexts/ToastContext';
 import type { ShareCaps, ShareLink, ShareAudience } from '@/lib/store/share-links-db';
 import type { ShareView, ShareViewItem } from '@/lib/services/share-links';
 import { AddVideosPicker } from './AddVideosPicker';
+import { ShareAnalytics } from './ShareAnalytics';
 import { ViewToggle, useViewMode } from './ViewToggle';
 
 // Internal isn't a switch here: choosing "LP Staff Only" under Who is what
@@ -54,6 +56,8 @@ interface Props {
   projectId?: string | null;
   onClose: () => void;
   onChanged?: () => void;
+  /** Open on Analytics instead of the share's settings. */
+  initialView?: 'manage' | 'analytics';
 }
 
 /** The project most of the share's videos come from (where Add videos opens by default). */
@@ -68,13 +72,14 @@ function fmtGB(n: number): string {
   return `${Math.max(1, Math.round(n / 1024 ** 2))} MB`;
 }
 
-export function ShareModal({ shareId, projectId = null, onClose, onChanged }: Readonly<Props>) {
+export function ShareModal({ shareId, projectId = null, onClose, onChanged, initialView = 'manage' }: Readonly<Props>) {
   const { toast } = useToast();
   const [share, setShare] = useState<ShareLink | null>(null);
   const [view, setView]   = useState<ShareView | null>(null);
   const [emailDraft, setEmailDraft] = useState('');
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [analytics, setAnalytics] = useState(initialView === 'analytics');
   const [viewMode, setViewMode] = useViewMode('lpos:share:items-view');
 
   const load = useCallback(async () => {
@@ -178,10 +183,27 @@ export function ShareModal({ shareId, projectId = null, onClose, onChanged }: Re
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/></svg>
                 </button>
                 <a className="shm-open" href={shareOpenHref(share.token)} target="_blank" rel="noreferrer">Open</a>
+                <button
+                  type="button"
+                  className={`shm-analytics${analytics ? ' is-on' : ''}`}
+                  aria-pressed={analytics}
+                  onClick={() => { setPicking(false); setAnalytics((a) => !a); }}
+                  title={analytics ? 'Back to the share' : 'Who has opened this share'}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="9"/></svg>
+                  Analytics
+                </button>
               </div>
             </div>
 
-            {picking ? (
+            {analytics ? (<>
+              <ShareAnalytics shareId={share.id} />
+              <div className="shm-foot">
+                <button type="button" className="shm-add" onClick={() => setAnalytics(false)}>← Back to share</button>
+                <span style={{ flex: 1 }} />
+                <button type="button" className="modal-btn-primary" onClick={onClose}>Close</button>
+              </div>
+            </>) : picking ? (
               <AddVideosPicker
                 existing={existingIds}
                 startProjectId={projectId ?? mostCommonProject(items.map((i) => i.projectId))}
