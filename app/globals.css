@@ -11618,6 +11618,17 @@ details[open] .m-fio-resolved-toggle::before { content: '▾ '; }
 .ctx-item--danger:hover:not(:disabled) { background: rgba(232,112,106,0.13); color: #f08a85; }
 .ctx-item-icon { color: var(--muted); display: flex; flex-shrink: 0; }
 .ctx-item--danger .ctx-item-icon { color: #e8706a; }
+.ctx-item-chevron { color: var(--muted-soft); flex-shrink: 0; margin-left: auto; }
+.ctx-item--open { background: var(--surface-3); color: var(--text-strong); }
+.ctx-header {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  padding: 6px 10px 4px;
+  text-transform: uppercase;
+  user-select: none;
+}
 
 /* ── Selection: checkbox ────────────────────────────────────────────────────── */
 .proj-check-wrap {

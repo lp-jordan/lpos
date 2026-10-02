@@ -14,6 +14,7 @@ import { AddToShareModal } from '@/components/share/AddToShareModal';
 import { MoveAssetsModal } from '@/components/projects/MoveAssetsModal';
 import { useContextMenu } from '@/contexts/ContextMenuContext';
 import { useToast } from '@/contexts/ToastContext';
+import type { MenuEntry } from '@/components/shared/ContextMenu';
 import { useVersionConfirm } from '@/contexts/VersionConfirmContext';
 import { useIngestQueue } from '@/hooks/useIngestQueue';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -200,6 +201,16 @@ const IconLink = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07l-1.5 1.5"/>
     <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 1 0 7.07 7.07l1.5-1.5"/>
+  </svg>
+);
+const IconPencil = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/>
+  </svg>
+);
+const IconMore = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>
   </svg>
 );
 const IconPush = () => (
@@ -533,9 +544,7 @@ export function MediaTab({
   const [managingShareId,  setManagingShareId]  = useState<string | null>(null);
   const [addToShareAssets, setAddToShareAssets] = useState<MediaAsset[] | null>(null);
   const [publishWorking,  setPublishWorking]  = useState(false);
-  const [publishError,    setPublishError]    = useState<string | null>(null);
   const [retranscribeWorking, setRetranscribeWorking] = useState(false);
-  const [retranscribeError,   setRetranscribeError]   = useState<string | null>(null);
   const [spanishWorking,      setSpanishWorking]      = useState(false);
   const [sardiusBatchAssets,  setSardiusBatchAssets]  = useState<MediaAsset[] | null>(null);
   const [thumbnailBatchAssets, setThumbnailBatchAssets] = useState<MediaAsset[] | null>(null);
@@ -1269,32 +1278,102 @@ const { openMenu } = useContextMenu();
     void fetchAssets();
   }
 
+  // ── Shared action vocabulary ──────────────────────────────────────────────
+  // The right-click menu and the batch bar use the same names, order and
+  // grouping: Share · Download · Move · Transcribe · Cloudflare · Delete.
+
+  const cfIsActive  = (a: MediaAsset) => a.leaderpass.status === 'preparing' || a.cloudflare.status === 'uploading' || a.cloudflare.status === 'processing';
+  /** On Cloudflare at the current version — pushing again would be a re-push. */
+  const cfIsCurrent = (a: MediaAsset) => a.cloudflare.status === 'ready' && !!a.cloudflare.uid && !a.cloudflare.isStale;
+  /** Worth (re)sending: not on CF, failed, or showing an older version. */
+  const cfNeedsPush = (a: MediaAsset) => !!a.filePath && !cfIsActive(a) && !cfIsCurrent(a);
+
+  function pushOneToCloudflare(asset: MediaAsset) {
+    void fetch(`/api/projects/${projectId}/media/${asset.assetId}/leaderpass`, { method: 'POST' })
+      .then((res) => {
+        if (!res.ok) toast({ id: `cf-push-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Cloudflare push failed to queue', body: asset.name || asset.originalFilename });
+        void fetchAssets();
+      });
+  }
+
+  /** Single-asset Cloudflare item — label reflects what a push would do. */
+  function cloudflarePushEntry(asset: MediaAsset): MenuEntry {
+    const base = { type: 'item' as const, icon: <IconPush />, onClick: () => pushOneToCloudflare(asset) };
+    if (!asset.filePath) return { ...base, label: 'Push to Cloudflare', disabled: true, title: 'No local file' };
+    if (cfIsActive(asset)) return { ...base, label: 'Uploading to Cloudflare…', disabled: true };
+    if (asset.cloudflare.isStale) return { ...base, label: `Push v${asset.frameio.version ?? 1} to Cloudflare` };
+    if (asset.cloudflare.status === 'failed' || asset.leaderpass.status === 'failed') return { ...base, label: 'Retry Cloudflare push' };
+    if (cfIsCurrent(asset)) {
+      return { ...base, label: 'Re-Push to Cloudflare', title: 'Uploads a fresh copy. The Cloudflare video ID changes and the old copy is deleted — anything embedding the old ID will need the new one.' };
+    }
+    return { ...base, label: 'Push to Cloudflare' };
+  }
+
+  /** Transcribe actions for a multi-selection (batch bar More menu + right-click). */
+  function selectionTranscribeEntries(sel: MediaAsset[]): MenuEntry[] {
+    const eligible = (s: MediaAsset['transcription'] | undefined) => s?.status !== 'queued' && s?.status !== 'processing';
+    return [
+      { type: 'item', label: 'Re-transcribe (English)', icon: <IconRefresh />,
+        disabled: retranscribeWorking || !sel.some((a) => a.filePath && eligible(a.transcription)),
+        onClick: () => void handleBulkRetranscribe() },
+      { type: 'item', label: 'Transcribe (Spanish)', icon: <IconRefresh />,
+        disabled: spanishWorking || !sel.some((a) => a.filePath && eligible(a.transcriptionEs)),
+        title: 'Additive — keeps the English transcript',
+        onClick: () => void handleBulkSpanishTranscribe() },
+    ];
+  }
+
+  /** Cloudflare actions for a multi-selection. Bulk push only sends videos that
+   *  need it — never a mass re-push, which would change live video IDs. */
+  function selectionCloudflareEntries(sel: MediaAsset[]): MenuEntry[] {
+    const needs = sel.filter(cfNeedsPush);
+    const withUid = sel.filter((a) => a.cloudflare?.uid);
+    return [
+      { type: 'item', icon: <IconPush />,
+        label: needs.length === 0 || needs.length === sel.length ? 'Push to Cloudflare' : `Push ${needs.length} of ${sel.length} to Cloudflare`,
+        disabled: publishWorking || needs.length === 0,
+        title: needs.length === 0 ? 'Every selected video is already current on Cloudflare (re-push one at a time from its own menu)' : undefined,
+        onClick: () => void handleBulkCloudflarePush(needs.map((a) => a.assetId)) },
+      { type: 'item', label: 'Set thumbnail…', icon: <IconFileVideo />,
+        disabled: withUid.length === 0,
+        title: 'Set a custom poster image for each selected Cloudflare video',
+        onClick: () => setThumbnailBatchAssets(withUid) },
+    ];
+  }
+
   function openAssetMenu(e: React.MouseEvent, asset: MediaAsset) {
     e.preventDefault();
+    // Right-clicking inside a multi-selection acts on the whole selection, and
+    // says so — the menu mirrors the batch bar.
+    if (selectedIds.has(asset.assetId) && selectedIds.size > 1) {
+      const sel = assets.filter((a) => selectedIds.has(a.assetId));
+      openMenu(e.clientX, e.clientY, [
+        { type: 'header', label: `${sel.length} selected` },
+        { type: 'item', label: 'New share…', icon: <IconLink />, onClick: () => void shareAssets(sel) },
+        { type: 'item', label: 'Add to share…', icon: <IconLink />, onClick: () => setAddToShareAssets(sel) },
+        { type: 'item', label: 'Download', icon: <IconDownload />, disabled: !sel.some((a) => a.filePath), onClick: handleBulkDownload },
+        { type: 'separator' },
+        { type: 'item', label: 'Move to project…', icon: <IconMove />, onClick: () => setShowMoveModal({ assetIds: sel.map((a) => a.assetId) }) },
+        { type: 'separator' },
+        { type: 'submenu', label: 'Transcribe', icon: <IconRefresh />, items: selectionTranscribeEntries(sel) },
+        { type: 'submenu', label: 'Cloudflare', icon: <IconPush />, items: selectionCloudflareEntries(sel) },
+        { type: 'separator' },
+        { type: 'item', label: 'Delete files', icon: <IconTrash />, danger: true, onClick: () => setConfirmBulkDelete({ deleteFile: true }) },
+        { type: 'item', label: 'Remove from project', icon: <IconTrash />, danger: true, onClick: () => setConfirmBulkDelete({ deleteFile: false }) },
+      ]);
+      return;
+    }
+
+    const streamUrl = cloudflareStreamEmbedUrl(asset.cloudflare);
     openMenu(e.clientX, e.clientY, [
+      { type: 'item', label: 'Open details', icon: <IconFileVideo />, onClick: () => setSelectedAsset(asset) },
+      { type: 'item', label: 'Rename', icon: <IconPencil />, onClick: () => setRenamingId(asset.assetId) },
       {
-        type: 'item' as const,
-        label: 'Rename',
-        onClick: () => setRenamingId(asset.assetId),
-      },
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: 'Open Details',
-        icon: <IconFileVideo />,
-        onClick: () => setSelectedAsset(asset),
-      },
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: 'Copy Stream URL',
-        icon: <IconLink />,
-        disabled: !cloudflareStreamEmbedUrl(asset.cloudflare),
+        type: 'item', label: 'Copy stream URL', icon: <IconLink />, disabled: !streamUrl,
         onClick: async () => {
-          const url = cloudflareStreamEmbedUrl(asset.cloudflare);
-          if (!url) return;
+          if (!streamUrl) return;
           try {
-            await navigator.clipboard.writeText(url);
+            await navigator.clipboard.writeText(streamUrl);
             toast({ id: `copy-stream:${asset.assetId}`, kind: 'publish', tone: 'info', title: 'Stream URL copied', body: asset.name || asset.originalFilename });
           } catch {
             toast({ id: `copy-stream-err:${asset.assetId}`, kind: 'publish', tone: 'error', title: 'Copy failed', body: 'Could not access the clipboard.' });
@@ -1302,116 +1381,55 @@ const { openMenu } = useContextMenu();
         },
       },
       {
-        type: 'item' as const,
-        label: 'Open File Location',
-        icon: <IconFolderOpen />,
-        disabled: !asset.filePath,
-        onClick: async () => {
-          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/open-location`, { method: 'POST' });
-        },
+        type: 'item', label: 'Open file location', icon: <IconFolderOpen />, disabled: !asset.filePath,
+        onClick: async () => { await fetch(`/api/projects/${projectId}/media/${asset.assetId}/open-location`, { method: 'POST' }); },
+      },
+      { type: 'separator' },
+      { type: 'item', label: 'New share…', icon: <IconLink />, onClick: () => void shareAssets([asset]) },
+      { type: 'item', label: 'Add to share…', icon: <IconLink />, onClick: () => setAddToShareAssets([asset]) },
+      {
+        type: 'item', label: 'Download', icon: <IconDownload />, disabled: !asset.filePath,
+        onClick: () => { window.location.href = `/api/projects/${projectId}/media/${asset.assetId}/download`; },
+      },
+      { type: 'separator' },
+      { type: 'item', label: 'Move to project…', icon: <IconMove />, onClick: () => setShowMoveModal({ assetIds: [asset.assetId] }) },
+      { type: 'separator' },
+      {
+        type: 'submenu', label: 'Transcribe', icon: <IconRefresh />, items: [
+          {
+            type: 'item', label: 'Edit transcript', icon: <IconPencil />,
+            // Needs a finished transcript in at least one language to have cues to show.
+            disabled: !transcriptEditorHref(asset),
+            onClick: () => { const href = transcriptEditorHref(asset); if (href) router.push(href); },
+          },
+          {
+            type: 'item', label: 'Re-transcribe (English)', icon: <IconRefresh />,
+            disabled: !asset.filePath || asset.transcription.status === 'queued' || asset.transcription.status === 'processing',
+            onClick: async () => { await fetch(`/api/projects/${projectId}/media/${asset.assetId}/retranscribe`, { method: 'POST' }); void fetchAssets(); },
+          },
+          {
+            type: 'item', label: asset.transcriptionEs?.status === 'done' ? 'Re-transcribe (Spanish)' : 'Transcribe (Spanish)', icon: <IconRefresh />,
+            disabled: !asset.filePath || asset.transcriptionEs?.status === 'queued' || asset.transcriptionEs?.status === 'processing',
+            onClick: async () => { await fetch(`/api/projects/${projectId}/media/${asset.assetId}/transcribe-es`, { method: 'POST' }); void fetchAssets(); },
+          },
+        ],
       },
       {
-        type: 'item' as const,
-        label: 'Download',
-        icon: <IconDownload />,
-        disabled: !asset.filePath,
-        onClick: () => {
-          window.location.href = `/api/projects/${projectId}/media/${asset.assetId}/download`;
-        },
+        type: 'submenu', label: 'Cloudflare', icon: <IconPush />, items: [
+          cloudflarePushEntry(asset),
+          {
+            type: 'item', label: 'Set thumbnail…', icon: <IconFileVideo />, disabled: !asset.cloudflare?.uid,
+            onClick: () => setThumbnailBatchAssets([asset]),
+          },
+        ],
       },
-      {
-        type: 'item' as const,
-        label: 'New Share…',
-        icon: <IconLink />,
-        onClick: () => {
-          // Right-clicking inside a multi-selection shares the whole selection.
-          const chosen = selectedIds.has(asset.assetId) && selectedIds.size > 1
-            ? assets.filter((a) => selectedIds.has(a.assetId))
-            : [asset];
-          void shareAssets(chosen);
-        },
-      },
-      {
-        type: 'item' as const,
-        label: 'Add to share…',
-        icon: <IconLink />,
-        onClick: () => {
-          setAddToShareAssets(selectedIds.has(asset.assetId) && selectedIds.size > 1
-            ? assets.filter((a) => selectedIds.has(a.assetId))
-            : [asset]);
-        },
-      },
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: asset.leaderpass.status === 'none' ? 'Push to LeaderPass' : LEADERPASS_STATUS_LABEL[asset.leaderpass.status],
-        icon: <IconPush />,
-        disabled: !asset.filePath || asset.leaderpass.status === 'preparing',
-        onClick: async () => {
-          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/leaderpass`, { method: 'POST' });
-          void fetchAssets();
-        },
-      },
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: 'Move to project…',
-        icon: <IconMove />,
-        onClick: () => {
-          // If the right-clicked asset is part of an active multi-selection,
-          // act on the whole set; otherwise just move this one. Matches desktop
-          // file-manager convention.
-          const ids = selectedIds.has(asset.assetId) && selectedIds.size > 1
-            ? [...selectedIds]
-            : [asset.assetId];
-          setShowMoveModal({ assetIds: ids });
-        },
-      },
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: 'Edit transcript',
-        icon: <IconRefresh />,
-        // Needs a finished transcript in at least one language to have cues to show.
-        disabled: !transcriptEditorHref(asset),
-        onClick: () => {
-          const href = transcriptEditorHref(asset);
-          if (href) router.push(href);
-        },
-      },
-      {
-        type: 'item' as const,
-        label: 'Re-transcribe',
-        icon: <IconRefresh />,
-        disabled: !asset.filePath || asset.transcription.status === 'queued' || asset.transcription.status === 'processing',
-        onClick: async () => {
-          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/retranscribe`, { method: 'POST' });
-          void fetchAssets();
-        },
-      },
-      {
-        type: 'item' as const,
-        label: asset.transcriptionEs?.status === 'done' ? 'Re-transcribe (Spanish)' : 'Transcribe (Spanish)',
-        icon: <IconRefresh />,
-        disabled: !asset.filePath || asset.transcriptionEs?.status === 'queued' || asset.transcriptionEs?.status === 'processing',
-        onClick: async () => {
-          await fetch(`/api/projects/${projectId}/media/${asset.assetId}/transcribe-es`, { method: 'POST' });
-          void fetchAssets();
-        },
-      },
-      { type: 'separator' as const },
+      { type: 'separator' },
       ...(asset.storageType === 'uploaded' ? [{
-        type: 'item' as const,
-        label: 'Delete File',
-        icon: <IconTrash />,
-        danger: true,
+        type: 'item' as const, label: 'Delete file', icon: <IconTrash />, danger: true,
         onClick: () => setConfirmDelete({ asset, deleteFile: true }),
       }] : []),
       {
-        type: 'item' as const,
-        label: 'Remove from Project',
-        icon: <IconTrash />,
-        danger: true,
+        type: 'item', label: 'Remove from project', icon: <IconTrash />, danger: true,
         onClick: () => setConfirmDelete({ asset, deleteFile: false }),
       },
     ]);
@@ -1529,25 +1547,27 @@ const { openMenu } = useContextMenu();
   }
 
 
-  async function handleBulkLeaderPassPublish() {
-    if (!selectedIds.size) return;
+  /** Queue a Cloudflare push for `ids` (callers pass only videos that need one). */
+  async function handleBulkCloudflarePush(ids: string[]) {
+    if (!ids.length) return;
     setPublishWorking(true);
-    setPublishError(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/media/leaderpass`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetIds: [...selectedIds] }),
+        body: JSON.stringify({ assetIds: ids }),
       });
-      const data = await res.json() as { error?: string };
+      const data = await res.json() as { error?: string; queued?: number };
       if (!res.ok) {
-        setPublishError(data.error ?? 'Failed to queue LeaderPass publish');
+        toast({ id: `cf-bulk-err:${Date.now()}`, kind: 'publish', tone: 'error', title: 'Cloudflare push failed', body: data.error ?? 'Could not queue the push.' });
         return;
       }
+      const queued = data.queued ?? ids.length;
+      toast({ id: `cf-bulk:${Date.now()}`, kind: 'publish', tone: 'success', title: `Pushing ${queued} video${queued === 1 ? '' : 's'} to Cloudflare`, body: 'Progress shows on each video.' });
       setSelectedIds(new Set());
       void fetchAssets();
     } catch {
-      setPublishError('Network error — could not queue LeaderPass publish');
+      toast({ id: `cf-bulk-err:${Date.now()}`, kind: 'publish', tone: 'error', title: 'Cloudflare push failed', body: 'Network error — could not queue the push.' });
     } finally {
       setPublishWorking(false);
     }
@@ -1556,7 +1576,6 @@ const { openMenu } = useContextMenu();
   async function handleBulkRetranscribe() {
     if (!selectedIds.size) return;
     setRetranscribeWorking(true);
-    setRetranscribeError(null);
     try {
       await Promise.all(
         [...selectedIds].map((id) =>
@@ -1566,7 +1585,7 @@ const { openMenu } = useContextMenu();
       setSelectedIds(new Set());
       void fetchAssets();
     } catch {
-      setRetranscribeError('Network error — could not queue re-transcription');
+      toast({ id: `retx-err:${Date.now()}`, kind: 'publish', tone: 'error', title: 'Re-transcribe failed', body: 'Network error — could not queue re-transcription.' });
     } finally {
       setRetranscribeWorking(false);
     }
@@ -1575,7 +1594,6 @@ const { openMenu } = useContextMenu();
   async function handleBulkSpanishTranscribe() {
     if (!selectedIds.size) return;
     setSpanishWorking(true);
-    setRetranscribeError(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/media/transcribe-es`, {
         method: 'POST',
@@ -1586,7 +1604,7 @@ const { openMenu } = useContextMenu();
       setSelectedIds(new Set());
       void fetchAssets();
     } catch {
-      setRetranscribeError('Network error — could not queue Spanish transcription');
+      toast({ id: `es-err:${Date.now()}`, kind: 'publish', tone: 'error', title: 'Spanish transcription failed', body: 'Network error — could not queue Spanish transcription.' });
     } finally {
       setSpanishWorking(false);
     }
@@ -1772,111 +1790,65 @@ const { openMenu } = useContextMenu();
             <span className="ma-selection-count">
               {selectedIds.size} selected
             </span>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => void handleBulkLeaderPassPublish()}
-              disabled={publishWorking}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
-                <path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/>
-              </svg>
-              {publishWorking ? 'Queueing publish...' : 'Push to LeaderPass'}
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => void shareAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-              </svg>
-              New Share
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => setAddToShareAssets(assets.filter((a) => selectedIds.has(a.assetId)))}
-            >
-              Add to share…
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => {
-                const selected = assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid);
-                if (selected.length) setThumbnailBatchAssets(selected);
-              }}
-              disabled={assets.filter((a) => selectedIds.has(a.assetId) && a.cloudflare?.uid).length === 0}
-              title="Set a custom poster image as the player thumbnail for each selected Cloudflare video"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-              </svg>
-              Set Thumbnail
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => void handleBulkRetranscribe()}
-              disabled={retranscribeWorking}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-              </svg>
-              {retranscribeWorking ? 'Queueing…' : 'Re-transcribe'}
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => void handleBulkSpanishTranscribe()}
-              disabled={spanishWorking}
-              title="Transcribe the selected videos in Spanish (additive — keeps the English transcript)"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-              </svg>
-              {spanishWorking ? 'Queueing…' : 'Transcribe Spanish'}
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={handleBulkDownload}
-              disabled={assets.filter((a) => selectedIds.has(a.assetId) && a.filePath).length === 0}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              Download
-            </button>
-            {publishError && <span className="ma-selection-error">{publishError}</span>}
-            {retranscribeError && <span className="ma-selection-error">{retranscribeError}</span>}
-            <button
-              type="button"
-              className="ma-selection-action"
-              onClick={() => setShowMoveModal({ assetIds: [...selectedIds] })}
-              title="Reassign the selected assets to a different project"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                <polyline points="9 22 9 12 15 12 15 22"/>
-              </svg>
-              Move to project…
-            </button>
-            <button
-              type="button"
-              className="ma-selection-action ma-selection-action--danger"
-              onClick={() => setConfirmBulkDelete({ deleteFile: true })}
-              disabled={bulkDeleteWorking}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-              </svg>
-              Delete Files
-            </button>
+            {(() => {
+              const sel = assets.filter((a) => selectedIds.has(a.assetId));
+              const anyFile = sel.some((a) => a.filePath);
+              return (
+                <>
+                  <button type="button" className="ma-selection-action" onClick={() => void shareAssets(sel)}>
+                    <IconLink />
+                    New share
+                  </button>
+                  <button type="button" className="ma-selection-action" onClick={() => setAddToShareAssets(sel)}>
+                    Add to share…
+                  </button>
+                  <button type="button" className="ma-selection-action" onClick={handleBulkDownload} disabled={!anyFile}>
+                    <IconDownload />
+                    Download
+                  </button>
+                  <button
+                    type="button"
+                    className="ma-selection-action"
+                    onClick={() => setShowMoveModal({ assetIds: [...selectedIds] })}
+                    title="Reassign the selected assets to a different project"
+                  >
+                    <IconMove />
+                    Move…
+                  </button>
+                  <button
+                    type="button"
+                    className="ma-selection-action"
+                    aria-haspopup="menu"
+                    title="Transcribe, Cloudflare and more"
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      // Anchored just above the button; the menu opens upward.
+                      openMenu(r.left, r.top - 6, [
+                        { type: 'header', label: 'Transcribe' },
+                        ...selectionTranscribeEntries(sel),
+                        { type: 'separator' },
+                        { type: 'header', label: 'Cloudflare' },
+                        ...selectionCloudflareEntries(sel),
+                        { type: 'separator' },
+                        { type: 'item', label: 'Remove from project', icon: <IconTrash />, danger: true, onClick: () => setConfirmBulkDelete({ deleteFile: false }) },
+                      ]);
+                    }}
+                  >
+                    <IconMore />
+                    More
+                  </button>
+                  <button
+                    type="button"
+                    className="ma-selection-action ma-selection-action--danger"
+                    onClick={() => setConfirmBulkDelete({ deleteFile: true })}
+                    disabled={bulkDeleteWorking}
+                  >
+                    <IconTrash />
+                    Delete files
+                  </button>
+                </>
+              );
+            })()}
             <button
               type="button"
               className="ma-selection-clear"

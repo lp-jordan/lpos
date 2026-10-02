@@ -20,7 +20,7 @@ function tile(p: Partial<PlatformTile> & { id: string }): PlatformTile {
 function treeOf(cats: Array<{ id: string; title: string; tiles: PlatformTile[] }>): PassTree {
   return {
     id: 'p1', title: 'Pass', slug: 'pass', source: 'local', lpPassId: null, status: 'draft',
-    brand: 'leaderpass', brandConfig: null, defaultProjectId: null, sheetId: null, sheetUrl: null,
+    brand: 'leaderpass', brandConfig: null, defaultProjectId: null, clientName: null, pinnedAt: null, pinnedBy: null, sheetId: null, sheetUrl: null,
     sheetConnectedAt: null, sheetTabCount: null, sheetRowCount: null, sheetTabGid: null,
     sheetTabTitle: null, createdAt: '', updatedAt: '',
     categories: cats.map((c) => ({ id: c.id, passId: 'p1', title: c.title, position: 0, createdAt: '', tiles: c.tiles })),
